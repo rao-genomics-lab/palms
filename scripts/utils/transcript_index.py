@@ -28,7 +28,7 @@ _PARQUET_PATH = _DATA_DIR / "transcripts.parquet"
 X_COL = "x_location"
 Y_COL = "y_location"
 QV_COL = "qv"
-GENE_COL = "gene"
+GENE_COL = "feature_name"  # Xenium 3.x column name
 
 
 class TranscriptLoader:

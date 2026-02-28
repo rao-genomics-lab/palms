@@ -28,7 +28,9 @@ PARQUET_PATH = DATA_PATH / "transcripts.parquet"
 CACHE_DIR = Path(__file__).parent / "transcript_cache"
 
 # Columns to keep in the feather files
-KEEP_COLS = ["x_location", "y_location", "qv", "gene"]
+# Xenium 3.x uses "feature_name" for the gene name column
+GENE_COL = "feature_name"
+KEEP_COLS = ["x_location", "y_location", "qv", GENE_COL]
 
 # Minimum quality value threshold
 MIN_QV = 20
@@ -78,7 +80,7 @@ def preprocess(parquet_path: Path = PARQUET_PATH,
         kept += len(df)
 
         # Accumulate per gene
-        for gene, group in df.groupby("gene", sort=False):
+        for gene, group in df.groupby(GENE_COL, sort=False):
             buffers[gene].append(group)
         buffer_rows += len(df)
 
