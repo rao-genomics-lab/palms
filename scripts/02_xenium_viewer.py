@@ -130,7 +130,7 @@ def main():
         name="transcripts",
         size=4,
         face_color="yellow",
-        edge_color="transparent",
+        border_color="transparent",
         opacity=0.7,
         visible=False,
     )
