@@ -30,6 +30,10 @@ Y_COL = "y_location"
 QV_COL = "qv"
 GENE_COL = "feature_name"  # Xenium 3.x column name
 
+# Xenium transcript coordinates are in microns; images/labels are in pixels.
+# pixel_size from experiment.xenium: 0.2125 µm/pixel
+PIXEL_SIZE = 0.2125
+
 
 class TranscriptLoader:
     """
@@ -118,6 +122,10 @@ class TranscriptLoader:
         """
         Return transcript coordinates as numpy array suitable for napari Points layer.
 
+        Transcript coordinates in the parquet/feather files are in microns.
+        Images and labels are in pixel space. We convert microns → pixels
+        by dividing by PIXEL_SIZE (0.2125 µm/px).
+
         Returns
         -------
         np.ndarray, shape (N, 2), columns = [y, x]  (napari uses row, col ordering)
@@ -125,8 +133,8 @@ class TranscriptLoader:
         df = self.load_gene(gene_name)
         if df.empty:
             return np.empty((0, 2), dtype=np.float32)
-        # napari Points expects (row, col) = (y, x)
+        # Convert microns → pixels and swap to (row, col) = (y, x) for napari
         return np.column_stack([
-            df[Y_COL].values.astype(np.float32),
-            df[X_COL].values.astype(np.float32),
+            df[Y_COL].values.astype(np.float32) / PIXEL_SIZE,
+            df[X_COL].values.astype(np.float32) / PIXEL_SIZE,
         ])
