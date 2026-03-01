@@ -205,7 +205,7 @@ class CellColorManager:
         -------
         napari.utils.colormaps.label_colormap.DirectLabelColormap
         """
-        from napari.utils.colormaps.label_colormap import DirectLabelColormap
+        from napari.utils.colormaps import DirectLabelColormap
 
         # Build color_dict from nonzero-alpha entries only (performance)
         nonzero = np.where(color_arr[:, 3] > 0)[0]
