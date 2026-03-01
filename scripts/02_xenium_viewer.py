@@ -68,6 +68,10 @@ from utils.coloring import (
 )
 from utils.transcript_index import TranscriptLoader
 from utils.umap_widget import UMAPViewer
+from utils.registration import (
+    load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
+    extract_tissue_mask_fluorescence, extract_tissue_mask_he, compute_coarse_affine,
+)
 
 # ─── Channel metadata ───────────────────────────────────────────────────────
 CHANNEL_NAMES = [
@@ -205,6 +209,17 @@ def main(data_path: Path, no_cache: bool = False):
     _add_layers_manually(viewer, sdata)
     print(f"  Layers added in {time.perf_counter() - t0:.1f}s")
 
+    # ── Extract lowest-res morphology thumbnail for coarse tissue alignment ───
+    morph_thumb = None
+    morph_full_shape_yx = None
+    if "morphology_focus" in sdata.images:
+        morph_scales = _extract_dt_scales(sdata.images["morphology_focus"])
+        if morph_scales:
+            morph_thumb = morph_scales[-1].compute()  # (C, Y, X), uint16
+            morph_full = morph_scales[0]
+            morph_full_shape_yx = (morph_full.shape[-2], morph_full.shape[-1])
+            print(f"  Morphology thumbnail for coarse align: {morph_thumb.shape}")
+
     # ── Get label layers ─────────────────────────────────────────────────────
     cell_labels_layer = None
     nucleus_labels_layer = None
@@ -260,6 +275,9 @@ def main(data_path: Path, no_cache: bool = False):
         roi_layer=roi_layer,
         centroids_yx=centroids_yx,
         pixel_size=pixel_size,
+        data_path=data_path,
+        morph_thumb=morph_thumb,
+        morph_full_shape_yx=morph_full_shape_yx,
     )
     viewer.window.add_dock_widget(panel, name="Xenium Controls", area="right")
 
@@ -344,6 +362,9 @@ def _build_control_panel(
     roi_layer=None,
     centroids_yx: np.ndarray = None,
     pixel_size: float = 1.0,
+    data_path: Path = None,
+    morph_thumb=None,
+    morph_full_shape_yx=None,
 ):
     """Build and return a magicgui Container docked widget."""
     from magicgui.widgets import (
@@ -918,6 +939,427 @@ def _build_control_panel(
             roi_export_button,
         ),
         "ROI Analysis",
+    )
+
+    # ── Tab 5: H&E Registration ──────────────────────────────────────────────
+    _he_state = {
+        "he_layer": None,
+        "he_tif": None,       # keep TiffFile alive for zarr store
+        "he_filename": None,
+        "he_shape_yx": None,  # (H, W) of full-res H&E for flip computation
+        "xenium_lm_layer": None,
+        "he_lm_layer": None,
+        "affine_3x3": None,
+        "coarse_affine": None,  # coarse tissue-outline alignment
+    }
+
+    he_load_button = PushButton(label="Load H&E Image...", enabled=True)
+    he_flip_v = CheckBox(label="Flip vertically", value=False)
+    he_flip_h = CheckBox(label="Flip horizontally", value=False)
+    he_status_label = Label(value="No H&E loaded")
+    he_opacity_slider = Slider(label="H&E opacity", min=0, max=100, value=70)
+    he_opacity_slider.enabled = False
+
+    coarse_align_button = PushButton(label="Coarse Align", enabled=False)
+
+    add_xenium_lm_button = PushButton(label="Add Xenium Landmark", enabled=False)
+    add_he_lm_button = PushButton(label="Add H&E Landmark", enabled=False)
+    clear_lm_button = PushButton(label="Clear All", enabled=False)
+
+    register_button = PushButton(label="Compute Registration", enabled=False)
+    reg_status_label = Label(value="")
+
+    reg_residuals_qt = QTextEdit()
+    reg_residuals_qt.setReadOnly(True)
+    reg_residuals_qt.setFontFamily("monospace")
+    reg_residuals_qt.setMaximumHeight(150)
+
+    save_lm_button = PushButton(label="Save Landmarks...", enabled=False)
+    load_lm_button = PushButton(label="Load Landmarks...", enabled=True)
+    save_affine_button = PushButton(label="Save Affine...", enabled=False)
+
+    def _build_flip_affine():
+        """Build a 3x3 affine that flips the H&E image around its center.
+
+        Uses the full-resolution shape stored in _he_state to compute
+        the center, then mirrors along the Y and/or X axis as requested
+        by the flip checkboxes. Returns identity if no flips are active
+        or no H&E is loaded.
+        """
+        shape = _he_state.get("he_shape_yx")
+        if shape is None:
+            return np.eye(3)
+        h, w = shape
+        M = np.eye(3)
+        if he_flip_v.value:
+            # Reflect Y around center: y' = h - 1 - y
+            M = np.array([[  -1, 0, h - 1],
+                          [   0, 1,     0],
+                          [   0, 0,     1]], dtype=np.float64) @ M
+        if he_flip_h.value:
+            # Reflect X around center: x' = w - 1 - x
+            M = np.array([[ 1,  0,     0],
+                          [ 0, -1, w - 1],
+                          [ 0,  0,     1]], dtype=np.float64) @ M
+        return M
+
+    def _apply_he_affine():
+        """Compose flip * registration and apply to H&E + H&E landmark layers.
+
+        Priority: fine (landmark) > coarse (tissue outline) > identity.
+        Fine replaces coarse entirely (not composed) because the landmark-based
+        similarity transform already captures scale+rotation+translation.
+        """
+        flip = _build_flip_affine()
+        fine = _he_state["affine_3x3"]
+        coarse = _he_state["coarse_affine"]
+
+        if fine is not None:
+            combined = fine @ flip
+        elif coarse is not None:
+            combined = coarse @ flip
+        else:
+            combined = flip
+
+        if _he_state["he_layer"] is not None:
+            _he_state["he_layer"].affine = combined
+        if _he_state["he_lm_layer"] is not None:
+            _he_state["he_lm_layer"].affine = combined
+
+    def on_flip_changed(_value=None):
+        _apply_he_affine()
+        flips = []
+        if he_flip_v.value:
+            flips.append("V")
+        if he_flip_h.value:
+            flips.append("H")
+        if flips:
+            he_status_label.value = f"Flip applied: {'+'.join(flips)}"
+
+    he_flip_v.changed.connect(on_flip_changed)
+    he_flip_h.changed.connect(on_flip_changed)
+
+    def _check_landmark_count(*_args):
+        """Enable 'Compute Registration' when both layers have >= 3 points."""
+        xen = _he_state["xenium_lm_layer"]
+        he = _he_state["he_lm_layer"]
+        if xen is not None and he is not None:
+            n = min(len(xen.data), len(he.data))
+            register_button.enabled = n >= 3
+            save_lm_button.enabled = n >= 1
+
+    def _create_landmark_layers():
+        """Create the two Points layers for landmark placement."""
+        if _he_state["xenium_lm_layer"] is not None:
+            return  # already created
+        xen_lm = viewer.add_points(
+            np.empty((0, 2), dtype=np.float64),
+            name="Xenium Landmarks",
+            size=30,
+            face_color="cyan",
+            symbol="cross",
+            border_color="cyan",
+            border_width=2,
+            opacity=1.0,
+        )
+        he_lm = viewer.add_points(
+            np.empty((0, 2), dtype=np.float64),
+            name="H&E Landmarks",
+            size=30,
+            face_color="red",
+            symbol="cross",
+            border_color="red",
+            border_width=2,
+            opacity=1.0,
+        )
+        xen_lm.events.data.connect(_check_landmark_count)
+        he_lm.events.data.connect(_check_landmark_count)
+        _he_state["xenium_lm_layer"] = xen_lm
+        _he_state["he_lm_layer"] = he_lm
+        add_xenium_lm_button.enabled = True
+        add_he_lm_button.enabled = True
+        clear_lm_button.enabled = True
+
+    def on_load_he():
+        default_dir = str(data_path) if data_path else ""
+        path, _ = QFileDialog.getOpenFileName(
+            None, "Load H&E Image", default_dir,
+            "Image Files (*.ome.tif *.tif *.tiff *.svs);;All Files (*)",
+        )
+        if not path:
+            return
+        he_status_label.value = "Loading H&E..."
+        he_load_button.enabled = False
+
+        @thread_worker(connect={"returned": _on_he_loaded})
+        def load_task():
+            return load_he_pyramid(path), path
+
+        load_task()
+
+    def _on_he_loaded(result):
+        (pyramid, tif), path = result
+        # Remove old H&E layer if present
+        if _he_state["he_layer"] is not None:
+            try:
+                viewer.layers.remove(_he_state["he_layer"])
+            except ValueError:
+                pass
+
+        _he_state["he_tif"] = tif
+        _he_state["he_filename"] = Path(path).name
+        # Store full-res spatial shape (Y, X) for flip affine computation
+        base = pyramid[0]
+        _he_state["he_shape_yx"] = (base.shape[0], base.shape[1])
+
+        he_layer = viewer.add_image(
+            pyramid,
+            name=f"H&E ({Path(path).name})",
+            rgb=True,
+            blending="translucent",
+            opacity=he_opacity_slider.value / 100.0,
+        )
+        _he_state["he_layer"] = he_layer
+        _he_state["affine_3x3"] = None
+        _he_state["coarse_affine"] = None
+
+        # Apply any pre-selected flip
+        _apply_he_affine()
+
+        # Create landmark layers if not yet present
+        _create_landmark_layers()
+
+        he_opacity_slider.enabled = True
+        he_load_button.enabled = True
+        coarse_align_button.enabled = morph_thumb is not None
+        shape_str = "x".join(str(s) for s in pyramid[0].shape)
+        he_status_label.value = f"H&E loaded: {Path(path).name} ({shape_str}, {len(pyramid)} levels)"
+
+    def on_he_opacity(value):
+        if _he_state["he_layer"] is not None:
+            _he_state["he_layer"].opacity = value / 100.0
+
+    def on_coarse_align():
+        if _he_state["he_layer"] is None:
+            reg_status_label.value = "Load H&E image first"
+            return
+        if morph_thumb is None:
+            reg_status_label.value = "No morphology data available"
+            return
+
+        reg_status_label.value = "Computing coarse alignment..."
+        coarse_align_button.enabled = False
+
+        @thread_worker(connect={"returned": _on_coarse_done})
+        def _compute_coarse():
+            he_pyramid = _he_state["he_layer"].data
+            he_low = np.asarray(he_pyramid[-1])  # (Y, X, 3) RGB, lowest res
+
+            # Extract tissue masks
+            morph_mask = extract_tissue_mask_fluorescence(morph_thumb)
+            he_mask = extract_tissue_mask_he(he_low)
+
+            # Compute downsample factors
+            target_ds = morph_full_shape_yx[0] / morph_thumb.shape[1]  # full_Y / thumb_Y
+            he_full_shape = _he_state["he_shape_yx"]
+            source_ds = he_full_shape[0] / he_low.shape[0]  # full_Y / thumb_Y
+
+            coarse_affine_yx = compute_coarse_affine(
+                target_mask=morph_mask,
+                source_mask=he_mask,
+                target_downsample=target_ds,
+                source_downsample=source_ds,
+            )
+            return coarse_affine_yx
+
+        _compute_coarse()
+
+    def _on_coarse_done(coarse_affine):
+        _he_state["coarse_affine"] = coarse_affine
+        _he_state["affine_3x3"] = None  # clear any previous fine registration
+        _apply_he_affine()
+        coarse_align_button.enabled = True
+        scale = np.sqrt(coarse_affine[0, 0]**2 + coarse_affine[0, 1]**2)
+        reg_status_label.value = f"Coarse aligned (scale={scale:.4f}). Place landmarks to refine."
+        reg_residuals_qt.setPlainText(
+            f"Coarse tissue-outline alignment applied.\n"
+            f"Scale: {scale:.4f}\n"
+            f"Place >= 3 matching landmarks, then click 'Compute Registration'\n"
+            f"to refine alignment."
+        )
+
+    def on_add_xenium_lm():
+        lm = _he_state["xenium_lm_layer"]
+        if lm is not None:
+            viewer.layers.selection.active = lm
+            lm.mode = "add"
+            reg_status_label.value = "Click on a feature in the Xenium image"
+
+    def on_add_he_lm():
+        lm = _he_state["he_lm_layer"]
+        if lm is not None:
+            viewer.layers.selection.active = lm
+            lm.mode = "add"
+            reg_status_label.value = "Click on the same feature in the H&E image"
+
+    def on_clear_lm():
+        for key in ("xenium_lm_layer", "he_lm_layer"):
+            lm = _he_state[key]
+            if lm is not None:
+                lm.data = np.empty((0, 2), dtype=np.float64)
+        _he_state["affine_3x3"] = None
+        _he_state["coarse_affine"] = None
+        # Reset to flip-only affine (or identity if no flips)
+        _apply_he_affine()
+        reg_residuals_qt.clear()
+        reg_status_label.value = "Landmarks cleared"
+        register_button.enabled = False
+        save_lm_button.enabled = False
+        save_affine_button.enabled = False
+
+    def on_register():
+        xen_pts = _he_state["xenium_lm_layer"].data
+        he_pts = _he_state["he_lm_layer"].data
+        n = min(len(xen_pts), len(he_pts))
+        if n < 3:
+            reg_status_label.value = "Need at least 3 paired landmarks"
+            return
+
+        xen_pts = np.asarray(xen_pts[:n], dtype=np.float64)
+        he_pts = np.asarray(he_pts[:n], dtype=np.float64)
+
+        affine, residuals = compute_landmark_affine(xen_pts, he_pts)
+        _he_state["affine_3x3"] = affine
+
+        # Apply registration + flip to H&E image and landmark layers
+        _apply_he_affine()
+
+        # Display residuals
+        lines = [f"Registration: {n} landmarks, similarity transform"]
+        lines.append(f"Mean residual: {residuals.mean():.1f} px ({residuals.mean() * pixel_size:.1f} um)")
+        lines.append(f"Max  residual: {residuals.max():.1f} px ({residuals.max() * pixel_size:.1f} um)")
+        lines.append("")
+        for i, r in enumerate(residuals):
+            lines.append(f"  Landmark {i+1}: {r:.1f} px ({r * pixel_size:.1f} um)")
+        # Show scale factor from the affine
+        scale = np.sqrt(affine[0, 0]**2 + affine[0, 1]**2)
+        lines.append(f"\nScale factor: {scale:.4f}")
+        reg_residuals_qt.setPlainText("\n".join(lines))
+
+        reg_status_label.value = f"Registered ({n} landmarks, mean residual {residuals.mean():.1f} px)"
+        save_affine_button.enabled = True
+
+    def on_save_landmarks():
+        default_dir = str(data_path) if data_path else ""
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Save Landmarks", default_dir + "/landmarks.json",
+            "JSON Files (*.json)",
+        )
+        if not path:
+            return
+        xen_pts = np.asarray(_he_state["xenium_lm_layer"].data, dtype=np.float64)
+        he_pts = np.asarray(_he_state["he_lm_layer"].data, dtype=np.float64)
+        save_landmarks(
+            path, xen_pts, he_pts,
+            affine=_he_state["affine_3x3"],
+            he_filename=_he_state["he_filename"],
+        )
+        reg_status_label.value = f"Landmarks saved to {Path(path).name}"
+
+    def on_load_landmarks():
+        default_dir = str(data_path) if data_path else ""
+        path, _ = QFileDialog.getOpenFileName(
+            None, "Load Landmarks", default_dir,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not path:
+            return
+        data = load_landmarks(path)
+        # Ensure landmark layers exist
+        _create_landmark_layers()
+        _he_state["xenium_lm_layer"].data = data["xenium_landmarks_yx"]
+        _he_state["he_lm_layer"].data = data["he_landmarks_yx"]
+        if "affine_3x3_yx" in data:
+            affine = data["affine_3x3_yx"]
+            _he_state["affine_3x3"] = affine
+            _apply_he_affine()
+            save_affine_button.enabled = True
+            # Show scale factor
+            scale = np.sqrt(affine[0, 0]**2 + affine[0, 1]**2)
+            reg_residuals_qt.setPlainText(f"Loaded affine (scale={scale:.4f})")
+        if "he_filename" in data:
+            _he_state["he_filename"] = data["he_filename"]
+        n = min(len(data["xenium_landmarks_yx"]), len(data["he_landmarks_yx"]))
+        reg_status_label.value = f"Loaded {n} landmarks from {Path(path).name}"
+
+    def on_save_affine():
+        default_dir = str(data_path) if data_path else ""
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Save Affine", default_dir + "/he_affine.json",
+            "JSON Files (*.json)",
+        )
+        if not path:
+            return
+        affine = _he_state["affine_3x3"]
+        if affine is None:
+            return
+        with open(path, "w") as f:
+            json.dump({"affine_3x3_yx": affine.tolist()}, f, indent=2)
+        reg_status_label.value = f"Affine saved to {Path(path).name}"
+
+    # Wire H&E Registration events
+    he_load_button.clicked.connect(on_load_he)
+    he_opacity_slider.changed.connect(on_he_opacity)
+    coarse_align_button.clicked.connect(on_coarse_align)
+    add_xenium_lm_button.clicked.connect(on_add_xenium_lm)
+    add_he_lm_button.clicked.connect(on_add_he_lm)
+    clear_lm_button.clicked.connect(on_clear_lm)
+    register_button.clicked.connect(on_register)
+    save_lm_button.clicked.connect(on_save_landmarks)
+    load_lm_button.clicked.connect(on_load_landmarks)
+    save_affine_button.clicked.connect(on_save_affine)
+
+    # Landmark buttons row
+    lm_btn_row = QWidget()
+    lm_btn_layout = QHBoxLayout()
+    lm_btn_layout.setContentsMargins(0, 0, 0, 0)
+    lm_btn_layout.addWidget(add_xenium_lm_button.native)
+    lm_btn_layout.addWidget(add_he_lm_button.native)
+    lm_btn_layout.addWidget(clear_lm_button.native)
+    lm_btn_row.setLayout(lm_btn_layout)
+
+    # Save/load buttons row
+    io_btn_row = QWidget()
+    io_btn_layout = QHBoxLayout()
+    io_btn_layout.setContentsMargins(0, 0, 0, 0)
+    io_btn_layout.addWidget(save_lm_button.native)
+    io_btn_layout.addWidget(load_lm_button.native)
+    io_btn_layout.addWidget(save_affine_button.native)
+    io_btn_row.setLayout(io_btn_layout)
+
+    # Flip checkboxes row
+    flip_row = QWidget()
+    flip_layout = QHBoxLayout()
+    flip_layout.setContentsMargins(0, 0, 0, 0)
+    flip_layout.addWidget(he_flip_v.native)
+    flip_layout.addWidget(he_flip_h.native)
+    flip_row.setLayout(flip_layout)
+
+    # Tab 5: H&E Registration
+    tab_widget.addTab(
+        _make_tab(
+            he_load_button,
+            flip_row,
+            he_status_label,
+            he_opacity_slider,
+            coarse_align_button,
+            lm_btn_row,
+            register_button,
+            reg_status_label,
+            reg_residuals_qt,
+            io_btn_row,
+        ),
+        "H&E Registration",
     )
 
     return tab_widget

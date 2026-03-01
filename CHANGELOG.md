@@ -3,6 +3,24 @@
 ## [Unreleased] — 2026-03-01
 
 ### Added
+- **H&E image registration** — new "H&E Registration" tab (5th tab). Load an H&E
+  OME-TIFF/SVS image as a multiscale overlay, place paired landmark points on both
+  Xenium and H&E images, then compute a similarity transform (rotation + uniform scale +
+  translation) to align the H&E onto Xenium coordinates. Features: opacity slider,
+  per-landmark residual display, save/load landmarks as JSON, save affine matrix.
+  Flip checkboxes (vertical/horizontal) let you mirror the H&E before placing
+  landmarks, useful when the H&E was scanned in a different orientation.
+  New module `scripts/utils/registration.py` with `load_he_pyramid()`,
+  `compute_landmark_affine()`, `save_landmarks()`, `load_landmarks()`.
+- **Coarse tissue-outline alignment** — "Coarse Align" button in H&E Registration tab
+  automatically snaps H&E roughly into position before manual landmark placement.
+  Extracts tissue masks from morphology_focus (max-projection across channels) and H&E
+  (HSV saturation channel), then computes a similarity transform using OpenCV image
+  moments with multi-rotation hypothesis testing (0/90/180/270 deg, best IoU wins).
+  The coarse affine is a visual stepping-stone; computing landmark registration replaces
+  it entirely. New functions in `registration.py`: `extract_tissue_mask()`,
+  `extract_tissue_mask_fluorescence()`, `extract_tissue_mask_he()`,
+  `compute_coarse_affine()`.
 - **ROI polygon analysis** — new "ROI Analysis" tab (4th tab). Draw polygons on the
   napari Shapes layer ("ROIs"), click "Calculate Expression" to get per-region stats
   (cell count, mean, median, std, min, max) for the selected gene. "Export CSV" saves
