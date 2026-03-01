@@ -7,9 +7,8 @@ Usage (standalone test):
 Returns a SpatialData object with:
   - images:  morphology_focus (multiscale, 4-channel, CYX)
   - labels:  cell_labels, nucleus_labels
-  - shapes:  cell_boundaries, nucleus_boundaries
   - points:  transcripts (dask-backed, lazy)
-  - tables:  table (AnnData 318K cells × 480+ genes)
+  - tables:  table (AnnData 318K cells x 480+ genes)
 """
 
 import os
@@ -20,7 +19,6 @@ import numpy as np
 import pandas as pd
 
 DATA_PATH = Path(__file__).parent.parent  # /media/.../output-XETG...
-ANALYSIS_PATH = DATA_PATH / "analysis"
 
 # ─── Channel names for the 4 morphology_focus planes ───────────────────────
 CHANNEL_NAMES = [
@@ -31,10 +29,44 @@ CHANNEL_NAMES = [
 ]
 
 
+def _convert_arrow_strings(sdata):
+    """
+    Convert ArrowStringArray columns in sdata's AnnData table to object dtype.
+
+    pandas 3.0 with future.infer_string=True uses PyArrow-backed string arrays
+    by default, but anndata's zarr writer has no serializer for ArrowStringArray.
+    We must temporarily disable infer_string and rebuild obs/var DataFrames with
+    plain object dtype so sdata.write() can serialize the table.
+    """
+    adata = sdata["table"]
+    old_infer = pd.options.future.infer_string
+    pd.options.future.infer_string = False
+    try:
+        for attr in ["obs", "var"]:
+            df = getattr(adata, attr).copy()
+            if pd.api.types.is_string_dtype(df.index):
+                df.index = pd.Index(df.index.to_numpy(dtype=object))
+            for col in df.columns:
+                if isinstance(df[col].dtype, pd.CategoricalDtype):
+                    # Rebuild categorical with object-dtype categories
+                    cat = df[col].cat
+                    if pd.api.types.is_string_dtype(cat.categories):
+                        new_cats = cat.categories.astype(object)
+                        df[col] = df[col].cat.rename_categories(
+                            dict(zip(cat.categories, new_cats))
+                        )
+                elif pd.api.types.is_string_dtype(df[col]):
+                    df[col] = df[col].to_numpy(dtype=object)
+            setattr(adata, attr, df)
+    finally:
+        pd.options.future.infer_string = old_infer
+
+
 def load_sdata(
     path: Path = DATA_PATH,
     build_pyramid: bool = True,
     n_jobs: int = 8,
+    use_cache: bool = True,
 ):
     """
     Load the Xenium 3.x output as a SpatialData object.
@@ -49,11 +81,38 @@ def load_sdata(
         pan/zoom performance.
     n_jobs : int
         Number of threads for spatialdata_io.
+    use_cache : bool
+        If True, use/create a zarr cache for faster subsequent loads.
 
     Returns
     -------
     spatialdata.SpatialData
     """
+    cache_path = path / "sdata_cached.zarr"
+    experiment_path = path / "experiment.xenium"
+
+    # Try loading from zarr cache if it exists and is fresh
+    if use_cache and cache_path.exists():
+        cache_fresh = True
+        if experiment_path.exists():
+            cache_mtime = cache_path.stat().st_mtime
+            exp_mtime = experiment_path.stat().st_mtime
+            if exp_mtime > cache_mtime:
+                print("Zarr cache is stale (experiment.xenium is newer). Rebuilding...")
+                cache_fresh = False
+        if cache_fresh:
+            import spatialdata
+            print(f"Loading SpatialData from zarr cache: {cache_path}")
+            try:
+                sdata = spatialdata.read_zarr(str(cache_path))
+                print("SpatialData loaded from cache.")
+                print(sdata)
+                return sdata
+            except Exception as e:
+                import shutil
+                print(f"Warning: zarr cache is corrupt ({e}). Deleting and rebuilding...")
+                shutil.rmtree(cache_path, ignore_errors=True)
+
     from spatialdata_io import xenium
 
     image_models_kwargs = {}
@@ -63,8 +122,8 @@ def load_sdata(
     print(f"Loading SpatialData from {path} ...")
     sdata = xenium(
         path=path,
-        cells_boundaries=True,
-        nucleus_boundaries=True,
+        cells_boundaries=False,
+        nucleus_boundaries=False,
         cells_labels=True,
         nucleus_labels=True,
         transcripts=True,
@@ -76,17 +135,31 @@ def load_sdata(
     )
     print("SpatialData loaded successfully.")
     print(sdata)
+
+    # Write zarr cache for next time
+    if use_cache:
+        try:
+            _convert_arrow_strings(sdata)
+            print(f"Writing zarr cache to {cache_path} ...")
+            sdata.write(str(cache_path), overwrite=True)
+            print("Zarr cache written.")
+        except Exception as e:
+            import shutil
+            shutil.rmtree(cache_path, ignore_errors=True)
+            print(f"Warning: could not write zarr cache: {e}")
+
     return sdata
 
 
-def load_umap(sdata=None):
+def load_umap(path: Path = DATA_PATH):
     """
     Load precomputed UMAP coordinates.
 
     Returns a DataFrame with columns ['UMAP_1', 'UMAP_2'] indexed by cell barcode.
     Note: the UMAP has 91 fewer cells than the AnnData — handled with reindex.
     """
-    umap_path = ANALYSIS_PATH / "umap" / "gene_expression_2_components" / "projection.csv"
+    analysis_path = path / "analysis"
+    umap_path = analysis_path / "umap" / "gene_expression_2_components" / "projection.csv"
     if not umap_path.exists():
         raise FileNotFoundError(f"UMAP projection not found at {umap_path}")
     umap_df = pd.read_csv(umap_path, index_col=0)
@@ -95,13 +168,14 @@ def load_umap(sdata=None):
     return umap_df
 
 
-def load_clusterings():
+def load_clusterings(path: Path = DATA_PATH):
     """
     Load all cluster assignments from analysis/clustering/.
 
     Returns a dict: {clustering_name -> pd.Series(cluster_id, index=cell_barcode)}
     """
-    clustering_root = ANALYSIS_PATH / "clustering"
+    analysis_path = path / "analysis"
+    clustering_root = analysis_path / "clustering"
     clusterings = {}
     for subdir in sorted(clustering_root.iterdir()):
         if not subdir.is_dir():
@@ -156,19 +230,30 @@ def get_label_to_obs_mapping(sdata):
 
 
 if __name__ == "__main__":
-    sdata = load_sdata()
-    umap_df = load_umap()
-    clusterings = load_clusterings()
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("data_dir", nargs="?", default=None,
+                        help="Path to Xenium output directory")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Skip zarr cache, load from raw output")
+    args = parser.parse_args()
+
+    data_path = Path(args.data_dir) if args.data_dir else DATA_PATH
+
+    sdata = load_sdata(data_path, use_cache=not args.no_cache)
+    umap_df = load_umap(data_path)
+    clusterings = load_clusterings(data_path)
 
     # Print summary
     print("\n=== SpatialData summary ===")
     print(f"Images:  {list(sdata.images.keys())}")
     print(f"Labels:  {list(sdata.labels.keys())}")
-    print(f"Shapes:  {list(sdata.shapes.keys())}")
+    if hasattr(sdata, 'shapes') and sdata.shapes:
+        print(f"Shapes:  {list(sdata.shapes.keys())}")
     print(f"Points:  {list(sdata.points.keys())}")
     print(f"Tables:  {list(sdata.tables.keys())}")
 
     adata = sdata["table"]
-    print(f"\nAnnData: {adata.shape[0]} cells × {adata.shape[1]} genes")
+    print(f"\nAnnData: {adata.shape[0]} cells x {adata.shape[1]} genes")
     print(f"UMAP:    {umap_df.shape[0]} cells")
     print(f"Clusterings: {list(clusterings.keys())}")

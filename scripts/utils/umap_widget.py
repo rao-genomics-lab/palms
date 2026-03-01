@@ -1,14 +1,15 @@
 """
-Linked UMAP scatter plot embedded as a napari dock widget.
+Interactive UMAP scatter plot as a second napari viewer window.
 
-Uses matplotlib's FigureCanvasQTAgg to render directly inside napari's
-Qt window — no separate window needed, no ICE/X11 conflicts.
+Uses a napari Points layer for the UMAP, giving native pan/zoom and
+hover-to-inspect. When cells are colored by cluster, hovering over a
+point in the UMAP shows the cluster ID in the status bar.
 
 Usage:
-    from utils.umap_widget import UMAPWidget
-    widget = UMAPWidget(umap_df, adata_obs_names)
-    viewer.window.add_dock_widget(widget, name="UMAP", area="bottom")
-    widget.color_by_gene("MMSET", color_arr, label_to_obs)
+    from utils.umap_widget import UMAPViewer
+    umap_viewer = UMAPViewer(umap_df, cell_ids)
+    umap_viewer.color_by_cluster("graphclust", color_arr, label_to_obs,
+                                  cluster_ids_per_obs)
 """
 
 from __future__ import annotations
@@ -17,71 +18,115 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-from qtpy.QtWidgets import QWidget, QVBoxLayout
+import napari
 
 
-class UMAPWidget(QWidget):
+class UMAPViewer:
     """
-    UMAP scatter plot as a Qt widget (embeddable in napari).
+    UMAP scatter plot in a dedicated napari Viewer window.
+
+    Points are displayed as a napari Points layer. When cluster coloring
+    is applied, hovering over a point shows cluster ID + cell ID in the
+    status bar.
 
     Parameters
     ----------
     umap_df : pd.DataFrame
         UMAP coordinates with columns ['UMAP_1', 'UMAP_2'], indexed by cell barcode.
-    adata_obs_names : pd.Index
-        Cell barcodes from sdata["table"].obs_names (may have 91 more than UMAP).
+    cell_ids : np.ndarray
+        Cell IDs from sdata["table"].obs['cell_id'].
     """
 
     def __init__(
         self,
         umap_df: pd.DataFrame,
         cell_ids: np.ndarray,
-        parent=None,
     ):
-        super().__init__(parent)
         self.n_cells = len(cell_ids)
+        self._cell_ids = cell_ids
 
         # Align UMAP to adata obs via cell_id (reindex handles the 91 missing cells)
         aligned = umap_df.reindex(cell_ids)
         self._xy = aligned[["UMAP_1", "UMAP_2"]].values.astype(np.float32)
         self._valid = ~np.isnan(self._xy[:, 0])  # mask of cells in UMAP
+        self._valid_indices = np.where(self._valid)[0]
 
+        # Coordinates for napari: (y, x) ordering, only valid cells
+        xy_valid = self._xy[self._valid]
+        self._points_data = np.column_stack([xy_valid[:, 1], xy_valid[:, 0]])
+
+        # Current state
         self._current_colors: Optional[np.ndarray] = None
+        self._cluster_ids: Optional[np.ndarray] = None  # per valid-point cluster IDs
+        self._clustering_name: Optional[str] = None
 
-        # Build the embedded matplotlib figure
-        self._fig = Figure(figsize=(6, 5), dpi=100)
-        self._canvas = FigureCanvasQTAgg(self._fig)
-        self._ax = self._fig.add_subplot(111)
+        # Create the UMAP viewer window (deferred — created on first coloring)
+        self._viewer: Optional[napari.Viewer] = None
+        self._points_layer = None
 
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._canvas)
-        self.setLayout(layout)
+    def _viewer_is_alive(self) -> bool:
+        """Check if the UMAP viewer window still exists."""
+        if self._viewer is None:
+            return False
+        try:
+            # Access the Qt window — raises RuntimeError if deleted
+            self._viewer.window._qt_window.isVisible()
+            return True
+        except (RuntimeError, AttributeError):
+            # Qt C++ object has been deleted
+            self._viewer = None
+            self._points_layer = None
+            return False
 
-        self._build_scatter()
+    def _ensure_viewer(self):
+        """Create (or recreate) the napari UMAP viewer."""
+        if self._viewer_is_alive():
+            return
 
-    def _build_scatter(self):
-        """Draw the initial gray scatter."""
+        self._viewer = napari.Viewer(
+            title="UMAP",
+            ndisplay=2,
+            show=True,
+        )
+
+        # Initial gray points
         n_valid = self._valid.sum()
         default_colors = np.full((n_valid, 4), [0.7, 0.7, 0.7, 0.5], dtype=np.float32)
-        xy_valid = self._xy[self._valid]
 
-        self._scatter = self._ax.scatter(
-            xy_valid[:, 0],
-            xy_valid[:, 1],
-            c=default_colors,
-            s=1,
-            rasterized=True,
-            linewidths=0,
+        self._points_layer = self._viewer.add_points(
+            self._points_data,
+            name="UMAP cells",
+            size=0.15,
+            face_color=default_colors,
+            border_color="transparent",
+            opacity=1.0,
         )
-        self._ax.set_xlabel("UMAP 1")
-        self._ax.set_ylabel("UMAP 2")
-        self._ax.set_title("UMAP (gene expression)")
-        self._ax.set_aspect("equal")
-        self._fig.tight_layout()
-        self._canvas.draw_idle()
+
+        # Hide axes ticks/grid for a cleaner look
+        self._viewer.axes.visible = False
+
+        # Reset view to fit all points
+        self._viewer.reset_view()
+
+        # Register hover callback
+        @self._points_layer.mouse_move_callbacks.append
+        def _on_hover(layer, event):
+            self._handle_hover(event)
+
+        # Reapply colors if we had them before the window was closed
+        if self._current_colors is not None:
+            rgba_valid = self._current_colors[self._valid]
+            self._points_layer.face_color = rgba_valid
+
+    def show(self):
+        """Open (or bring to front) the UMAP viewer window."""
+        self._ensure_viewer()
+        self._viewer.window.activate()
+
+    def set_point_size(self, size: float):
+        """Set the UMAP point size."""
+        if self._points_layer is not None:
+            self._points_layer.size = size
 
     # ── Public coloring API ──────────────────────────────────────────────────
 
@@ -100,22 +145,85 @@ class UMAPWidget(QWidget):
         color_arr : np.ndarray, shape (max_label + 1, 4)
         label_to_obs : np.ndarray
         """
+        self._ensure_viewer()
         rgba_obs = self._labels_color_arr_to_obs_colors(color_arr, label_to_obs)
-        self._update_scatter_colors(rgba_obs)
-        self._ax.set_title(f"UMAP — {gene_name}")
-        self._canvas.draw_idle()
+        rgba_valid = rgba_obs[self._valid]
+        self._points_layer.face_color = rgba_valid
+        self._current_colors = rgba_obs
+
+        # Clear cluster hover info
+        self._cluster_ids = None
+        self._clustering_name = None
+
+        self._viewer.title = f"UMAP — {gene_name}"
 
     def color_by_cluster(
         self,
         clustering_name: str,
         color_arr: np.ndarray,
         label_to_obs: np.ndarray,
+        cluster_ids_per_obs: Optional[np.ndarray] = None,
     ):
-        """Color UMAP points by cluster assignment."""
+        """
+        Color UMAP points by cluster assignment.
+
+        Parameters
+        ----------
+        clustering_name : str
+        color_arr : np.ndarray, shape (max_label + 1, 4)
+        label_to_obs : np.ndarray
+        cluster_ids_per_obs : np.ndarray, optional
+            Shape (n_obs,), cluster ID for each obs row. If provided,
+            enables hover-to-see-cluster-ID.
+        """
+        self._ensure_viewer()
         rgba_obs = self._labels_color_arr_to_obs_colors(color_arr, label_to_obs)
-        self._update_scatter_colors(rgba_obs)
-        self._ax.set_title(f"UMAP — {clustering_name}")
-        self._canvas.draw_idle()
+        rgba_valid = rgba_obs[self._valid]
+        self._points_layer.face_color = rgba_valid
+        self._current_colors = rgba_obs
+
+        # Store cluster IDs for hover
+        if cluster_ids_per_obs is not None:
+            self._cluster_ids = cluster_ids_per_obs[self._valid]
+        else:
+            self._cluster_ids = None
+        self._clustering_name = clustering_name
+
+        self._viewer.title = f"UMAP — {clustering_name}"
+
+    # ── Hover handler ────────────────────────────────────────────────────────
+
+    def _handle_hover(self, event):
+        """Show cluster ID and cell ID in the UMAP viewer status bar on hover."""
+        if self._points_layer is None:
+            return
+
+        # Get the value under the cursor (point index or None)
+        val = self._points_layer.get_value(
+            event.position,
+            view_direction=event.view_direction,
+            dims_displayed=event.dims_displayed,
+            world=True,
+        )
+
+        # Points layer returns (point_index, None) or (None, None)
+        if val is None:
+            return
+        point_idx = val[0] if isinstance(val, tuple) else val
+        if point_idx is None:
+            self._viewer.status = ""
+            return
+
+        # Map point index → obs index → cell_id
+        obs_idx = self._valid_indices[point_idx]
+        cell_id = self._cell_ids[obs_idx]
+
+        parts = [f"Cell: {cell_id}"]
+        if self._cluster_ids is not None and self._clustering_name:
+            cid = self._cluster_ids[point_idx]
+            parts.append(f"{self._clustering_name}: {cid}")
+
+        self._viewer.status = " | ".join(parts)
 
     # ── Selection highlighting ───────────────────────────────────────────────
 
@@ -130,7 +238,7 @@ class UMAPWidget(QWidget):
         dim_others : bool
             If True, reduce alpha of non-selected cells.
         """
-        if self._scatter is None or self._current_colors is None:
+        if self._points_layer is None or self._current_colors is None:
             return
 
         colors = self._current_colors.copy()
@@ -138,14 +246,14 @@ class UMAPWidget(QWidget):
             colors[:, 3] *= 0.1  # dim all
             colors[obs_indices, 3] = 1.0  # restore selected
 
-        self._update_scatter_colors(colors)
-        self._canvas.draw_idle()
+        rgba_valid = colors[self._valid]
+        self._points_layer.face_color = rgba_valid
 
     def reset_highlights(self):
         """Restore all cells to full opacity."""
-        if self._current_colors is not None:
-            self._update_scatter_colors(self._current_colors)
-            self._canvas.draw_idle()
+        if self._current_colors is not None and self._points_layer is not None:
+            rgba_valid = self._current_colors[self._valid]
+            self._points_layer.face_color = rgba_valid
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -176,9 +284,3 @@ class UMAPWidget(QWidget):
         rgba_obs[valid_obs] = color_arr[obs_to_label[valid_obs]]
 
         return rgba_obs
-
-    def _update_scatter_colors(self, rgba_obs: np.ndarray):
-        """Update scatter plot colors (only for cells present in UMAP)."""
-        rgba_valid = rgba_obs[self._valid]
-        self._scatter.set_facecolor(rgba_valid)
-        self._current_colors = rgba_obs

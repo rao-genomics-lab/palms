@@ -43,6 +43,20 @@ CLUSTER_PALETTE = np.array([
     [0.73, 0.93, 0.96, 1.0],  # light cyan
 ], dtype=np.float32)
 
+# 10 maximally-distinct RGBA colors for multi-gene transcript overlay
+TRANSCRIPT_PALETTE = np.array([
+    [1.00, 1.00, 0.00, 1.0],  # yellow
+    [0.00, 1.00, 1.00, 1.0],  # cyan
+    [1.00, 0.00, 1.00, 1.0],  # magenta
+    [1.00, 0.60, 0.00, 1.0],  # orange
+    [0.00, 1.00, 0.00, 1.0],  # green
+    [0.30, 0.70, 1.00, 1.0],  # sky blue
+    [1.00, 0.00, 0.00, 1.0],  # red
+    [0.60, 0.30, 0.90, 1.0],  # violet
+    [1.00, 0.50, 0.70, 1.0],  # pink
+    [0.60, 0.40, 0.20, 1.0],  # brown
+], dtype=np.float32)
+
 AVAILABLE_COLORMAPS = ["viridis", "magma", "plasma", "RdBu_r", "YlOrRd"]
 
 
@@ -138,6 +152,54 @@ class CellColorManager:
         color_arr[valid_labels] = rgba_obs[obs_indices]
 
         self._gene_cache[cache_key] = color_arr
+        return color_arr
+
+    def get_gene_colors_filtered(
+        self,
+        gene_name: str,
+        cluster_series: pd.Series,
+        cluster_id: int,
+        colormap: str = "viridis",
+    ) -> np.ndarray:
+        """
+        Build RGBA color array for gene expression, filtered to a single cluster.
+
+        Cells NOT in the selected cluster get alpha=0 (transparent).
+
+        Parameters
+        ----------
+        gene_name : str
+        cluster_series : pd.Series
+            Cluster assignments indexed by cell barcode.
+        cluster_id : int
+            Cluster ID to keep visible.
+        colormap : str
+
+        Returns
+        -------
+        np.ndarray, shape (max_label + 1, 4), dtype float32
+        """
+        # Get the full gene coloring (uses cache)
+        color_arr = self.get_gene_colors(gene_name, colormap=colormap).copy()
+
+        # Align cluster assignments to adata obs (same pattern as get_cluster_colors)
+        if 'cell_id' in self.adata.obs.columns:
+            cell_ids = self.adata.obs['cell_id'].values
+            clusters_aligned = cluster_series.reindex(cell_ids, fill_value=-1)
+        else:
+            clusters_aligned = cluster_series.reindex(self.adata.obs_names, fill_value=-1)
+        cluster_values = clusters_aligned.values.astype(np.int32)
+
+        # Build mask of obs indices NOT in the selected cluster
+        not_in_cluster = cluster_values != cluster_id
+
+        # Set alpha=0 for labels whose obs is not in the selected cluster
+        valid_mask = self.label_to_obs >= 0
+        valid_labels = np.where(valid_mask)[0]
+        obs_indices = self.label_to_obs[valid_labels]
+        labels_to_clear = valid_labels[not_in_cluster[obs_indices]]
+        color_arr[labels_to_clear, 3] = 0.0
+
         return color_arr
 
     def get_cluster_colors(

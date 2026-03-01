@@ -25,7 +25,7 @@ import pyarrow.parquet as pq
 
 DATA_PATH = Path(__file__).parent.parent
 PARQUET_PATH = DATA_PATH / "transcripts.parquet"
-CACHE_DIR = Path(__file__).parent / "transcript_cache"
+CACHE_DIR = DATA_PATH / "transcript_cache"
 
 # Columns to keep in the feather files
 # Xenium 3.x uses "feature_name" for the gene name column
@@ -121,10 +121,17 @@ def _flush_buffers(buffers: dict, cache_dir: Path):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("data_dir", nargs="?", default=None,
+                        help="Path to Xenium output directory (default: parent of scripts/)")
     parser.add_argument("--min-qv", type=int, default=MIN_QV,
                         help=f"Minimum quality value (default: {MIN_QV})")
     parser.add_argument("--chunk-size", type=int, default=CHUNK_SIZE,
                         help=f"Rows per batch (default: {CHUNK_SIZE:,})")
     args = parser.parse_args()
 
-    preprocess(min_qv=args.min_qv, chunk_size=args.chunk_size)
+    data_dir = Path(args.data_dir) if args.data_dir else DATA_PATH
+    parquet_path = data_dir / "transcripts.parquet"
+    cache_dir = data_dir / "transcript_cache"
+
+    preprocess(parquet_path=parquet_path, cache_dir=cache_dir,
+               min_qv=args.min_qv, chunk_size=args.chunk_size)
