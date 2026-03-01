@@ -1059,7 +1059,8 @@ def _build_control_panel(
             face_color="cyan",
             symbol="cross",
             border_color="cyan",
-            border_width=2,
+            border_width=0.1,
+            border_width_is_relative=True,
             opacity=1.0,
         )
         he_lm = viewer.add_points(
@@ -1069,7 +1070,8 @@ def _build_control_panel(
             face_color="red",
             symbol="cross",
             border_color="red",
-            border_width=2,
+            border_width=0.1,
+            border_width_is_relative=True,
             opacity=1.0,
         )
         xen_lm.events.data.connect(_check_landmark_count)
