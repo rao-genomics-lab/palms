@@ -37,14 +37,14 @@ class UMAPWidget(QWidget):
     def __init__(
         self,
         umap_df: pd.DataFrame,
-        adata_obs_names: pd.Index,
+        cell_ids: np.ndarray,
         parent=None,
     ):
         super().__init__(parent)
-        self.adata_obs_names = adata_obs_names
+        self.n_cells = len(cell_ids)
 
-        # Align UMAP to adata obs (reindex handles the 91 missing cells)
-        aligned = umap_df.reindex(adata_obs_names)
+        # Align UMAP to adata obs via cell_id (reindex handles the 91 missing cells)
+        aligned = umap_df.reindex(cell_ids)
         self._xy = aligned[["UMAP_1", "UMAP_2"]].values.astype(np.float32)
         self._valid = ~np.isnan(self._xy[:, 0])  # mask of cells in UMAP
 
@@ -160,7 +160,7 @@ class UMAPWidget(QWidget):
         color_arr shape: (max_label + 1, 4)
         Returns rgba_obs shape: (N_cells, 4)
         """
-        n_obs = len(self.adata_obs_names)
+        n_obs = self.n_cells
         rgba_obs = np.zeros((n_obs, 4), dtype=np.float32)
         rgba_obs[:, 3] = 0.8  # default alpha
 

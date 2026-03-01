@@ -168,8 +168,15 @@ class CellColorManager:
         if palette is None:
             palette = CLUSTER_PALETTE
 
-        # Align cluster_series with adata obs (some cells may be missing)
-        clusters_aligned = cluster_series.reindex(self.adata.obs_names, fill_value=-1)
+        # Align cluster_series with adata obs via cell_id column.
+        # Cluster CSVs are indexed by cell barcode (e.g. 'aaaagflk-1'),
+        # but adata.obs_names are integer indices ('0', '1', ...).
+        # Use adata.obs['cell_id'] as the join key.
+        if 'cell_id' in self.adata.obs.columns:
+            cell_ids = self.adata.obs['cell_id'].values
+            clusters_aligned = cluster_series.reindex(cell_ids, fill_value=-1)
+        else:
+            clusters_aligned = cluster_series.reindex(self.adata.obs_names, fill_value=-1)
         cluster_values = clusters_aligned.values.astype(np.int32)
 
         unique_clusters = sorted(set(cluster_values[cluster_values >= 0]))

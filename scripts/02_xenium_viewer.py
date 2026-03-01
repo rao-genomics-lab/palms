@@ -125,7 +125,10 @@ def main():
     viewer = napari.Viewer(title="Xenium Linux Viewer")
 
     # ── UMAP widget (needs QApplication from napari.Viewer) ──────────────────
-    umap_widget = UMAPWidget(umap_df, adata.obs_names)
+    # UMAP and clusters are indexed by cell barcode, not adata.obs_names
+    # (which are integer indices). Use adata.obs['cell_id'] for alignment.
+    cell_ids = adata.obs['cell_id'].values
+    umap_widget = UMAPWidget(umap_df, cell_ids)
 
     # ── Add layers from sdata ─────────────────────────────────────────────────
     _add_layers_manually(viewer, sdata)
