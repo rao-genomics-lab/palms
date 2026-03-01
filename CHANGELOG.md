@@ -30,6 +30,10 @@
   correction when >1 comparison.
 
 ### Changed
+- **Cluster filter works in both modes** — "Filter by cluster" checkbox and cluster ID
+  selector are now available in Cluster coloring mode (not just Gene Expression). When
+  enabled, only cells belonging to the selected cluster are shown; all others are
+  transparent.
 - **UMAP window no longer auto-opens** — `color_by_gene()` and `color_by_cluster()`
   store colors/metadata but only update the viewer if already open. Click "Show UMAP
   Window" to open it manually; colors and title are applied on first open.

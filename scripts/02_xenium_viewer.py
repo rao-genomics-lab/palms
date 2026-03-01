@@ -502,15 +502,13 @@ def _build_control_panel(
         is_gene = (value == "Gene Expression")
         gene_widget.enabled = is_gene
         colormap_widget.enabled = is_gene
-        filter_check.enabled = is_gene
-        clustering_widget.enabled = (value == "Cluster") or (is_gene and filter_check.value)
-        cluster_id_widget.enabled = is_gene and filter_check.value
+        clustering_widget.enabled = (value == "Cluster") or filter_check.value
+        cluster_id_widget.enabled = filter_check.value
 
     def on_filter_change(value):
         _state["filter_by_cluster"] = value
-        is_gene = (_state["color_mode"] == "Gene Expression")
-        clustering_widget.enabled = (not is_gene) or value
-        cluster_id_widget.enabled = is_gene and value
+        clustering_widget.enabled = (_state["color_mode"] == "Cluster") or value
+        cluster_id_widget.enabled = value
 
     def on_clustering_change(value):
         _repopulate_cluster_ids()
@@ -555,9 +553,12 @@ def _build_control_panel(
             cluster_series = clusterings[clustering_key]
             cluster_series.name = clustering_key
 
+            use_filter = filter_check.value
+            filter_id = int(cluster_id_widget.value) if use_filter else None
+
             @thread_worker(connect={"returned": _on_cluster_colors_ready})
             def compute_cluster():
-                return clustering_key, color_manager.get_cluster_colors(cluster_series)
+                return clustering_key, color_manager.get_cluster_colors(cluster_series), filter_id
 
             compute_cluster()
 
@@ -592,17 +593,27 @@ def _build_control_panel(
         return cluster_values, label_to_cluster
 
     def _on_cluster_colors_ready(result):
-        clustering_key, (color_arr, cluster_to_color) = result
-        color_manager.apply_to_labels_layer(cell_labels_layer, color_arr)
+        clustering_key, (color_arr, cluster_to_color), filter_id = result
         # Get per-obs cluster IDs for both UMAP hover and spatial hover
         cluster_ids_per_obs, label_to_cluster = _get_cluster_ids_per_obs(clustering_key)
+
+        # If filtering by a specific cluster, zero out all other cells
+        if filter_id is not None:
+            color_arr = color_arr.copy()
+            # Zero out labels that don't belong to the selected cluster
+            mask_out = label_to_cluster != filter_id
+            valid_range = min(len(mask_out), len(color_arr))
+            color_arr[:valid_range][mask_out[:valid_range]] = 0
+
+        color_manager.apply_to_labels_layer(cell_labels_layer, color_arr)
         umap_viewer.color_by_cluster(
             clustering_key, color_arr, label_to_obs,
             cluster_ids_per_obs=cluster_ids_per_obs,
         )
         _state["label_to_cluster"] = label_to_cluster
         _state["active_clustering_name"] = clustering_key
-        status_label.value = f"Cells colored by cluster: {clustering_key}"
+        filter_desc = f" (cluster {filter_id})" if filter_id is not None else ""
+        status_label.value = f"Cells colored by cluster: {clustering_key}{filter_desc}"
         apply_color_button.enabled = True
 
     # ── Transcript Overlay callbacks (multi-gene) ────────────────────────────
