@@ -103,23 +103,8 @@ def main():
     print("Opening napari...")
     viewer = napari.Viewer(title="Xenium Linux Viewer")
 
-    # ── Morphology image ─────────────────────────────────────────────────────
-    if "morphology_focus" in sdata.images:
-        img_data = sdata.images["morphology_focus"]
-        # img_data is a DataTree (multiscale); napari-spatialdata handles this
-        # via Interactive, but we can also add manually as a multiscale image
-        try:
-            from napari_spatialdata import Interactive
-            interactive = Interactive(sdata, viewer=viewer)
-            interactive.add_element("morphology_focus")
-            interactive.add_element("cell_labels")
-            interactive.add_element("nucleus_labels")
-        except Exception as exc:
-            print(f"napari-spatialdata Interactive failed ({exc}); adding layers manually")
-            _add_layers_manually(viewer, sdata)
-    else:
-        print("Warning: morphology_focus not found in sdata")
-        _add_layers_manually(viewer, sdata)
+    # ── Add layers from sdata ─────────────────────────────────────────────────
+    _add_layers_manually(viewer, sdata)
 
     # ── Get label layers ─────────────────────────────────────────────────────
     cell_labels_layer = None
@@ -172,39 +157,66 @@ def main():
     napari.run()
 
 
+def _extract_dt_scales(dt):
+    """
+    Extract an ordered list of dask arrays from a spatialdata DataTree.
+
+    spatialdata 0.7.x stores multiscale data as a DataTree with children
+    named 'scale0', 'scale1', ..., each holding a Dataset with a single
+    variable called 'image'.
+
+    Returns a list of dask arrays sorted from highest to lowest resolution,
+    suitable for passing to napari's multiscale image/labels API.
+    """
+    import re
+
+    def _sort_key(name):
+        nums = re.findall(r'\d+', name)
+        return int(nums[0]) if nums else 0
+
+    scales = []
+    for name in sorted(dt.children.keys(), key=_sort_key):
+        child = dt.children[name]
+        ds = getattr(child, 'ds', None)
+        if ds is None:
+            continue
+        # The data variable is always named 'image' in spatialdata 0.7.x
+        if 'image' in ds:
+            scales.append(ds['image'].data)
+        elif ds.data_vars:
+            first = next(iter(ds.data_vars))
+            scales.append(ds[first].data)
+
+    return scales
+
+
 def _add_layers_manually(viewer, sdata):
-    """Fallback: add layers without napari-spatialdata Interactive."""
-    import tifffile
+    """Add images and labels from sdata DataTree to the napari viewer."""
+    # ── Morphology image (multiscale pyramid from sdata) ─────────────────────
+    if "morphology_focus" in sdata.images:
+        print("  Adding morphology_focus (multiscale)...")
+        scales = _extract_dt_scales(sdata.images["morphology_focus"])
+        if scales:
+            viewer.add_image(
+                scales,
+                name="morphology_focus",
+                channel_axis=0,
+                colormap=CHANNEL_COLORMAPS,
+                contrast_limits=CHANNEL_CONTRAST,
+                visible=True,
+            )
+        else:
+            print("  Warning: could not extract morphology_focus scales")
 
-    # Add morphology_focus TIFFs
-    focus_dir = DATA_DIR / "morphology_focus"
-    focus_files = sorted(focus_dir.glob("morphology_focus_*.ome.tif"))
-    if focus_files:
-        channels = []
-        for f in focus_files[:4]:
-            print(f"  Reading {f.name}...")
-            img = tifffile.imread(str(f))  # shape: (C, Y, X) or (Y, X)
-            if img.ndim == 3:
-                channels.append(img[0])  # take first channel
-            else:
-                channels.append(img)
-        stack = np.stack(channels, axis=0)  # (4, Y, X)
-        viewer.add_image(
-            stack,
-            name="morphology_focus",
-            channel_axis=0,
-            colormap=CHANNEL_COLORMAPS,
-            contrast_limits=CHANNEL_CONTRAST,
-            visible=True,
-        )
-
-    # Add labels from sdata
+    # ── Labels (multiscale pyramid from sdata) ────────────────────────────────
     for key in ["cell_labels", "nucleus_labels"]:
         if key in sdata.labels:
-            label_data = sdata.labels[key]
-            if hasattr(label_data, "values"):
-                label_data = label_data.values
-            viewer.add_labels(label_data, name=key)
+            print(f"  Adding {key} (multiscale)...")
+            scales = _extract_dt_scales(sdata.labels[key])
+            if scales:
+                viewer.add_labels(scales, name=key)
+            else:
+                print(f"  Warning: could not extract {key} scales")
 
 
 def _build_control_panel(
