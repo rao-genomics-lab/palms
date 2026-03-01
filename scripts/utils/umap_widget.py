@@ -17,14 +17,10 @@ from typing import Optional, Callable
 
 import numpy as np
 import pandas as pd
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
+# matplotlib.pyplot imported lazily in _build_figure() so napari's Qt
+# is already running before any matplotlib Qt canvas is created.
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
-
-# Use a non-blocking backend that works alongside napari/Qt
-matplotlib.use("QtAgg")
 
 
 class UMAPWindow:
@@ -64,13 +60,15 @@ class UMAPWindow:
 
     def show(self):
         """Open or bring the UMAP window to focus."""
+        import matplotlib.pyplot as plt
         if self._fig is None or not plt.fignum_exists(self._fig.number):
             self._build_figure()
         self._fig.canvas.manager.window.activateWindow()
         self._fig.canvas.manager.window.raise_()
-        plt.pause(0.01)
+        self._fig.canvas.draw_idle()
 
     def _build_figure(self):
+        import matplotlib.pyplot as plt
         self._fig, self._ax = plt.subplots(figsize=(8, 6))
         self._fig.canvas.manager.set_window_title("Xenium Viewer — UMAP")
         self._ax.set_xlabel("UMAP 1")
@@ -93,7 +91,7 @@ class UMAPWindow:
         )
         self._fig.tight_layout()
         self._fig.canvas.draw_idle()
-        plt.show(block=False)
+        self._fig.show()
 
     def color_by_gene(
         self,
@@ -160,6 +158,7 @@ class UMAPWindow:
 
     def _update_scatter_colors(self, rgba_obs: np.ndarray):
         """Update scatter plot colors (only for cells present in UMAP)."""
+        import matplotlib.pyplot as plt
         if self._fig is None or not plt.fignum_exists(self._fig.number):
             self._build_figure()
 

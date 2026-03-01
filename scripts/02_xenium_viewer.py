@@ -19,9 +19,13 @@ Performance notes:
   - Label coloring uses DirectLabelColormap for O(nonzero) construction
 """
 
+import os
 import sys
 import warnings
 from pathlib import Path
+
+# Prevent ICE/X11 session manager EPIPE crash (common on Linux with Qt)
+os.environ.setdefault('SESSION_MANAGER', '')
 
 import numpy as np
 import napari
@@ -150,8 +154,11 @@ def main():
     )
     viewer.window.add_dock_widget(panel, name="Xenium Controls", area="right")
 
-    # ── Show UMAP window ─────────────────────────────────────────────────────
-    umap_window.show()
+    # ── Show UMAP window after event loop starts ──────────────────────────────
+    # Deferred via QTimer so napari's Qt event loop is fully running before
+    # matplotlib tries to create its figure (avoids ICE/X11 race on startup).
+    from qtpy.QtCore import QTimer
+    QTimer.singleShot(800, umap_window.show)
 
     print("\nViewer ready. Close the napari window to exit.")
     napari.run()
