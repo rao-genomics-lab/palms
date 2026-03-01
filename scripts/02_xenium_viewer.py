@@ -1208,6 +1208,7 @@ def _build_control_panel(
         for key in ("xenium_lm_layer", "he_lm_layer"):
             lm = _he_state[key]
             if lm is not None:
+                lm.selected_data = set()
                 lm.data = np.empty((0, 2), dtype=np.float64)
         _he_state["affine_3x3"] = None
         _he_state["coarse_affine"] = None
