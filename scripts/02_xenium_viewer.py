@@ -101,11 +101,13 @@ def main():
     # ── Managers ─────────────────────────────────────────────────────────────
     color_manager = CellColorManager(adata, label_to_obs)
     transcript_loader = TranscriptLoader(cache_dir=SCRIPTS_DIR / "transcript_cache")
-    umap_widget = UMAPWidget(umap_df, adata.obs_names)
 
-    # ── Napari viewer ────────────────────────────────────────────────────────
+    # ── Napari viewer (must be created before any QWidgets) ──────────────────
     print("Opening napari...")
     viewer = napari.Viewer(title="Xenium Linux Viewer")
+
+    # ── UMAP widget (needs QApplication from napari.Viewer) ──────────────────
+    umap_widget = UMAPWidget(umap_df, adata.obs_names)
 
     # ── Add layers from sdata ─────────────────────────────────────────────────
     _add_layers_manually(viewer, sdata)
