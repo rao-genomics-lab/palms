@@ -60,9 +60,10 @@ class UMAPViewer:
         self._cluster_ids: Optional[np.ndarray] = None  # per valid-point cluster IDs
         self._clustering_name: Optional[str] = None
 
-        # Create the UMAP viewer window (deferred — created on first coloring)
+        # Create the UMAP viewer window (deferred — created on first show())
         self._viewer: Optional[napari.Viewer] = None
         self._points_layer = None
+        self._pending_title: Optional[str] = None
 
     def _viewer_is_alive(self) -> bool:
         """Check if the UMAP viewer window still exists."""
@@ -119,6 +120,10 @@ class UMAPViewer:
             rgba_valid = self._current_colors[self._valid]
             self._points_layer.face_color = rgba_valid
 
+        # Apply pending title if set
+        if self._pending_title is not None:
+            self._viewer.title = self._pending_title
+
     def show(self):
         """Open (or bring to front) the UMAP viewer window."""
         self._ensure_viewer()
@@ -140,23 +145,29 @@ class UMAPViewer:
         """
         Color UMAP points using the same RGBA array as the Labels layer.
 
+        Does NOT auto-open the UMAP window. Colors are stored and applied
+        when the user manually opens the window via show().
+
         Parameters
         ----------
         gene_name : str
         color_arr : np.ndarray, shape (max_label + 1, 4)
         label_to_obs : np.ndarray
         """
-        self._ensure_viewer()
         rgba_obs = self._labels_color_arr_to_obs_colors(color_arr, label_to_obs)
-        rgba_valid = rgba_obs[self._valid]
-        self._points_layer.face_color = rgba_valid
         self._current_colors = rgba_obs
 
         # Clear cluster hover info
         self._cluster_ids = None
         self._clustering_name = None
 
-        self._viewer.title = f"UMAP — {gene_name}"
+        self._pending_title = f"UMAP — {gene_name}"
+
+        # Update viewer only if already open
+        if self._viewer_is_alive():
+            rgba_valid = rgba_obs[self._valid]
+            self._points_layer.face_color = rgba_valid
+            self._viewer.title = self._pending_title
 
     def color_by_cluster(
         self,
@@ -168,6 +179,9 @@ class UMAPViewer:
         """
         Color UMAP points by cluster assignment.
 
+        Does NOT auto-open the UMAP window. Colors are stored and applied
+        when the user manually opens the window via show().
+
         Parameters
         ----------
         clustering_name : str
@@ -177,10 +191,7 @@ class UMAPViewer:
             Shape (n_obs,), cluster ID for each obs row. If provided,
             enables hover-to-see-cluster-ID.
         """
-        self._ensure_viewer()
         rgba_obs = self._labels_color_arr_to_obs_colors(color_arr, label_to_obs)
-        rgba_valid = rgba_obs[self._valid]
-        self._points_layer.face_color = rgba_valid
         self._current_colors = rgba_obs
 
         # Store cluster IDs for hover
@@ -190,7 +201,13 @@ class UMAPViewer:
             self._cluster_ids = None
         self._clustering_name = clustering_name
 
-        self._viewer.title = f"UMAP — {clustering_name}"
+        self._pending_title = f"UMAP — {clustering_name}"
+
+        # Update viewer only if already open
+        if self._viewer_is_alive():
+            rgba_valid = rgba_obs[self._valid]
+            self._points_layer.face_color = rgba_valid
+            self._viewer.title = self._pending_title
 
     # ── Hover handler ────────────────────────────────────────────────────────
 

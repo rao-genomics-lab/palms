@@ -128,12 +128,17 @@ class CellColorManager:
         else:
             expr = np.asarray(X[:, gene_idx]).ravel().astype(np.float32)
 
-        # Normalise to [0, 1]
-        vmax = expr.max()
-        if vmax > 0:
-            expr_norm = expr / vmax
-        else:
-            expr_norm = expr.copy()
+        # Normalise non-zero cells to [0, 1] using min/max of non-zero values
+        # This spreads the full colormap range across expressing cells
+        nonzero = expr > 0
+        expr_norm = np.zeros_like(expr)
+        if nonzero.any():
+            vmin = expr[nonzero].min()
+            vmax = expr[nonzero].max()
+            if vmax > vmin:
+                expr_norm[nonzero] = (expr[nonzero] - vmin) / (vmax - vmin)
+            else:
+                expr_norm[nonzero] = 1.0  # all same value → top of colormap
 
         # Map via colormap
         cmap = plt.get_cmap(colormap)

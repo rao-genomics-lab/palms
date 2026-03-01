@@ -223,6 +223,17 @@ def main(data_path: Path, no_cache: bool = False):
         cell_labels_layer.contour = 0
         cell_labels_layer.opacity = 0.8
 
+    # ── Precompute cell centroids in pixel coordinates ──────────────────────
+    centroids_um = adata.obsm['spatial']  # shape (N, 2), columns = (x, y)
+    centroids_px = centroids_um / pixel_size
+    centroids_yx = centroids_px[:, ::-1]  # shape (N, 2), columns = (y, x) for napari
+
+    # ── ROI shapes layer ─────────────────────────────────────────────────────
+    roi_layer = viewer.add_shapes(
+        data=[], name="ROIs", shape_type="polygon",
+        edge_color="white", face_color=[1, 1, 1, 0.1], edge_width=2,
+    )
+
     # ── Transcript points layer ───────────────────────────────────────────────
     transcript_layer = viewer.add_points(
         np.empty((0, 2), dtype=np.float32),
@@ -246,6 +257,9 @@ def main(data_path: Path, no_cache: bool = False):
         transcript_layer=transcript_layer,
         umap_viewer=umap_viewer,
         label_to_obs=label_to_obs,
+        roi_layer=roi_layer,
+        centroids_yx=centroids_yx,
+        pixel_size=pixel_size,
     )
     viewer.window.add_dock_widget(panel, name="Xenium Controls", area="right")
 
@@ -327,6 +341,9 @@ def _build_control_panel(
     transcript_layer,
     umap_viewer: UMAPViewer,
     label_to_obs: np.ndarray,
+    roi_layer=None,
+    centroids_yx: np.ndarray = None,
+    pixel_size: float = 1.0,
 ):
     """Build and return a magicgui Container docked widget."""
     from magicgui.widgets import (
@@ -652,6 +669,105 @@ def _build_control_panel(
 
         viewer.cursor.events.position.connect(_on_cursor_move)
 
+    # ── ROI Analysis widgets ──────────────────────────────────────────────────
+    from qtpy.QtWidgets import QTextEdit, QFileDialog
+    roi_calc_button = PushButton(label="Calculate Expression", enabled=True)
+    roi_export_button = PushButton(label="Export CSV", enabled=False)
+    roi_text = QTextEdit()
+    roi_text.setReadOnly(True)
+    roi_text.setFontFamily("monospace")
+    roi_text.setMaximumHeight(300)
+
+    def on_calculate_roi():
+        from shapely.geometry import Polygon as ShapelyPolygon
+        from shapely import contains_xy
+
+        gene = gene_widget.value
+        if gene is None:
+            roi_text.setPlainText("No gene selected.")
+            return
+
+        polygons = roi_layer.data if roi_layer is not None else []
+        if len(polygons) == 0:
+            roi_text.setPlainText("No ROI polygons drawn.\nUse the Shapes layer to draw polygons.")
+            return
+
+        # Get expression for current gene
+        adata = color_manager.adata
+        gene_idx = adata.var_names.get_loc(gene)
+        X = adata.X
+        if hasattr(X, "toarray"):
+            expr = np.asarray(X[:, gene_idx].toarray()).ravel().astype(np.float32)
+        else:
+            expr = np.asarray(X[:, gene_idx]).ravel().astype(np.float32)
+
+        lines = [f"Gene: {gene}", ""]
+        roi_results = []  # list of dicts for export
+
+        for i, poly_yx in enumerate(polygons):
+            # poly_yx is Nx2 in napari (y, x) coords; shapely needs (x, y)
+            poly_xy = poly_yx[:, ::-1]
+            shapely_poly = ShapelyPolygon(poly_xy)
+            if not shapely_poly.is_valid:
+                shapely_poly = shapely_poly.buffer(0)
+
+            # Check which centroids are inside
+            inside = contains_xy(shapely_poly, centroids_yx[:, 1], centroids_yx[:, 0])
+            inside_idx = np.where(inside)[0]
+            n_cells = len(inside_idx)
+
+            if n_cells == 0:
+                lines.append(f"Region {i+1}: 0 cells")
+            else:
+                region_expr = expr[inside_idx]
+                lines.append(
+                    f"Region {i+1}: {n_cells} cells, "
+                    f"mean={region_expr.mean():.2f}, "
+                    f"median={np.median(region_expr):.2f}, "
+                    f"std={region_expr.std():.2f}, "
+                    f"min={region_expr.min():.0f}, "
+                    f"max={region_expr.max():.0f}"
+                )
+
+            # Store for export
+            for idx in inside_idx:
+                # centroids_yx is (y, x) in pixels; convert back to microns (x, y)
+                x_um = centroids_yx[idx, 1] * pixel_size
+                y_um = centroids_yx[idx, 0] * pixel_size
+                cell_id = adata.obs['cell_id'].values[idx] if 'cell_id' in adata.obs.columns else str(idx)
+                roi_results.append({
+                    "region_id": i + 1,
+                    "cell_id": cell_id,
+                    "x_centroid_um": x_um,
+                    "y_centroid_um": y_um,
+                    "expression": expr[idx],
+                })
+
+        roi_text.setPlainText("\n".join(lines))
+        _state["roi_results"] = roi_results
+        _state["roi_gene"] = gene
+        roi_export_button.enabled = len(roi_results) > 0
+
+    def on_export_csv():
+        results = _state.get("roi_results", [])
+        if not results:
+            return
+        import csv
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export ROI Data", f"roi_{_state.get('roi_gene', 'gene')}.csv",
+            "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["region_id", "cell_id", "x_centroid_um", "y_centroid_um", "expression"])
+            writer.writeheader()
+            writer.writerows(results)
+        status_label.value = f"Exported {len(results)} cells to {path}"
+
+    roi_calc_button.clicked.connect(on_calculate_roi)
+    roi_export_button.clicked.connect(on_export_csv)
+
     # ── Wire events ──────────────────────────────────────────────────────────
     mode_widget.changed.connect(on_mode_change)
     filter_check.changed.connect(on_filter_change)
@@ -725,6 +841,16 @@ def _build_control_panel(
             umap_size_slider,
         ),
         "UMAP",
+    )
+
+    # Tab 4: ROI Analysis
+    tab_widget.addTab(
+        _make_tab(
+            roi_calc_button,
+            roi_text,
+            roi_export_button,
+        ),
+        "ROI Analysis",
     )
 
     return tab_widget

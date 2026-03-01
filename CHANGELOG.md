@@ -3,6 +3,22 @@
 ## [Unreleased] — 2026-03-01
 
 ### Added
+- **ROI polygon analysis** — new "ROI Analysis" tab (4th tab). Draw polygons on the
+  napari Shapes layer ("ROIs"), click "Calculate Expression" to get per-region stats
+  (cell count, mean, median, std, min, max) for the selected gene. "Export CSV" saves
+  per-cell data (region_id, cell_id, x/y centroid in microns, expression). Uses shapely
+  `contains_xy` for fast point-in-polygon queries on precomputed cell centroids.
+
+### Changed
+- **UMAP window no longer auto-opens** — `color_by_gene()` and `color_by_cluster()`
+  store colors/metadata but only update the viewer if already open. Click "Show UMAP
+  Window" to open it manually; colors and title are applied on first open.
+- **Min/max colormap scaling** — gene expression coloring now normalizes non-zero cells
+  using vmin/vmax of expressing cells (instead of 0-to-max). This spreads the full
+  viridis range across expressing cells so low-expressors are visually distinguishable.
+  Zero-expression cells remain transparent.
+
+### Previously added
 - **Multi-gene transcript overlay** — add up to 10 genes simultaneously with distinct
   colors (yellow, cyan, magenta, orange, green, sky blue, red, violet, pink, brown).
   New gene list widget with Add/Remove/Clear All buttons and color legend.
