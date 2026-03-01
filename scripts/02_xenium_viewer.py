@@ -622,16 +622,17 @@ def _build_control_panel(
         apply_transcripts_button.enabled = True
 
     # ── Mouse hover: show cluster ID in status bar ─────────────────────────
+    # Use cursor.events.position which fires AFTER napari's built-in layer
+    # status updates, so our custom text overwrites the default coordinates.
     if cell_labels_layer is not None:
-        @cell_labels_layer.mouse_move_callbacks.append
-        def _on_hover(layer, event):
+        def _on_cursor_move(event):
             lut = _state["label_to_cluster"]
             if lut is None:
                 return  # not in cluster mode
-            label_val = layer.get_value(
-                event.position,
-                view_direction=event.view_direction,
-                dims_displayed=event.dims_displayed,
+            label_val = cell_labels_layer.get_value(
+                viewer.cursor.position,
+                view_direction=None,
+                dims_displayed=list(range(cell_labels_layer.ndim)),
                 world=True,
             )
             # multiscale labels return (data_level, label_value)
@@ -644,8 +645,8 @@ def _build_control_panel(
                     viewer.status = f"Cell {int(label_val)} — {name}: {cid}"
                 else:
                     viewer.status = f"Cell {int(label_val)} — {name}: unassigned"
-            else:
-                viewer.status = ""
+
+        viewer.cursor.events.position.connect(_on_cursor_move)
 
     # ── Wire events ──────────────────────────────────────────────────────────
     mode_widget.changed.connect(on_mode_change)

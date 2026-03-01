@@ -108,10 +108,11 @@ class UMAPViewer:
         # Reset view to fit all points
         self._viewer.reset_view()
 
-        # Register hover callback
-        @self._points_layer.mouse_move_callbacks.append
-        def _on_hover(layer, event):
-            self._handle_hover(event)
+        # Register hover callback — use cursor.events.position so our status
+        # text overwrites napari's default layer status updates
+        self._viewer.cursor.events.position.connect(
+            lambda event: self._handle_hover()
+        )
 
         # Reapply colors if we had them before the window was closed
         if self._current_colors is not None:
@@ -193,16 +194,16 @@ class UMAPViewer:
 
     # ── Hover handler ────────────────────────────────────────────────────────
 
-    def _handle_hover(self, event):
+    def _handle_hover(self):
         """Show cluster ID and cell ID in the UMAP viewer status bar on hover."""
-        if self._points_layer is None:
+        if self._points_layer is None or self._viewer is None:
             return
 
         # Get the value under the cursor (point index or None)
         val = self._points_layer.get_value(
-            event.position,
-            view_direction=event.view_direction,
-            dims_displayed=event.dims_displayed,
+            self._viewer.cursor.position,
+            view_direction=None,
+            dims_displayed=list(range(self._points_layer.ndim)),
             world=True,
         )
 
