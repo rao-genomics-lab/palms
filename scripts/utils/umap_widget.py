@@ -196,6 +196,8 @@ class UMAPViewer:
 
     def _handle_hover(self):
         """Show cluster ID and cell ID in the UMAP viewer status bar on hover."""
+        from qtpy.QtCore import QTimer
+
         if self._points_layer is None or self._viewer is None:
             return
 
@@ -212,7 +214,6 @@ class UMAPViewer:
             return
         point_idx = val[0] if isinstance(val, tuple) else val
         if point_idx is None:
-            self._viewer.status = ""
             return
 
         # Map point index → obs index → cell_id
@@ -224,7 +225,9 @@ class UMAPViewer:
             cid = self._cluster_ids[point_idx]
             parts.append(f"{self._clustering_name}: {cid}")
 
-        self._viewer.status = " | ".join(parts)
+        text = " | ".join(parts)
+        viewer = self._viewer
+        QTimer.singleShot(0, lambda: setattr(viewer, 'status', text))
 
     # ── Selection highlighting ───────────────────────────────────────────────
 

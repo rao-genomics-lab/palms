@@ -622,8 +622,11 @@ def _build_control_panel(
         apply_transcripts_button.enabled = True
 
     # ── Mouse hover: show cluster ID in status bar ─────────────────────────
-    # Use cursor.events.position which fires AFTER napari's built-in layer
-    # status updates, so our custom text overwrites the default coordinates.
+    # napari's own layer status updates overwrite viewer.status on every
+    # cursor move. We defer our update with QTimer.singleShot(0) so it
+    # runs on the next event-loop tick, after napari's updates finish.
+    from qtpy.QtCore import QTimer
+
     if cell_labels_layer is not None:
         def _on_cursor_move(event):
             lut = _state["label_to_cluster"]
@@ -642,9 +645,10 @@ def _build_control_panel(
                 cid = lut[int(label_val)]
                 name = _state["active_clustering_name"] or "cluster"
                 if cid >= 0:
-                    viewer.status = f"Cell {int(label_val)} — {name}: {cid}"
+                    text = f"Cell {int(label_val)} — {name}: {cid}"
                 else:
-                    viewer.status = f"Cell {int(label_val)} — {name}: unassigned"
+                    text = f"Cell {int(label_val)} — {name}: unassigned"
+                QTimer.singleShot(0, lambda t=text: setattr(viewer, 'status', t))
 
         viewer.cursor.events.position.connect(_on_cursor_move)
 
