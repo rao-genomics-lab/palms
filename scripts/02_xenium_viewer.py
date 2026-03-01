@@ -272,9 +272,9 @@ def _build_control_panel(
         "color_mode": "Gene Expression",
     }
 
-    # ── Widgets ──────────────────────────────────────────────────────────────
+    # ── Cell Coloring widgets ────────────────────────────────────────────────
     mode_widget = RadioButtons(
-        label="Color by",
+        label="Color cells by",
         choices=["Gene Expression", "Cluster"],
         value="Gene Expression",
     )
@@ -298,28 +298,39 @@ def _build_control_panel(
         enabled=False,
     )
 
+    apply_color_button = PushButton(label="Apply Cell Coloring", enabled=True)
+
+    # ── Transcript Overlay widgets ────────────────────────────────────────────
+    transcript_gene_widget = ComboBox(
+        label="Transcript gene",
+        choices=gene_names,
+        value=gene_names[0] if gene_names else None,
+    )
+
     transcript_check = CheckBox(label="Show transcripts", value=False)
 
     qv_slider = Slider(label="Min QV", min=0, max=40, value=20)
 
-    apply_button = PushButton(label="Apply", enabled=True)
+    apply_transcripts_button = PushButton(label="Apply Transcripts", enabled=True)
+
+    # ── Status ────────────────────────────────────────────────────────────────
     status_label = Label(value="Ready")
 
-    # ── Callbacks ────────────────────────────────────────────────────────────
+    # ── Cell Coloring callbacks ─────────────────────────────────────────────
     def on_mode_change(value):
         _state["color_mode"] = value
         gene_widget.enabled = (value == "Gene Expression")
         colormap_widget.enabled = (value == "Gene Expression")
         clustering_widget.enabled = (value == "Cluster")
 
-    def on_apply():
+    def on_apply_color():
         if cell_labels_layer is None:
             status_label.value = "No cell_labels layer found"
             return
 
         mode = _state["color_mode"]
-        status_label.value = "Computing colors..."
-        apply_button.enabled = False
+        status_label.value = "Computing cell colors..."
+        apply_color_button.enabled = False
 
         if mode == "Gene Expression":
             gene = gene_widget.value
@@ -345,55 +356,64 @@ def _build_control_panel(
 
             compute_cluster()
 
-        # Handle transcript visibility
-        if transcript_check.value:
-            gene = gene_widget.value
-            _state["show_transcripts"] = True
-            _load_transcripts(gene)
-        else:
-            transcript_layer.visible = False
-
     def _on_gene_colors_ready(result):
         gene, color_arr = result
         color_manager.apply_to_labels_layer(cell_labels_layer, color_arr)
         umap_widget.color_by_gene(gene, color_arr, label_to_obs)
-        status_label.value = f"Gene: {gene}"
-        apply_button.enabled = True
+        status_label.value = f"Cells colored by gene: {gene}"
+        apply_color_button.enabled = True
 
     def _on_cluster_colors_ready(result):
         clustering_key, (color_arr, cluster_to_color) = result
         color_manager.apply_to_labels_layer(cell_labels_layer, color_arr)
         umap_widget.color_by_cluster(clustering_key, color_arr, label_to_obs)
-        status_label.value = f"Clustering: {clustering_key}"
-        apply_button.enabled = True
+        status_label.value = f"Cells colored by cluster: {clustering_key}"
+        apply_color_button.enabled = True
 
-    def _load_transcripts(gene: str):
-        @thread_worker(connect={"returned": _on_transcripts_ready})
-        def fetch():
-            return transcript_loader.get_points_array(gene)
+    # ── Transcript Overlay callbacks ──────────────────────────────────────────
+    def on_apply_transcripts():
+        if transcript_check.value:
+            gene = transcript_gene_widget.value
+            status_label.value = f"Loading transcripts for {gene}..."
+            apply_transcripts_button.enabled = False
 
-        fetch()
+            @thread_worker(connect={"returned": _on_transcripts_ready})
+            def fetch():
+                return gene, transcript_loader.get_points_array(gene)
 
-    def _on_transcripts_ready(points: np.ndarray):
+            fetch()
+        else:
+            transcript_layer.visible = False
+            status_label.value = "Transcripts hidden"
+
+    def _on_transcripts_ready(result):
+        gene, points = result
         transcript_layer.data = points
         transcript_layer.visible = True
-        status_label.value += f" | {len(points):,} transcripts"
+        status_label.value = f"Transcripts: {gene} ({len(points):,} spots)"
+        apply_transcripts_button.enabled = True
 
     # ── Wire events ──────────────────────────────────────────────────────────
     mode_widget.changed.connect(on_mode_change)
-    apply_button.clicked.connect(on_apply)
+    apply_color_button.clicked.connect(on_apply_color)
+    apply_transcripts_button.clicked.connect(on_apply_transcripts)
 
     # ── Assemble container ───────────────────────────────────────────────────
     container = Container(
         widgets=[
-            Label(value="─── Xenium Linux Viewer ───"),
+            Label(value="─── Cell Coloring ───"),
             mode_widget,
             gene_widget,
             colormap_widget,
             clustering_widget,
+            apply_color_button,
+            Label(value=""),
+            Label(value="─── Transcript Overlay ───"),
+            transcript_gene_widget,
             transcript_check,
             qv_slider,
-            apply_button,
+            apply_transcripts_button,
+            Label(value=""),
             status_label,
         ]
     )
