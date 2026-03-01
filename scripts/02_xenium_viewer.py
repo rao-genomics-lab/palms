@@ -701,8 +701,12 @@ def _build_control_panel(
         else:
             expr = np.asarray(X[:, gene_idx]).ravel().astype(np.float32)
 
+        from scipy import stats
+        from itertools import combinations
+
         lines = [f"Gene: {gene}", ""]
         roi_results = []  # list of dicts for export
+        region_exprs = []  # list of (region_idx, expression_array) for t-tests
 
         for i, poly_yx in enumerate(polygons):
             # poly_yx is Nx2 in napari (y, x) coords; shapely needs (x, y)
@@ -718,6 +722,7 @@ def _build_control_panel(
 
             if n_cells == 0:
                 lines.append(f"Region {i+1}: 0 cells")
+                region_exprs.append((i + 1, np.array([], dtype=np.float32)))
             else:
                 region_expr = expr[inside_idx]
                 lines.append(
@@ -728,6 +733,7 @@ def _build_control_panel(
                     f"min={region_expr.min():.0f}, "
                     f"max={region_expr.max():.0f}"
                 )
+                region_exprs.append((i + 1, region_expr))
 
             # Store for export
             for idx in inside_idx:
@@ -742,6 +748,49 @@ def _build_control_panel(
                     "y_centroid_um": y_um,
                     "expression": expr[idx],
                 })
+
+        # ── Significance testing (Welch's t-test, pairwise) ──────────────
+        # Only between regions with >= 2 cells
+        testable = [(r, e) for r, e in region_exprs if len(e) >= 2]
+        pairs = list(combinations(testable, 2))
+        if pairs:
+            lines.append("")
+            lines.append("── Pairwise Welch's t-tests ──")
+            raw_pvals = []
+            pair_labels = []
+            for (r1, e1), (r2, e2) in pairs:
+                t_stat, p_val = stats.ttest_ind(e1, e2, equal_var=False)
+                raw_pvals.append(p_val)
+                pair_labels.append((r1, r2, t_stat, p_val))
+
+            # Benjamini-Hochberg correction if >1 comparison
+            n_tests = len(raw_pvals)
+            if n_tests > 1:
+                sorted_idx = np.argsort(raw_pvals)
+                adjusted = np.empty(n_tests, dtype=np.float64)
+                for rank_pos, orig_idx in enumerate(sorted_idx):
+                    adjusted[orig_idx] = raw_pvals[orig_idx] * n_tests / (rank_pos + 1)
+                # Enforce monotonicity (step-up) and cap at 1.0
+                adjusted_sorted = adjusted[sorted_idx]
+                for j in range(n_tests - 2, -1, -1):
+                    adjusted_sorted[j] = min(adjusted_sorted[j], adjusted_sorted[j + 1])
+                adjusted[sorted_idx] = adjusted_sorted
+                adjusted = np.minimum(adjusted, 1.0)
+
+                for k, (r1, r2, t_stat, p_raw) in enumerate(pair_labels):
+                    p_adj = adjusted[k]
+                    sig = " *" if p_adj < 0.05 else ""
+                    lines.append(
+                        f"  Region {r1} vs {r2}: t={t_stat:.3f}, "
+                        f"p={p_raw:.2e}, p_adj(BH)={p_adj:.2e}{sig}"
+                    )
+                lines.append(f"  ({n_tests} comparisons, Benjamini-Hochberg correction)")
+            else:
+                r1, r2, t_stat, p_val = pair_labels[0]
+                sig = " *" if p_val < 0.05 else ""
+                lines.append(
+                    f"  Region {r1} vs {r2}: t={t_stat:.3f}, p={p_val:.2e}{sig}"
+                )
 
         roi_text.setPlainText("\n".join(lines))
         _state["roi_results"] = roi_results

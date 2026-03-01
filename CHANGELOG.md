@@ -8,6 +8,8 @@
   (cell count, mean, median, std, min, max) for the selected gene. "Export CSV" saves
   per-cell data (region_id, cell_id, x/y centroid in microns, expression). Uses shapely
   `contains_xy` for fast point-in-polygon queries on precomputed cell centroids.
+  Includes pairwise Welch's t-tests between regions with Benjamini-Hochberg
+  correction when >1 comparison.
 
 ### Changed
 - **UMAP window no longer auto-opens** — `color_by_gene()` and `color_by_cluster()`
