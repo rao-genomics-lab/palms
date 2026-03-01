@@ -42,7 +42,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from utils.coloring import CellColorManager, AVAILABLE_COLORMAPS, CLUSTER_PALETTE
 from utils.transcript_index import TranscriptLoader
-from utils.umap_widget import UMAPWindow
+from utils.umap_widget import UMAPWidget
 
 # ─── Channel metadata ───────────────────────────────────────────────────────
 CHANNEL_NAMES = [
@@ -101,7 +101,7 @@ def main():
     # ── Managers ─────────────────────────────────────────────────────────────
     color_manager = CellColorManager(adata, label_to_obs)
     transcript_loader = TranscriptLoader(cache_dir=SCRIPTS_DIR / "transcript_cache")
-    umap_window = UMAPWindow(umap_df, adata.obs_names)
+    umap_widget = UMAPWidget(umap_df, adata.obs_names)
 
     # ── Napari viewer ────────────────────────────────────────────────────────
     print("Opening napari...")
@@ -149,16 +149,13 @@ def main():
         transcript_loader=transcript_loader,
         cell_labels_layer=cell_labels_layer,
         transcript_layer=transcript_layer,
-        umap_window=umap_window,
+        umap_widget=umap_widget,
         label_to_obs=label_to_obs,
     )
     viewer.window.add_dock_widget(panel, name="Xenium Controls", area="right")
 
-    # ── Show UMAP window after event loop starts ──────────────────────────────
-    # Deferred via QTimer so napari's Qt event loop is fully running before
-    # matplotlib tries to create its figure (avoids ICE/X11 race on startup).
-    from qtpy.QtCore import QTimer
-    QTimer.singleShot(800, umap_window.show)
+    # ── UMAP dock widget ───────────────────────────────────────────────────────
+    viewer.window.add_dock_widget(umap_widget, name="UMAP", area="bottom")
 
     print("\nViewer ready. Close the napari window to exit.")
     napari.run()
@@ -235,7 +232,7 @@ def _build_control_panel(
     transcript_loader: TranscriptLoader,
     cell_labels_layer,
     transcript_layer,
-    umap_window: UMAPWindow,
+    umap_widget: UMAPWidget,
     label_to_obs: np.ndarray,
 ):
     """Build and return a magicgui Container docked widget."""
@@ -339,14 +336,14 @@ def _build_control_panel(
     def _on_gene_colors_ready(result):
         gene, color_arr = result
         color_manager.apply_to_labels_layer(cell_labels_layer, color_arr)
-        umap_window.color_by_gene(gene, color_arr, label_to_obs)
+        umap_widget.color_by_gene(gene, color_arr, label_to_obs)
         status_label.value = f"Gene: {gene}"
         apply_button.enabled = True
 
     def _on_cluster_colors_ready(result):
         clustering_key, (color_arr, cluster_to_color) = result
         color_manager.apply_to_labels_layer(cell_labels_layer, color_arr)
-        umap_window.color_by_cluster(clustering_key, color_arr, label_to_obs)
+        umap_widget.color_by_cluster(clustering_key, color_arr, label_to_obs)
         status_label.value = f"Clustering: {clustering_key}"
         apply_button.enabled = True
 
