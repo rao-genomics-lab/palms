@@ -701,10 +701,26 @@ def _build_control_panel(
         else:
             expr = np.asarray(X[:, gene_idx]).ravel().astype(np.float32)
 
+        # Build cluster mask if filter is active
+        use_filter = filter_check.value
+        cluster_mask = None  # None = no filtering, else bool array (n_obs,)
+        filter_desc = ""
+        if use_filter:
+            clustering_key = clustering_widget.value
+            cluster_id = int(cluster_id_widget.value)
+            cluster_series = clusterings[clustering_key]
+            if 'cell_id' in adata.obs.columns:
+                cell_ids_arr = adata.obs['cell_id'].values
+                clusters_aligned = cluster_series.reindex(cell_ids_arr, fill_value=-1)
+            else:
+                clusters_aligned = cluster_series.reindex(adata.obs_names, fill_value=-1)
+            cluster_mask = clusters_aligned.values.astype(np.int32) == cluster_id
+            filter_desc = f" (cluster {clustering_key}={cluster_id})"
+
         from scipy import stats
         from itertools import combinations
 
-        lines = [f"Gene: {gene}", ""]
+        lines = [f"Gene: {gene}{filter_desc}", ""]
         roi_results = []  # list of dicts for export
         region_exprs = []  # list of (region_idx, expression_array) for t-tests
 
@@ -715,8 +731,10 @@ def _build_control_panel(
             if not shapely_poly.is_valid:
                 shapely_poly = shapely_poly.buffer(0)
 
-            # Check which centroids are inside
+            # Check which centroids are inside (intersect with cluster filter if active)
             inside = contains_xy(shapely_poly, centroids_yx[:, 1], centroids_yx[:, 0])
+            if cluster_mask is not None:
+                inside = inside & cluster_mask
             inside_idx = np.where(inside)[0]
             n_cells = len(inside_idx)
 
