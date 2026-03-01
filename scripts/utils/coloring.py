@@ -184,26 +184,48 @@ class CellColorManager:
         -------
         np.ndarray, shape (max_label + 1, 4), dtype float32
         """
-        # Get the full gene coloring (uses cache)
-        color_arr = self.get_gene_colors(gene_name, colormap=colormap).copy()
-
-        # Align cluster assignments to adata obs (same pattern as get_cluster_colors)
+        # Align cluster assignments to adata obs
         if 'cell_id' in self.adata.obs.columns:
             cell_ids = self.adata.obs['cell_id'].values
             clusters_aligned = cluster_series.reindex(cell_ids, fill_value=-1)
         else:
             clusters_aligned = cluster_series.reindex(self.adata.obs_names, fill_value=-1)
         cluster_values = clusters_aligned.values.astype(np.int32)
+        in_cluster = cluster_values == cluster_id
 
-        # Build mask of obs indices NOT in the selected cluster
-        not_in_cluster = cluster_values != cluster_id
+        # Extract expression for this gene (sparse → dense)
+        gene_idx = self.adata.var_names.get_loc(gene_name)
+        X = self.adata.X
+        if hasattr(X, "toarray"):
+            expr = np.asarray(X[:, gene_idx].toarray()).ravel().astype(np.float32)
+        else:
+            expr = np.asarray(X[:, gene_idx]).ravel().astype(np.float32)
 
-        # Set alpha=0 for labels whose obs is not in the selected cluster
+        # Normalise using min/max of non-zero expression WITHIN the cluster
+        nonzero_in_cluster = in_cluster & (expr > 0)
+        expr_norm = np.zeros_like(expr)
+        if nonzero_in_cluster.any():
+            vmin = expr[nonzero_in_cluster].min()
+            vmax = expr[nonzero_in_cluster].max()
+            if vmax > vmin:
+                expr_norm[nonzero_in_cluster] = (expr[nonzero_in_cluster] - vmin) / (vmax - vmin)
+            else:
+                expr_norm[nonzero_in_cluster] = 1.0
+
+        # Map via colormap
+        cmap = plt.get_cmap(colormap)
+        rgba_obs = cmap(expr_norm).astype(np.float32)
+
+        # Alpha: transparent for zero-expression and out-of-cluster cells
+        rgba_obs[:, 3] = 0.0
+        rgba_obs[nonzero_in_cluster, 3] = 1.0
+
+        # Build label-indexed array
+        color_arr = self._empty_color_array()
         valid_mask = self.label_to_obs >= 0
         valid_labels = np.where(valid_mask)[0]
         obs_indices = self.label_to_obs[valid_labels]
-        labels_to_clear = valid_labels[not_in_cluster[obs_indices]]
-        color_arr[labels_to_clear, 3] = 0.0
+        color_arr[valid_labels] = rgba_obs[obs_indices]
 
         return color_arr
 
