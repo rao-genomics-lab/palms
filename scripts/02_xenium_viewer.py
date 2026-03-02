@@ -245,6 +245,10 @@ def main(data_path: Path, no_cache: bool = False):
         cell_labels_layer.contour = 0
         cell_labels_layer.opacity = 0.8
 
+    # ── Hide all layers except cell_labels at startup ────────────────────────
+    for layer in viewer.layers:
+        layer.visible = (layer is cell_labels_layer)
+
     # ── Precompute cell centroids in pixel coordinates ──────────────────────
     centroids_um = adata.obsm['spatial']  # shape (N, 2), columns = (x, y)
     centroids_px = centroids_um / pixel_size
