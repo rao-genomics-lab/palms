@@ -49,6 +49,7 @@ def run_ligrec(
                 n_perms=n_perms,
                 threshold=threshold,
                 seed=seed,
+                use_raw=False,
                 copy=True,
             )
         means = result['means']
