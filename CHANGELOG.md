@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased] — 2026-03-02
+
+### Added
+- **Gene Analysis tab** (Tab 6) — rank marker genes per cluster using Wilcoxon, t-test, or
+  logreg methods via scanpy's `rank_genes_groups`. Features: configurable top-N genes,
+  dotplot visualization with optional dendrogram, editable cluster labels (dialog to rename
+  cluster IDs for publication-ready plots), rank genes panel plot, results preview in
+  monospace text area, and full CSV export. New module `scripts/utils/gene_analysis.py` with
+  `get_normalized_adata()` (cached log-normalization + PCA), `add_clustering_to_obs()`,
+  `run_rank_genes()`, `make_rank_genes_dotplot()`, `make_rank_genes_plot()`.
+- **ROI differential expression** — extended ROI Analysis tab (Tab 4) with genome-wide
+  DEG between drawn ROI polygons. Draw >= 2 ROIs, select method (Wilcoxon/t-test), optional
+  cluster filtering, then compute DE across all genes. Uses `compute_roi_deg()` which
+  normalizes the subset, runs `rank_genes_groups` with `reference='rest'`, and returns
+  full results table. Export to CSV supported.
+- **Ligand-Receptor tab** (Tab 7) — squidpy-based spatial ligand-receptor interaction
+  analysis. Computes spatial neighbor graph, runs permutation-based L-R testing
+  (`sq.gr.ligrec`), displays summary of significant interactions, and generates
+  interaction dotplot. Configurable: clustering, permutation count (100-1000), neighbor
+  count (3-20), p-value threshold. Export means and p-values as CSV, save plot as PNG.
+  Warns when the 480-gene Xenium panel lacks common L-R pairs. New module
+  `scripts/utils/spatial_analysis.py` with `compute_spatial_neighbors()`, `run_ligrec()`,
+  `make_ligrec_plot()`.
+
 ## [Unreleased] — 2026-03-01
 
 ### Added
@@ -30,9 +54,16 @@
   correction when >1 comparison.
 
 ### Changed
+- **Multi-cluster filter** — "Filter by cluster" now supports selecting multiple clusters
+  simultaneously via checkboxes (3-column grid with Select All / Deselect All). Works
+  in both Gene Expression and Cluster coloring modes. Replaces the single-cluster
+  ComboBox dropdown.
+- **White background toggle** — new checkbox at the top of the Cell Coloring tab sets the
+  napari canvas background to white, useful for H&E overlay visibility or light-colored
+  cluster inspection.
 - **Cluster filter works in both modes** — "Filter by cluster" checkbox and cluster ID
   selector are now available in Cluster coloring mode (not just Gene Expression). When
-  enabled, only cells belonging to the selected cluster are shown; all others are
+  enabled, only cells belonging to the selected clusters are shown; all others are
   transparent.
 - **UMAP window no longer auto-opens** — `color_by_gene()` and `color_by_cluster()`
   store colors/metadata but only update the viewer if already open. Click "Show UMAP

@@ -72,6 +72,13 @@ from utils.registration import (
     load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
     extract_tissue_mask_fluorescence, extract_tissue_mask_he, compute_coarse_affine,
 )
+from utils.gene_analysis import (
+    get_normalized_adata, add_clustering_to_obs, run_rank_genes,
+    make_rank_genes_dotplot, make_rank_genes_plot, compute_roi_deg,
+)
+from utils.spatial_analysis import (
+    compute_spatial_neighbors, run_ligrec, make_ligrec_plot,
+)
 
 # ─── Channel metadata ───────────────────────────────────────────────────────
 CHANNEL_NAMES = [
@@ -278,6 +285,7 @@ def main(data_path: Path, no_cache: bool = False):
         data_path=data_path,
         morph_thumb=morph_thumb,
         morph_full_shape_yx=morph_full_shape_yx,
+        adata=adata,
     )
     viewer.window.add_dock_widget(panel, name="Xenium Controls", area="right")
 
@@ -365,6 +373,7 @@ def _build_control_panel(
     data_path: Path = None,
     morph_thumb=None,
     morph_full_shape_yx=None,
+    adata=None,
 ):
     """Build and return a magicgui Container docked widget."""
     from magicgui.widgets import (
@@ -373,6 +382,7 @@ def _build_control_panel(
     )
     from qtpy.QtWidgets import (
         QListWidget, QHBoxLayout, QWidget, QVBoxLayout, QLabel, QTabWidget,
+        QCheckBox, QScrollArea, QGridLayout,
     )
 
     # ── State ────────────────────────────────────────────────────────────────
@@ -418,18 +428,25 @@ def _build_control_panel(
     # ── Cluster filter widgets ───────────────────────────────────────────────
     filter_check = CheckBox(label="Filter by cluster", value=False, enabled=True)
 
-    # Get initial cluster IDs for the first clustering
-    _initial_cluster_ids = []
-    if clustering_names:
-        _initial_cluster_ids = sorted(
-            clusterings[clustering_names[0]].dropna().unique().astype(int).tolist()
-        )
-    cluster_id_widget = ComboBox(
-        label="Cluster ID",
-        choices=[str(c) for c in _initial_cluster_ids],
-        value=str(_initial_cluster_ids[0]) if _initial_cluster_ids else None,
-        enabled=False,
-    )
+    # Scrollable checkbox grid for multi-cluster selection
+    cluster_filter_container = QWidget()
+    cluster_filter_grid = QGridLayout()
+    cluster_filter_grid.setContentsMargins(0, 0, 0, 0)
+    cluster_filter_container.setLayout(cluster_filter_grid)
+
+    cluster_scroll = QScrollArea()
+    cluster_scroll.setWidget(cluster_filter_container)
+    cluster_scroll.setWidgetResizable(True)
+    cluster_scroll.setMaximumHeight(150)
+    cluster_scroll.setEnabled(False)
+
+    select_all_btn = PushButton(label="Select All", enabled=False)
+    deselect_all_btn = PushButton(label="Deselect All", enabled=False)
+
+    _state["cluster_checkboxes"] = {}  # int -> QCheckBox
+
+    # ── White background toggle ─────────────────────────────────────────────
+    bg_white_check = CheckBox(label="White background", value=False)
 
     apply_color_button = PushButton(label="Apply Cell Coloring", enabled=True)
 
@@ -487,14 +504,45 @@ def _build_control_panel(
             parts.append(f"{color_names[i % len(color_names)]}: {g}")
         legend_label_qt.setText(" | ".join(parts))
 
-    # ── Helper: repopulate cluster ID choices ─────────────────────────────────
-    def _repopulate_cluster_ids():
+    # ── Helper: repopulate cluster checkboxes ──────────────────────────────
+    def _repopulate_cluster_checkboxes():
+        # Clear existing checkboxes
+        while cluster_filter_grid.count():
+            item = cluster_filter_grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        _state["cluster_checkboxes"].clear()
+
         key = clustering_widget.value
-        if key and key in clusterings:
-            ids = sorted(clusterings[key].dropna().unique().astype(int).tolist())
-            cluster_id_widget.choices = [str(c) for c in ids]
-            if ids:
-                cluster_id_widget.value = str(ids[0])
+        if not key or key not in clusterings:
+            return
+        ids = sorted(clusterings[key].dropna().unique().astype(int).tolist())
+        cols = 3
+        for i, cid in enumerate(ids):
+            cb = QCheckBox(str(cid))
+            cb.setChecked(True)
+            cb.setEnabled(filter_check.value)
+            cluster_filter_grid.addWidget(cb, i // cols, i % cols)
+            _state["cluster_checkboxes"][cid] = cb
+
+    def _get_selected_cluster_ids():
+        """Return set of cluster IDs whose checkboxes are checked."""
+        return {cid for cid, cb in _state["cluster_checkboxes"].items() if cb.isChecked()}
+
+    def _on_select_all():
+        for cb in _state["cluster_checkboxes"].values():
+            cb.setChecked(True)
+
+    def _on_deselect_all():
+        for cb in _state["cluster_checkboxes"].values():
+            cb.setChecked(False)
+
+    select_all_btn.clicked.connect(_on_select_all)
+    deselect_all_btn.clicked.connect(_on_deselect_all)
+
+    # Populate checkboxes for initial clustering
+    _repopulate_cluster_checkboxes()
 
     # ── Cell Coloring callbacks ─────────────────────────────────────────────
     def on_mode_change(value):
@@ -503,15 +551,22 @@ def _build_control_panel(
         gene_widget.enabled = is_gene
         colormap_widget.enabled = is_gene
         clustering_widget.enabled = (value == "Cluster") or filter_check.value
-        cluster_id_widget.enabled = filter_check.value
+        _set_cluster_filter_enabled(filter_check.value)
+
+    def _set_cluster_filter_enabled(enabled):
+        cluster_scroll.setEnabled(enabled)
+        select_all_btn.enabled = enabled
+        deselect_all_btn.enabled = enabled
+        for cb in _state["cluster_checkboxes"].values():
+            cb.setEnabled(enabled)
 
     def on_filter_change(value):
         _state["filter_by_cluster"] = value
         clustering_widget.enabled = (_state["color_mode"] == "Cluster") or value
-        cluster_id_widget.enabled = value
+        _set_cluster_filter_enabled(value)
 
     def on_clustering_change(value):
-        _repopulate_cluster_ids()
+        _repopulate_cluster_checkboxes()
 
     def on_apply_color():
         if cell_labels_layer is None:
@@ -529,23 +584,14 @@ def _build_control_panel(
             _state["current_colormap"] = cmap
 
             use_filter = filter_check.value
-            if use_filter:
-                clustering_key = clustering_widget.value
-                cluster_id = int(cluster_id_widget.value)
-                cluster_series = clusterings[clustering_key]
-                cluster_series.name = clustering_key
+            selected_ids = _get_selected_cluster_ids() if use_filter else None
+            clustering_key = clustering_widget.value if use_filter else None
 
-                @thread_worker(connect={"returned": _on_gene_colors_ready})
-                def compute_gene_filtered():
-                    return gene, color_manager.get_gene_colors_filtered(
-                        gene, cluster_series, cluster_id, colormap=cmap
-                    )
-                compute_gene_filtered()
-            else:
-                @thread_worker(connect={"returned": _on_gene_colors_ready})
-                def compute_gene():
-                    return gene, color_manager.get_gene_colors(gene, colormap=cmap)
-                compute_gene()
+            @thread_worker(connect={"returned": _on_gene_colors_ready})
+            def compute_gene():
+                color_arr = color_manager.get_gene_colors(gene, colormap=cmap)
+                return gene, color_arr, selected_ids, clustering_key
+            compute_gene()
 
         else:  # Cluster
             clustering_key = clustering_widget.value
@@ -554,22 +600,32 @@ def _build_control_panel(
             cluster_series.name = clustering_key
 
             use_filter = filter_check.value
-            filter_id = int(cluster_id_widget.value) if use_filter else None
+            selected_ids = _get_selected_cluster_ids() if use_filter else None
 
             @thread_worker(connect={"returned": _on_cluster_colors_ready})
             def compute_cluster():
-                return clustering_key, color_manager.get_cluster_colors(cluster_series), filter_id
+                return clustering_key, color_manager.get_cluster_colors(cluster_series), selected_ids
 
             compute_cluster()
 
     def _on_gene_colors_ready(result):
-        gene, color_arr = result
+        gene, color_arr, selected_ids, clustering_key = result
+        # If filtering by clusters, zero out non-selected cells
+        if selected_ids is not None and clustering_key:
+            _, label_to_cluster_arr = _get_cluster_ids_per_obs(clustering_key)
+            color_arr = color_arr.copy()
+            mask_out = ~np.isin(label_to_cluster_arr, list(selected_ids))
+            valid_range = min(len(mask_out), len(color_arr))
+            color_arr[:valid_range][mask_out[:valid_range]] = 0
+            filter_desc = f" (clusters: {sorted(selected_ids)})"
+        else:
+            filter_desc = ""
         color_manager.apply_to_labels_layer(cell_labels_layer, color_arr)
         umap_viewer.color_by_gene(gene, color_arr, label_to_obs)
         # Clear cluster hover lookup (no longer showing clusters)
         _state["label_to_cluster"] = None
         _state["active_clustering_name"] = None
-        status_label.value = f"Cells colored by gene: {gene}"
+        status_label.value = f"Cells colored by gene: {gene}{filter_desc}"
         apply_color_button.enabled = True
 
     def _get_cluster_ids_per_obs(clustering_key):
@@ -593,15 +649,14 @@ def _build_control_panel(
         return cluster_values, label_to_cluster
 
     def _on_cluster_colors_ready(result):
-        clustering_key, (color_arr, cluster_to_color), filter_id = result
+        clustering_key, (color_arr, cluster_to_color), selected_ids = result
         # Get per-obs cluster IDs for both UMAP hover and spatial hover
         cluster_ids_per_obs, label_to_cluster = _get_cluster_ids_per_obs(clustering_key)
 
-        # If filtering by a specific cluster, zero out all other cells
-        if filter_id is not None:
+        # If filtering by selected clusters, zero out all other cells
+        if selected_ids is not None:
             color_arr = color_arr.copy()
-            # Zero out labels that don't belong to the selected cluster
-            mask_out = label_to_cluster != filter_id
+            mask_out = ~np.isin(label_to_cluster, list(selected_ids))
             valid_range = min(len(mask_out), len(color_arr))
             color_arr[:valid_range][mask_out[:valid_range]] = 0
 
@@ -612,7 +667,7 @@ def _build_control_panel(
         )
         _state["label_to_cluster"] = label_to_cluster
         _state["active_clustering_name"] = clustering_key
-        filter_desc = f" (cluster {filter_id})" if filter_id is not None else ""
+        filter_desc = f" (clusters: {sorted(selected_ids)})" if selected_ids is not None else ""
         status_label.value = f"Cells colored by cluster: {clustering_key}{filter_desc}"
         apply_color_button.enabled = True
 
@@ -739,15 +794,15 @@ def _build_control_panel(
         filter_desc = ""
         if use_filter:
             clustering_key = clustering_widget.value
-            cluster_id = int(cluster_id_widget.value)
+            selected_ids = _get_selected_cluster_ids()
             cluster_series = clusterings[clustering_key]
             if 'cell_id' in adata.obs.columns:
                 cell_ids_arr = adata.obs['cell_id'].values
                 clusters_aligned = cluster_series.reindex(cell_ids_arr, fill_value=-1)
             else:
                 clusters_aligned = cluster_series.reindex(adata.obs_names, fill_value=-1)
-            cluster_mask = clusters_aligned.values.astype(np.int32) == cluster_id
-            filter_desc = f" (cluster {clustering_key}={cluster_id})"
+            cluster_mask = np.isin(clusters_aligned.values.astype(np.int32), list(selected_ids))
+            filter_desc = f" ({clustering_key} clusters: {sorted(selected_ids)})"
 
         from scipy import stats
         from itertools import combinations
@@ -867,6 +922,390 @@ def _build_control_panel(
     roi_calc_button.clicked.connect(on_calculate_roi)
     roi_export_button.clicked.connect(on_export_csv)
 
+    # ── ROI DEG widgets (extend ROI Analysis tab) ────────────────────────────
+    from qtpy.QtWidgets import QLabel as QtLabel
+
+    roi_deg_method_widget = ComboBox(
+        label="DEG Method", choices=["wilcoxon", "t-test"], value="wilcoxon",
+    )
+    roi_deg_filter_check = CheckBox(label="Filter by cluster", value=False)
+    roi_deg_button = PushButton(label="Run ROI DEG", enabled=True)
+    roi_deg_text = QTextEdit()
+    roi_deg_text.setReadOnly(True)
+    roi_deg_text.setFontFamily("monospace")
+    roi_deg_text.setMaximumHeight(250)
+    roi_deg_export_button = PushButton(label="Export DEG CSV...", enabled=False)
+    roi_deg_status = Label(value="Draw >= 2 ROI polygons, then run DEG")
+
+    def on_roi_deg():
+        polygons = roi_layer.data if roi_layer is not None else []
+        if len(polygons) < 2:
+            roi_deg_status.value = "Need at least 2 ROI polygons drawn"
+            return
+
+        roi_deg_status.value = "Running differential expression..."
+        roi_deg_button.enabled = False
+
+        use_filter = roi_deg_filter_check.value
+        cluster_mask = None
+        if use_filter:
+            clustering_key = clustering_widget.value
+            selected_ids = _get_selected_cluster_ids()
+            cluster_series = clusterings[clustering_key]
+            _adata = adata if adata is not None else color_manager.adata
+            if 'cell_id' in _adata.obs.columns:
+                cell_ids_arr = _adata.obs['cell_id'].values
+                clusters_aligned = cluster_series.reindex(cell_ids_arr, fill_value=-1)
+            else:
+                clusters_aligned = cluster_series.reindex(_adata.obs_names, fill_value=-1)
+            cluster_mask = np.isin(clusters_aligned.values.astype(np.int32), list(selected_ids))
+
+        method = roi_deg_method_widget.value
+        _adata = adata if adata is not None else color_manager.adata
+
+        @thread_worker(connect={"returned": _on_roi_deg_ready})
+        def _run():
+            return compute_roi_deg(
+                _adata, centroids_yx, polygons, pixel_size,
+                cluster_mask=cluster_mask, method=method,
+            )
+        _run()
+
+    def _on_roi_deg_ready(df):
+        _state["roi_deg_df"] = df
+        roi_deg_button.enabled = True
+        if df.empty:
+            roi_deg_text.setPlainText("No significant results or insufficient cells in ROIs.")
+            roi_deg_status.value = "DEG: no results"
+            roi_deg_export_button.enabled = False
+            return
+        # Show top 50 rows
+        preview = df.head(50).to_string(index=False)
+        roi_deg_text.setPlainText(preview)
+        roi_deg_status.value = f"DEG complete: {len(df)} gene-group results"
+        roi_deg_export_button.enabled = True
+
+    def on_export_roi_deg():
+        df = _state.get("roi_deg_df")
+        if df is None or df.empty:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export ROI DEG Results", "roi_deg_results.csv", "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        df.to_csv(path, index=False)
+        roi_deg_status.value = f"Exported {len(df)} rows to {path}"
+
+    roi_deg_button.clicked.connect(on_roi_deg)
+    roi_deg_export_button.clicked.connect(on_export_roi_deg)
+
+    # ── Gene Analysis widgets (Tab 6) ─────────────────────────────────────────
+    ga_clustering_widget = ComboBox(
+        label="Clustering", choices=clustering_names,
+        value=clustering_names[0] if clustering_names else None,
+    )
+    ga_method_widget = ComboBox(
+        label="Method", choices=["wilcoxon", "t-test", "logreg"], value="wilcoxon",
+    )
+    ga_n_genes_slider = Slider(label="Top N genes", min=5, max=50, value=25)
+    ga_run_button = PushButton(label="Run Rank Genes", enabled=True)
+
+    ga_dotplot_n_slider = Slider(label="Genes per cluster", min=3, max=20, value=5)
+    ga_dendro_check = CheckBox(label="Dendrogram", value=True)
+    ga_dotplot_button = PushButton(label="Show Dotplot", enabled=False)
+    ga_edit_labels_button = PushButton(label="Edit Cluster Labels...", enabled=False)
+    ga_save_dotplot_button = PushButton(label="Save Dotplot as PNG...", enabled=False)
+
+    ga_rank_plot_button = PushButton(label="Show Rank Genes Plot", enabled=False)
+
+    ga_results_text = QTextEdit()
+    ga_results_text.setReadOnly(True)
+    ga_results_text.setFontFamily("monospace")
+    ga_results_text.setMaximumHeight(300)
+    ga_export_button = PushButton(label="Export Full Results CSV...", enabled=False)
+    ga_status = Label(value="Select clustering and run rank genes")
+
+    def on_run_rank_genes():
+        ga_status.value = "Running rank genes (normalizing + computing)..."
+        ga_run_button.enabled = False
+
+        clustering_key = ga_clustering_widget.value
+        method = ga_method_widget.value
+        n_genes = ga_n_genes_slider.value
+
+        _adata = adata if adata is not None else color_manager.adata
+
+        @thread_worker(connect={"returned": _on_rank_genes_ready})
+        def _run():
+            adata_norm = get_normalized_adata(_adata)
+            add_clustering_to_obs(adata_norm, _adata, clusterings[clustering_key], clustering_key)
+            df = run_rank_genes(adata_norm, clustering_key, method=method, n_genes=n_genes)
+            return df, adata_norm, clustering_key
+        _run()
+
+    def _on_rank_genes_ready(result):
+        df, adata_norm, clustering_key = result
+        _state["rank_genes_df"] = df
+        _state["rank_genes_adata_norm"] = adata_norm
+        _state["rank_genes_groupby"] = clustering_key
+        ga_run_button.enabled = True
+        ga_dotplot_button.enabled = True
+        ga_rank_plot_button.enabled = True
+        ga_edit_labels_button.enabled = True
+        ga_export_button.enabled = True
+        # Show top 50 rows
+        preview = df.head(50).to_string(index=False)
+        ga_results_text.setPlainText(preview)
+        ga_status.value = f"Rank genes done: {len(df)} results ({clustering_key}, {ga_method_widget.value})"
+
+    def on_show_dotplot():
+        adata_norm = _state.get("rank_genes_adata_norm")
+        groupby = _state.get("rank_genes_groupby")
+        if adata_norm is None or groupby is None:
+            ga_status.value = "Run rank genes first"
+            return
+        ga_status.value = "Generating dotplot..."
+        ga_dotplot_button.enabled = False
+
+        n_genes = ga_dotplot_n_slider.value
+        dendro = ga_dendro_check.value
+        labels = _state.get("cluster_labels")
+
+        @thread_worker(connect={"returned": _on_dotplot_ready})
+        def _run():
+            fig = make_rank_genes_dotplot(
+                adata_norm, groupby, n_genes=n_genes,
+                cluster_labels=labels, dendrogram=dendro,
+            )
+            return fig
+        _run()
+
+    def _on_dotplot_ready(fig):
+        _state["dotplot_fig"] = fig
+        ga_dotplot_button.enabled = True
+        ga_save_dotplot_button.enabled = True
+        import matplotlib.pyplot as _plt
+        _plt.show(block=False)
+        ga_status.value = "Dotplot displayed"
+
+    def _open_label_editor():
+        from qtpy.QtWidgets import QDialog, QGridLayout, QLineEdit, QDialogButtonBox
+
+        clustering_key = ga_clustering_widget.value
+        cluster_series = clusterings[clustering_key]
+        ids = sorted(cluster_series.dropna().unique().astype(int).tolist())
+        existing = _state.get("cluster_labels", {})
+
+        dialog = QDialog()
+        dialog.setWindowTitle("Edit Cluster Labels")
+        grid = QGridLayout()
+        edits = {}
+        for i, cid in enumerate(ids):
+            grid.addWidget(QtLabel(f"Cluster {cid}:"), i, 0)
+            edit = QLineEdit(existing.get(cid, str(cid)))
+            grid.addWidget(edit, i, 1)
+            edits[cid] = edit
+        from qtpy.QtWidgets import QDialogButtonBox as QDBBox
+        buttons = QDBBox(QDBBox.Ok | QDBBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        grid.addWidget(buttons, len(ids), 0, 1, 2)
+        dialog.setLayout(grid)
+
+        if dialog.exec_() == QDialog.Accepted:
+            _state["cluster_labels"] = {cid: e.text() for cid, e in edits.items()}
+            ga_status.value = f"Labels updated for {len(ids)} clusters"
+
+    def on_save_dotplot():
+        fig = _state.get("dotplot_fig")
+        if fig is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Save Dotplot", "dotplot.png", "PNG Files (*.png);;All Files (*)",
+        )
+        if not path:
+            return
+        fig.savefig(path, dpi=300, bbox_inches='tight')
+        ga_status.value = f"Dotplot saved to {path}"
+
+    def on_show_rank_plot():
+        adata_norm = _state.get("rank_genes_adata_norm")
+        if adata_norm is None:
+            ga_status.value = "Run rank genes first"
+            return
+        import matplotlib.pyplot as _plt
+        fig = make_rank_genes_plot(adata_norm, n_genes=ga_n_genes_slider.value)
+        _plt.show(block=False)
+        ga_status.value = "Rank genes plot displayed"
+
+    def on_export_rank_genes():
+        df = _state.get("rank_genes_df")
+        if df is None or df.empty:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export Rank Genes Results", "rank_genes_results.csv", "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        df.to_csv(path, index=False)
+        ga_status.value = f"Exported {len(df)} rows to {path}"
+
+    ga_run_button.clicked.connect(on_run_rank_genes)
+    ga_dotplot_button.clicked.connect(on_show_dotplot)
+    ga_edit_labels_button.clicked.connect(_open_label_editor)
+    ga_save_dotplot_button.clicked.connect(on_save_dotplot)
+    ga_rank_plot_button.clicked.connect(on_show_rank_plot)
+    ga_export_button.clicked.connect(on_export_rank_genes)
+
+    # ── Ligand-Receptor widgets (Tab 7) ───────────────────────────────────────
+    lr_clustering_widget = ComboBox(
+        label="Clustering", choices=clustering_names,
+        value=clustering_names[0] if clustering_names else None,
+    )
+    lr_perms_slider = Slider(label="Permutations", min=100, max=1000, value=1000)
+    lr_neighs_slider = Slider(label="N neighbors", min=3, max=20, value=6)
+    lr_run_button = PushButton(label="Run L-R Analysis", enabled=True)
+    lr_status = Label(value="May take several minutes for large datasets")
+
+    lr_results_text = QTextEdit()
+    lr_results_text.setReadOnly(True)
+    lr_results_text.setFontFamily("monospace")
+    lr_results_text.setMaximumHeight(250)
+
+    lr_pval_widget = ComboBox(
+        label="P-value threshold", choices=["0.001", "0.005", "0.01", "0.05"],
+        value="0.05",
+    )
+    lr_plot_button = PushButton(label="Show L-R Plot", enabled=False)
+    lr_save_plot_button = PushButton(label="Save L-R Plot as PNG...", enabled=False)
+    lr_export_means_button = PushButton(label="Export Means CSV...", enabled=False)
+    lr_export_pvals_button = PushButton(label="Export P-values CSV...", enabled=False)
+
+    def on_run_ligrec():
+        lr_status.value = "Running L-R analysis... (this may take several minutes)"
+        lr_run_button.enabled = False
+
+        clustering_key = lr_clustering_widget.value
+        n_perms = lr_perms_slider.value
+        n_neighs = lr_neighs_slider.value
+        _adata = adata if adata is not None else color_manager.adata
+
+        @thread_worker(connect={"returned": _on_ligrec_ready})
+        def _run():
+            adata_norm = get_normalized_adata(_adata)
+            add_clustering_to_obs(adata_norm, _adata, clusterings[clustering_key], clustering_key)
+            # Set spatial coordinates for squidpy
+            adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
+            compute_spatial_neighbors(adata_norm, n_neighs=n_neighs)
+            result = run_ligrec(adata_norm, clustering_key, n_perms=n_perms)
+            return result
+        _run()
+
+    def _on_ligrec_ready(result):
+        _state["ligrec_result"] = result
+        lr_run_button.enabled = True
+
+        warning = result.get('warning')
+        means = result['means']
+        pvalues = result['pvalues']
+
+        if warning:
+            lr_results_text.setPlainText(warning)
+            lr_status.value = "L-R analysis: warning (see results)"
+            lr_plot_button.enabled = False
+            lr_save_plot_button.enabled = False
+            lr_export_means_button.enabled = False
+            lr_export_pvals_button.enabled = False
+            return
+
+        # Summary
+        n_interactions = means.shape[0]
+        pval_thresh = float(lr_pval_widget.value)
+        n_sig = (pvalues < pval_thresh).sum().sum() if not pvalues.empty else 0
+
+        lines = [
+            f"L-R interactions found: {n_interactions}",
+            f"Significant (p < {pval_thresh}): {n_sig}",
+            "",
+        ]
+        if not means.empty:
+            lines.append("Top interactions by mean expression:")
+            # Show top 20 by max mean across cluster pairs
+            top_means = means.max(axis=1).sort_values(ascending=False).head(20)
+            for idx, val in top_means.items():
+                lines.append(f"  {idx}: {val:.4f}")
+
+        lr_results_text.setPlainText("\n".join(lines))
+        lr_status.value = f"L-R done: {n_interactions} interactions, {n_sig} significant"
+        lr_plot_button.enabled = n_interactions > 0
+        lr_save_plot_button.enabled = False
+        lr_export_means_button.enabled = not means.empty
+        lr_export_pvals_button.enabled = not pvalues.empty
+
+    def on_show_lr_plot():
+        result = _state.get("ligrec_result")
+        if result is None:
+            return
+        pval_thresh = float(lr_pval_widget.value)
+        import matplotlib.pyplot as _plt
+        try:
+            fig = make_ligrec_plot(result, pvalue_threshold=pval_thresh)
+            _state["ligrec_fig"] = fig
+            _plt.show(block=False)
+            lr_save_plot_button.enabled = True
+            lr_status.value = "L-R plot displayed"
+        except Exception as e:
+            lr_status.value = f"Plot error: {e}"
+
+    def on_save_lr_plot():
+        fig = _state.get("ligrec_fig")
+        if fig is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Save L-R Plot", "ligrec_plot.png", "PNG Files (*.png);;All Files (*)",
+        )
+        if not path:
+            return
+        fig.savefig(path, dpi=300, bbox_inches='tight')
+        lr_status.value = f"L-R plot saved to {path}"
+
+    def on_export_lr_means():
+        result = _state.get("ligrec_result")
+        if result is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export L-R Means", "ligrec_means.csv", "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        result['means'].to_csv(path)
+        lr_status.value = f"Means exported to {path}"
+
+    def on_export_lr_pvals():
+        result = _state.get("ligrec_result")
+        if result is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export L-R P-values", "ligrec_pvalues.csv", "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        result['pvalues'].to_csv(path)
+        lr_status.value = f"P-values exported to {path}"
+
+    lr_run_button.clicked.connect(on_run_ligrec)
+    lr_plot_button.clicked.connect(on_show_lr_plot)
+    lr_save_plot_button.clicked.connect(on_save_lr_plot)
+    lr_export_means_button.clicked.connect(on_export_lr_means)
+    lr_export_pvals_button.clicked.connect(on_export_lr_pvals)
+
+    # ── White background callback ────────────────────────────────────────────
+    def on_bg_change(value):
+        viewer.window._qt_viewer.canvas.bgcolor = (1, 1, 1, 1) if value else (0, 0, 0, 1)
+
+    bg_white_check.changed.connect(on_bg_change)
+
     # ── Wire events ──────────────────────────────────────────────────────────
     mode_widget.changed.connect(on_mode_change)
     filter_check.changed.connect(on_filter_change)
@@ -904,15 +1343,25 @@ def _build_control_panel(
     # ── Assemble tabbed control panel ─────────────────────────────────────────
     tab_widget = QTabWidget()
 
+    # Select All / Deselect All buttons row
+    cluster_btn_row = QWidget()
+    cluster_btn_layout = QHBoxLayout()
+    cluster_btn_layout.setContentsMargins(0, 0, 0, 0)
+    cluster_btn_layout.addWidget(select_all_btn.native)
+    cluster_btn_layout.addWidget(deselect_all_btn.native)
+    cluster_btn_row.setLayout(cluster_btn_layout)
+
     # Tab 1: Cell Coloring
     tab_widget.addTab(
         _make_tab(
+            bg_white_check,
             mode_widget,
             gene_widget,
             colormap_widget,
             clustering_widget,
             filter_check,
-            cluster_id_widget,
+            cluster_btn_row,
+            cluster_scroll,
             apply_color_button,
             status_label,
         ),
@@ -942,12 +1391,21 @@ def _build_control_panel(
         "UMAP",
     )
 
-    # Tab 4: ROI Analysis
+    # Tab 4: ROI Analysis (with DEG section)
+    roi_deg_header = QtLabel("── Differential Expression Between ROIs ──")
+    roi_deg_header.setStyleSheet("font-weight: bold; margin-top: 10px;")
     tab_widget.addTab(
         _make_tab(
             roi_calc_button,
             roi_text,
             roi_export_button,
+            roi_deg_header,
+            roi_deg_method_widget,
+            roi_deg_filter_check,
+            roi_deg_button,
+            roi_deg_text,
+            roi_deg_export_button,
+            roi_deg_status,
         ),
         "ROI Analysis",
     )
@@ -1374,6 +1832,62 @@ def _build_control_panel(
             io_btn_row,
         ),
         "H&E Registration",
+    )
+
+    # Tab 6: Gene Analysis
+    ga_dotplot_btn_row = QWidget()
+    ga_dotplot_btn_layout = QHBoxLayout()
+    ga_dotplot_btn_layout.setContentsMargins(0, 0, 0, 0)
+    ga_dotplot_btn_layout.addWidget(ga_dotplot_button.native)
+    ga_dotplot_btn_layout.addWidget(ga_edit_labels_button.native)
+    ga_dotplot_btn_layout.addWidget(ga_save_dotplot_button.native)
+    ga_dotplot_btn_row.setLayout(ga_dotplot_btn_layout)
+
+    tab_widget.addTab(
+        _make_tab(
+            ga_clustering_widget,
+            ga_method_widget,
+            ga_n_genes_slider,
+            ga_run_button,
+            ga_dotplot_n_slider,
+            ga_dendro_check,
+            ga_dotplot_btn_row,
+            ga_rank_plot_button,
+            ga_results_text,
+            ga_export_button,
+            ga_status,
+        ),
+        "Gene Analysis",
+    )
+
+    # Tab 7: Ligand-Receptor
+    lr_export_btn_row = QWidget()
+    lr_export_btn_layout = QHBoxLayout()
+    lr_export_btn_layout.setContentsMargins(0, 0, 0, 0)
+    lr_export_btn_layout.addWidget(lr_export_means_button.native)
+    lr_export_btn_layout.addWidget(lr_export_pvals_button.native)
+    lr_export_btn_row.setLayout(lr_export_btn_layout)
+
+    lr_plot_btn_row = QWidget()
+    lr_plot_btn_layout = QHBoxLayout()
+    lr_plot_btn_layout.setContentsMargins(0, 0, 0, 0)
+    lr_plot_btn_layout.addWidget(lr_plot_button.native)
+    lr_plot_btn_layout.addWidget(lr_save_plot_button.native)
+    lr_plot_btn_row.setLayout(lr_plot_btn_layout)
+
+    tab_widget.addTab(
+        _make_tab(
+            lr_clustering_widget,
+            lr_perms_slider,
+            lr_neighs_slider,
+            lr_run_button,
+            lr_status,
+            lr_results_text,
+            lr_pval_widget,
+            lr_plot_btn_row,
+            lr_export_btn_row,
+        ),
+        "Ligand-Receptor",
     )
 
     return tab_widget
