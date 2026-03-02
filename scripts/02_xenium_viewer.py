@@ -486,8 +486,25 @@ def _build_control_panel(
     show_umap_button.clicked.connect(on_show_umap)
     umap_size_slider.changed.connect(on_umap_size_change)
 
-    # ── Status ────────────────────────────────────────────────────────────────
-    status_label = Label(value="Ready")
+    # ── Status — all messages go to napari status bar ──────────────────────
+    def _set_status(msg: str):
+        viewer.status = msg
+
+    # Keep a dummy object so `.value = ...` assignments still work everywhere
+    class _StatusProxy:
+        @property
+        def value(self):
+            return viewer.status
+        @value.setter
+        def value(self, msg):
+            _set_status(msg)
+
+    status_label = _StatusProxy()
+    ga_status = _StatusProxy()
+    roi_deg_status = _StatusProxy()
+    lr_status = _StatusProxy()
+    he_status_label = _StatusProxy()
+    reg_status_label = _StatusProxy()
 
     # ── Helper: update legend text ────────────────────────────────────────────
     def _update_legend():
@@ -935,7 +952,7 @@ def _build_control_panel(
     roi_deg_text.setFontFamily("monospace")
     roi_deg_text.setMaximumHeight(250)
     roi_deg_export_button = PushButton(label="Export DEG CSV...", enabled=False)
-    roi_deg_status = Label(value="Draw >= 2 ROI polygons, then run DEG")
+    # roi_deg_status assigned above as _StatusProxy
 
     def on_roi_deg():
         polygons = roi_layer.data if roi_layer is not None else []
@@ -1024,7 +1041,7 @@ def _build_control_panel(
     ga_results_text.setFontFamily("monospace")
     ga_results_text.setMaximumHeight(300)
     ga_export_button = PushButton(label="Export Full Results CSV...", enabled=False)
-    ga_status = Label(value="Select clustering and run rank genes")
+    # ga_status assigned above as _StatusProxy
 
     def on_run_rank_genes():
         ga_status.value = "Running rank genes (normalizing + computing)..."
@@ -1166,7 +1183,7 @@ def _build_control_panel(
     lr_perms_slider = Slider(label="Permutations", min=100, max=1000, value=1000)
     lr_neighs_slider = Slider(label="N neighbors", min=3, max=20, value=6)
     lr_run_button = PushButton(label="Run L-R Analysis", enabled=True)
-    lr_status = Label(value="May take several minutes for large datasets")
+    # lr_status assigned above as _StatusProxy
 
     lr_results_text = QTextEdit()
     lr_results_text.setReadOnly(True)
@@ -1363,7 +1380,6 @@ def _build_control_panel(
             cluster_btn_row,
             cluster_scroll,
             apply_color_button,
-            status_label,
         ),
         "Cell Coloring",
     )
@@ -1403,7 +1419,6 @@ def _build_control_panel(
             roi_deg_filter_check,
             roi_deg_button,
             roi_deg_export_button,
-            roi_deg_status,
         ),
         "ROI Analysis",
     )
@@ -1423,7 +1438,7 @@ def _build_control_panel(
     he_load_button = PushButton(label="Load H&E Image...", enabled=True)
     he_flip_v = CheckBox(label="Flip vertically", value=False)
     he_flip_h = CheckBox(label="Flip horizontally", value=False)
-    he_status_label = Label(value="No H&E loaded")
+    # he_status_label assigned above as _StatusProxy
     he_opacity_slider = Slider(label="H&E opacity", min=0, max=100, value=70)
     he_opacity_slider.enabled = False
 
@@ -1434,7 +1449,7 @@ def _build_control_panel(
     clear_lm_button = PushButton(label="Clear All", enabled=False)
 
     register_button = PushButton(label="Compute Registration", enabled=False)
-    reg_status_label = Label(value="")
+    # reg_status_label assigned above as _StatusProxy
 
     reg_residuals_qt = QTextEdit()
     reg_residuals_qt.setReadOnly(True)
@@ -1820,12 +1835,10 @@ def _build_control_panel(
         _make_tab(
             he_load_button,
             flip_row,
-            he_status_label,
             he_opacity_slider,
             coarse_align_button,
             lm_btn_row,
             register_button,
-            reg_status_label,
             io_btn_row,
         ),
         "H&E Registration",
@@ -1851,7 +1864,6 @@ def _build_control_panel(
             ga_dotplot_btn_row,
             ga_rank_plot_button,
             ga_export_button,
-            ga_status,
         ),
         "Gene Analysis",
     )
@@ -1877,7 +1889,6 @@ def _build_control_panel(
             lr_perms_slider,
             lr_neighs_slider,
             lr_run_button,
-            lr_status,
             lr_pval_widget,
             lr_plot_btn_row,
             lr_export_btn_row,
