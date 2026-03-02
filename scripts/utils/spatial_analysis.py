@@ -10,6 +10,11 @@ Provides:
 from __future__ import annotations
 
 import numpy as np
+
+# Patch for omnipath compatibility with numpy >= 2.0 (np.NAN was removed)
+if not hasattr(np, 'NAN'):
+    np.NAN = np.nan
+
 import pandas as pd
 import scanpy as sc
 import squidpy as sq

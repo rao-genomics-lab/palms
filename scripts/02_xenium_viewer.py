@@ -1232,8 +1232,7 @@ def _build_control_panel(
         pvalues = result['pvalues']
 
         if warning:
-            lr_results_text.setPlainText(warning)
-            lr_status.value = "L-R analysis: warning (see results)"
+            lr_status.value = f"L-R: {warning}"
             lr_plot_button.enabled = False
             lr_save_plot_button.enabled = False
             lr_export_means_button.enabled = False
