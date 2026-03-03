@@ -463,7 +463,30 @@ def _build_control_panel(
         "nhood_fig": None,  # matplotlib Figure
         "co_result": None,  # dict from run_co_occurrence()
         "co_fig": None,  # matplotlib Figure
+        "plot_format": "png",  # "png" or "svg" — set via Preferences menu
     }
+
+    # ── Preferences menu (plot format) ────────────────────────────────────────
+    from qtpy.QtWidgets import QActionGroup, QMenu
+    from qtpy.QtGui import QAction
+
+    menu_bar = viewer.window._qt_window.menuBar()
+    prefs_menu = QMenu("Preferences", menu_bar)
+    menu_bar.addMenu(prefs_menu)
+
+    format_menu = prefs_menu.addMenu("Plot format")
+    format_group = QActionGroup(format_menu)
+    format_group.setExclusive(True)
+
+    png_action = QAction("PNG", format_group, checkable=True, checked=True)
+    svg_action = QAction("SVG", format_group, checkable=True)
+    format_menu.addAction(png_action)
+    format_menu.addAction(svg_action)
+
+    def _on_format_changed(action):
+        _state["plot_format"] = action.text().lower()
+
+    format_group.triggered.connect(_on_format_changed)
 
     # ── Cell Coloring widgets ────────────────────────────────────────────────
     mode_widget = RadioButtons(
@@ -841,6 +864,16 @@ def _build_control_panel(
 
     # ── ROI Analysis widgets ──────────────────────────────────────────────────
     from qtpy.QtWidgets import QTextEdit, QFileDialog
+
+    def _get_plot_save_path(title: str, default_stem: str) -> str | None:
+        """Open a save dialog using the preferred plot format (png/svg)."""
+        fmt = _state.get("plot_format", "png")
+        filter_str = f"{fmt.upper()} Files (*.{fmt});;All Files (*)"
+        path, _ = QFileDialog.getSaveFileName(
+            None, title, f"{default_stem}.{fmt}", filter_str,
+        )
+        return path if path else None
+
     roi_calc_button = PushButton(label="Calculate Expression", enabled=True)
     roi_export_button = PushButton(label="Export CSV", enabled=False)
     roi_text = QTextEdit()
@@ -1204,9 +1237,7 @@ def _build_control_panel(
         fig = _state.get("dotplot_fig")
         if fig is None:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            None, "Save Dotplot", "dotplot.png", "PNG Files (*.png);;All Files (*)",
-        )
+        path = _get_plot_save_path("Save Dotplot", "dotplot")
         if not path:
             return
         fig.savefig(path, dpi=300, bbox_inches='tight')
@@ -1360,9 +1391,7 @@ def _build_control_panel(
         fig = _state.get("ligrec_fig")
         if fig is None:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            None, "Save L-R Plot", "ligrec_plot.png", "PNG Files (*.png);;All Files (*)",
-        )
+        path = _get_plot_save_path("Save L-R Plot", "ligrec_plot")
         if not path:
             return
         fig.savefig(path, dpi=300, bbox_inches='tight')
@@ -1434,6 +1463,8 @@ def _build_control_panel(
             adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
             compute_spatial_neighbors(adata_norm, n_neighs=n_neighs)
             result = run_nhood_enrichment(adata_norm, clustering_key, n_perms=n_perms)
+            result['_adata_norm'] = adata_norm
+            result['_cluster_key'] = clustering_key
             return result
         _run()
 
@@ -1491,9 +1522,27 @@ def _build_control_panel(
         groups = _get_cluster_filter()
         import matplotlib.pyplot as _plt
         try:
-            fig = make_nhood_enrichment_plot(
-                result, mode=ne_mode_widget.value, cluster_filter=groups,
-            )
+            if groups:
+                # Custom plot with cluster filter
+                fig = make_nhood_enrichment_plot(
+                    result, mode=ne_mode_widget.value, cluster_filter=groups,
+                )
+            else:
+                # Try squidpy native when no filter is active
+                adata_norm = result.get('_adata_norm')
+                cluster_key = result.get('_cluster_key')
+                if adata_norm is not None and cluster_key is not None:
+                    import squidpy as _sq
+                    _sq.pl.nhood_enrichment(
+                        adata_norm, cluster_key=cluster_key,
+                        mode=ne_mode_widget.value,
+                    )
+                    fig = _plt.gcf()
+                else:
+                    # Session restore fallback
+                    fig = make_nhood_enrichment_plot(
+                        result, mode=ne_mode_widget.value,
+                    )
             _state["nhood_fig"] = fig
             _plt.show(block=False)
             ne_save_plot_button.enabled = True
@@ -1508,10 +1557,7 @@ def _build_control_panel(
         fig = _state.get("nhood_fig")
         if fig is None:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            None, "Save Nhood Enrichment Plot", "nhood_enrichment.png",
-            "PNG Files (*.png);;All Files (*)",
-        )
+        path = _get_plot_save_path("Save Nhood Enrichment Plot", "nhood_enrichment")
         if not path:
             return
         fig.savefig(path, dpi=300, bbox_inches='tight')
@@ -1558,6 +1604,7 @@ def _build_control_panel(
     co_plot_button = PushButton(label="Show Co-occurrence Plot", enabled=False)
     co_save_plot_button = PushButton(label="Save Plot as PNG...", enabled=False)
     co_export_button = PushButton(label="Export CSV...", enabled=False)
+    co_filter_targets = CheckBox(label="Filter targets", value=False, enabled=True)
     co_status = _StatusProxy()
 
     def on_run_co_occurrence():
@@ -1617,25 +1664,34 @@ def _build_control_panel(
         if result is None:
             return
         groups = _get_cluster_filter()
+        filter_targets = co_filter_targets.value and groups
         import matplotlib.pyplot as _plt
         try:
-            if groups:
-                fig = make_co_occurrence_plot(result, clusters_to_plot=groups)
-                co_status.value = f"Co-occurrence plot (clusters: {', '.join(groups)})"
+            if filter_targets:
+                # Custom plot: both query subplots AND target lines filtered
+                fig = make_co_occurrence_plot(
+                    result, clusters_to_plot=groups, target_clusters=groups,
+                )
             else:
-                # Use squidpy's native plot when no filter is active
+                # Try squidpy native (query filtered, all targets)
                 adata_norm = result.get('_adata_norm')
                 cluster_key = result.get('_cluster_key')
                 if adata_norm is not None and cluster_key is not None:
                     import squidpy as _sq
-                    _sq.pl.co_occurrence(adata_norm, cluster_key=cluster_key)
+                    _sq.pl.co_occurrence(
+                        adata_norm, cluster_key=cluster_key, clusters=groups,
+                    )
                     fig = _plt.gcf()
                 else:
-                    fig = make_co_occurrence_plot(result, clusters_to_plot=None)
-                co_status.value = "Co-occurrence plot displayed"
+                    # Session restore fallback
+                    fig = make_co_occurrence_plot(result, clusters_to_plot=groups)
             _state["co_fig"] = fig
             _plt.show(block=False)
             co_save_plot_button.enabled = True
+            if groups:
+                co_status.value = f"Co-occurrence plot (clusters: {', '.join(groups)})"
+            else:
+                co_status.value = "Co-occurrence plot displayed"
         except Exception as e:
             co_status.value = f"Plot error: {e}"
 
@@ -1643,10 +1699,7 @@ def _build_control_panel(
         fig = _state.get("co_fig")
         if fig is None:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            None, "Save Co-occurrence Plot", "co_occurrence.png",
-            "PNG Files (*.png);;All Files (*)",
-        )
+        path = _get_plot_save_path("Save Co-occurrence Plot", "co_occurrence")
         if not path:
             return
         fig.savefig(path, dpi=300, bbox_inches='tight')
@@ -2398,6 +2451,7 @@ def _build_control_panel(
             co_interval_slider,
             co_run_button,
             co_results_text,
+            co_filter_targets,
             co_plot_btn_row,
             co_export_button,
         ),

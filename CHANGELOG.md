@@ -3,6 +3,24 @@
 ## [Unreleased] — 2026-03-03
 
 ### Added
+- **Plot format preference (PNG / SVG)** — new Preferences → Plot format menu in the
+  napari menu bar with exclusive PNG/SVG radio actions. All 4 plot save handlers
+  (dotplot, L-R, nhood enrichment, co-occurrence) now respect the chosen format.
+  Default is PNG. `matplotlib.savefig()` infers format from file extension.
+
+- **Native squidpy heatmap** for Neighborhood Enrichment — `on_show_nhood_plot()`
+  now uses `sq.pl.nhood_enrichment()` when no cluster filter is active, falling
+  back to the custom `make_nhood_enrichment_plot()` when clusters are filtered or
+  on session restore. `_adata_norm` and `_cluster_key` are now stored on the result
+  dict (matching co-occurrence).
+
+- **"Filter targets" checkbox** in Co-occurrence tab — when checked with a cluster
+  filter active, restricts target lines (not just query subplots) to the selected
+  clusters. Three-path plot logic: (1) filter targets ON → custom plot with both
+  query and target restricted, (2) filter targets OFF → squidpy native plot with
+  cluster-filtered subplots, (3) session restore fallback → custom plot.
+  `make_co_occurrence_plot()` gains a `target_clusters` parameter.
+
 - **Co-occurrence tab** (Tab 9) — squidpy-based spatial co-occurrence analysis
   (`sq.gr.co_occurrence`). Computes how cluster types co-occur spatially across
   increasing distance radii. Configurable: clustering, distance bins (10-100).
