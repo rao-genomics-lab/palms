@@ -78,6 +78,7 @@ from utils.gene_analysis import (
 )
 from utils.spatial_analysis import (
     compute_spatial_neighbors, run_ligrec, make_ligrec_plot,
+    run_nhood_enrichment, make_nhood_enrichment_plot,
 )
 
 # ─── Channel metadata ───────────────────────────────────────────────────────
@@ -272,7 +273,7 @@ def main(data_path: Path, no_cache: bool = False):
     )
 
     # ── Control panel ────────────────────────────────────────────────────────
-    panel = _build_control_panel(
+    panel, _state, _he_state, restore_session = _build_control_panel(
         viewer=viewer,
         gene_names=gene_names,
         clustering_names=clustering_names,
@@ -290,12 +291,54 @@ def main(data_path: Path, no_cache: bool = False):
         morph_thumb=morph_thumb,
         morph_full_shape_yx=morph_full_shape_yx,
         adata=adata,
+        sdata=sdata,
+        no_cache=no_cache,
     )
     viewer.window.add_dock_widget(panel, name="Xenium Controls", area="right")
+
+    # ── Restore saved session ────────────────────────────────────────────────
+    zarr_path = data_path / "sdata_cached.zarr"
+    if not no_cache and zarr_path.exists():
+        from utils.session import load_session
+        session = load_session(zarr_path)
+        if session is not None:
+            print("Restoring session from zarr cache...")
+            restore_session(session)
+            print("Session restored.")
+
+    # ── Snapshot layer data before Qt teardown, then save on exit ────────────
+    _snapshot = {}  # filled by the about_to_close handler
+
+    if not no_cache:
+        def _on_viewer_closing(_event=None):
+            """Capture napari layer data while Qt objects are still alive."""
+            # ROI polygons
+            _snapshot["roi_data"] = [
+                np.asarray(p, dtype=np.float64) for p in roi_layer.data
+            ] if roi_layer is not None else []
+
+            # Landmark layer data
+            xen_lm = _he_state.get("xenium_lm_layer")
+            he_lm = _he_state.get("he_lm_layer")
+            _snapshot["xenium_landmarks"] = (
+                np.asarray(xen_lm.data, dtype=np.float64) if xen_lm is not None and len(xen_lm.data) > 0 else None
+            )
+            _snapshot["he_landmarks"] = (
+                np.asarray(he_lm.data, dtype=np.float64) if he_lm is not None and len(he_lm.data) > 0 else None
+            )
+
+        from qtpy.QtWidgets import QApplication
+        QApplication.instance().aboutToQuit.connect(_on_viewer_closing)
 
     total_time = time.perf_counter() - t_start
     print(f"\nViewer ready in {total_time:.1f}s. Close the napari window to exit.")
     napari.run()
+
+    # ── Save session state on exit ────────────────────────────────────────────
+    if not no_cache and zarr_path.exists():
+        from utils.session import save_session
+        save_session(zarr_path, _state, _he_state, _snapshot)
+        print("Session saved to zarr cache.")
 
 
 def _extract_dt_scales(dt):
@@ -338,14 +381,26 @@ def _add_layers_manually(viewer, sdata):
         print("  Adding morphology_focus (multiscale)...")
         scales = _extract_dt_scales(sdata.images["morphology_focus"])
         if scales:
-            viewer.add_image(
-                scales,
-                name="morphology_focus",
-                channel_axis=0,
-                colormap=CHANNEL_COLORMAPS,
-                contrast_limits=CHANNEL_CONTRAST,
-                visible=True,
-            )
+            # Detect number of channels from the highest-res level
+            n_ch = scales[0].shape[0]  # CYX layout
+            if n_ch == len(CHANNEL_COLORMAPS):
+                viewer.add_image(
+                    scales,
+                    name="morphology_focus",
+                    channel_axis=0,
+                    colormap=CHANNEL_COLORMAPS,
+                    contrast_limits=CHANNEL_CONTRAST,
+                    visible=True,
+                )
+            else:
+                # Different channel count — use defaults
+                print(f"  morphology_focus has {n_ch} channel(s) (expected {len(CHANNEL_COLORMAPS)}), using defaults")
+                viewer.add_image(
+                    scales,
+                    name="morphology_focus",
+                    channel_axis=0 if n_ch > 1 else None,
+                    visible=True,
+                )
         else:
             print("  Warning: could not extract morphology_focus scales")
 
@@ -378,6 +433,8 @@ def _build_control_panel(
     morph_thumb=None,
     morph_full_shape_yx=None,
     adata=None,
+    sdata=None,
+    no_cache: bool = False,
 ):
     """Build and return a magicgui Container docked widget."""
     from magicgui.widgets import (
@@ -401,6 +458,8 @@ def _build_control_panel(
         "filter_by_cluster": False,
         "label_to_cluster": None,  # np.ndarray: label_value -> cluster_id (or -1)
         "active_clustering_name": None,  # name shown on hover
+        "nhood_result": None,  # dict from run_nhood_enrichment()
+        "nhood_fig": None,  # matplotlib Figure
     }
 
     # ── Cell Coloring widgets ────────────────────────────────────────────────
@@ -1263,18 +1322,34 @@ def _build_control_panel(
         lr_export_means_button.enabled = not means.empty
         lr_export_pvals_button.enabled = not pvalues.empty
 
+    def _get_cluster_filter():
+        """Return list of cluster ID strings based on cell coloring filter, or None."""
+        if not _state.get("filter_by_cluster"):
+            return None
+        selected = _get_selected_cluster_ids()
+        if not selected:
+            return None
+        return sorted(str(cid) for cid in selected)
+
     def on_show_lr_plot():
         result = _state.get("ligrec_result")
         if result is None:
             return
         pval_thresh = float(lr_pval_widget.value)
+        groups = _get_cluster_filter()
         import matplotlib.pyplot as _plt
         try:
-            fig = make_ligrec_plot(result, pvalue_threshold=pval_thresh)
+            fig = make_ligrec_plot(
+                result, pvalue_threshold=pval_thresh,
+                source_groups=groups, target_groups=groups,
+            )
             _state["ligrec_fig"] = fig
             _plt.show(block=False)
             lr_save_plot_button.enabled = True
-            lr_status.value = "L-R plot displayed"
+            if groups:
+                lr_status.value = f"L-R plot displayed (clusters: {', '.join(groups)})"
+            else:
+                lr_status.value = "L-R plot displayed"
         except Exception as e:
             lr_status.value = f"Plot error: {e}"
 
@@ -1319,6 +1394,152 @@ def _build_control_panel(
     lr_save_plot_button.clicked.connect(on_save_lr_plot)
     lr_export_means_button.clicked.connect(on_export_lr_means)
     lr_export_pvals_button.clicked.connect(on_export_lr_pvals)
+
+    # ── Neighborhood Enrichment widgets (Tab 8) ──────────────────────────────
+    ne_clustering_widget = ComboBox(
+        label="Clustering", choices=clustering_names,
+        value=clustering_names[0] if clustering_names else None,
+    )
+    ne_perms_slider = Slider(label="Permutations", min=100, max=1000, value=1000)
+    ne_neighs_slider = Slider(label="N neighbors", min=3, max=20, value=6)
+    ne_run_button = PushButton(label="Run Nhood Enrichment", enabled=True)
+    ne_mode_widget = ComboBox(
+        label="Display mode", choices=["zscore", "count"], value="zscore",
+    )
+    ne_results_text = QTextEdit()
+    ne_results_text.setReadOnly(True)
+    ne_results_text.setFontFamily("monospace")
+    ne_results_text.setMaximumHeight(250)
+    ne_plot_button = PushButton(label="Show Heatmap", enabled=False)
+    ne_save_plot_button = PushButton(label="Save Plot as PNG...", enabled=False)
+    ne_export_button = PushButton(label="Export Z-scores CSV...", enabled=False)
+    ne_status = _StatusProxy()
+
+    def on_run_nhood():
+        ne_status.value = "Running neighborhood enrichment... (this may take a minute)"
+        ne_run_button.enabled = False
+
+        clustering_key = ne_clustering_widget.value
+        n_perms = ne_perms_slider.value
+        n_neighs = ne_neighs_slider.value
+        _adata = adata if adata is not None else color_manager.adata
+
+        @thread_worker(connect={"returned": _on_nhood_ready})
+        def _run():
+            adata_norm = get_normalized_adata(_adata)
+            add_clustering_to_obs(adata_norm, _adata, clusterings[clustering_key], clustering_key)
+            adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
+            compute_spatial_neighbors(adata_norm, n_neighs=n_neighs)
+            result = run_nhood_enrichment(adata_norm, clustering_key, n_perms=n_perms)
+            return result
+        _run()
+
+    def _on_nhood_ready(result):
+        _state["nhood_result"] = result
+        ne_run_button.enabled = True
+
+        warning = result.get('warning')
+        if warning:
+            ne_status.value = f"Nhood: {warning}"
+            ne_results_text.setPlainText(warning)
+            ne_plot_button.enabled = False
+            ne_save_plot_button.enabled = False
+            ne_export_button.enabled = False
+            return
+
+        zscore = result['zscore']
+        clusters = result['clusters']
+        n = len(clusters)
+
+        # Summary: top enriched and depleted pairs
+        lines = [
+            f"Neighborhood enrichment: {n}x{n} matrix ({n} clusters)",
+            f"Clusters: {', '.join(clusters)}",
+            "",
+        ]
+
+        if zscore.size > 0:
+            # Find top enriched pairs (off-diagonal)
+            pairs = []
+            for i in range(n):
+                for j in range(n):
+                    if i != j:
+                        pairs.append((clusters[i], clusters[j], zscore[i, j]))
+            pairs.sort(key=lambda x: x[2], reverse=True)
+
+            lines.append("Top 10 enriched pairs (z-score):")
+            for c1, c2, z in pairs[:10]:
+                lines.append(f"  {c1} <-> {c2}: {z:.2f}")
+
+            lines.append("")
+            lines.append("Top 10 depleted pairs (z-score):")
+            for c1, c2, z in pairs[-10:]:
+                lines.append(f"  {c1} <-> {c2}: {z:.2f}")
+
+        ne_results_text.setPlainText("\n".join(lines))
+        ne_status.value = f"Nhood enrichment done: {n} clusters"
+        ne_plot_button.enabled = True
+        ne_export_button.enabled = True
+
+    def on_show_nhood_plot():
+        result = _state.get("nhood_result")
+        if result is None:
+            return
+        groups = _get_cluster_filter()
+        import matplotlib.pyplot as _plt
+        try:
+            fig = make_nhood_enrichment_plot(
+                result, mode=ne_mode_widget.value, cluster_filter=groups,
+            )
+            _state["nhood_fig"] = fig
+            _plt.show(block=False)
+            ne_save_plot_button.enabled = True
+            if groups:
+                ne_status.value = f"Heatmap displayed (clusters: {', '.join(groups)})"
+            else:
+                ne_status.value = "Heatmap displayed"
+        except Exception as e:
+            ne_status.value = f"Plot error: {e}"
+
+    def on_save_nhood_plot():
+        fig = _state.get("nhood_fig")
+        if fig is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Save Nhood Enrichment Plot", "nhood_enrichment.png",
+            "PNG Files (*.png);;All Files (*)",
+        )
+        if not path:
+            return
+        fig.savefig(path, dpi=300, bbox_inches='tight')
+        ne_status.value = f"Plot saved to {path}"
+
+    def on_export_nhood():
+        result = _state.get("nhood_result")
+        if result is None:
+            return
+        import pandas as _pd
+        zscore = result['zscore']
+        clusters = result['clusters']
+        df = _pd.DataFrame(zscore, index=clusters, columns=clusters)
+        # Apply cluster filter if active
+        groups = _get_cluster_filter()
+        if groups:
+            keep = [c for c in groups if c in df.index]
+            if keep:
+                df = df.loc[keep, keep]
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export Z-scores", "nhood_zscore.csv", "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        df.to_csv(path)
+        ne_status.value = f"Z-scores exported to {path}"
+
+    ne_run_button.clicked.connect(on_run_nhood)
+    ne_plot_button.clicked.connect(on_show_nhood_plot)
+    ne_save_plot_button.clicked.connect(on_save_nhood_plot)
+    ne_export_button.clicked.connect(on_export_nhood)
 
     # ── White background callback ────────────────────────────────────────────
     def on_bg_change(value):
@@ -1431,11 +1652,14 @@ def _build_control_panel(
         "he_layer": None,
         "he_tif": None,       # keep TiffFile alive for zarr store
         "he_filename": None,
+        "he_path": None,      # full path to H&E file for session persistence
         "he_shape_yx": None,  # (H, W) of full-res H&E for flip computation
         "xenium_lm_layer": None,
         "he_lm_layer": None,
         "affine_3x3": None,
         "coarse_affine": None,  # coarse tissue-outline alignment
+        "flip_v": False,
+        "flip_h": False,
     }
 
     he_load_button = PushButton(label="Load H&E Image...", enabled=True)
@@ -1513,6 +1737,9 @@ def _build_control_panel(
 
     def on_flip_changed(_value=None):
         _apply_he_affine()
+        _he_state["flip_v"] = he_flip_v.value
+        _he_state["flip_h"] = he_flip_h.value
+        _save_he_affine_to_sdata()
         flips = []
         if he_flip_v.value:
             flips.append("V")
@@ -1584,6 +1811,86 @@ def _build_control_panel(
 
         load_task()
 
+    def _save_he_to_sdata(pyramid, he_filename):
+        """Persist H&E image to sdata zarr cache as images/he_image."""
+        if sdata is None or no_cache:
+            return
+        try:
+            from spatialdata.models import Image2DModel
+
+            # Take the full-res level, convert (Y, X, C) → (C, Y, X)
+            base = np.asarray(pyramid[0])
+            if base.ndim == 3 and base.shape[-1] in (3, 4):
+                base_cyx = np.transpose(base, (2, 0, 1))
+            else:
+                base_cyx = base
+
+            # Build multiscale spatialdata element with pyramid
+            parsed = Image2DModel.parse(
+                base_cyx.astype(np.uint8),
+                dims=("c", "y", "x"),
+                scale_factors=[2, 2, 2, 2],
+                chunks=(3, 1024, 1024),
+            )
+
+            # Remove old he_image if present
+            if "he_image" in sdata.images:
+                del sdata.images["he_image"]
+
+            sdata.images["he_image"] = parsed
+            sdata.write_element("he_image", overwrite=True)
+
+            # Store metadata in zarr attrs
+            zarr_path = data_path / "sdata_cached.zarr"
+            import zarr as zarr_mod
+            store = zarr_mod.open_group(str(zarr_path), mode="r+", use_consolidated=False)
+            if "viewer_session" not in store:
+                store.create_group("viewer_session")
+            store["viewer_session"].attrs["he_filename"] = he_filename
+            store["viewer_session"].attrs["he_shape_yx"] = list(base.shape[:2])
+
+            print(f"  H&E image saved to sdata zarr cache ({base_cyx.shape})")
+        except Exception as e:
+            print(f"  Warning: could not save H&E to sdata: {e}")
+
+    def _save_he_affine_to_sdata():
+        """Update the affine transformation on he_image in sdata zarr cache."""
+        if sdata is None or no_cache or "he_image" not in sdata.images:
+            return
+        try:
+            from spatialdata.transformations import Affine as SdAffine, set_transformation
+
+            # Build the combined affine (flip + registration) in (y, x) convention
+            flip = _build_flip_affine()
+            fine = _he_state["affine_3x3"]
+            coarse = _he_state["coarse_affine"]
+            if fine is not None:
+                combined = fine @ flip
+            elif coarse is not None:
+                combined = coarse @ flip
+            else:
+                combined = flip
+
+            sd_affine = SdAffine(combined, input_axes=("y", "x"), output_axes=("y", "x"))
+            set_transformation(sdata.images["he_image"], sd_affine, "global")
+            sdata.write_transformations("he_image")
+
+            # Also persist flip + affine state to viewer_session attrs
+            zarr_path = data_path / "sdata_cached.zarr"
+            import zarr as zarr_mod
+            store = zarr_mod.open_group(str(zarr_path), mode="r+", use_consolidated=False)
+            if "viewer_session" not in store:
+                store.create_group("viewer_session")
+            sess = store["viewer_session"]
+            sess.attrs["flip_v"] = bool(_he_state.get("flip_v", False))
+            sess.attrs["flip_h"] = bool(_he_state.get("flip_h", False))
+            if fine is not None:
+                sess.attrs["affine_3x3"] = fine.tolist()
+            if coarse is not None:
+                sess.attrs["coarse_affine"] = coarse.tolist()
+        except Exception as e:
+            print(f"  Warning: could not save H&E affine: {e}")
+
     def _on_he_loaded(result):
         (pyramid, tif), path = result
         # Remove old H&E layer if present
@@ -1595,6 +1902,7 @@ def _build_control_panel(
 
         _he_state["he_tif"] = tif
         _he_state["he_filename"] = Path(path).name
+        _he_state["he_path"] = str(path)
         # Store full-res spatial shape (Y, X) for flip affine computation
         base = pyramid[0]
         _he_state["he_shape_yx"] = (base.shape[0], base.shape[1])
@@ -1615,6 +1923,9 @@ def _build_control_panel(
 
         # Create landmark layers if not yet present
         _create_landmark_layers()
+
+        # Persist H&E image to sdata zarr cache
+        _save_he_to_sdata(pyramid, Path(path).name)
 
         he_opacity_slider.enabled = True
         he_load_button.enabled = True
@@ -1665,6 +1976,7 @@ def _build_control_panel(
         _he_state["coarse_affine"] = coarse_affine
         _he_state["affine_3x3"] = None  # clear any previous fine registration
         _apply_he_affine()
+        _save_he_affine_to_sdata()
         coarse_align_button.enabled = True
         scale = np.sqrt(coarse_affine[0, 0]**2 + coarse_affine[0, 1]**2)
         reg_status_label.value = f"Coarse aligned (scale={scale:.4f}). Place landmarks to refine."
@@ -1735,6 +2047,7 @@ def _build_control_panel(
         reg_residuals_qt.setPlainText("\n".join(lines))
 
         reg_status_label.value = f"Registered ({n} landmarks, mean residual {residuals.mean():.1f} px)"
+        _save_he_affine_to_sdata()
         save_affine_button.enabled = True
 
     def on_save_landmarks():
@@ -1899,7 +2212,161 @@ def _build_control_panel(
         "Ligand-Receptor",
     )
 
-    return tab_widget
+    # Tab 8: Neighborhood Enrichment
+    ne_plot_btn_row = QWidget()
+    ne_plot_btn_layout = QHBoxLayout()
+    ne_plot_btn_layout.setContentsMargins(0, 0, 0, 0)
+    ne_plot_btn_layout.addWidget(ne_plot_button.native)
+    ne_plot_btn_layout.addWidget(ne_save_plot_button.native)
+    ne_plot_btn_row.setLayout(ne_plot_btn_layout)
+
+    tab_widget.addTab(
+        _make_tab(
+            ne_clustering_widget,
+            ne_perms_slider,
+            ne_neighs_slider,
+            ne_run_button,
+            ne_mode_widget,
+            ne_results_text,
+            ne_plot_btn_row,
+            ne_export_button,
+        ),
+        "Nhood Enrichment",
+    )
+
+    # ── Session restore function ─────────────────────────────────────────────
+    def restore_session(session):
+        """Apply loaded session data to the viewer state."""
+        # ROIs
+        rois = session.get("rois", [])
+        if rois and roi_layer is not None:
+            roi_layer.data = rois
+            print(f"  Restored {len(rois)} ROI polygons")
+
+        # Cluster labels
+        cl = session.get("cluster_labels")
+        if cl:
+            _state["cluster_labels"] = cl
+            print(f"  Restored {len(cl)} cluster labels")
+
+        # Analysis results: rank genes
+        rg = session.get("rank_genes_df")
+        if rg is not None:
+            _state["rank_genes_df"] = rg
+            ga_export_button.enabled = True
+            print(f"  Restored rank genes ({len(rg)} rows)")
+
+        # Analysis results: ROI DEG
+        rd = session.get("roi_deg_df")
+        if rd is not None:
+            _state["roi_deg_df"] = rd
+            roi_deg_export_button.enabled = True
+            print(f"  Restored ROI DEG ({len(rd)} rows)")
+
+        # Analysis results: ligrec
+        lm = session.get("ligrec_means")
+        lp = session.get("ligrec_pvalues")
+        if lm is not None or lp is not None:
+            _state["ligrec_result"] = {
+                "means": lm if lm is not None else __import__("pandas").DataFrame(),
+                "pvalues": lp if lp is not None else __import__("pandas").DataFrame(),
+                "warning": None,
+            }
+            lr_export_means_button.enabled = lm is not None
+            lr_export_pvals_button.enabled = lp is not None
+            lr_plot_button.enabled = lm is not None and not lm.empty
+            print(f"  Restored L-R results")
+
+        # Analysis results: nhood enrichment
+        nh = session.get("nhood_result")
+        if nh is not None:
+            _state["nhood_result"] = nh
+            ne_plot_button.enabled = True
+            ne_export_button.enabled = True
+            n = len(nh.get('clusters', []))
+            print(f"  Restored nhood enrichment ({n} clusters)")
+
+        # H&E restore — load from sdata zarr cache
+        if sdata is not None and "he_image" in sdata.images:
+            he_flip_v.value = session.get("flip_v", False)
+            he_flip_h.value = session.get("flip_h", False)
+
+            _session_he_data = {
+                "affine_3x3": session.get("affine_3x3"),
+                "coarse_affine": session.get("coarse_affine"),
+                "xenium_landmarks": session.get("xenium_landmarks"),
+                "he_landmarks": session.get("he_landmarks"),
+                "he_filename": session.get("he_filename", "H&E"),
+                "he_shape_yx": session.get("he_shape_yx"),
+            }
+
+            he_status_label.value = "Restoring H&E from cache..."
+
+            @thread_worker(connect={"returned": lambda result: _on_he_restored_from_sdata(result, _session_he_data)})
+            def _load_he_from_sdata():
+                he_dt = sdata.images["he_image"]
+                pyramid = _extract_dt_scales(he_dt)
+                # Convert from CYX to YXC (RGB) for napari
+                pyramid_rgb = []
+                for arr in pyramid:
+                    computed = arr.compute() if hasattr(arr, 'compute') else np.asarray(arr)
+                    if computed.ndim == 3 and computed.shape[0] in (3, 4):
+                        computed = np.transpose(computed, (1, 2, 0))
+                    pyramid_rgb.append(computed)
+                return pyramid_rgb
+
+            _load_he_from_sdata()
+        elif session.get("he_filename"):
+            print(f"  Warning: H&E image not found in sdata cache, skipping H&E restore")
+
+    def _on_he_restored_from_sdata(pyramid_rgb, session_he_data):
+        """Callback after H&E loads from sdata cache — apply saved affine."""
+        if _he_state["he_layer"] is not None:
+            try:
+                viewer.layers.remove(_he_state["he_layer"])
+            except ValueError:
+                pass
+
+        he_filename = session_he_data.get("he_filename", "H&E")
+        _he_state["he_tif"] = None
+        _he_state["he_filename"] = he_filename
+        _he_state["he_path"] = None  # loaded from cache, no file path
+        base = pyramid_rgb[0]
+        _he_state["he_shape_yx"] = session_he_data.get("he_shape_yx") or (base.shape[0], base.shape[1])
+
+        he_layer = viewer.add_image(
+            pyramid_rgb,
+            name=f"H&E ({he_filename})",
+            rgb=True,
+            blending="translucent",
+            opacity=he_opacity_slider.value / 100.0,
+        )
+        _he_state["he_layer"] = he_layer
+
+        # Restore saved affines
+        _he_state["affine_3x3"] = session_he_data.get("affine_3x3")
+        _he_state["coarse_affine"] = session_he_data.get("coarse_affine")
+        _apply_he_affine()
+
+        # Create landmark layers and populate with saved data
+        _create_landmark_layers()
+        xen_lm = session_he_data.get("xenium_landmarks")
+        he_lm = session_he_data.get("he_landmarks")
+        if xen_lm is not None and _he_state["xenium_lm_layer"] is not None:
+            _he_state["xenium_lm_layer"].data = xen_lm
+        if he_lm is not None and _he_state["he_lm_layer"] is not None:
+            _he_state["he_lm_layer"].data = he_lm
+
+        he_opacity_slider.enabled = True
+        he_load_button.enabled = True
+        coarse_align_button.enabled = morph_thumb is not None
+        save_affine_button.enabled = _he_state["affine_3x3"] is not None
+
+        has_affine = _he_state["affine_3x3"] is not None or _he_state["coarse_affine"] is not None
+        he_status_label.value = f"H&E restored: {he_filename}" + (" (with registration)" if has_affine else "")
+        print(f"  Restored H&E from cache: {he_filename}" + (" with registration" if has_affine else ""))
+
+    return tab_widget, _state, _he_state, restore_session
 
 
 if __name__ == "__main__":

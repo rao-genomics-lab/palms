@@ -1,8 +1,36 @@
 # Changelog
 
+## [Unreleased] — 2026-03-03
+
+### Added
+- **Neighborhood Enrichment tab** (Tab 8) — squidpy-based neighborhood enrichment
+  analysis (`sq.gr.nhood_enrichment`). Computes which cluster types are spatially
+  enriched or depleted in each other's neighborhoods via permutation testing.
+  Configurable: clustering, permutation count (100-1000), neighbor count (3-20).
+  Displays summary with top enriched/depleted cluster pairs. Heatmap visualization
+  (z-score or count mode) via seaborn with diverging colormap, supports filtering
+  by the Cell Coloring tab's cluster selection. Export z-score matrix as CSV, save
+  plot as PNG. Session persistence via zarr. New functions in `spatial_analysis.py`:
+  `run_nhood_enrichment()`, `make_nhood_enrichment_plot()`.
+
+### Changed
+- Renamed `_get_lr_cluster_filter()` to `_get_cluster_filter()` — shared helper for
+  cluster filtering in both L-R plot and nhood enrichment plot.
+
 ## [Unreleased] — 2026-03-02
 
 ### Added
+- **Session persistence** — viewer state (ROIs, H&E registration, analysis results,
+  cluster labels) is automatically saved to `sdata_cached.zarr/` when the viewer closes.
+  The H&E image is stored as a spatialdata multiscale image element (`images/he_image`)
+  with its affine transformation, so the next launch restores the H&E overlay with
+  registration already applied — no need to re-load or re-register. ROI polygons,
+  cluster labels, and analysis results (rank genes, ROI DEG, L-R) are persisted in
+  `viewer_session/` and restored on startup. Affine transformations are saved in
+  real-time (on each registration/flip change). Skipped when `--no-cache` is used.
+  New module `scripts/utils/session.py` with `save_session()` and `load_session()`.
+
+### Previously added
 - **Gene Analysis tab** (Tab 6) — rank marker genes per cluster using Wilcoxon, t-test, or
   logreg methods via scanpy's `rank_genes_groups`. Features: configurable top-N genes,
   dotplot visualization with optional dendrogram, editable cluster labels (dialog to rename
