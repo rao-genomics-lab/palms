@@ -3,6 +3,16 @@
 ## [Unreleased] — 2026-03-03
 
 ### Added
+- **Co-occurrence tab** (Tab 9) — squidpy-based spatial co-occurrence analysis
+  (`sq.gr.co_occurrence`). Computes how cluster types co-occur spatially across
+  increasing distance radii. Configurable: clustering, distance bins (10-100).
+  Displays summary with cluster count and distance range. Line-plot visualization
+  showing co-occurrence probability vs distance for selected clusters — one subplot
+  per query cluster with colored lines for each target cluster and baseline at y=1.
+  Uses Cell Coloring tab's cluster filter to select which clusters get subplots.
+  Export long-form CSV, save plot as PNG. Session persistence via zarr. New functions
+  in `spatial_analysis.py`: `run_co_occurrence()`, `make_co_occurrence_plot()`.
+
 - **Neighborhood Enrichment tab** (Tab 8) — squidpy-based neighborhood enrichment
   analysis (`sq.gr.nhood_enrichment`). Computes which cluster types are spatially
   enriched or depleted in each other's neighborhoods via permutation testing.

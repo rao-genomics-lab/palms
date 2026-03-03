@@ -6,6 +6,7 @@ Provides:
   - Ligand-receptor interaction analysis
   - L-R result plotting
   - Neighborhood enrichment analysis
+  - Co-occurrence analysis
 """
 
 from __future__ import annotations
@@ -191,3 +192,112 @@ def make_ligrec_plot(
         show=False,
     )
     return plt.gcf()
+
+
+def run_co_occurrence(
+    adata_norm: sc.AnnData,
+    cluster_key: str,
+    interval: int = 50,
+    seed: int = 42,
+) -> dict:
+    """Run spatial co-occurrence analysis.
+
+    Returns dict with keys 'occ' (n_clusters x n_clusters x n_intervals-1),
+    'interval' (n_intervals,), 'clusters' (list of str), and 'warning' (str or None).
+    """
+    warning_msg = None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sq.gr.co_occurrence(
+                adata_norm,
+                cluster_key=cluster_key,
+                interval=interval,
+            )
+        result = adata_norm.uns[f'{cluster_key}_co_occurrence']
+        occ = np.array(result['occ'])
+        interval_arr = np.array(result['interval'])
+        clusters = list(adata_norm.obs[cluster_key].cat.categories.astype(str))
+    except Exception as e:
+        occ = np.array([])
+        interval_arr = np.array([])
+        clusters = []
+        warning_msg = f"Co-occurrence analysis failed: {e}"
+
+    return {
+        'occ': occ,
+        'interval': interval_arr,
+        'clusters': clusters,
+        'warning': warning_msg,
+    }
+
+
+def make_co_occurrence_plot(
+    result: dict,
+    clusters_to_plot: list[str] | None = None,
+) -> plt.Figure:
+    """Create co-occurrence line plots. Returns matplotlib Figure.
+
+    Parameters
+    ----------
+    result : dict
+        Output from run_co_occurrence().
+    clusters_to_plot : list of str or None
+        Cluster IDs to create subplots for. If None, plot all clusters.
+    """
+    import seaborn as sns
+
+    occ = result['occ']
+    interval = result['interval']
+    clusters = list(result['clusters'])
+    distances = interval[1:]  # bin right edges
+
+    # Determine which clusters get subplots
+    if clusters_to_plot:
+        plot_ids = [c for c in clusters_to_plot if c in clusters]
+    else:
+        plot_ids = clusters
+
+    n_plots = len(plot_ids)
+    if n_plots == 0:
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, "No clusters to plot", ha='center', va='center',
+                transform=ax.transAxes)
+        return fig
+
+    n_cols = min(3, n_plots)
+    n_rows = (n_plots + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols,
+                             figsize=(5 * n_cols, 4 * n_rows),
+                             squeeze=False)
+
+    palette = sns.color_palette("tab20", n_colors=len(clusters))
+    color_map = {c: palette[i] for i, c in enumerate(clusters)}
+
+    for idx, query_cluster in enumerate(plot_ids):
+        row, col = divmod(idx, n_cols)
+        ax = axes[row][col]
+        qi = clusters.index(query_cluster)
+
+        for ti, target_cluster in enumerate(clusters):
+            ax.plot(distances, occ[qi, ti, :],
+                    label=target_cluster, color=color_map[target_cluster],
+                    linewidth=1.2)
+
+        ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=0.8, alpha=0.6)
+        ax.set_title(f"Cluster {query_cluster}", fontsize=10)
+        ax.set_xlabel("Distance")
+        ax.set_ylabel("Co-occurrence score")
+
+    # Remove empty subplots
+    for idx in range(n_plots, n_rows * n_cols):
+        row, col = divmod(idx, n_cols)
+        axes[row][col].set_visible(False)
+
+    # Single legend outside the last used subplot
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='center right', title='Target cluster',
+               fontsize=8, title_fontsize=9, bbox_to_anchor=(1.0, 0.5))
+
+    fig.tight_layout(rect=[0, 0, 0.88, 1.0])
+    return fig

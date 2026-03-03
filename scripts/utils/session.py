@@ -156,6 +156,21 @@ def save_session(
                 has_nhood = True
         attrs["has_nhood"] = has_nhood
 
+        # co-occurrence results
+        co_result = state.get("co_result")
+        has_co = False
+        if co_result is not None and co_result.get("warning") is None:
+            occ = co_result.get("occ")
+            interval_arr = co_result.get("interval")
+            clusters = co_result.get("clusters", [])
+            if occ is not None and occ.size > 0:
+                co_group = session.create_group("co_occ")
+                _write_array(co_group, "occ", occ)
+                _write_array(co_group, "interval", interval_arr)
+                co_group.attrs["clusters"] = clusters
+                has_co = True
+        attrs["has_co"] = has_co
+
         # Write all attrs at once
         session.attrs.update(attrs)
 
@@ -175,6 +190,8 @@ def save_session(
             parts.append("L-R results")
         if attrs.get("has_nhood"):
             parts.append("nhood enrichment")
+        if attrs.get("has_co"):
+            parts.append("co-occurrence")
         summary = ", ".join(parts) if parts else "empty session"
         print(f"Session saved: {summary}")
 
@@ -226,6 +243,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "ligrec_means": None,
         "ligrec_pvalues": None,
         "nhood_result": None,
+        "co_result": None,
     }
 
     # ── ROIs ──────────────────────────────────────────────────────────
@@ -292,6 +310,19 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         result["nhood_result"] = {
             "zscore": zscore,
             "count": count,
+            "clusters": clusters,
+            "warning": None,
+        }
+
+    # ── Co-occurrence ────────────────────────────────────────────────
+    if attrs.get("has_co") and "co_occ" in session:
+        co_group = session["co_occ"]
+        occ = np.array(co_group["occ"]) if "occ" in co_group else np.array([])
+        interval_arr = np.array(co_group["interval"]) if "interval" in co_group else np.array([])
+        clusters = list(dict(co_group.attrs).get("clusters", []))
+        result["co_result"] = {
+            "occ": occ,
+            "interval": interval_arr,
             "clusters": clusters,
             "warning": None,
         }

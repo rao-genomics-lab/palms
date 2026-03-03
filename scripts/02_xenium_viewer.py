@@ -79,6 +79,7 @@ from utils.gene_analysis import (
 from utils.spatial_analysis import (
     compute_spatial_neighbors, run_ligrec, make_ligrec_plot,
     run_nhood_enrichment, make_nhood_enrichment_plot,
+    run_co_occurrence, make_co_occurrence_plot,
 )
 
 # ─── Channel metadata ───────────────────────────────────────────────────────
@@ -460,6 +461,8 @@ def _build_control_panel(
         "active_clustering_name": None,  # name shown on hover
         "nhood_result": None,  # dict from run_nhood_enrichment()
         "nhood_fig": None,  # matplotlib Figure
+        "co_result": None,  # dict from run_co_occurrence()
+        "co_fig": None,  # matplotlib Figure
     }
 
     # ── Cell Coloring widgets ────────────────────────────────────────────────
@@ -1541,6 +1544,142 @@ def _build_control_panel(
     ne_save_plot_button.clicked.connect(on_save_nhood_plot)
     ne_export_button.clicked.connect(on_export_nhood)
 
+    # ── Co-occurrence widgets (Tab 9) ────────────────────────────────────────
+    co_clustering_widget = ComboBox(
+        label="Clustering", choices=clustering_names,
+        value=clustering_names[0] if clustering_names else None,
+    )
+    co_interval_slider = Slider(label="Distance bins", min=10, max=100, value=50)
+    co_run_button = PushButton(label="Run Co-occurrence", enabled=True)
+    co_results_text = QTextEdit()
+    co_results_text.setReadOnly(True)
+    co_results_text.setFontFamily("monospace")
+    co_results_text.setMaximumHeight(250)
+    co_plot_button = PushButton(label="Show Co-occurrence Plot", enabled=False)
+    co_save_plot_button = PushButton(label="Save Plot as PNG...", enabled=False)
+    co_export_button = PushButton(label="Export CSV...", enabled=False)
+    co_status = _StatusProxy()
+
+    def on_run_co_occurrence():
+        co_status.value = "Running co-occurrence analysis... (this may take a minute)"
+        co_run_button.enabled = False
+
+        clustering_key = co_clustering_widget.value
+        interval = co_interval_slider.value
+        _adata = adata if adata is not None else color_manager.adata
+
+        @thread_worker(connect={"returned": _on_co_occurrence_ready})
+        def _run():
+            adata_norm = get_normalized_adata(_adata)
+            add_clustering_to_obs(adata_norm, _adata, clusterings[clustering_key], clustering_key)
+            adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
+            result = run_co_occurrence(adata_norm, clustering_key, interval=interval)
+            return result
+        _run()
+
+    def _on_co_occurrence_ready(result):
+        _state["co_result"] = result
+        co_run_button.enabled = True
+
+        warning = result.get('warning')
+        if warning:
+            co_status.value = f"Co-occurrence: {warning}"
+            co_results_text.setPlainText(warning)
+            co_plot_button.enabled = False
+            co_save_plot_button.enabled = False
+            co_export_button.enabled = False
+            return
+
+        occ = result['occ']
+        interval_arr = result['interval']
+        clusters = result['clusters']
+        n = len(clusters)
+
+        lines = [
+            f"Co-occurrence analysis: {n} clusters",
+            f"Clusters: {', '.join(clusters)}",
+            f"Distance range: {interval_arr[0]:.1f} – {interval_arr[-1]:.1f}",
+            f"Number of distance bins: {len(interval_arr) - 1}",
+            "",
+            "Use 'Show Co-occurrence Plot' to visualize.",
+            "Filter clusters via Cell Coloring tab to plot a subset.",
+        ]
+
+        co_results_text.setPlainText("\n".join(lines))
+        co_status.value = f"Co-occurrence done: {n} clusters"
+        co_plot_button.enabled = True
+        co_export_button.enabled = True
+
+    def on_show_co_plot():
+        result = _state.get("co_result")
+        if result is None:
+            return
+        groups = _get_cluster_filter()
+        import matplotlib.pyplot as _plt
+        try:
+            fig = make_co_occurrence_plot(result, clusters_to_plot=groups)
+            _state["co_fig"] = fig
+            _plt.show(block=False)
+            co_save_plot_button.enabled = True
+            if groups:
+                co_status.value = f"Co-occurrence plot (clusters: {', '.join(groups)})"
+            else:
+                co_status.value = "Co-occurrence plot displayed"
+        except Exception as e:
+            co_status.value = f"Plot error: {e}"
+
+    def on_save_co_plot():
+        fig = _state.get("co_fig")
+        if fig is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Save Co-occurrence Plot", "co_occurrence.png",
+            "PNG Files (*.png);;All Files (*)",
+        )
+        if not path:
+            return
+        fig.savefig(path, dpi=300, bbox_inches='tight')
+        co_status.value = f"Plot saved to {path}"
+
+    def on_export_co():
+        result = _state.get("co_result")
+        if result is None:
+            return
+        import pandas as _pd
+
+        occ = result['occ']
+        interval_arr = result['interval']
+        clusters = result['clusters']
+        distances = interval_arr[1:]
+
+        groups = _get_cluster_filter()
+
+        rows = []
+        for i, src in enumerate(clusters):
+            if groups and src not in groups:
+                continue
+            for j, tgt in enumerate(clusters):
+                for k, d in enumerate(distances):
+                    rows.append({
+                        'source_cluster': src,
+                        'target_cluster': tgt,
+                        'distance': d,
+                        'co_occurrence': occ[i, j, k],
+                    })
+        df = _pd.DataFrame(rows)
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export Co-occurrence", "co_occurrence.csv", "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        df.to_csv(path, index=False)
+        co_status.value = f"Co-occurrence exported to {path}"
+
+    co_run_button.clicked.connect(on_run_co_occurrence)
+    co_plot_button.clicked.connect(on_show_co_plot)
+    co_save_plot_button.clicked.connect(on_save_co_plot)
+    co_export_button.clicked.connect(on_export_co)
+
     # ── White background callback ────────────────────────────────────────────
     def on_bg_change(value):
         viewer.window._qt_viewer.canvas.bgcolor = (1, 1, 1, 1) if value else (0, 0, 0, 1)
@@ -2234,6 +2373,26 @@ def _build_control_panel(
         "Nhood Enrichment",
     )
 
+    # Tab 9: Co-occurrence
+    co_plot_btn_row = QWidget()
+    co_plot_btn_layout = QHBoxLayout()
+    co_plot_btn_layout.setContentsMargins(0, 0, 0, 0)
+    co_plot_btn_layout.addWidget(co_plot_button.native)
+    co_plot_btn_layout.addWidget(co_save_plot_button.native)
+    co_plot_btn_row.setLayout(co_plot_btn_layout)
+
+    tab_widget.addTab(
+        _make_tab(
+            co_clustering_widget,
+            co_interval_slider,
+            co_run_button,
+            co_results_text,
+            co_plot_btn_row,
+            co_export_button,
+        ),
+        "Co-occurrence",
+    )
+
     # ── Session restore function ─────────────────────────────────────────────
     def restore_session(session):
         """Apply loaded session data to the viewer state."""
@@ -2285,6 +2444,15 @@ def _build_control_panel(
             ne_export_button.enabled = True
             n = len(nh.get('clusters', []))
             print(f"  Restored nhood enrichment ({n} clusters)")
+
+        # Analysis results: co-occurrence
+        co = session.get("co_result")
+        if co is not None:
+            _state["co_result"] = co
+            co_plot_button.enabled = True
+            co_export_button.enabled = True
+            n = len(co.get('clusters', []))
+            print(f"  Restored co-occurrence ({n} clusters)")
 
         # H&E restore — load from sdata zarr cache
         if sdata is not None and "he_image" in sdata.images:
