@@ -1574,6 +1574,8 @@ def _build_control_panel(
             add_clustering_to_obs(adata_norm, _adata, clusterings[clustering_key], clustering_key)
             adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
             result = run_co_occurrence(adata_norm, clustering_key, interval=interval)
+            result['_adata_norm'] = adata_norm
+            result['_cluster_key'] = clustering_key
             return result
         _run()
 
@@ -1617,14 +1619,23 @@ def _build_control_panel(
         groups = _get_cluster_filter()
         import matplotlib.pyplot as _plt
         try:
-            fig = make_co_occurrence_plot(result, clusters_to_plot=groups)
+            if groups:
+                fig = make_co_occurrence_plot(result, clusters_to_plot=groups)
+                co_status.value = f"Co-occurrence plot (clusters: {', '.join(groups)})"
+            else:
+                # Use squidpy's native plot when no filter is active
+                adata_norm = result.get('_adata_norm')
+                cluster_key = result.get('_cluster_key')
+                if adata_norm is not None and cluster_key is not None:
+                    import squidpy as _sq
+                    _sq.pl.co_occurrence(adata_norm, cluster_key=cluster_key)
+                    fig = _plt.gcf()
+                else:
+                    fig = make_co_occurrence_plot(result, clusters_to_plot=None)
+                co_status.value = "Co-occurrence plot displayed"
             _state["co_fig"] = fig
             _plt.show(block=False)
             co_save_plot_button.enabled = True
-            if groups:
-                co_status.value = f"Co-occurrence plot (clusters: {', '.join(groups)})"
-            else:
-                co_status.value = "Co-occurrence plot displayed"
         except Exception as e:
             co_status.value = f"Plot error: {e}"
 
