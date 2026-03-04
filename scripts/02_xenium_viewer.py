@@ -444,7 +444,7 @@ def _build_control_panel(
     )
     from qtpy.QtWidgets import (
         QListWidget, QHBoxLayout, QWidget, QVBoxLayout, QLabel, QTabWidget,
-        QCheckBox, QScrollArea, QGridLayout,
+        QCheckBox, QScrollArea, QGridLayout, QGroupBox,
     )
 
     # ── State ────────────────────────────────────────────────────────────────
@@ -464,6 +464,10 @@ def _build_control_panel(
         "co_result": None,  # dict from run_co_occurrence()
         "co_fig": None,  # matplotlib Figure
         "plot_format": "png",  # "png" or "svg" — set via Preferences menu
+        "plot_font_size": 10,  # matplotlib font.size — set via Preferences menu
+        "record_code": False,       # toggle via Preferences
+        "code_journal": [],         # list of code block strings
+        "code_journal_tags": set(), # dedup tags for preamble sections
     }
 
     # ── Preferences menu (plot format) ────────────────────────────────────────
@@ -487,6 +491,116 @@ def _build_control_panel(
         _state["plot_format"] = action.text().lower()
 
     format_group.triggered.connect(_on_format_changed)
+
+    fontsize_menu = prefs_menu.addMenu("Plot font size")
+    fontsize_group = QActionGroup(fontsize_menu)
+    fontsize_group.setExclusive(True)
+
+    for sz in (1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20):
+        act = QAction(str(sz), fontsize_group, checkable=True,
+                      checked=(sz == 10))
+        fontsize_menu.addAction(act)
+
+    def _on_fontsize_changed(action):
+        _state["plot_font_size"] = int(action.text())
+
+    fontsize_group.triggered.connect(_on_fontsize_changed)
+
+    # --- Record code checkbox ---
+    record_action = QAction("Record reproducible code", prefs_menu, checkable=True, checked=False)
+    prefs_menu.addAction(record_action)
+
+    def _on_record_toggled(checked):
+        _state["record_code"] = checked
+        if checked:
+            _state["code_journal"].clear()
+            _state["code_journal_tags"].clear()
+
+    record_action.toggled.connect(_on_record_toggled)
+
+    # --- Save code action ---
+    save_code_action = QAction("Save recorded code...", prefs_menu)
+    prefs_menu.addAction(save_code_action)
+
+    def _on_save_code():
+        if not _state["code_journal"]:
+            return
+        from qtpy.QtWidgets import QFileDialog as _QFD
+        path, _ = _QFD.getSaveFileName(
+            None, "Save Reproducible Code", "analysis.py", "Python Files (*.py)",
+        )
+        if path:
+            with open(path, 'w') as f:
+                f.write("\n".join(_state["code_journal"]) + "\n")
+
+    save_code_action.triggered.connect(_on_save_code)
+
+    def _apply_plot_font_size():
+        import matplotlib.pyplot as _plt
+        _plt.rcParams['font.size'] = _state.get("plot_font_size", 10)
+
+    # ── Reproducible code journal helpers ──────────────────────────────────
+    def _record_code(code: str, tag: str = None):
+        """Append a code block to the journal. If tag is given, skip if already emitted."""
+        if not _state.get("record_code"):
+            return
+        if tag:
+            if tag in _state["code_journal_tags"]:
+                return
+            _state["code_journal_tags"].add(tag)
+        _state["code_journal"].append(code)
+
+    def _record_preamble():
+        """Emit imports + data loading (once)."""
+        _record_code(
+            "import scanpy as sc\n"
+            "import squidpy as sq\n"
+            "import matplotlib.pyplot as plt\n"
+            "import pandas as pd\n"
+            "import numpy as np\n"
+            f"\nplt.rcParams['font.size'] = {_state.get('plot_font_size', 10)}\n"
+            f"\n# Load data\n"
+            "from spatialdata_io import xenium\n"
+            f"sdata = xenium(\"{data_path}\")\n"
+            "adata = sdata[\"table\"].copy()",
+            tag="preamble"
+        )
+
+    def _record_normalize():
+        """Emit normalization (once)."""
+        _record_preamble()
+        _record_code(
+            "\n# Normalize, log-transform, PCA\n"
+            "sc.pp.normalize_total(adata)\n"
+            "sc.pp.log1p(adata)\n"
+            "sc.pp.pca(adata)",
+            tag="normalize"
+        )
+
+    def _record_clustering(key):
+        """Emit clustering assignment (once per key)."""
+        _record_normalize()
+        dir_name = f"gene_expression_{key}"
+        csv_path = os.path.join(data_path, "analysis", "clustering", dir_name, "clusters.csv")
+        if not os.path.exists(csv_path):
+            csv_path = os.path.join(data_path, "analysis", "clustering", key, "clusters.csv")
+        _record_code(
+            f"\n# Add clustering: {key}\n"
+            f"clust_df = pd.read_csv(\"{csv_path}\", index_col=0)\n"
+            f"adata.obs[\"{key}\"] = pd.Categorical("
+            f"clust_df.reindex(adata.obs_names).iloc[:, 0].astype(str).values)",
+            tag=f"clustering_{key}"
+        )
+
+    def _record_spatial_neighbors(n_neighs):
+        """Emit spatial neighbor computation (once per n_neighs)."""
+        _record_code(
+            f"\n# Compute spatial neighbors (k={n_neighs})\n"
+            "adata.obsm['spatial'] = adata.obsm.get('spatial', "
+            "np.column_stack([adata.obs['x_centroid'], adata.obs['y_centroid']]))\n"
+            f"sq.gr.spatial_neighbors(adata, n_neighs={n_neighs}, coord_type=\"generic\")",
+            tag=f"spatial_neighbors_{n_neighs}"
+        )
 
     # ── Cell Coloring widgets ────────────────────────────────────────────────
     mode_widget = RadioButtons(
@@ -1149,6 +1263,8 @@ def _build_control_panel(
         clustering_key = ga_clustering_widget.value
         method = ga_method_widget.value
         n_genes = ga_n_genes_slider.value
+        _state["_rg_method"] = method
+        _state["_rg_n_genes"] = n_genes
 
         _adata = adata if adata is not None else color_manager.adata
 
@@ -1175,6 +1291,17 @@ def _build_control_panel(
         ga_results_text.setPlainText(preview)
         ga_status.value = f"Rank genes done: {len(df)} results ({clustering_key}, {ga_method_widget.value})"
 
+        # Record reproducible code
+        _rg_method = _state.get("_rg_method", "wilcoxon")
+        _rg_n = _state.get("_rg_n_genes", 25)
+        _record_clustering(clustering_key)
+        _record_code(
+            f"\n# Rank genes: method={_rg_method}, groupby={clustering_key}, n_genes={_rg_n}\n"
+            f"sc.tl.rank_genes_groups(adata, groupby=\"{clustering_key}\", "
+            f"method=\"{_rg_method}\", n_genes={_rg_n})\n"
+            f"rank_df = sc.get.rank_genes_groups_df(adata, group=None)"
+        )
+
     def on_show_dotplot():
         adata_norm = _state.get("rank_genes_adata_norm")
         groupby = _state.get("rank_genes_groupby")
@@ -1190,6 +1317,7 @@ def _build_control_panel(
 
         @thread_worker(connect={"returned": _on_dotplot_ready})
         def _run():
+            _apply_plot_font_size()
             fig = make_rank_genes_dotplot(
                 adata_norm, groupby, n_genes=n_genes,
                 cluster_labels=labels, dendrogram=dendro,
@@ -1204,6 +1332,17 @@ def _build_control_panel(
         import matplotlib.pyplot as _plt
         _plt.show(block=False)
         ga_status.value = "Dotplot displayed"
+
+        # Record reproducible code
+        _dp_n = ga_dotplot_n_slider.value
+        _dp_dendro = ga_dendro_check.value
+        _dp_groupby = _state.get("rank_genes_groupby", "")
+        _record_code(
+            f"\n# Dotplot (n_genes={_dp_n}, dendrogram={_dp_dendro})\n"
+            + (f"sc.tl.dendrogram(adata, groupby=\"{_dp_groupby}\")\n" if _dp_dendro else "")
+            + f"sc.pl.rank_genes_groups_dotplot(adata, n_genes={_dp_n}, "
+            f"dendrogram={_dp_dendro})\nplt.show()"
+        )
 
     def _open_label_editor():
         from qtpy.QtWidgets import QDialog, QGridLayout, QLineEdit, QDialogButtonBox
@@ -1249,9 +1388,17 @@ def _build_control_panel(
             ga_status.value = "Run rank genes first"
             return
         import matplotlib.pyplot as _plt
-        fig = make_rank_genes_plot(adata_norm, n_genes=ga_n_genes_slider.value)
+        _apply_plot_font_size()
+        _rp_n = ga_n_genes_slider.value
+        fig = make_rank_genes_plot(adata_norm, n_genes=_rp_n)
         _plt.show(block=False)
         ga_status.value = "Rank genes plot displayed"
+
+        # Record reproducible code
+        _record_code(
+            f"\n# Rank genes panel plot (n_genes={_rp_n})\n"
+            f"sc.pl.rank_genes_groups(adata, n_genes={_rp_n})\nplt.show()"
+        )
 
     def on_export_rank_genes():
         df = _state.get("rank_genes_df")
@@ -1280,6 +1427,22 @@ def _build_control_panel(
     lr_perms_slider = Slider(label="Permutations", min=100, max=1000, value=1000)
     lr_neighs_slider = Slider(label="N neighbors", min=3, max=20, value=6)
     lr_run_button = PushButton(label="Run L-R Analysis", enabled=True)
+
+    # ── Interaction database filter checkboxes ─────────────────────────────
+    lr_ds_group = QGroupBox("Interaction datasets")
+    lr_ds_layout = QGridLayout()
+    lr_ds_omnipath = QCheckBox("OmniPath"); lr_ds_omnipath.setChecked(True)
+    lr_ds_ligrecextra = QCheckBox("LigRecExtra"); lr_ds_ligrecextra.setChecked(True)
+    lr_ds_pathwayextra = QCheckBox("PathwayExtra"); lr_ds_pathwayextra.setChecked(True)
+    lr_ds_kinaseextra = QCheckBox("KinaseExtra"); lr_ds_kinaseextra.setChecked(True)
+    lr_ds_layout.addWidget(lr_ds_omnipath, 0, 0)
+    lr_ds_layout.addWidget(lr_ds_ligrecextra, 0, 1)
+    lr_ds_layout.addWidget(lr_ds_pathwayextra, 1, 0)
+    lr_ds_layout.addWidget(lr_ds_kinaseextra, 1, 1)
+    lr_ds_group.setLayout(lr_ds_layout)
+    lr_cpdb_only = QCheckBox("CellPhoneDB only")
+    lr_cpdb_only.setChecked(False)
+
     # lr_status assigned above as _StatusProxy
 
     lr_results_text = QTextEdit()
@@ -1303,7 +1466,27 @@ def _build_control_panel(
         clustering_key = lr_clustering_widget.value
         n_perms = lr_perms_slider.value
         n_neighs = lr_neighs_slider.value
+        _state["_lr_params"] = {
+            "clustering_key": clustering_key,
+            "n_perms": n_perms,
+            "n_neighs": n_neighs,
+        }
         _adata = adata if adata is not None else color_manager.adata
+
+        # Build interactions_params from dataset checkboxes
+        from omnipath.constants import InteractionDataset
+        include = []
+        if lr_ds_omnipath.isChecked():
+            include.append(InteractionDataset.OMNIPATH)
+        if lr_ds_ligrecextra.isChecked():
+            include.append(InteractionDataset.LIGREC_EXTRA)
+        if lr_ds_pathwayextra.isChecked():
+            include.append(InteractionDataset.PATHWAY_EXTRA)
+        if lr_ds_kinaseextra.isChecked():
+            include.append(InteractionDataset.KINASE_EXTRA)
+        interactions_params = {"include": tuple(include)} if include else {}
+        if lr_cpdb_only.isChecked():
+            interactions_params["resources"] = "CellPhoneDB"
 
         @thread_worker(connect={"returned": _on_ligrec_ready})
         def _run():
@@ -1312,7 +1495,8 @@ def _build_control_panel(
             # Set spatial coordinates for squidpy
             adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
             compute_spatial_neighbors(adata_norm, n_neighs=n_neighs)
-            result = run_ligrec(adata_norm, clustering_key, n_perms=n_perms)
+            result = run_ligrec(adata_norm, clustering_key, n_perms=n_perms,
+                                interactions_params=interactions_params)
             return result
         _run()
 
@@ -1356,6 +1540,23 @@ def _build_control_panel(
         lr_export_means_button.enabled = not means.empty
         lr_export_pvals_button.enabled = not pvalues.empty
 
+        # Record reproducible code
+        _lr_p = _state.get("_lr_params", {})
+        _lr_ck = _lr_p.get("clustering_key", "")
+        _lr_np = _lr_p.get("n_perms", 1000)
+        _lr_nn = _lr_p.get("n_neighs", 6)
+        _record_clustering(_lr_ck)
+        _record_spatial_neighbors(_lr_nn)
+        _record_code(
+            f"\n# Ligand-receptor analysis (n_perms={_lr_np})\n"
+            f"sq.gr.ligrec(\n"
+            f"    adata, cluster_key=\"{_lr_ck}\", n_perms={_lr_np},\n"
+            f"    threshold=0.01, seed=42,\n"
+            f"    transmitter_params={{\"categories\": \"ligand\"}},\n"
+            f"    receiver_params={{\"categories\": \"receptor\"}},\n"
+            f")"
+        )
+
     def _get_cluster_filter():
         """Return list of cluster ID strings based on cell coloring filter, or None."""
         if not _state.get("filter_by_cluster"):
@@ -1372,6 +1573,7 @@ def _build_control_panel(
         pval_thresh = float(lr_pval_widget.value)
         groups = _get_cluster_filter()
         import matplotlib.pyplot as _plt
+        _apply_plot_font_size()
         try:
             fig = make_ligrec_plot(
                 result, pvalue_threshold=pval_thresh,
@@ -1384,6 +1586,16 @@ def _build_control_panel(
                 lr_status.value = f"L-R plot displayed (clusters: {', '.join(groups)})"
             else:
                 lr_status.value = "L-R plot displayed"
+
+            # Record reproducible code
+            _lr_ck = _state.get("_lr_params", {}).get("clustering_key", "")
+            _record_code(
+                f"\n# L-R dotplot (pvalue_threshold={pval_thresh})\n"
+                f"sq.pl.ligrec(adata, cluster_key=\"{_lr_ck}\", "
+                f"pvalue_threshold={pval_thresh}"
+                + (f", source_groups={groups}, target_groups={groups}" if groups else "")
+                + ")\nplt.show()"
+            )
         except Exception as e:
             lr_status.value = f"Plot error: {e}"
 
@@ -1454,6 +1666,10 @@ def _build_control_panel(
         clustering_key = ne_clustering_widget.value
         n_perms = ne_perms_slider.value
         n_neighs = ne_neighs_slider.value
+        _state["_ne_params"] = {
+            "n_perms": n_perms,
+            "n_neighs": n_neighs,
+        }
         _adata = adata if adata is not None else color_manager.adata
 
         @thread_worker(connect={"returned": _on_nhood_ready})
@@ -1515,12 +1731,26 @@ def _build_control_panel(
         ne_plot_button.enabled = True
         ne_export_button.enabled = True
 
+        # Record reproducible code
+        _ne_ck = result.get('_cluster_key', '')
+        _ne_p = _state.get("_ne_params", {})
+        _ne_np = _ne_p.get("n_perms", 1000)
+        _ne_nn = _ne_p.get("n_neighs", 6)
+        _record_clustering(_ne_ck)
+        _record_spatial_neighbors(_ne_nn)
+        _record_code(
+            f"\n# Neighborhood enrichment (n_perms={_ne_np})\n"
+            f"sq.gr.nhood_enrichment(adata, cluster_key=\"{_ne_ck}\", "
+            f"n_perms={_ne_np}, seed=42)"
+        )
+
     def on_show_nhood_plot():
         result = _state.get("nhood_result")
         if result is None:
             return
         groups = _get_cluster_filter()
         import matplotlib.pyplot as _plt
+        _apply_plot_font_size()
         try:
             if groups:
                 # Custom plot with cluster filter
@@ -1550,6 +1780,15 @@ def _build_control_panel(
                 ne_status.value = f"Heatmap displayed (clusters: {', '.join(groups)})"
             else:
                 ne_status.value = "Heatmap displayed"
+
+            # Record reproducible code
+            _ne_mode = ne_mode_widget.value
+            _ne_ck = result.get('_cluster_key', '')
+            _record_code(
+                f"\n# Nhood enrichment heatmap (mode={_ne_mode})\n"
+                f"sq.pl.nhood_enrichment(adata, cluster_key=\"{_ne_ck}\", "
+                f"mode=\"{_ne_mode}\")\nplt.show()"
+            )
         except Exception as e:
             ne_status.value = f"Plot error: {e}"
 
@@ -1613,6 +1852,7 @@ def _build_control_panel(
 
         clustering_key = co_clustering_widget.value
         interval = co_interval_slider.value
+        _state["_co_params"] = {"interval": interval}
         _adata = adata if adata is not None else color_manager.adata
 
         @thread_worker(connect={"returned": _on_co_occurrence_ready})
@@ -1659,6 +1899,16 @@ def _build_control_panel(
         co_plot_button.enabled = True
         co_export_button.enabled = True
 
+        # Record reproducible code
+        _co_ck = result.get('_cluster_key', '')
+        _co_iv = _state.get("_co_params", {}).get("interval", 50)
+        _record_clustering(_co_ck)
+        _record_code(
+            f"\n# Co-occurrence (interval={_co_iv})\n"
+            f"sq.gr.co_occurrence(adata, cluster_key=\"{_co_ck}\", "
+            f"interval={_co_iv})"
+        )
+
     def on_show_co_plot():
         result = _state.get("co_result")
         if result is None:
@@ -1666,6 +1916,7 @@ def _build_control_panel(
         groups = _get_cluster_filter()
         filter_targets = co_filter_targets.value and groups
         import matplotlib.pyplot as _plt
+        _apply_plot_font_size()
         try:
             if filter_targets:
                 # Custom plot: both query subplots AND target lines filtered
@@ -1692,6 +1943,15 @@ def _build_control_panel(
                 co_status.value = f"Co-occurrence plot (clusters: {', '.join(groups)})"
             else:
                 co_status.value = "Co-occurrence plot displayed"
+
+            # Record reproducible code
+            _co_ck = result.get('_cluster_key', '')
+            _record_code(
+                f"\n# Co-occurrence plot\n"
+                f"sq.pl.co_occurrence(adata, cluster_key=\"{_co_ck}\""
+                + (f", clusters={groups}" if groups else "")
+                + ")\nplt.show()"
+            )
         except Exception as e:
             co_status.value = f"Plot error: {e}"
 
@@ -2407,6 +2667,8 @@ def _build_control_panel(
             lr_clustering_widget,
             lr_perms_slider,
             lr_neighs_slider,
+            lr_ds_group,
+            lr_cpdb_only,
             lr_run_button,
             lr_pval_widget,
             lr_plot_btn_row,
