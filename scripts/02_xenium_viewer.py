@@ -440,7 +440,7 @@ def _build_control_panel(
     """Build and return a magicgui Container docked widget."""
     from magicgui.widgets import (
         Container, ComboBox, CheckBox, PushButton, Label,
-        Slider, RadioButtons,
+        Slider, RadioButtons, FloatSpinBox,
     )
     from qtpy.QtWidgets import (
         QListWidget, QHBoxLayout, QWidget, QVBoxLayout, QLabel, QTabWidget,
@@ -737,10 +737,20 @@ def _build_control_panel(
         key = clustering_widget.value
         if not key or key not in clusterings:
             return
-        ids = sorted(clusterings[key].dropna().unique().astype(int).tolist())
+        # Handle both integer and string cluster IDs
+        raw_ids = clusterings[key].dropna().unique().tolist()
+        try:
+            ids = sorted([int(x) for x in raw_ids])
+        except (ValueError, TypeError):
+            ids = sorted(raw_ids, key=lambda x: str(x))
+        try:
+            labels = _get_labels_for(key)
+        except NameError:
+            labels = {}
         cols = 3
         for i, cid in enumerate(ids):
-            cb = QCheckBox(str(cid))
+            display = str(labels.get(cid, labels.get(str(cid), cid)))
+            cb = QCheckBox(display)
             cb.setChecked(True)
             cb.setEnabled(filter_check.value)
             cluster_filter_grid.addWidget(cb, i // cols, i % cols)
@@ -763,6 +773,175 @@ def _build_control_panel(
 
     # Populate checkboxes for initial clustering
     _repopulate_cluster_checkboxes()
+
+    # ── Leiden Clustering widgets ──────────────────────────────────────────
+    from qtpy.QtWidgets import QTextEdit as _QTextEdit
+
+    leiden_n_neighbors = Slider(label="n_neighbors", min=5, max=50, value=15)
+    leiden_n_pcs = Slider(label="n_pcs", min=10, max=50, value=40)
+    leiden_resolution = FloatSpinBox(label="resolution", min=0.1, max=5.0, step=0.1, value=1.0)
+    leiden_hvg_check = CheckBox(label="Use HVGs only", value=False)
+    leiden_n_hvgs = Slider(label="n_top_genes", min=500, max=4000, value=2000, enabled=False)
+    leiden_scale_check = CheckBox(label="Scale (max_value=10)", value=False)
+
+    def _on_hvg_toggle(val):
+        leiden_n_hvgs.enabled = val
+    leiden_hvg_check.changed.connect(_on_hvg_toggle)
+
+    leiden_run_button = PushButton(label="Run Leiden Clustering", enabled=True)
+    leiden_import_button = PushButton(label="Import Clustering...", enabled=True)
+    leiden_export_button = PushButton(label="Export Clustering...", enabled=True)
+    leiden_edit_labels_button = PushButton(label="Edit Cluster Labels...", enabled=True)
+
+    leiden_status_text = _QTextEdit()
+    leiden_status_text.setReadOnly(True)
+    leiden_status_text.setFontFamily("monospace")
+    leiden_status_text.setMaximumHeight(150)
+
+    leiden_status = _StatusProxy()
+
+    def _refresh_clustering_choices():
+        """Update all clustering ComboBoxes with current clustering_names."""
+        names = list(clusterings.keys())
+        for combo in [clustering_widget, ga_clustering_widget, lr_clustering_widget,
+                      ne_clustering_widget, co_clustering_widget]:
+            old_val = combo.value
+            combo.choices = names
+            if old_val in names:
+                combo.value = old_val
+
+    def on_run_leiden():
+        n_neighbors = leiden_n_neighbors.value
+        n_pcs = leiden_n_pcs.value
+        resolution = leiden_resolution.value
+        use_hvg = leiden_hvg_check.value
+        do_scale = leiden_scale_check.value
+        n_hvgs = leiden_n_hvgs.value
+        leiden_run_button.enabled = False
+        leiden_status.value = "Running Leiden clustering..."
+
+        _adata = adata if adata is not None else color_manager.adata
+
+        @thread_worker(connect={"returned": _on_leiden_ready})
+        def _run():
+            import scanpy as sc
+            if use_hvg or do_scale:
+                adata_work = _adata.copy()
+                sc.pp.normalize_total(adata_work, target_sum=1e4)
+                sc.pp.log1p(adata_work)
+                if use_hvg:
+                    sc.pp.highly_variable_genes(adata_work, n_top_genes=n_hvgs, flavor="seurat")
+                    adata_work = adata_work[:, adata_work.var.highly_variable].copy()
+                if do_scale:
+                    sc.pp.scale(adata_work, max_value=10)
+                sc.pp.pca(adata_work)
+            else:
+                adata_work = get_normalized_adata(_adata)
+            sc.pp.neighbors(adata_work, n_neighbors=n_neighbors, n_pcs=n_pcs)
+            sc.tl.leiden(adata_work, resolution=resolution, key_added="leiden")
+            import pandas as pd
+            cell_ids = _adata.obs['cell_id'].values if 'cell_id' in _adata.obs.columns else _adata.obs_names
+            series = pd.Series(
+                adata_work.obs['leiden'].astype(int).values,
+                index=cell_ids,
+                name="leiden",
+            )
+            n_clusters = series.nunique()
+            return series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs
+        _run()
+
+    def _on_leiden_ready(result):
+        series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs = result
+        key = f"leiden_r{resolution}"
+        clusterings[key] = series
+        _refresh_clustering_choices()
+
+        leiden_status_text.setPlainText(
+            f"Leiden clustering complete\n"
+            f"  Key: {key}\n"
+            f"  Clusters: {n_clusters}\n"
+            f"  n_neighbors: {n_neighbors}\n"
+            f"  n_pcs: {n_pcs}\n"
+            f"  resolution: {resolution}\n"
+            f"  HVGs: {n_hvgs if use_hvg else 'all genes'}\n"
+            f"  Scaled: {'yes (max=10)' if do_scale else 'no'}"
+        )
+        leiden_status.value = f"Leiden done: {n_clusters} clusters ({key})"
+        leiden_run_button.enabled = True
+
+        if use_hvg or do_scale:
+            code_lines = [
+                "\n# Custom preprocessing for Leiden",
+                "adata_leiden = adata.copy()",
+                "sc.pp.normalize_total(adata_leiden, target_sum=1e4)",
+                "sc.pp.log1p(adata_leiden)",
+            ]
+            if use_hvg:
+                code_lines.append(f"sc.pp.highly_variable_genes(adata_leiden, n_top_genes={n_hvgs}, flavor='seurat')")
+                code_lines.append("adata_leiden = adata_leiden[:, adata_leiden.var.highly_variable].copy()")
+            if do_scale:
+                code_lines.append("sc.pp.scale(adata_leiden, max_value=10)")
+            code_lines.append("sc.pp.pca(adata_leiden)")
+            code_lines.append(f"sc.pp.neighbors(adata_leiden, n_neighbors={n_neighbors}, n_pcs={n_pcs})")
+            code_lines.append(f'sc.tl.leiden(adata_leiden, resolution={resolution}, key_added="{key}")')
+            _record_code("\n".join(code_lines), tag=f"leiden_{key}")
+        else:
+            _record_normalize()
+            _record_code(
+                f"\n# Leiden clustering (n_neighbors={n_neighbors}, n_pcs={n_pcs}, resolution={resolution})\n"
+                f"sc.pp.neighbors(adata, n_neighbors={n_neighbors}, n_pcs={n_pcs})\n"
+                f"sc.tl.leiden(adata, resolution={resolution}, key_added=\"{key}\")",
+                tag=f"leiden_{key}"
+            )
+
+    leiden_run_button.clicked.connect(on_run_leiden)
+
+    # ── Import / Export clustering callbacks ─────────────────────────────────
+    def _on_import_clustering():
+        import pandas as pd
+        path, _ = QFileDialog.getOpenFileName(
+            None, "Import Clustering", "",
+            "CSV/TSV Files (*.csv *.tsv *.txt);;All Files (*)",
+        )
+        if not path:
+            return
+        df = pd.read_csv(path, sep=None, engine='python')
+        if 'cell_id' in df.columns and 'group' in df.columns:
+            series = pd.Series(df['group'].values, index=df['cell_id'].values)
+        else:
+            series = pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0].values)
+        name = Path(path).stem
+        clusterings[name] = series
+        _refresh_clustering_choices()
+        clustering_widget.value = name
+        leiden_status.value = f"Imported '{name}' ({series.nunique()} groups, {len(series)} cells)"
+
+    def _on_export_clustering():
+        import pandas as pd
+        clustering_key = clustering_widget.value
+        if not clustering_key or clustering_key not in clusterings:
+            leiden_status.value = "No clustering selected"
+            return
+        series = clusterings[clustering_key]
+        labels = _get_active_labels()
+        if labels:
+            mapped = series.map(lambda x: labels.get(x, labels.get(str(x),
+                                labels.get(int(x) if str(x).lstrip('-').isdigit() else x, x))))
+        else:
+            mapped = series
+        df = pd.DataFrame({'cell_id': mapped.index, 'group': mapped.values})
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export Clustering", f"{clustering_key}.csv",
+            "CSV Files (*.csv);;TSV Files (*.tsv)",
+        )
+        if not path:
+            return
+        sep = '\t' if path.endswith('.tsv') else ','
+        df.to_csv(path, index=False, sep=sep)
+        leiden_status.value = f"Exported {len(df)} cells to {path}"
+
+    leiden_import_button.clicked.connect(_on_import_clustering)
+    leiden_export_button.clicked.connect(_on_export_clustering)
 
     # ── Cell Coloring callbacks ─────────────────────────────────────────────
     def on_mode_change(value):
@@ -787,6 +966,11 @@ def _build_control_panel(
 
     def on_clustering_change(value):
         _repopulate_cluster_checkboxes()
+        # Sync all analysis tabs to the same clustering
+        for combo in [ga_clustering_widget, lr_clustering_widget,
+                      ne_clustering_widget, co_clustering_widget]:
+            if value in [c for c in combo.choices]:
+                combo.value = value
 
     def on_apply_color():
         if cell_labels_layer is None:
@@ -849,7 +1033,12 @@ def _build_control_panel(
         apply_color_button.enabled = True
 
     def _get_cluster_ids_per_obs(clustering_key):
-        """Return per-obs cluster IDs aligned to adata, plus label lookup."""
+        """Return per-obs cluster IDs aligned to adata, plus label lookup.
+
+        For string-valued clusterings (e.g. imported), cluster IDs are encoded
+        as integers via factorization. The mapping is stored in
+        _state['_cluster_id_to_raw'] for hover display.
+        """
         cluster_series = clusterings[clustering_key]
         adata = color_manager.adata
         if 'cell_id' in adata.obs.columns:
@@ -857,7 +1046,16 @@ def _build_control_panel(
             clusters_aligned = cluster_series.reindex(cell_ids, fill_value=-1)
         else:
             clusters_aligned = cluster_series.reindex(adata.obs_names, fill_value=-1)
-        cluster_values = clusters_aligned.values.astype(np.int32)
+
+        # Try direct int conversion; if it fails, factorize string values
+        try:
+            cluster_values = clusters_aligned.values.astype(np.int32)
+            _state['_cluster_id_to_raw'] = None  # no mapping needed
+        except (ValueError, TypeError):
+            import pandas as pd
+            codes, uniques = pd.factorize(clusters_aligned.values)
+            cluster_values = codes.astype(np.int32)  # -1 for NaN stays -1
+            _state['_cluster_id_to_raw'] = {int(i): str(u) for i, u in enumerate(uniques)}
 
         # Also build label -> cluster lookup for spatial hover
         max_label = len(label_to_obs) - 1
@@ -870,6 +1068,8 @@ def _build_control_panel(
 
     def _on_cluster_colors_ready(result):
         clustering_key, (color_arr, cluster_to_color), selected_ids = result
+        # Store cluster colors for use in analysis plots (e.g. co-occurrence)
+        _state["cluster_to_color"] = cluster_to_color
         # Get per-obs cluster IDs for both UMAP hover and spatial hover
         cluster_ids_per_obs, label_to_cluster = _get_cluster_ids_per_obs(clustering_key)
 
@@ -969,9 +1169,14 @@ def _build_control_panel(
                 cid = lut[int(label_val)]
                 name = _state["active_clustering_name"] or "cluster"
                 if cid >= 0:
-                    text = f"Cell {int(label_val)} — {name}: {cid}"
+                    # Map factorized int back to raw cluster name if needed
+                    raw_map = _state.get('_cluster_id_to_raw')
+                    raw_cid = raw_map[cid] if raw_map and cid in raw_map else cid
+                    labels = _get_active_labels()
+                    display_cid = labels.get(raw_cid, labels.get(str(raw_cid), raw_cid))
+                    text = f"Cell {int(label_val)} \u2014 {name}: {display_cid}"
                 else:
-                    text = f"Cell {int(label_val)} — {name}: unassigned"
+                    text = f"Cell {int(label_val)} \u2014 {name}: unassigned"
                 QTimer.singleShot(0, lambda t=text: setattr(viewer, 'status', t))
 
         viewer.cursor.events.position.connect(_on_cursor_move)
@@ -1313,7 +1518,7 @@ def _build_control_panel(
 
         n_genes = ga_dotplot_n_slider.value
         dendro = ga_dendro_check.value
-        labels = _state.get("cluster_labels")
+        labels = _get_labels_for(groupby)
 
         @thread_worker(connect={"returned": _on_dotplot_ready})
         def _run():
@@ -1344,33 +1549,97 @@ def _build_control_panel(
             f"dendrogram={_dp_dendro})\nplt.show()"
         )
 
-    def _open_label_editor():
+    # ── Per-clustering label storage and helpers ───────────────────────────
+    # _state["cluster_labels"] is a nested dict: {clustering_name: {cluster_id: label}}
+    if "cluster_labels" not in _state or not isinstance(_state.get("cluster_labels"), dict):
+        _state["cluster_labels"] = {}
+
+    def _get_active_labels():
+        """Get cluster_labels dict for the currently active clustering."""
+        key = _state.get("active_clustering_name") or clustering_widget.value
+        if key:
+            all_labels = _state.get("cluster_labels", {})
+            if isinstance(all_labels, dict):
+                return all_labels.get(key, {})
+        return {}
+
+    def _get_labels_for(clustering_key):
+        """Get cluster_labels dict for a specific clustering."""
+        all_labels = _state.get("cluster_labels", {})
+        if isinstance(all_labels, dict):
+            return all_labels.get(clustering_key, {})
+        return {}
+
+    def _build_label_editor_dialog(clustering_key):
+        """Open a multi-column label editor dialog for the given clustering.
+
+        Returns True if labels were updated, False if cancelled.
+        """
         from qtpy.QtWidgets import QDialog, QGridLayout, QLineEdit, QDialogButtonBox
 
-        clustering_key = ga_clustering_widget.value
+        if not clustering_key or clustering_key not in clusterings:
+            return False
         cluster_series = clusterings[clustering_key]
-        ids = sorted(cluster_series.dropna().unique().astype(int).tolist())
-        existing = _state.get("cluster_labels", {})
+        # Handle both integer and string cluster IDs
+        ids = sorted(cluster_series.dropna().unique().tolist(), key=lambda x: (str(x),))
+        existing = _get_labels_for(clustering_key)
 
         dialog = QDialog()
-        dialog.setWindowTitle("Edit Cluster Labels")
+        dialog.setWindowTitle(f"Edit Cluster Labels \u2014 {clustering_key}")
+
+        # Multi-column layout: ~10 rows per column, up to 3 columns
+        n_cols = min(3, max(1, (len(ids) + 9) // 10))
+        n_per_col = (len(ids) + n_cols - 1) // n_cols
+
+        outer_layout = QVBoxLayout()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_content = QWidget()
         grid = QGridLayout()
+
         edits = {}
         for i, cid in enumerate(ids):
-            grid.addWidget(QtLabel(f"Cluster {cid}:"), i, 0)
-            edit = QLineEdit(existing.get(cid, str(cid)))
-            grid.addWidget(edit, i, 1)
+            col_idx = i // n_per_col
+            row_idx = i % n_per_col
+            grid.addWidget(QtLabel(f"{cid}:"), row_idx, col_idx * 2)
+            edit = QLineEdit(str(existing.get(cid, existing.get(str(cid), cid))))
+            grid.addWidget(edit, row_idx, col_idx * 2 + 1)
             edits[cid] = edit
-        from qtpy.QtWidgets import QDialogButtonBox as QDBBox
-        buttons = QDBBox(QDBBox.Ok | QDBBox.Cancel)
+
+        scroll_content.setLayout(grid)
+        scroll.setWidget(scroll_content)
+        outer_layout.addWidget(scroll)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        grid.addWidget(buttons, len(ids), 0, 1, 2)
-        dialog.setLayout(grid)
+        outer_layout.addWidget(buttons)
+        dialog.setLayout(outer_layout)
+        dialog.resize(min(800, 250 * n_cols), min(600, 30 * n_per_col + 60))
 
         if dialog.exec_() == QDialog.Accepted:
-            _state["cluster_labels"] = {cid: e.text() for cid, e in edits.items()}
-            ga_status.value = f"Labels updated for {len(ids)} clusters"
+            new_labels = {cid: e.text() for cid, e in edits.items()}
+            if "cluster_labels" not in _state or not isinstance(_state["cluster_labels"], dict):
+                _state["cluster_labels"] = {}
+            _state["cluster_labels"][clustering_key] = new_labels
+            return True
+        return False
+
+    def _open_label_editor():
+        clustering_key = ga_clustering_widget.value
+        if _build_label_editor_dialog(clustering_key):
+            ga_status.value = f"Labels updated for {clustering_key}"
+
+    def _open_clustering_label_editor():
+        clustering_key = clustering_widget.value
+        if not clustering_key or clustering_key not in clusterings:
+            leiden_status.value = "No clustering selected"
+            return
+        if _build_label_editor_dialog(clustering_key):
+            leiden_status.value = f"Labels updated for {clustering_key}"
+            _repopulate_cluster_checkboxes()
+
+    leiden_edit_labels_button.clicked.connect(_open_clustering_label_editor)
 
     def on_save_dotplot():
         fig = _state.get("dotplot_fig")
@@ -1390,7 +1659,9 @@ def _build_control_panel(
         import matplotlib.pyplot as _plt
         _apply_plot_font_size()
         _rp_n = ga_n_genes_slider.value
-        fig = make_rank_genes_plot(adata_norm, n_genes=_rp_n)
+        groupby = _state.get("rank_genes_groupby", "")
+        labels = _get_labels_for(groupby)
+        fig = make_rank_genes_plot(adata_norm, n_genes=_rp_n, cluster_labels=labels)
         _plt.show(block=False)
         ga_status.value = "Rank genes plot displayed"
 
@@ -1572,12 +1843,15 @@ def _build_control_panel(
             return
         pval_thresh = float(lr_pval_widget.value)
         groups = _get_cluster_filter()
+        lr_ck = _state.get("_lr_params", {}).get("clustering_key", "")
+        labels = _get_labels_for(lr_ck)
         import matplotlib.pyplot as _plt
         _apply_plot_font_size()
         try:
             fig = make_ligrec_plot(
                 result, pvalue_threshold=pval_thresh,
                 source_groups=groups, target_groups=groups,
+                cluster_labels=labels,
             )
             _state["ligrec_fig"] = fig
             _plt.show(block=False)
@@ -1749,16 +2023,19 @@ def _build_control_panel(
         if result is None:
             return
         groups = _get_cluster_filter()
+        ne_ck = result.get('_cluster_key', ne_clustering_widget.value)
+        labels = _get_labels_for(ne_ck)
         import matplotlib.pyplot as _plt
         _apply_plot_font_size()
         try:
-            if groups:
-                # Custom plot with cluster filter
+            if groups or labels:
+                # Custom plot with cluster filter and/or labels
                 fig = make_nhood_enrichment_plot(
-                    result, mode=ne_mode_widget.value, cluster_filter=groups,
+                    result, mode=ne_mode_widget.value,
+                    cluster_filter=groups, cluster_labels=labels,
                 )
             else:
-                # Try squidpy native when no filter is active
+                # Try squidpy native when no filter/labels active
                 adata_norm = result.get('_adata_norm')
                 cluster_key = result.get('_cluster_key')
                 if adata_norm is not None and cluster_key is not None:
@@ -1915,13 +2192,20 @@ def _build_control_panel(
             return
         groups = _get_cluster_filter()
         filter_targets = co_filter_targets.value and groups
+        cc = _state.get("cluster_to_color")
+        co_ck = result.get('_cluster_key', co_clustering_widget.value)
+        labels = _get_labels_for(co_ck)
         import matplotlib.pyplot as _plt
         _apply_plot_font_size()
         try:
-            if filter_targets:
-                # Custom plot: both query subplots AND target lines filtered
+            if filter_targets or cc is not None or labels:
+                # Use custom plot when we have cluster colors, filtered targets, or labels
                 fig = make_co_occurrence_plot(
-                    result, clusters_to_plot=groups, target_clusters=groups,
+                    result,
+                    clusters_to_plot=groups if filter_targets else groups,
+                    target_clusters=groups if filter_targets else None,
+                    cluster_colors=cc,
+                    cluster_labels=labels,
                 )
             else:
                 # Try squidpy native (query filtered, all targets)
@@ -1935,7 +2219,7 @@ def _build_control_panel(
                     fig = _plt.gcf()
                 else:
                     # Session restore fallback
-                    fig = make_co_occurrence_plot(result, clusters_to_plot=groups)
+                    fig = make_co_occurrence_plot(result, clusters_to_plot=groups, cluster_colors=cc)
             _state["co_fig"] = fig
             _plt.show(block=False)
             co_save_plot_button.enabled = True
@@ -2046,6 +2330,31 @@ def _build_control_panel(
 
     # ── Assemble tabbed control panel ─────────────────────────────────────────
     tab_widget = QTabWidget()
+
+    # Import/Export buttons row
+    leiden_io_row = QWidget()
+    leiden_io_layout = QHBoxLayout()
+    leiden_io_layout.setContentsMargins(0, 0, 0, 0)
+    leiden_io_layout.addWidget(leiden_import_button.native)
+    leiden_io_layout.addWidget(leiden_export_button.native)
+    leiden_io_row.setLayout(leiden_io_layout)
+
+    # Tab 0: Clustering (Leiden)
+    tab_widget.addTab(
+        _make_tab(
+            leiden_n_neighbors,
+            leiden_n_pcs,
+            leiden_resolution,
+            leiden_hvg_check,
+            leiden_n_hvgs,
+            leiden_scale_check,
+            leiden_run_button,
+            leiden_status_text,
+            leiden_io_row,
+            leiden_edit_labels_button,
+        ),
+        "Clustering",
+    )
 
     # Select All / Deselect All buttons row
     cluster_btn_row = QWidget()
@@ -2729,11 +3038,13 @@ def _build_control_panel(
             roi_layer.data = rois
             print(f"  Restored {len(rois)} ROI polygons")
 
-        # Cluster labels
+        # Cluster labels (per-clustering nested dict)
         cl = session.get("cluster_labels")
-        if cl:
+        if cl and isinstance(cl, dict):
             _state["cluster_labels"] = cl
-            print(f"  Restored {len(cl)} cluster labels")
+            n_clusterings = len(cl)
+            n_labels = sum(len(v) for v in cl.values() if isinstance(v, dict))
+            print(f"  Restored cluster labels: {n_labels} labels across {n_clusterings} clustering(s)")
 
         # Analysis results: rank genes
         rg = session.get("rank_genes_df")

@@ -1,8 +1,75 @@
 # Changelog
 
-## [Unreleased] — 2026-03-03
+## [Unreleased] — 2026-03-06
 
 ### Added
+- **Import clustering from CSV/TSV** — "Import Clustering..." button in the
+  Clustering tab. Reads a file with `cell_id` + `group` columns (auto-detects
+  tab vs comma separator). Supports string-valued group names (e.g. imported
+  cell type annotations). Imported clusterings appear in all downstream dropdowns.
+- **Export clustering to CSV/TSV** — "Export Clustering..." button exports the
+  currently selected clustering with cell_id and group columns. Custom cluster
+  labels are applied to the exported group names when available.
+- **Per-clustering label storage** — cluster labels are now stored per-clustering
+  (nested dict `{clustering_name: {cluster_id: label}}`), so labels don't collide
+  across different clusterings. Session save/restore updated with backward
+  compatibility for the old flat format.
+- **Multi-column label editor** — the "Edit Cluster Labels..." dialog now uses a
+  multi-column grid layout (up to 3 columns, ~10 rows per column) with a scroll
+  area, preventing the dialog from being too tall for clusterings with many groups.
+  Handles both integer and string cluster IDs.
+- **Label propagation to all plots** — cluster labels now appear in:
+  - Neighborhood enrichment heatmap (axis tick labels)
+  - Co-occurrence plots (subplot titles + legend entries)
+  - Ligand-receptor dotplot (column axis labels)
+  - Rank genes panel plot (group titles)
+  - Mouse hover status bar (shows label instead of raw cluster ID)
+  - Cluster filter checkboxes (show labels when available)
+  - Dotplot (already worked, now uses per-clustering lookup)
+
+### Changed
+- **Cluster label editor shared between tabs** — Gene Analysis and Clustering
+  tabs now share the same `_build_label_editor_dialog()` helper, eliminating
+  code duplication. Both editors use the per-clustering label storage.
+- **String cluster ID support** — `add_clustering_to_obs()` in gene_analysis.py
+  and `_get_cluster_ids_per_obs()` in the viewer now handle string-valued
+  cluster IDs (from imported clusterings) via factorization fallback.
+
+## [Previous] — 2026-03-05
+
+### Added
+- **Cluster label editor in Clustering tab** — "Edit Cluster Labels..." button
+  in the Clustering tab opens a dialog to rename clusters (manual cell type
+  annotation) using the Cell Coloring tab's selected clustering.
+
+### Changed
+- **Co-occurrence plot colors match napari** — line colors in co-occurrence plots
+  now use the same palette as napari cell coloring (CLUSTER_PALETTE) instead of
+  seaborn tab20. Falls back to tab20 for clusters without a stored color.
+- **Clustering sync across tabs** — selecting a clustering in the Cell Coloring
+  tab now auto-sets the same clustering in Gene Analysis, Ligand-Receptor,
+  Nhood Enrichment, and Co-occurrence tabs (one-directional sync).
+
+## [Previous] — 2026-03-04
+
+### Added
+- **Leiden clustering tab** — new "Clustering" tab (Tab 0) with configurable
+  `n_neighbors` (5–50), `n_pcs` (10–50), and `resolution` (0.1–5.0) parameters.
+  Runs `sc.pp.neighbors` + `sc.tl.leiden` on a worker thread, stores results as
+  `leiden_r{resolution}` in the clusterings dict, and refreshes all downstream
+  ComboBoxes (Cell Coloring, Gene Analysis, L-R, Nhood, Co-occurrence).
+  Reproducible code recording supported.
+
+## [Previous] — 2026-03-03
+
+### Added
+- **Interaction database filtering for L-R analysis** — 4 checkboxes (OmniPath,
+  LigRecExtra, PathwayExtra, KinaseExtra) to select which OmniPath interaction
+  datasets are queried, plus a "CellPhoneDB only" toggle to restrict to canonical
+  ligand-receptor pairs. Selections are passed via `interactions_params` to
+  `sq.gr.ligrec()`. Unchecking PathwayExtra + KinaseExtra removes intracellular
+  proteins (e.g. TP53) that leak through as false "ligands".
+
 - **Plot format preference (PNG / SVG)** — new Preferences → Plot format menu in the
   napari menu bar with exclusive PNG/SVG radio actions. All 4 plot save handlers
   (dotplot, L-R, nhood enrichment, co-occurrence) now respect the chosen format.

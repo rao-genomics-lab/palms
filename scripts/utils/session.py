@@ -101,11 +101,15 @@ def save_session(
         attrs["flip_v"] = bool(he_state.get("flip_v", False))
         attrs["flip_h"] = bool(he_state.get("flip_h", False))
 
-        # ── Cluster labels ────────────────────────────────────────────────
+        # ── Cluster labels (per-clustering nested dict) ────────────────────
         cluster_labels = state.get("cluster_labels")
-        if cluster_labels:
-            # Convert int keys to str for JSON serialization
-            attrs["cluster_labels"] = {str(k): v for k, v in cluster_labels.items()}
+        if cluster_labels and isinstance(cluster_labels, dict):
+            # Nested dict: {clustering_name: {cluster_id: label}}
+            serialized = {}
+            for clust_name, label_dict in cluster_labels.items():
+                if isinstance(label_dict, dict):
+                    serialized[clust_name] = {str(k): v for k, v in label_dict.items()}
+            attrs["cluster_labels"] = serialized if serialized else None
         else:
             attrs["cluster_labels"] = None
 
@@ -274,11 +278,27 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         if "he_landmarks" in he_group:
             result["he_landmarks"] = np.array(he_group["he_landmarks"])
 
-    # ── Cluster labels ────────────────────────────────────────────────
+    # ── Cluster labels (per-clustering nested dict) ────────────────────
     cl = attrs.get("cluster_labels")
     if cl:
-        # Convert string keys back to int
-        result["cluster_labels"] = {int(k): v for k, v in cl.items()}
+        # Detect old flat format (str(int) -> label) vs new nested format
+        first_val = next(iter(cl.values()), None) if cl else None
+        if isinstance(first_val, dict):
+            # New nested format: {clustering_name: {cluster_id: label}}
+            restored = {}
+            for clust_name, label_dict in cl.items():
+                inner = {}
+                for k, v in label_dict.items():
+                    # Try converting keys back to int
+                    try:
+                        inner[int(k)] = v
+                    except (ValueError, TypeError):
+                        inner[k] = v
+                restored[clust_name] = inner
+            result["cluster_labels"] = restored
+        else:
+            # Old flat format: {str(int): label} — wrap under a generic key
+            result["cluster_labels"] = {"_legacy": {int(k): v for k, v in cl.items()}}
 
     # ── Analysis DataFrames ───────────────────────────────────────────
     session_dir = Path(zarr_path) / "viewer_session"

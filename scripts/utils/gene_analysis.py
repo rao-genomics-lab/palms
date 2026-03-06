@@ -47,7 +47,13 @@ def add_clustering_to_obs(
         aligned = clustering_series.reindex(cell_ids, fill_value=-1)
     else:
         aligned = clustering_series.reindex(adata_orig.obs_names, fill_value=-1)
-    adata_norm.obs[key_name] = pd.Categorical(aligned.values.astype(int).astype(str))
+    # Handle both integer and string cluster IDs (e.g. imported clusterings)
+    vals = aligned.values
+    try:
+        vals = vals.astype(int).astype(str)
+    except (ValueError, TypeError):
+        vals = vals.astype(str)
+    adata_norm.obs[key_name] = pd.Categorical(vals)
 
 
 def run_rank_genes(
@@ -73,7 +79,7 @@ def make_rank_genes_dotplot(
     if cluster_labels:
         ad = adata_norm.copy()
         cat = ad.obs[groupby].cat
-        new_cats = [cluster_labels.get(int(c), c) if c.lstrip('-').isdigit() else c
+        new_cats = [cluster_labels.get(c, cluster_labels.get(int(c), c) if c.lstrip('-').isdigit() else c)
                     for c in cat.categories]
         ad.obs[groupby] = ad.obs[groupby].cat.rename_categories(new_cats)
         # Re-run rank_genes so the group names match
@@ -95,9 +101,25 @@ def make_rank_genes_dotplot(
     return dp
 
 
-def make_rank_genes_plot(adata_norm: sc.AnnData, n_genes: int = 25) -> plt.Figure:
+def make_rank_genes_plot(
+    adata_norm: sc.AnnData,
+    n_genes: int = 25,
+    cluster_labels: Optional[dict] = None,
+) -> plt.Figure:
     """Create the standard rank_genes_groups panel plot. Returns matplotlib Figure."""
-    sc.pl.rank_genes_groups(adata_norm, n_genes=n_genes, show=False)
+    if cluster_labels:
+        ad = adata_norm.copy()
+        groupby = ad.uns.get('rank_genes_groups', {}).get('params', {}).get('groupby')
+        if groupby and groupby in ad.obs.columns:
+            cat = ad.obs[groupby].cat
+            new_cats = [cluster_labels.get(c, cluster_labels.get(int(c), c) if c.lstrip('-').isdigit() else c)
+                        for c in cat.categories]
+            ad.obs[groupby] = ad.obs[groupby].cat.rename_categories(new_cats)
+            method = ad.uns.get('rank_genes_groups', {}).get('params', {}).get('method', 'wilcoxon')
+            sc.tl.rank_genes_groups(ad, groupby, method=method, n_genes=n_genes)
+        sc.pl.rank_genes_groups(ad, n_genes=n_genes, show=False)
+    else:
+        sc.pl.rank_genes_groups(adata_norm, n_genes=n_genes, show=False)
     return plt.gcf()
 
 

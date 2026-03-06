@@ -40,8 +40,16 @@ def run_ligrec(
     n_perms: int = 1000,
     threshold: float = 0.01,
     seed: int = 42,
+    interactions_params: dict | None = None,
 ) -> dict:
     """Run ligand-receptor interaction analysis.
+
+    Parameters
+    ----------
+    interactions_params : dict or None
+        Passed to ``sq.gr.ligrec(interactions_params=...)``.
+        Keys may include ``"include"`` (tuple of InteractionDataset enums)
+        and ``"resources"`` (e.g. ``"CellPhoneDB"``).
 
     Returns dict with keys 'means', 'pvalues' (both DataFrames),
     and 'warning' (str or None).
@@ -60,6 +68,7 @@ def run_ligrec(
                 copy=True,
                 transmitter_params={"categories": "ligand"},
                 receiver_params={"categories": "receptor"},
+                interactions_params=interactions_params or {},
             )
         means = result['means']
         pvalues = result['pvalues']
@@ -124,6 +133,7 @@ def make_nhood_enrichment_plot(
     result: dict,
     mode: str = 'zscore',
     cluster_filter: list[str] | None = None,
+    cluster_labels: dict | None = None,
 ) -> plt.Figure:
     """Create a neighborhood enrichment heatmap. Returns matplotlib Figure.
 
@@ -135,6 +145,8 @@ def make_nhood_enrichment_plot(
         'zscore' or 'count'.
     cluster_filter : list of str or None
         If provided, subset to only these cluster labels.
+    cluster_labels : dict or None
+        Maps cluster ID -> display label. Applied to axis tick labels.
     """
     import seaborn as sns
 
@@ -143,6 +155,11 @@ def make_nhood_enrichment_plot(
 
     # Build DataFrame for labeling
     df = pd.DataFrame(matrix, index=clusters, columns=clusters)
+
+    # Apply cluster labels to index/columns
+    if cluster_labels:
+        label_map = {str(k): v for k, v in cluster_labels.items()}
+        df.rename(index=label_map, columns=label_map, inplace=True)
 
     # Subset if cluster filter provided
     if cluster_filter:
@@ -182,10 +199,33 @@ def make_ligrec_plot(
     pvalue_threshold: float = 0.05,
     source_groups: list[str] | None = None,
     target_groups: list[str] | None = None,
+    cluster_labels: dict | None = None,
 ) -> plt.Figure:
     """Create a ligand-receptor interaction dot plot. Returns matplotlib Figure."""
+    # Apply cluster labels to the result's MultiIndex column levels
+    if cluster_labels:
+        label_map = {str(k): v for k, v in cluster_labels.items()}
+        plot_result = {}
+        for key in ('means', 'pvalues'):
+            df = result[key]
+            if df is not None and not df.empty and isinstance(df.columns, pd.MultiIndex):
+                new_levels = []
+                for level in df.columns.levels:
+                    new_levels.append(level.map(lambda x: label_map.get(str(x), x)))
+                new_cols = df.columns.set_levels(new_levels)
+                df = df.copy()
+                df.columns = new_cols
+            plot_result[key] = df
+        # Map source/target groups to original IDs for filtering, then use labelled result
+        if source_groups:
+            source_groups = [label_map.get(str(g), g) for g in source_groups]
+        if target_groups:
+            target_groups = [label_map.get(str(g), g) for g in target_groups]
+    else:
+        plot_result = result
+
     sq.pl.ligrec(
-        result,
+        plot_result,
         pvalue_threshold=pvalue_threshold,
         source_groups=source_groups,
         target_groups=target_groups,
@@ -235,6 +275,9 @@ def run_co_occurrence(
 def make_co_occurrence_plot(
     result: dict,
     clusters_to_plot: list[str] | None = None,
+    target_clusters: list[str] | None = None,
+    cluster_colors: dict | None = None,
+    cluster_labels: dict | None = None,
 ) -> plt.Figure:
     """Create co-occurrence line plots. Returns matplotlib Figure.
 
@@ -244,6 +287,12 @@ def make_co_occurrence_plot(
         Output from run_co_occurrence().
     clusters_to_plot : list of str or None
         Cluster IDs to create subplots for. If None, plot all clusters.
+    target_clusters : list of str or None
+        Cluster IDs to draw as target lines on each subplot.
+        If None, draw all clusters (current behavior).
+    cluster_colors : dict or None
+        Maps int cluster_id -> RGBA numpy array (from CellColorManager).
+        If provided, line colors will match the napari cell coloring palette.
     """
     import seaborn as sns
 
@@ -271,21 +320,44 @@ def make_co_occurrence_plot(
                              figsize=(5 * n_cols, 4 * n_rows),
                              squeeze=False)
 
-    palette = sns.color_palette("tab20", n_colors=len(clusters))
-    color_map = {c: palette[i] for i, c in enumerate(clusters)}
+    if cluster_colors is not None:
+        # Convert int cluster_id -> RGBA to string cluster_id -> RGB tuple
+        color_map = {str(cid): tuple(rgba[:3]) for cid, rgba in cluster_colors.items()}
+        # Fallback for any cluster not in the dict
+        fallback = sns.color_palette("tab20", n_colors=len(clusters))
+        for i, c in enumerate(clusters):
+            if c not in color_map:
+                color_map[c] = fallback[i]
+    else:
+        palette = sns.color_palette("tab20", n_colors=len(clusters))
+        color_map = {c: palette[i] for i, c in enumerate(clusters)}
+
+    # Determine which clusters to draw as target lines
+    if target_clusters:
+        targets = [c for c in target_clusters if c in clusters]
+    else:
+        targets = clusters
+
+    # Build label map for display names
+    label_map = {}
+    if cluster_labels:
+        label_map = {str(k): v for k, v in cluster_labels.items()}
 
     for idx, query_cluster in enumerate(plot_ids):
         row, col = divmod(idx, n_cols)
         ax = axes[row][col]
         qi = clusters.index(query_cluster)
 
-        for ti, target_cluster in enumerate(clusters):
+        for target_cluster in targets:
+            ti = clusters.index(target_cluster)
+            display_target = label_map.get(target_cluster, target_cluster)
             ax.plot(distances, occ[qi, ti, :],
-                    label=target_cluster, color=color_map[target_cluster],
+                    label=display_target, color=color_map[target_cluster],
                     linewidth=1.2)
 
         ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=0.8, alpha=0.6)
-        ax.set_title(f"Cluster {query_cluster}", fontsize=10)
+        display_query = label_map.get(query_cluster, query_cluster)
+        ax.set_title(f"Cluster {display_query}", fontsize=10)
         ax.set_xlabel("Distance")
         ax.set_ylabel("Co-occurrence score")
 
