@@ -760,6 +760,14 @@ def _build_control_panel(
         """Return set of cluster IDs whose checkboxes are checked."""
         return {cid for cid, cb in _state["cluster_checkboxes"].items() if cb.isChecked()}
 
+    def _make_cluster_mask(aligned_values, selected_ids):
+        """Build a boolean mask: True where aligned_values is in selected_ids.
+
+        Handles both int and string cluster IDs.
+        """
+        sel = {str(s) for s in selected_ids}
+        return np.array([str(v) in sel for v in aligned_values], dtype=bool)
+
     def _on_select_all():
         for cb in _state["cluster_checkboxes"].values():
             cb.setChecked(True)
@@ -1043,16 +1051,17 @@ def _build_control_panel(
         adata = color_manager.adata
         if 'cell_id' in adata.obs.columns:
             cell_ids = adata.obs['cell_id'].values
-            clusters_aligned = cluster_series.reindex(cell_ids, fill_value=-1)
+            clusters_aligned = cluster_series.reindex(cell_ids)
         else:
-            clusters_aligned = cluster_series.reindex(adata.obs_names, fill_value=-1)
+            clusters_aligned = cluster_series.reindex(adata.obs_names)
 
         # Try direct int conversion; if it fails, factorize string values
+        import pandas as pd
         try:
-            cluster_values = clusters_aligned.values.astype(np.int32)
+            filled = clusters_aligned.fillna(-1)
+            cluster_values = filled.values.astype(np.int32)
             _state['_cluster_id_to_raw'] = None  # no mapping needed
         except (ValueError, TypeError):
-            import pandas as pd
             codes, uniques = pd.factorize(clusters_aligned.values)
             cluster_values = codes.astype(np.int32)  # -1 for NaN stays -1
             _state['_cluster_id_to_raw'] = {int(i): str(u) for i, u in enumerate(uniques)}
@@ -1233,10 +1242,10 @@ def _build_control_panel(
             cluster_series = clusterings[clustering_key]
             if 'cell_id' in adata.obs.columns:
                 cell_ids_arr = adata.obs['cell_id'].values
-                clusters_aligned = cluster_series.reindex(cell_ids_arr, fill_value=-1)
+                clusters_aligned = cluster_series.reindex(cell_ids_arr)
             else:
-                clusters_aligned = cluster_series.reindex(adata.obs_names, fill_value=-1)
-            cluster_mask = np.isin(clusters_aligned.values.astype(np.int32), list(selected_ids))
+                clusters_aligned = cluster_series.reindex(adata.obs_names)
+            cluster_mask = _make_cluster_mask(clusters_aligned.values, selected_ids)
             filter_desc = f" ({clustering_key} clusters: {sorted(selected_ids)})"
 
         from scipy import stats
@@ -1390,10 +1399,10 @@ def _build_control_panel(
             _adata = adata if adata is not None else color_manager.adata
             if 'cell_id' in _adata.obs.columns:
                 cell_ids_arr = _adata.obs['cell_id'].values
-                clusters_aligned = cluster_series.reindex(cell_ids_arr, fill_value=-1)
+                clusters_aligned = cluster_series.reindex(cell_ids_arr)
             else:
-                clusters_aligned = cluster_series.reindex(_adata.obs_names, fill_value=-1)
-            cluster_mask = np.isin(clusters_aligned.values.astype(np.int32), list(selected_ids))
+                clusters_aligned = cluster_series.reindex(_adata.obs_names)
+            cluster_mask = _make_cluster_mask(clusters_aligned.values, selected_ids)
 
         method = roi_deg_method_widget.value
         _adata = adata if adata is not None else color_manager.adata

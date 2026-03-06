@@ -44,15 +44,16 @@ def add_clustering_to_obs(
     """Align clustering_series to adata_norm.obs via cell_id and store as categorical."""
     if 'cell_id' in adata_orig.obs.columns:
         cell_ids = adata_orig.obs['cell_id'].values
-        aligned = clustering_series.reindex(cell_ids, fill_value=-1)
+        aligned = clustering_series.reindex(cell_ids)
     else:
-        aligned = clustering_series.reindex(adata_orig.obs_names, fill_value=-1)
+        aligned = clustering_series.reindex(adata_orig.obs_names)
     # Handle both integer and string cluster IDs (e.g. imported clusterings)
+    # Fill missing with a sentinel, then convert to string categorical
     vals = aligned.values
     try:
-        vals = vals.astype(int).astype(str)
+        vals = np.where(pd.isna(vals), -1, vals).astype(int).astype(str)
     except (ValueError, TypeError):
-        vals = vals.astype(str)
+        vals = np.where(pd.isna(vals), '-1', vals).astype(str)
     adata_norm.obs[key_name] = pd.Categorical(vals)
 
 

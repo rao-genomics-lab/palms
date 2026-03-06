@@ -187,11 +187,17 @@ class CellColorManager:
         # Align cluster assignments to adata obs
         if 'cell_id' in self.adata.obs.columns:
             cell_ids = self.adata.obs['cell_id'].values
-            clusters_aligned = cluster_series.reindex(cell_ids, fill_value=-1)
+            clusters_aligned = cluster_series.reindex(cell_ids)
         else:
-            clusters_aligned = cluster_series.reindex(self.adata.obs_names, fill_value=-1)
-        cluster_values = clusters_aligned.values.astype(np.int32)
-        in_cluster = cluster_values == cluster_id
+            clusters_aligned = cluster_series.reindex(self.adata.obs_names)
+        # Handle both integer and string cluster IDs
+        try:
+            filled = clusters_aligned.fillna(-1)
+            cluster_values = filled.values.astype(np.int32)
+            in_cluster = cluster_values == cluster_id
+        except (ValueError, TypeError):
+            cluster_values = clusters_aligned.values.astype(str)
+            in_cluster = cluster_values == str(cluster_id)
 
         # Extract expression for this gene (sparse → dense)
         gene_idx = self.adata.var_names.get_loc(gene_name)
@@ -263,10 +269,20 @@ class CellColorManager:
         # Use adata.obs['cell_id'] as the join key.
         if 'cell_id' in self.adata.obs.columns:
             cell_ids = self.adata.obs['cell_id'].values
-            clusters_aligned = cluster_series.reindex(cell_ids, fill_value=-1)
+            clusters_aligned = cluster_series.reindex(cell_ids)
         else:
-            clusters_aligned = cluster_series.reindex(self.adata.obs_names, fill_value=-1)
-        cluster_values = clusters_aligned.values.astype(np.int32)
+            clusters_aligned = cluster_series.reindex(self.adata.obs_names)
+
+        # Handle both integer and string cluster IDs
+        try:
+            filled = clusters_aligned.fillna(-1)
+            cluster_values = filled.values.astype(np.int32)
+        except (ValueError, TypeError):
+            import pandas as pd
+            # String-valued clusters: factorize to integers
+            raw = clusters_aligned.values
+            codes, uniques = pd.factorize(raw)
+            cluster_values = codes.astype(np.int32)  # -1 for NaN
 
         unique_clusters = sorted(set(cluster_values[cluster_values >= 0]))
         cluster_to_color = {}
