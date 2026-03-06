@@ -1025,8 +1025,9 @@ def _build_control_panel(
         # If filtering by clusters, zero out non-selected cells
         if selected_ids is not None and clustering_key:
             _, label_to_cluster_arr = _get_cluster_ids_per_obs(clustering_key)
+            int_ids = _translate_selected_ids_to_int(selected_ids)
             color_arr = color_arr.copy()
-            mask_out = ~np.isin(label_to_cluster_arr, list(selected_ids))
+            mask_out = ~np.isin(label_to_cluster_arr, int_ids)
             valid_range = min(len(mask_out), len(color_arr))
             color_arr[:valid_range][mask_out[:valid_range]] = 0
             filter_desc = f" (clusters: {sorted(selected_ids)})"
@@ -1044,8 +1045,13 @@ def _build_control_panel(
         """Return per-obs cluster IDs aligned to adata, plus label lookup.
 
         For string-valued clusterings (e.g. imported), cluster IDs are encoded
-        as integers via factorization. The mapping is stored in
-        _state['_cluster_id_to_raw'] for hover display.
+        as integers via factorization. The mappings are stored in _state for
+        hover display and filter translation.
+
+        _state['_cluster_id_to_raw'] : dict[int, raw_id] or None
+            Maps factorized int → original cluster value (for hover display).
+        _state['_cluster_raw_to_id'] : dict[raw_id, int] or None
+            Maps original cluster value → factorized int (for filter matching).
         """
         cluster_series = clusterings[clustering_key]
         adata = color_manager.adata
@@ -1060,11 +1066,13 @@ def _build_control_panel(
         try:
             filled = clusters_aligned.fillna(-1)
             cluster_values = filled.values.astype(np.int32)
-            _state['_cluster_id_to_raw'] = None  # no mapping needed
+            _state['_cluster_id_to_raw'] = None
+            _state['_cluster_raw_to_id'] = None
         except (ValueError, TypeError):
             codes, uniques = pd.factorize(clusters_aligned.values)
             cluster_values = codes.astype(np.int32)  # -1 for NaN stays -1
-            _state['_cluster_id_to_raw'] = {int(i): str(u) for i, u in enumerate(uniques)}
+            _state['_cluster_id_to_raw'] = {int(i): u for i, u in enumerate(uniques)}
+            _state['_cluster_raw_to_id'] = {u: int(i) for i, u in enumerate(uniques)}
 
         # Also build label -> cluster lookup for spatial hover
         max_label = len(label_to_obs) - 1
@@ -1075,6 +1083,17 @@ def _build_control_panel(
         label_to_cluster[valid_labels] = cluster_values[obs_indices]
         return cluster_values, label_to_cluster
 
+    def _translate_selected_ids_to_int(selected_ids):
+        """Convert selected_ids (raw cluster IDs) to factorized ints if needed.
+
+        When the clustering has string IDs, _state['_cluster_raw_to_id'] maps
+        the raw values to the factorized integers used in label_to_cluster.
+        """
+        raw_to_id = _state.get('_cluster_raw_to_id')
+        if raw_to_id is None:
+            return list(selected_ids)
+        return [raw_to_id[sid] for sid in selected_ids if sid in raw_to_id]
+
     def _on_cluster_colors_ready(result):
         clustering_key, (color_arr, cluster_to_color), selected_ids = result
         # Store cluster colors for use in analysis plots (e.g. co-occurrence)
@@ -1084,8 +1103,9 @@ def _build_control_panel(
 
         # If filtering by selected clusters, zero out all other cells
         if selected_ids is not None:
+            int_ids = _translate_selected_ids_to_int(selected_ids)
             color_arr = color_arr.copy()
-            mask_out = ~np.isin(label_to_cluster, list(selected_ids))
+            mask_out = ~np.isin(label_to_cluster, int_ids)
             valid_range = min(len(mask_out), len(color_arr))
             color_arr[:valid_range][mask_out[:valid_range]] = 0
 
