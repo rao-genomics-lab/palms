@@ -74,6 +74,16 @@ def save_session(
                 for pq in clust_dir.glob("*.parquet"):
                     pq.unlink()
 
+        # Preserve real-time-saved ARMS attrs before overwrite wipes them
+        _prev_arms_attrs = {}
+        if "viewer_session" in store:
+            prev = store["viewer_session"].attrs
+            for key in ("arms_he_filename", "arms_he_path", "arms_he_shape_yx",
+                        "arms_affine_3x3", "arms_flip_v", "arms_flip_h",
+                        "arms_geojson_path", "arms_csv_path"):
+                if key in prev and prev[key] is not None:
+                    _prev_arms_attrs[key] = prev[key]
+
         session = store.create_group("viewer_session", overwrite=True)
         attrs = {}
 
@@ -123,18 +133,20 @@ def save_session(
         if arms_he_lm is not None:
             _write_array(arms_group, "he_landmarks", arms_he_lm)
 
-        attrs["arms_he_filename"] = arms_state.get("he_filename")
-        attrs["arms_he_path"] = arms_state.get("he_path")
+        attrs["arms_he_filename"] = arms_state.get("he_filename") or _prev_arms_attrs.get("arms_he_filename")
+        attrs["arms_he_path"] = arms_state.get("he_path") or _prev_arms_attrs.get("arms_he_path")
         attrs["arms_he_shape_yx"] = (
-            list(arms_state["he_shape_yx"]) if arms_state.get("he_shape_yx") else None
+            list(arms_state["he_shape_yx"]) if arms_state.get("he_shape_yx")
+            else _prev_arms_attrs.get("arms_he_shape_yx")
         )
-        attrs["arms_flip_v"] = bool(arms_state.get("flip_v", False))
-        attrs["arms_flip_h"] = bool(arms_state.get("flip_h", False))
-        # Also persist affine to attrs (redundant with zarr array, but survives partial saves)
+        attrs["arms_flip_v"] = bool(arms_state.get("flip_v", _prev_arms_attrs.get("arms_flip_v", False)))
+        attrs["arms_flip_h"] = bool(arms_state.get("flip_h", _prev_arms_attrs.get("arms_flip_h", False)))
         if arms_state.get("affine_3x3") is not None:
             attrs["arms_affine_3x3"] = np.asarray(arms_state["affine_3x3"], dtype=np.float64).tolist()
-        attrs["arms_geojson_path"] = arms_state.get("geojson_path")
-        attrs["arms_csv_path"] = arms_state.get("csv_path")
+        elif "arms_affine_3x3" in _prev_arms_attrs:
+            attrs["arms_affine_3x3"] = _prev_arms_attrs["arms_affine_3x3"]
+        attrs["arms_geojson_path"] = arms_state.get("geojson_path") or _prev_arms_attrs.get("arms_geojson_path")
+        attrs["arms_csv_path"] = arms_state.get("csv_path") or _prev_arms_attrs.get("arms_csv_path")
 
         # ── Cluster labels (per-clustering nested dict) ────────────────────
         cluster_labels = state.get("cluster_labels")
@@ -177,6 +189,14 @@ def save_session(
             attrs["has_roi_deg"] = True
         else:
             attrs["has_roi_deg"] = False
+
+        # arms_tile_deg_df
+        arms_tile_deg_df = state.get("arms_tile_deg_df")
+        if arms_tile_deg_df is not None and not arms_tile_deg_df.empty:
+            arms_tile_deg_df.to_parquet(session_dir / "arms_tile_deg.parquet")
+            attrs["has_arms_tile_deg"] = True
+        else:
+            attrs["has_arms_tile_deg"] = False
 
         # ligrec results
         ligrec_result = state.get("ligrec_result")
@@ -238,6 +258,8 @@ def save_session(
             parts.append("rank genes")
         if attrs["has_roi_deg"]:
             parts.append("ROI DEG")
+        if attrs.get("has_arms_tile_deg"):
+            parts.append("ARMS Tile DEG")
         if attrs["has_ligrec"]:
             parts.append("L-R results")
         if attrs.get("has_nhood"):
@@ -294,6 +316,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "cluster_labels": None,
         "rank_genes_df": None,
         "roi_deg_df": None,
+        "arms_tile_deg_df": None,
         "ligrec_means": None,
         "ligrec_pvalues": None,
         "nhood_result": None,
@@ -384,6 +407,11 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         p = session_dir / "roi_deg.parquet"
         if p.exists():
             result["roi_deg_df"] = pd.read_parquet(p)
+
+    if attrs.get("has_arms_tile_deg"):
+        p = session_dir / "arms_tile_deg.parquet"
+        if p.exists():
+            result["arms_tile_deg_df"] = pd.read_parquet(p)
 
     if attrs.get("has_ligrec"):
         p = session_dir / "ligrec_means.parquet"

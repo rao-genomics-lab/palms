@@ -12,11 +12,15 @@ Provides:
 
 from __future__ import annotations
 
+import itertools
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import scanpy as sc
+import matplotlib
 import matplotlib.pyplot as plt
-from typing import Optional
+from typing import Optional, Callable
 
 # Module-level cache: id(adata) -> normalized copy
 _norm_cache: dict[int, sc.AnnData] = {}
@@ -180,3 +184,178 @@ def compute_roi_deg(
 
     sc.tl.rank_genes_groups(subset, 'roi_region', method=method, reference='rest')
     return sc.get.rank_genes_groups_df(subset, group=None)
+
+
+def compute_arms_tile_deg(
+    adata: sc.AnnData,
+    centroids_yx: np.ndarray,
+    tile_polygons_yx: list,
+    cluster_ids: np.ndarray,
+    min_cells_per_cluster: int = 10,
+    method: str = 'wilcoxon',
+) -> tuple:
+    """Differential expression between ARMS tile clusters.
+
+    Parameters
+    ----------
+    adata : raw-count AnnData
+    centroids_yx : (N, 2) pixel coords (y, x)
+    tile_polygons_yx : list of Nx2 arrays in (y, x) pixel coords (already transformed)
+    cluster_ids : array of cluster IDs, one per tile polygon
+    min_cells_per_cluster : minimum cells to keep a cluster
+    method : 'wilcoxon' or 't-test'
+
+    Returns
+    -------
+    (deg_df, summary_dict) where summary_dict = {cluster_id: n_cells}
+    """
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from shapely import contains_xy
+
+    cell_cluster = np.full(adata.n_obs, -1, dtype=int)
+
+    for i, poly_yx in enumerate(tile_polygons_yx):
+        poly_xy = poly_yx[:, ::-1]
+        shapely_poly = ShapelyPolygon(poly_xy)
+        if not shapely_poly.is_valid:
+            shapely_poly = shapely_poly.buffer(0)
+        inside = contains_xy(shapely_poly, centroids_yx[:, 1], centroids_yx[:, 0])
+        cell_cluster[inside] = cluster_ids[i]
+
+    # Drop cells not in any tile
+    mask = cell_cluster >= 0
+    if mask.sum() == 0:
+        empty = pd.DataFrame(columns=['group', 'names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj'])
+        return (empty, {})
+
+    subset = adata[mask].copy()
+    subset.obs['arms_cluster'] = pd.Categorical(cell_cluster[mask].astype(str))
+
+    # Count cells per cluster and drop small ones
+    cluster_counts = subset.obs['arms_cluster'].value_counts()
+    summary = {int(k): int(v) for k, v in cluster_counts.items() if k != '-1'}
+    keep_clusters = [c for c, n in cluster_counts.items() if n >= min_cells_per_cluster and c != '-1']
+
+    if len(keep_clusters) < 2:
+        empty = pd.DataFrame(columns=['group', 'names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj'])
+        return (empty, summary)
+
+    subset = subset[subset.obs['arms_cluster'].isin(keep_clusters)].copy()
+    subset.obs['arms_cluster'] = pd.Categorical(subset.obs['arms_cluster'].values)
+
+    sc.pp.normalize_total(subset, target_sum=1e4)
+    sc.pp.log1p(subset)
+
+    sc.tl.rank_genes_groups(subset, 'arms_cluster', method=method, reference='rest')
+    deg_df = sc.get.rank_genes_groups_df(subset, group=None)
+    return (deg_df, summary)
+
+
+def run_pairwise_deg(
+    adata_norm: sc.AnnData,
+    groupby: str,
+    group_a: str,
+    group_b: str,
+    method: str = 'wilcoxon',
+) -> pd.DataFrame:
+    """Run DEG for group_a vs group_b and return results DataFrame."""
+    sc.tl.rank_genes_groups(
+        adata_norm, groupby,
+        groups=[str(group_a)], reference=str(group_b),
+        method=method, n_genes=adata_norm.n_vars,
+    )
+    return sc.get.rank_genes_groups_df(adata_norm, group=str(group_a))
+
+
+def make_volcano_plot(
+    df: pd.DataFrame,
+    group_a: str,
+    group_b: str,
+    lfc_thresh: float = 0.5,
+    pval_thresh: float = 0.05,
+    n_label: int = 10,
+) -> plt.Figure:
+    """Create a volcano plot from DEG results. Returns matplotlib Figure."""
+    lfc = df['logfoldchanges'].values.astype(float)
+    padj = df['pvals_adj'].values.astype(float)
+    names = df['names'].values
+
+    # Clip tiny p-values to avoid -log10(0)
+    padj_clipped = np.clip(padj, 1e-300, 1.0)
+    neg_log10 = -np.log10(padj_clipped)
+
+    # Classify genes
+    sig = padj < pval_thresh
+    up = sig & (lfc > lfc_thresh)
+    down = sig & (lfc < -lfc_thresh)
+    ns = ~(up | down)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    ax.scatter(lfc[ns], neg_log10[ns], s=4, alpha=0.5, c='#aaaaaa', edgecolors='none', label='NS')
+    ax.scatter(lfc[up], neg_log10[up], s=4, alpha=0.5, c='#d62728', edgecolors='none', label='Up')
+    ax.scatter(lfc[down], neg_log10[down], s=4, alpha=0.5, c='#1f77b4', edgecolors='none', label='Down')
+
+    # Threshold lines
+    ax.axhline(-np.log10(pval_thresh), linestyle='--', color='gray', alpha=0.5)
+    ax.axvline(lfc_thresh, linestyle='--', color='gray', alpha=0.5)
+    ax.axvline(-lfc_thresh, linestyle='--', color='gray', alpha=0.5)
+
+    # Label top significant genes
+    sig_mask = up | down
+    if sig_mask.any():
+        sig_idx = np.where(sig_mask)[0]
+        # Sort by padj (smallest first)
+        order = sig_idx[np.argsort(padj[sig_idx])]
+        for idx in order[:n_label]:
+            ax.annotate(
+                names[idx],
+                (lfc[idx], neg_log10[idx]),
+                fontsize=7, textcoords='offset points', xytext=(4, 4),
+            )
+
+    ax.set_xlabel('log2 fold change')
+    ax.set_ylabel('-log10(adjusted p-value)')
+    ax.set_title(f'{group_a} vs {group_b}')
+    ax.legend(markerscale=3, framealpha=0.8)
+    fig.tight_layout()
+    return fig
+
+
+def generate_all_volcano_plots(
+    adata_norm: sc.AnnData,
+    groupby: str,
+    method: str = 'wilcoxon',
+    output_dir: str | Path = '.',
+    lfc_thresh: float = 0.5,
+    pval_thresh: float = 0.05,
+    n_label: int = 10,
+    progress_callback: Optional[Callable] = None,
+) -> int:
+    """Generate volcano PNGs for all pairwise cluster comparisons.
+
+    Returns the number of plots generated.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    groups = sorted(
+        [g for g in adata_norm.obs[groupby].cat.categories if str(g) != '-1'],
+        key=lambda x: (int(x) if str(x).lstrip('-').isdigit() else 0, str(x)),
+    )
+    pairs = list(itertools.combinations(groups, 2))
+    total = len(pairs)
+
+    # Use non-interactive backend for thread safety
+    backend = matplotlib.get_backend()
+
+    for i, (a, b) in enumerate(pairs):
+        if progress_callback:
+            progress_callback(i, total, str(a), str(b))
+
+        df = run_pairwise_deg(adata_norm, groupby, str(a), str(b), method=method)
+        fig = make_volcano_plot(df, str(a), str(b), lfc_thresh, pval_thresh, n_label)
+        fig.savefig(output_dir / f'volcano_{a}_vs_{b}.png', dpi=300)
+        plt.close(fig)
+
+    return total

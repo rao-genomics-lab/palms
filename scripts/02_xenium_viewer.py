@@ -75,6 +75,7 @@ from utils.registration import (
 from utils.gene_analysis import (
     get_normalized_adata, add_clustering_to_obs, run_rank_genes,
     make_rank_genes_dotplot, make_rank_genes_plot, compute_roi_deg,
+    compute_arms_tile_deg, generate_all_volcano_plots,
 )
 from utils.spatial_analysis import (
     compute_spatial_neighbors, run_ligrec, make_ligrec_plot,
@@ -327,6 +328,28 @@ def main(data_path: Path, no_cache: bool = False):
             _snapshot["he_landmarks"] = (
                 np.asarray(he_lm.data, dtype=np.float64) if he_lm is not None and len(he_lm.data) > 0 else None
             )
+
+            # ARMS overlay landmark data
+            try:
+                arms_xen_lm = _arms_state.get("xenium_lm_layer")
+                arms_he_lm = _arms_state.get("he_lm_layer")
+                _snapshot["arms_xenium_landmarks"] = (
+                    np.asarray(arms_xen_lm.data, dtype=np.float64)
+                    if arms_xen_lm is not None and len(arms_xen_lm.data) > 0 else None
+                )
+                _snapshot["arms_he_landmarks"] = (
+                    np.asarray(arms_he_lm.data, dtype=np.float64)
+                    if arms_he_lm is not None and len(arms_he_lm.data) > 0 else None
+                )
+                # ARMS state (exclude non-serializable napari layers)
+                _snapshot["arms_state"] = {
+                    k: v for k, v in _arms_state.items()
+                    if k not in ("he_layer", "he_tif", "xenium_lm_layer", "he_lm_layer", "shapes_layer")
+                }
+            except NameError:
+                _snapshot["arms_xenium_landmarks"] = None
+                _snapshot["arms_he_landmarks"] = None
+                _snapshot["arms_state"] = {}
 
         from qtpy.QtWidgets import QApplication
         QApplication.instance().aboutToQuit.connect(_on_viewer_closing)
@@ -1498,6 +1521,7 @@ def _build_control_panel(
     ga_results_text.setFontFamily("monospace")
     ga_results_text.setMaximumHeight(300)
     ga_export_button = PushButton(label="Export Full Results CSV...", enabled=False)
+    ga_volcano_button = PushButton(label="Generate All Volcano Plots...", enabled=False)
     # ga_status assigned above as _StatusProxy
 
     def on_run_rank_genes():
@@ -1530,6 +1554,7 @@ def _build_control_panel(
         ga_rank_plot_button.enabled = True
         ga_edit_labels_button.enabled = True
         ga_export_button.enabled = True
+        ga_volcano_button.enabled = True
         # Show top 50 rows
         preview = df.head(50).to_string(index=False)
         ga_results_text.setPlainText(preview)
@@ -1722,12 +1747,56 @@ def _build_control_panel(
         df.to_csv(path, index=False)
         ga_status.value = f"Exported {len(df)} rows to {path}"
 
+    def on_generate_volcanos():
+        adata_norm = _state.get("rank_genes_adata_norm")
+        groupby = _state.get("rank_genes_groupby")
+        if adata_norm is None or groupby is None:
+            ga_status.value = "Run rank genes first"
+            return
+        output_dir = QFileDialog.getExistingDirectory(None, "Select output directory for volcano plots")
+        if not output_dir:
+            return
+        ga_volcano_button.enabled = False
+        ga_status.value = "Generating volcano plots..."
+        method = _state.get("_rg_method", "wilcoxon")
+
+        @thread_worker(connect={"yielded": lambda msg: setattr(ga_status, 'value', msg),
+                                "returned": _on_volcanos_done})
+        def _run():
+            from pathlib import Path
+            import itertools as _it
+            from utils.gene_analysis import run_pairwise_deg, make_volcano_plot
+            import matplotlib.pyplot as _plt
+
+            out = Path(output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            groups = sorted(
+                [g for g in adata_norm.obs[groupby].cat.categories if str(g) != '-1'],
+                key=lambda x: (int(x) if str(x).lstrip('-').isdigit() else 0, str(x)),
+            )
+            pairs = list(_it.combinations(groups, 2))
+            total = len(pairs)
+            for i, (a, b) in enumerate(pairs):
+                yield f"Volcano plot {i + 1}/{total}: {a} vs {b}"
+                df = run_pairwise_deg(adata_norm, groupby, str(a), str(b), method=method)
+                fig = make_volcano_plot(df, str(a), str(b))
+                fig.savefig(out / f'volcano_{a}_vs_{b}.png', dpi=300)
+                _plt.close(fig)
+            return total, output_dir
+        _run()
+
+    def _on_volcanos_done(result):
+        count, out_dir = result
+        ga_volcano_button.enabled = True
+        ga_status.value = f"{count} volcano plots saved to {out_dir}"
+
     ga_run_button.clicked.connect(on_run_rank_genes)
     ga_dotplot_button.clicked.connect(on_show_dotplot)
     ga_edit_labels_button.clicked.connect(_open_label_editor)
     ga_save_dotplot_button.clicked.connect(on_save_dotplot)
     ga_rank_plot_button.clicked.connect(on_show_rank_plot)
     ga_export_button.clicked.connect(on_export_rank_genes)
+    ga_volcano_button.clicked.connect(on_generate_volcanos)
 
     # ── Ligand-Receptor widgets (Tab 7) ───────────────────────────────────────
     lr_clustering_widget = ComboBox(
@@ -2991,6 +3060,7 @@ def _build_control_panel(
             ga_dotplot_btn_row,
             ga_rank_plot_button,
             ga_export_button,
+            ga_volcano_button,
         ),
         "Gene Analysis",
     )
@@ -3068,6 +3138,640 @@ def _build_control_panel(
         "Co-occurrence",
     )
 
+    # ── Tab 10: ARMS Overlay ────────────────────────────────────────────────
+    arms_status_label = _StatusProxy()
+
+    _arms_state = {
+        "he_layer": None,          # napari Image layer for larger H&E
+        "he_tif": None,            # keep TiffFile alive
+        "he_filename": None,
+        "he_path": None,
+        "he_shape_yx": None,       # (H, W) of full-res ARMS H&E
+        "xenium_lm_layer": None,   # Points layer: landmarks on Xenium image
+        "he_lm_layer": None,       # Points layer: landmarks on ARMS H&E
+        "affine_3x3": None,        # landmark-based affine (y,x convention)
+        "flip_v": False,
+        "flip_h": False,
+        "shapes_layer": None,      # napari Shapes layer for tile polygons
+        "tile_names": None,        # list of tile name strings
+        "cluster_ids": None,       # np.array of cluster IDs per tile
+        "geojson_path": None,      # path to GeoJSON file (for session restore)
+        "csv_path": None,          # path to CSV file (for session restore)
+    }
+
+    ARMS_CLUSTER_PALETTE = [
+        [0.12, 0.47, 0.71, 0.6],  # 1: blue
+        [1.00, 0.50, 0.05, 0.6],  # 2: orange
+        [0.17, 0.63, 0.17, 0.6],  # 3: green
+        [0.84, 0.15, 0.16, 0.6],  # 4: red
+        [0.58, 0.40, 0.74, 0.6],  # 5: purple
+        [0.55, 0.34, 0.29, 0.6],  # 6: brown
+        [0.89, 0.47, 0.76, 0.6],  # 7: pink
+        [0.50, 0.50, 0.50, 0.6],  # 8: gray
+    ]
+    ARMS_CLUSTER_NAMES = [
+        "blue", "orange", "green", "red", "purple", "brown", "pink", "gray",
+    ]
+
+    arms_load_he_button = PushButton(label="Load ARMS H&E Image...", enabled=True)
+    arms_flip_v = CheckBox(label="Flip vertically", value=False)
+    arms_flip_h = CheckBox(label="Flip horizontally", value=False)
+    arms_opacity_slider = Slider(label="H&E opacity", min=0, max=100, value=70)
+    arms_opacity_slider.enabled = False
+
+    arms_add_xenium_lm_button = PushButton(label="Add Xenium Landmark", enabled=False)
+    arms_add_he_lm_button = PushButton(label="Add ARMS H&E Landmark", enabled=False)
+    arms_clear_lm_button = PushButton(label="Clear All", enabled=False)
+
+    arms_register_button = PushButton(label="Compute Registration", enabled=False)
+
+    arms_residuals_qt = QTextEdit()
+    arms_residuals_qt.setReadOnly(True)
+    arms_residuals_qt.setFontFamily("monospace")
+    arms_residuals_qt.setMaximumHeight(180)
+
+    arms_load_geojson_button = PushButton(label="Load GeoJSON + CSV...", enabled=False)
+    arms_tile_opacity_slider = Slider(label="Tile opacity", min=0, max=100, value=50)
+    arms_tile_opacity_slider.enabled = False
+
+    # ── ARMS Tile DEG widgets ────────────────────────────────────────────────
+    arms_deg_method = ComboBox(
+        label="DEG Method", choices=["wilcoxon", "t-test"], value="wilcoxon",
+    )
+    arms_deg_button = PushButton(label="Run ARMS Tile DEG", enabled=False)
+    arms_deg_text = QTextEdit()
+    arms_deg_text.setReadOnly(True)
+    arms_deg_text.setFontFamily("monospace")
+    arms_deg_text.setMaximumHeight(250)
+    arms_deg_export_button = PushButton(label="Export ARMS DEG CSV...", enabled=False)
+
+    def _build_arms_flip_affine():
+        """Build a 3x3 affine that flips the ARMS H&E image around its center."""
+        shape = _arms_state.get("he_shape_yx")
+        if shape is None:
+            return np.eye(3)
+        h, w = shape
+        M = np.eye(3)
+        if arms_flip_v.value:
+            M = np.array([[  -1, 0, h - 1],
+                          [   0, 1,     0],
+                          [   0, 0,     1]], dtype=np.float64) @ M
+        if arms_flip_h.value:
+            M = np.array([[ 1,  0,     0],
+                          [ 0, -1, w - 1],
+                          [ 0,  0,     1]], dtype=np.float64) @ M
+        return M
+
+    def _apply_arms_affine():
+        """Compose registration @ flip and apply to ARMS H&E + landmark + shapes layers."""
+        flip = _build_arms_flip_affine()
+        fine = _arms_state["affine_3x3"]
+        if fine is not None:
+            combined = fine @ flip
+        else:
+            combined = flip
+        if _arms_state["he_layer"] is not None:
+            _arms_state["he_layer"].affine = combined
+        if _arms_state["he_lm_layer"] is not None:
+            _arms_state["he_lm_layer"].affine = combined
+        if _arms_state["shapes_layer"] is not None:
+            _arms_state["shapes_layer"].affine = combined
+
+    def on_arms_flip_changed(_value=None):
+        _apply_arms_affine()
+        _arms_state["flip_v"] = arms_flip_v.value
+        _arms_state["flip_h"] = arms_flip_h.value
+        _save_arms_affine_to_sdata()
+        flips = []
+        if arms_flip_v.value:
+            flips.append("V")
+        if arms_flip_h.value:
+            flips.append("H")
+        if flips:
+            arms_status_label.value = f"ARMS flip applied: {'+'.join(flips)}"
+
+    arms_flip_v.changed.connect(on_arms_flip_changed)
+    arms_flip_h.changed.connect(on_arms_flip_changed)
+
+    def _check_arms_landmark_count(*_args):
+        """Enable 'Compute Registration' when both layers have >= 3 points."""
+        xen = _arms_state["xenium_lm_layer"]
+        he = _arms_state["he_lm_layer"]
+        if xen is not None and he is not None:
+            n = min(len(xen.data), len(he.data))
+            arms_register_button.enabled = n >= 3
+
+    def _create_arms_landmark_layers():
+        """Create the two Points layers for ARMS landmark placement."""
+        if _arms_state["xenium_lm_layer"] is not None:
+            return  # already created
+        xen_lm = viewer.add_points(
+            np.empty((0, 2), dtype=np.float64),
+            name="ARMS Xenium Landmarks",
+            size=30,
+            face_color="cyan",
+            symbol="cross",
+            border_color="cyan",
+            border_width=0.1,
+            border_width_is_relative=True,
+            opacity=1.0,
+        )
+        he_lm = viewer.add_points(
+            np.empty((0, 2), dtype=np.float64),
+            name="ARMS H&E Landmarks",
+            size=30,
+            face_color="orange",
+            symbol="cross",
+            border_color="orange",
+            border_width=0.1,
+            border_width_is_relative=True,
+            opacity=1.0,
+        )
+        xen_lm.events.data.connect(_check_arms_landmark_count)
+        he_lm.events.data.connect(_check_arms_landmark_count)
+        _arms_state["xenium_lm_layer"] = xen_lm
+        _arms_state["he_lm_layer"] = he_lm
+        arms_add_xenium_lm_button.enabled = True
+        arms_add_he_lm_button.enabled = True
+        arms_clear_lm_button.enabled = True
+
+    def on_arms_load_he():
+        default_dir = str(data_path) if data_path else ""
+        path, _ = QFileDialog.getOpenFileName(
+            None, "Load ARMS H&E Image", default_dir,
+            "Image Files (*.ome.tif *.tif *.tiff *.svs);;All Files (*)",
+        )
+        if not path:
+            return
+        arms_status_label.value = "Loading ARMS H&E..."
+        arms_load_he_button.enabled = False
+
+        @thread_worker(connect={"returned": _on_arms_he_loaded})
+        def load_task():
+            return load_he_pyramid(path), path
+
+        load_task()
+
+    def _on_arms_he_loaded(result):
+        (pyramid, tif), path = result
+        # Remove old ARMS H&E layer if present
+        if _arms_state["he_layer"] is not None:
+            try:
+                viewer.layers.remove(_arms_state["he_layer"])
+            except ValueError:
+                pass
+
+        _arms_state["he_tif"] = tif
+        _arms_state["he_filename"] = Path(path).name
+        _arms_state["he_path"] = str(path)
+        base = pyramid[0]
+        _arms_state["he_shape_yx"] = (base.shape[0], base.shape[1])
+
+        he_layer = viewer.add_image(
+            pyramid,
+            name=f"ARMS H&E ({Path(path).name})",
+            rgb=True,
+            blending="translucent",
+            opacity=arms_opacity_slider.value / 100.0,
+        )
+        _arms_state["he_layer"] = he_layer
+        _arms_state["affine_3x3"] = None
+
+        # Apply any pre-selected flip
+        _apply_arms_affine()
+
+        # Create landmark layers if not yet present
+        _create_arms_landmark_layers()
+
+        # Persist ARMS H&E image to sdata zarr cache
+        _save_arms_he_to_sdata(pyramid, Path(path).name)
+
+        arms_opacity_slider.enabled = True
+        arms_load_he_button.enabled = True
+        arms_load_geojson_button.enabled = True
+        shape_str = "x".join(str(s) for s in pyramid[0].shape)
+        arms_status_label.value = f"ARMS H&E loaded: {Path(path).name} ({shape_str}, {len(pyramid)} levels)"
+
+    def on_arms_he_opacity(value):
+        if _arms_state["he_layer"] is not None:
+            _arms_state["he_layer"].opacity = value / 100.0
+
+    arms_opacity_slider.changed.connect(on_arms_he_opacity)
+
+    def on_arms_add_xenium_lm():
+        lm = _arms_state["xenium_lm_layer"]
+        if lm is not None:
+            viewer.layers.selection.active = lm
+            lm.mode = "add"
+            arms_status_label.value = "Click on a feature in the Xenium image"
+
+    def on_arms_add_he_lm():
+        lm = _arms_state["he_lm_layer"]
+        if lm is not None:
+            viewer.layers.selection.active = lm
+            lm.mode = "add"
+            arms_status_label.value = "Click on the same feature in the ARMS H&E image"
+
+    def on_arms_clear_lm():
+        for key in ("xenium_lm_layer", "he_lm_layer"):
+            lm = _arms_state[key]
+            if lm is not None:
+                lm.selected_data = set()
+                lm.data = np.empty((0, 2), dtype=np.float64)
+        _arms_state["affine_3x3"] = None
+        _apply_arms_affine()
+        _save_arms_affine_to_sdata()
+        arms_residuals_qt.clear()
+        arms_status_label.value = "ARMS landmarks cleared"
+        arms_register_button.enabled = False
+
+    def on_arms_register():
+        xen_pts = _arms_state["xenium_lm_layer"].data
+        he_pts = _arms_state["he_lm_layer"].data
+        n = min(len(xen_pts), len(he_pts))
+        if n < 3:
+            arms_status_label.value = "Need at least 3 paired landmarks"
+            return
+
+        xen_pts = np.asarray(xen_pts[:n], dtype=np.float64)
+        he_pts = np.asarray(he_pts[:n], dtype=np.float64)
+
+        affine, residuals = compute_landmark_affine(xen_pts, he_pts)
+        _arms_state["affine_3x3"] = affine
+
+        # Apply registration + flip to ARMS H&E, landmarks, and shapes
+        _apply_arms_affine()
+
+        # Display residuals
+        lines = [f"ARMS Registration: {n} landmarks, similarity transform"]
+        lines.append(f"Mean residual: {residuals.mean():.1f} px ({residuals.mean() * pixel_size:.1f} um)")
+        lines.append(f"Max  residual: {residuals.max():.1f} px ({residuals.max() * pixel_size:.1f} um)")
+        lines.append("")
+        for i, r in enumerate(residuals):
+            lines.append(f"  Landmark {i+1}: {r:.1f} px ({r * pixel_size:.1f} um)")
+        scale = np.sqrt(affine[0, 0]**2 + affine[0, 1]**2)
+        lines.append(f"\nScale factor: {scale:.4f}")
+        arms_residuals_qt.setPlainText("\n".join(lines))
+        arms_status_label.value = f"ARMS registered ({n} landmarks, mean residual {residuals.mean():.1f} px)"
+        _save_arms_affine_to_sdata()
+
+    def _save_arms_he_to_sdata(pyramid, he_filename):
+        """Persist ARMS H&E image to sdata zarr cache as images/arms_he_image."""
+        if sdata is None or no_cache:
+            return
+        try:
+            from spatialdata.models import Image2DModel
+
+            base = np.asarray(pyramid[0])
+            if base.ndim == 3 and base.shape[-1] in (3, 4):
+                base_cyx = np.transpose(base, (2, 0, 1))
+            else:
+                base_cyx = base
+
+            parsed = Image2DModel.parse(
+                base_cyx.astype(np.uint8),
+                dims=("c", "y", "x"),
+                scale_factors=[2, 2, 2, 2],
+                chunks=(3, 1024, 1024),
+            )
+
+            if "arms_he_image" in sdata.images:
+                del sdata.images["arms_he_image"]
+
+            sdata.images["arms_he_image"] = parsed
+            sdata.write_element("arms_he_image", overwrite=True)
+
+            zarr_p = data_path / "sdata_cached.zarr"
+            import zarr as zarr_mod
+            store = zarr_mod.open_group(str(zarr_p), mode="r+", use_consolidated=False)
+            if "viewer_session" not in store:
+                store.create_group("viewer_session")
+            store["viewer_session"].attrs["arms_he_filename"] = he_filename
+            store["viewer_session"].attrs["arms_he_shape_yx"] = list(base.shape[:2])
+
+            print(f"  ARMS H&E image saved to sdata zarr cache ({base_cyx.shape})")
+        except Exception as e:
+            print(f"  Warning: could not save ARMS H&E to sdata: {e}")
+
+    def _save_arms_affine_to_sdata():
+        """Update the affine transformation on arms_he_image in sdata zarr cache."""
+        if sdata is None or no_cache or "arms_he_image" not in sdata.images:
+            return
+        try:
+            from spatialdata.transformations import Affine as SdAffine, set_transformation
+
+            flip = _build_arms_flip_affine()
+            fine = _arms_state["affine_3x3"]
+            if fine is not None:
+                combined = fine @ flip
+            else:
+                combined = flip
+
+            sd_affine = SdAffine(combined, input_axes=("y", "x"), output_axes=("y", "x"))
+            set_transformation(sdata.images["arms_he_image"], sd_affine, "global")
+            sdata.write_transformations("arms_he_image")
+
+            zarr_p = data_path / "sdata_cached.zarr"
+            import zarr as zarr_mod
+            store = zarr_mod.open_group(str(zarr_p), mode="r+", use_consolidated=False)
+            if "viewer_session" not in store:
+                store.create_group("viewer_session")
+            sess = store["viewer_session"]
+            sess.attrs["arms_flip_v"] = bool(_arms_state.get("flip_v", False))
+            sess.attrs["arms_flip_h"] = bool(_arms_state.get("flip_h", False))
+            if fine is not None:
+                sess.attrs["arms_affine_3x3"] = fine.tolist()
+            # Also save all essential ARMS metadata so it survives overwrite
+            sess.attrs["arms_he_filename"] = _arms_state.get("he_filename")
+            sess.attrs["arms_he_path"] = _arms_state.get("he_path")
+            sess.attrs["arms_he_shape_yx"] = (
+                list(_arms_state["he_shape_yx"]) if _arms_state.get("he_shape_yx") else None
+            )
+            sess.attrs["arms_geojson_path"] = _arms_state.get("geojson_path")
+            sess.attrs["arms_csv_path"] = _arms_state.get("csv_path")
+        except Exception as e:
+            print(f"  Warning: could not save ARMS affine: {e}")
+
+    def _load_geojson_csv(geojson_path, csv_path):
+        """Parse GeoJSON tile polygons + CSV cluster IDs and display as colored shapes.
+
+        Returns True on success, False on failure. Used by both user-initiated
+        loading and session restore.
+        """
+        import csv as csv_mod
+        import re as _re
+
+        try:
+            # Parse GeoJSON
+            with open(geojson_path) as f:
+                geojson = json.load(f)
+            features = geojson.get("features", [])
+            tile_polygons = {}  # name -> np.array (N, 2) in (y, x)
+            for feat in features:
+                name = feat.get("properties", {}).get("name")
+                if name is None:
+                    continue
+                coords_xy = feat["geometry"]["coordinates"]
+                # Handle MultiPolygon or Polygon
+                if feat["geometry"]["type"] == "MultiPolygon":
+                    ring = coords_xy[0][0]
+                elif feat["geometry"]["type"] == "Polygon":
+                    ring = coords_xy[0]
+                else:
+                    continue
+                arr = np.array(ring, dtype=np.float64)
+                tile_polygons[name] = arr[:, ::-1]  # swap x,y -> y,x
+
+            # Parse CSV — try both 'tile' and 'sample' columns
+            tile_clusters = {}
+            with open(csv_path) as f:
+                reader = csv_mod.DictReader(f)
+                for row in reader:
+                    tile_name = row.get("tile", row.get("sample", "")).strip()
+                    cluster_val = row.get("cluster", "").strip()
+                    if tile_name and cluster_val:
+                        try:
+                            tile_clusters[tile_name] = int(cluster_val)
+                        except ValueError:
+                            pass
+
+            def _normalize_tile(name):
+                n = name.strip().lower()
+                n = _re.sub(r'^plate', 'p', n)
+                return n
+
+            csv_norm = {}
+            for raw_name, cid in tile_clusters.items():
+                csv_norm[_normalize_tile(raw_name)] = cid
+
+            polygon_data = []
+            face_colors = []
+            tile_names = []
+            cluster_ids = []
+            matched = 0
+            for name, poly_yx in tile_polygons.items():
+                cid = tile_clusters.get(name)
+                if cid is None:
+                    cid = csv_norm.get(_normalize_tile(name))
+                if cid is None:
+                    continue
+                matched += 1
+                polygon_data.append(poly_yx)
+                tile_names.append(name)
+                cluster_ids.append(cid)
+                idx = max(0, min(cid - 1, len(ARMS_CLUSTER_PALETTE) - 1))
+                face_colors.append(ARMS_CLUSTER_PALETTE[idx])
+
+            if not polygon_data:
+                geojson_sample = list(tile_polygons.keys())[:5]
+                csv_sample = list(tile_clusters.keys())[:5]
+                arms_status_label.value = "No matching tiles found between GeoJSON and CSV"
+                arms_residuals_qt.setPlainText(
+                    f"No matching tiles found.\n\n"
+                    f"GeoJSON tile names (sample): {geojson_sample}\n"
+                    f"CSV tile names (sample): {csv_sample}\n\n"
+                    f"GeoJSON has {len(tile_polygons)} tiles, CSV has {len(tile_clusters)} entries."
+                )
+                return False
+
+            # Remove old shapes layer if present
+            if _arms_state["shapes_layer"] is not None:
+                try:
+                    viewer.layers.remove(_arms_state["shapes_layer"])
+                except ValueError:
+                    pass
+
+            shapes_layer = viewer.add_shapes(
+                polygon_data,
+                shape_type="polygon",
+                face_color=np.array(face_colors),
+                edge_color="white",
+                edge_width=2,
+                name="ARMS Tiles",
+                opacity=arms_tile_opacity_slider.value / 100.0,
+            )
+            _arms_state["shapes_layer"] = shapes_layer
+            _arms_state["tile_names"] = tile_names
+            _arms_state["cluster_ids"] = np.array(cluster_ids, dtype=int)
+            _arms_state["geojson_path"] = geojson_path
+            _arms_state["csv_path"] = csv_path
+
+            # Apply current affine transform to shapes layer
+            _apply_arms_affine()
+
+            arms_tile_opacity_slider.enabled = True
+            arms_deg_button.enabled = True
+
+            # Show cluster legend in residuals text
+            unique_clusters = sorted(set(cluster_ids))
+            legend_lines = [f"Loaded {matched} tiles from {len(tile_polygons)} GeoJSON features"]
+            legend_lines.append(f"Clusters found: {unique_clusters}")
+            legend_lines.append("")
+            legend_lines.append("Cluster legend:")
+            for cid in unique_clusters:
+                idx = max(0, min(cid - 1, len(ARMS_CLUSTER_NAMES) - 1))
+                count = cluster_ids.count(cid)
+                legend_lines.append(f"  Cluster {cid}: {ARMS_CLUSTER_NAMES[idx]} ({count} tiles)")
+            arms_residuals_qt.setPlainText("\n".join(legend_lines))
+            arms_status_label.value = f"ARMS tiles loaded: {matched} tiles, {len(unique_clusters)} clusters"
+            return True
+
+        except Exception as e:
+            arms_status_label.value = f"Error loading GeoJSON/CSV: {e}"
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def on_arms_load_geojson():
+        """Load GeoJSON tile polygons + CSV cluster IDs, display as colored shapes."""
+        default_dir = str(data_path) if data_path else ""
+
+        geojson_path, _ = QFileDialog.getOpenFileName(
+            None, "Load GeoJSON (tile boundaries)", default_dir,
+            "GeoJSON Files (*.geojson *.json);;All Files (*)",
+        )
+        if not geojson_path:
+            return
+
+        csv_path, _ = QFileDialog.getOpenFileName(
+            None, "Load CSV (tile cluster IDs)", str(Path(geojson_path).parent),
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not csv_path:
+            return
+
+        arms_status_label.value = "Loading GeoJSON + CSV..."
+        ok = _load_geojson_csv(geojson_path, csv_path)
+
+        # Persist GeoJSON/CSV paths to zarr attrs on success
+        if ok and not no_cache:
+            try:
+                zarr_p = data_path / "sdata_cached.zarr"
+                if zarr_p.exists():
+                    import zarr as zarr_mod
+                    store = zarr_mod.open_group(str(zarr_p), mode="r+", use_consolidated=False)
+                    if "viewer_session" not in store:
+                        store.create_group("viewer_session")
+                    store["viewer_session"].attrs["arms_geojson_path"] = geojson_path
+                    store["viewer_session"].attrs["arms_csv_path"] = csv_path
+            except Exception:
+                pass
+
+    def on_arms_tile_opacity(value):
+        if _arms_state["shapes_layer"] is not None:
+            _arms_state["shapes_layer"].opacity = value / 100.0
+
+    arms_tile_opacity_slider.changed.connect(on_arms_tile_opacity)
+
+    # ── ARMS Tile DEG handlers ───────────────────────────────────────────────
+    def on_arms_deg():
+        if _arms_state["shapes_layer"] is None or _arms_state["cluster_ids"] is None:
+            arms_status_label.value = "Load ARMS tiles first"
+            return
+
+        tile_data = _arms_state["shapes_layer"].data
+        cluster_ids_arr = _arms_state["cluster_ids"]
+
+        # Get the combined affine from the shapes layer
+        affine_mat = _arms_state["shapes_layer"].affine.affine_matrix  # 3x3
+
+        # Transform tile polygons from GeoJSON space to Xenium pixel space
+        transformed_polys = []
+        for poly_yx in tile_data:
+            ones = np.ones((len(poly_yx), 1))
+            coords_h = np.hstack([poly_yx, ones])  # (N, 3) with [y, x, 1]
+            transformed = (affine_mat @ coords_h.T).T[:, :2]  # (N, 2) [y', x']
+            transformed_polys.append(transformed)
+
+        arms_status_label.value = "Running ARMS Tile DEG..."
+        arms_deg_button.enabled = False
+        method = arms_deg_method.value
+        _adata = adata if adata is not None else color_manager.adata
+
+        @thread_worker(connect={"returned": _on_arms_deg_ready})
+        def _run():
+            return compute_arms_tile_deg(
+                _adata, centroids_yx, transformed_polys, cluster_ids_arr,
+                method=method,
+            )
+        _run()
+
+    def _on_arms_deg_ready(result):
+        deg_df, summary = result
+        _state["arms_tile_deg_df"] = deg_df
+        arms_deg_button.enabled = True
+        if deg_df.empty:
+            summary_str = ", ".join(f"C{k}: {v} cells" for k, v in sorted(summary.items()))
+            arms_deg_text.setPlainText(
+                f"No results (need ≥2 clusters with ≥10 cells each).\n"
+                f"Cells per cluster: {summary_str or 'none'}"
+            )
+            arms_status_label.value = "ARMS DEG: no results"
+            arms_deg_export_button.enabled = False
+            return
+        summary_str = ", ".join(f"C{k}: {v}" for k, v in sorted(summary.items()))
+        preview = deg_df.head(50).to_string(index=False)
+        arms_deg_text.setPlainText(f"Cells per cluster: {summary_str}\n\n{preview}")
+        arms_status_label.value = f"ARMS DEG complete: {len(deg_df)} gene-group results"
+        arms_deg_export_button.enabled = True
+
+    def on_export_arms_deg():
+        df = _state.get("arms_tile_deg_df")
+        if df is None or df.empty:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export ARMS DEG Results", "arms_tile_deg_results.csv", "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        df.to_csv(path, index=False)
+        arms_status_label.value = f"Exported {len(df)} rows to {path}"
+
+    arms_deg_button.clicked.connect(on_arms_deg)
+    arms_deg_export_button.clicked.connect(on_export_arms_deg)
+
+    # Wire ARMS events
+    arms_load_he_button.clicked.connect(on_arms_load_he)
+    arms_add_xenium_lm_button.clicked.connect(on_arms_add_xenium_lm)
+    arms_add_he_lm_button.clicked.connect(on_arms_add_he_lm)
+    arms_clear_lm_button.clicked.connect(on_arms_clear_lm)
+    arms_register_button.clicked.connect(on_arms_register)
+    arms_load_geojson_button.clicked.connect(on_arms_load_geojson)
+
+    # ARMS button rows
+    arms_flip_row = QWidget()
+    arms_flip_layout = QHBoxLayout()
+    arms_flip_layout.setContentsMargins(0, 0, 0, 0)
+    arms_flip_layout.addWidget(arms_flip_v.native)
+    arms_flip_layout.addWidget(arms_flip_h.native)
+    arms_flip_row.setLayout(arms_flip_layout)
+
+    arms_lm_btn_row = QWidget()
+    arms_lm_layout = QHBoxLayout()
+    arms_lm_layout.setContentsMargins(0, 0, 0, 0)
+    arms_lm_layout.addWidget(arms_add_xenium_lm_button.native)
+    arms_lm_layout.addWidget(arms_add_he_lm_button.native)
+    arms_lm_layout.addWidget(arms_clear_lm_button.native)
+    arms_lm_btn_row.setLayout(arms_lm_layout)
+
+    tab_widget.addTab(
+        _make_tab(
+            arms_load_he_button,
+            arms_flip_row,
+            arms_opacity_slider,
+            arms_lm_btn_row,
+            arms_register_button,
+            arms_residuals_qt,
+            arms_load_geojson_button,
+            arms_tile_opacity_slider,
+            arms_deg_method,
+            arms_deg_button,
+            arms_deg_text,
+            arms_deg_export_button,
+        ),
+        "ARMS Overlay",
+    )
+
     # ── Session restore function ─────────────────────────────────────────────
     def restore_session(session):
         """Apply loaded session data to the viewer state."""
@@ -3099,6 +3803,7 @@ def _build_control_panel(
         if rg is not None:
             _state["rank_genes_df"] = rg
             ga_export_button.enabled = True
+            ga_volcano_button.enabled = True
             print(f"  Restored rank genes ({len(rg)} rows)")
 
         # Analysis results: ROI DEG
@@ -3107,6 +3812,14 @@ def _build_control_panel(
             _state["roi_deg_df"] = rd
             roi_deg_export_button.enabled = True
             print(f"  Restored ROI DEG ({len(rd)} rows)")
+
+        # Analysis results: ARMS Tile DEG
+        atd = session.get("arms_tile_deg_df")
+        if atd is not None:
+            _state["arms_tile_deg_df"] = atd
+            arms_deg_export_button.enabled = True
+            arms_deg_text.setPlainText(atd.head(50).to_string(index=False))
+            print(f"  Restored ARMS Tile DEG ({len(atd)} rows)")
 
         # Analysis results: ligrec
         lm = session.get("ligrec_means")
@@ -3172,6 +3885,105 @@ def _build_control_panel(
             _load_he_from_sdata()
         elif session.get("he_filename"):
             print(f"  Warning: H&E image not found in sdata cache, skipping H&E restore")
+
+        # ARMS overlay restore — load from sdata zarr cache
+        if sdata is not None and "arms_he_image" in sdata.images:
+            arms_flip_v.value = session.get("arms_flip_v", False)
+            arms_flip_h.value = session.get("arms_flip_h", False)
+
+            _session_arms_data = {
+                "affine_3x3": session.get("arms_affine_3x3"),
+                "xenium_landmarks": session.get("arms_xenium_landmarks"),
+                "he_landmarks": session.get("arms_he_landmarks"),
+                "he_filename": session.get("arms_he_filename", "ARMS H&E"),
+                "he_path": session.get("arms_he_path"),
+                "he_shape_yx": session.get("arms_he_shape_yx"),
+                "geojson_path": session.get("arms_geojson_path"),
+                "csv_path": session.get("arms_csv_path"),
+            }
+
+            arms_status_label.value = "Restoring ARMS H&E from cache..."
+
+            @thread_worker(connect={"returned": lambda result: _on_arms_restored(result, _session_arms_data)})
+            def _load_arms_from_sdata():
+                arms_dt = sdata.images["arms_he_image"]
+                pyramid = _extract_dt_scales(arms_dt)
+                pyramid_rgb = []
+                for arr in pyramid:
+                    computed = arr.compute() if hasattr(arr, 'compute') else np.asarray(arr)
+                    if computed.ndim == 3 and computed.shape[0] in (3, 4):
+                        computed = np.transpose(computed, (1, 2, 0))
+                    pyramid_rgb.append(computed)
+                return pyramid_rgb
+
+            _load_arms_from_sdata()
+        elif session.get("arms_he_filename"):
+            print(f"  Warning: ARMS H&E image not found in sdata cache, skipping ARMS restore")
+
+    def _on_arms_restored(pyramid_rgb, session_arms_data):
+        """Callback after ARMS H&E loads from sdata cache — apply saved state."""
+        # Remove old ARMS H&E layer if present
+        if _arms_state["he_layer"] is not None:
+            try:
+                viewer.layers.remove(_arms_state["he_layer"])
+            except ValueError:
+                pass
+
+        he_filename = session_arms_data.get("he_filename", "ARMS H&E")
+        _arms_state["he_tif"] = None
+        _arms_state["he_filename"] = he_filename
+        _arms_state["he_path"] = session_arms_data.get("he_path")  # may be None (loaded from cache)
+        base = pyramid_rgb[0]
+        _arms_state["he_shape_yx"] = session_arms_data.get("he_shape_yx") or (base.shape[0], base.shape[1])
+        _arms_state["geojson_path"] = session_arms_data.get("geojson_path")
+        _arms_state["csv_path"] = session_arms_data.get("csv_path")
+
+        he_layer = viewer.add_image(
+            pyramid_rgb,
+            name=f"ARMS H&E ({he_filename})",
+            rgb=True,
+            blending="translucent",
+            opacity=arms_opacity_slider.value / 100.0,
+        )
+        _arms_state["he_layer"] = he_layer
+
+        # Restore saved affine
+        _arms_state["affine_3x3"] = session_arms_data.get("affine_3x3")
+        _apply_arms_affine()
+        _save_arms_affine_to_sdata()  # repair real-time attrs if missing
+
+        # Create landmark layers and populate with saved data
+        _create_arms_landmark_layers()
+        xen_lm = session_arms_data.get("xenium_landmarks")
+        he_lm = session_arms_data.get("he_landmarks")
+        if xen_lm is not None and _arms_state["xenium_lm_layer"] is not None:
+            _arms_state["xenium_lm_layer"].data = xen_lm
+        if he_lm is not None and _arms_state["he_lm_layer"] is not None:
+            _arms_state["he_lm_layer"].data = he_lm
+
+        arms_opacity_slider.enabled = True
+        arms_load_he_button.enabled = True
+        arms_load_geojson_button.enabled = True
+
+        # Re-load GeoJSON/CSV tiles if paths are still valid
+        geojson_path = session_arms_data.get("geojson_path")
+        csv_path = session_arms_data.get("csv_path")
+        if geojson_path and csv_path:
+            if Path(geojson_path).exists() and Path(csv_path).exists():
+                _load_geojson_csv(geojson_path, csv_path)
+            else:
+                missing = []
+                if not Path(geojson_path).exists():
+                    missing.append(f"GeoJSON: {geojson_path}")
+                if not Path(csv_path).exists():
+                    missing.append(f"CSV: {csv_path}")
+                print(f"  Warning: ARMS tile files moved/missing: {', '.join(missing)}")
+                arms_status_label.value = "ARMS H&E restored (tile files not found)"
+
+        has_affine = _arms_state["affine_3x3"] is not None
+        if arms_status_label.value.startswith("Restoring"):
+            arms_status_label.value = f"ARMS restored: {he_filename}" + (" (with registration)" if has_affine else "")
+        print(f"  Restored ARMS from cache: {he_filename}" + (" with registration" if has_affine else ""))
 
     def _on_he_restored_from_sdata(pyramid_rgb, session_he_data):
         """Callback after H&E loads from sdata cache — apply saved affine."""

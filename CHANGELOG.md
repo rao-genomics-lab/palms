@@ -2,13 +2,47 @@
 
 ## [Unreleased] — 2026-03-09
 
+### Fixed
+- **ARMS metadata not persisting across sessions** — `save_session()` overwrote
+  real-time-saved ARMS attrs (filename, affine, shape, paths) with empty snapshot
+  values, causing ARMS registration to be lost on reload. Fixed by: (1) preserving
+  existing ARMS attrs before the overwrite and using them as fallback, (2) saving
+  all essential ARMS metadata in `_save_arms_affine_to_sdata()` (not just
+  affine/flips), (3) calling `_save_arms_affine_to_sdata()` after ARMS restore to
+  repair any previously corrupted attrs.
+- **NameError on close** — `_on_viewer_closing` referenced `_arms_state` which is
+  defined later in `main()`; wrapped in `try/except NameError` so closing the
+  viewer before the ARMS tab initializes no longer crashes.
+
 ### Added
+- **ARMS Tile DEG analysis** — "Run ARMS Tile DEG" button in ARMS Overlay tab
+  performs differential expression between cells grouped by ARMS tile cluster ID.
+  Tile polygons are transformed from GeoJSON space to Xenium pixel space via the
+  registration affine before point-in-polygon tests. Clusters with <10 cells are
+  excluded. Results display in a text widget and can be exported to CSV. Session
+  persistence saves/restores DEG results across viewer restarts.
+- **Pairwise volcano plots** — "Generate All Volcano Plots..." button in Gene
+  Analysis tab runs DEG for every pairwise cluster comparison and saves volcano
+  PNGs (3-color scatter with threshold lines and top gene labels) to a
+  user-selected directory. Progress updates shown in status bar.
+- **ARMS Overlay tab (Tab 10)** — load a larger ARMS H&E image, align it to
+  Xenium coordinates via manual landmark registration (same workflow as the H&E
+  Registration tab), then load GeoJSON tile boundaries + CSV cluster IDs to
+  display 288 tile polygons colored by genomic cluster (1–8). The affine
+  transform is applied to both the H&E image and the polygon shapes layer, so
+  re-registering landmarks automatically re-aligns everything.
 - **Auto-save reproducible code on exit** — code recording is now on by default
   and automatically saves to `{data_dir}/code.py` when the viewer closes (if
   recording is enabled and journal is non-empty).
 - **Persist custom clusterings across sessions** — Leiden and imported clusterings
   are saved as parquet files in `viewer_session/clusterings/` inside the zarr
   cache, and restored on next launch.
+- **ARMS overlay session persistence** — ARMS H&E image, registration affine,
+  flip state, landmarks, and GeoJSON/CSV file paths are saved to the zarr cache
+  and restored on next launch. The H&E image is stored as
+  `sdata.images["arms_he_image"]` with a multiscale pyramid; the affine and
+  landmarks are saved in `viewer_session/arms/`. GeoJSON/CSV tiles are re-parsed
+  from the original file paths on restore (with a warning if files have moved).
 
 ### Changed
 - `record_code` default changed from `False` to `True` (always-on recording).
