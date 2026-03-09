@@ -1,9 +1,9 @@
 """
 Session persistence for the Xenium viewer.
 
-Saves and loads viewer state (ROIs, H&E registration, analysis results,
-cluster labels) to/from a zarr store so the session can be restored on
-the next launch.
+Saves and loads viewer state (ROIs, H&E registration, ARMS overlay,
+analysis results, cluster labels) to/from a zarr store so the session
+can be restored on the next launch.
 
 Storage layout inside sdata_cached.zarr/viewer_session/:
   rois/0, rois/1, ...         — zarr arrays (Nx2 float64) for each ROI polygon
@@ -11,6 +11,9 @@ Storage layout inside sdata_cached.zarr/viewer_session/:
   he/coarse_affine             — zarr array 3x3
   he/xenium_landmarks          — zarr array Nx2
   he/he_landmarks              — zarr array Nx2
+  arms/affine_3x3              — zarr array 3x3
+  arms/xenium_landmarks        — zarr array Nx2
+  arms/he_landmarks            — zarr array Nx2
   rank_genes.parquet           — DataFrame
   roi_deg.parquet              — DataFrame
   ligrec_means.parquet         — DataFrame
@@ -105,6 +108,33 @@ def save_session(
         )
         attrs["flip_v"] = bool(he_state.get("flip_v", False))
         attrs["flip_h"] = bool(he_state.get("flip_h", False))
+
+        # ── ARMS overlay ─────────────────────────────────────────────────
+        arms_state = snapshot.get("arms_state", {})
+        arms_group = session.create_group("arms")
+
+        if arms_state.get("affine_3x3") is not None:
+            _write_array(arms_group, "affine_3x3", arms_state["affine_3x3"])
+
+        arms_xen_lm = snapshot.get("arms_xenium_landmarks")
+        arms_he_lm = snapshot.get("arms_he_landmarks")
+        if arms_xen_lm is not None:
+            _write_array(arms_group, "xenium_landmarks", arms_xen_lm)
+        if arms_he_lm is not None:
+            _write_array(arms_group, "he_landmarks", arms_he_lm)
+
+        attrs["arms_he_filename"] = arms_state.get("he_filename")
+        attrs["arms_he_path"] = arms_state.get("he_path")
+        attrs["arms_he_shape_yx"] = (
+            list(arms_state["he_shape_yx"]) if arms_state.get("he_shape_yx") else None
+        )
+        attrs["arms_flip_v"] = bool(arms_state.get("flip_v", False))
+        attrs["arms_flip_h"] = bool(arms_state.get("flip_h", False))
+        # Also persist affine to attrs (redundant with zarr array, but survives partial saves)
+        if arms_state.get("affine_3x3") is not None:
+            attrs["arms_affine_3x3"] = np.asarray(arms_state["affine_3x3"], dtype=np.float64).tolist()
+        attrs["arms_geojson_path"] = arms_state.get("geojson_path")
+        attrs["arms_csv_path"] = arms_state.get("csv_path")
 
         # ── Cluster labels (per-clustering nested dict) ────────────────────
         cluster_labels = state.get("cluster_labels")
@@ -214,6 +244,8 @@ def save_session(
             parts.append("nhood enrichment")
         if attrs.get("has_co"):
             parts.append("co-occurrence")
+        if attrs.get("arms_he_filename"):
+            parts.append(f"ARMS ({attrs['arms_he_filename']})")
         summary = ", ".join(parts) if parts else "empty session"
         print(f"Session saved: {summary}")
 
@@ -266,6 +298,17 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "ligrec_pvalues": None,
         "nhood_result": None,
         "co_result": None,
+        # ARMS overlay
+        "arms_he_filename": attrs.get("arms_he_filename"),
+        "arms_he_path": attrs.get("arms_he_path"),
+        "arms_he_shape_yx": tuple(attrs["arms_he_shape_yx"]) if attrs.get("arms_he_shape_yx") else None,
+        "arms_affine_3x3": None,
+        "arms_xenium_landmarks": None,
+        "arms_he_landmarks": None,
+        "arms_flip_v": attrs.get("arms_flip_v", False),
+        "arms_flip_h": attrs.get("arms_flip_h", False),
+        "arms_geojson_path": attrs.get("arms_geojson_path"),
+        "arms_csv_path": attrs.get("arms_csv_path"),
     }
 
     # ── ROIs ──────────────────────────────────────────────────────────
@@ -375,5 +418,19 @@ def load_session(zarr_path: Path) -> Optional[dict]:
             "clusters": clusters,
             "warning": None,
         }
+
+    # ── ARMS overlay ─────────────────────────────────────────────────
+    # Prefer attrs (real-time saved) over zarr arrays (snapshot)
+    if "arms_affine_3x3" in attrs and attrs["arms_affine_3x3"] is not None:
+        result["arms_affine_3x3"] = np.array(attrs["arms_affine_3x3"], dtype=np.float64)
+
+    if "arms" in session:
+        arms_group = session["arms"]
+        if result["arms_affine_3x3"] is None and "affine_3x3" in arms_group:
+            result["arms_affine_3x3"] = np.array(arms_group["affine_3x3"])
+        if "xenium_landmarks" in arms_group:
+            result["arms_xenium_landmarks"] = np.array(arms_group["xenium_landmarks"])
+        if "he_landmarks" in arms_group:
+            result["arms_he_landmarks"] = np.array(arms_group["he_landmarks"])
 
     return result
