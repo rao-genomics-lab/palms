@@ -65,6 +65,11 @@ def save_session(
         if session_dir.exists():
             for pq in session_dir.glob("*.parquet"):
                 pq.unlink()
+            # Clean up custom clustering subdirectory
+            clust_dir = session_dir / "clusterings"
+            if clust_dir.exists():
+                for pq in clust_dir.glob("*.parquet"):
+                    pq.unlink()
 
         session = store.create_group("viewer_session", overwrite=True)
         attrs = {}
@@ -112,6 +117,17 @@ def save_session(
             attrs["cluster_labels"] = serialized if serialized else None
         else:
             attrs["cluster_labels"] = None
+
+        # ── Custom clusterings (Leiden, imported, etc.) ──────────────────
+        custom_clusterings = state.get("custom_clusterings", {})
+        if custom_clusterings:
+            clust_dir = Path(zarr_path) / "viewer_session" / "clusterings"
+            clust_dir.mkdir(exist_ok=True)
+            for name, series in custom_clusterings.items():
+                series.to_frame(name="cluster").to_parquet(clust_dir / f"{name}.parquet")
+            attrs["custom_clustering_names"] = list(custom_clusterings.keys())
+        else:
+            attrs["custom_clustering_names"] = []
 
         # ── Analysis DataFrames ───────────────────────────────────────────
         session_dir = Path(zarr_path) / "viewer_session"
@@ -186,6 +202,8 @@ def save_session(
             parts.append(f"H&E ({attrs['he_filename']})")
         if attrs.get("cluster_labels"):
             parts.append(f"{len(attrs['cluster_labels'])} cluster labels")
+        if attrs.get("custom_clustering_names"):
+            parts.append(f"{len(attrs['custom_clustering_names'])} custom clusterings")
         if attrs["has_rank_genes"]:
             parts.append("rank genes")
         if attrs["has_roi_deg"]:
@@ -299,6 +317,17 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         else:
             # Old flat format: {str(int): label} — wrap under a generic key
             result["cluster_labels"] = {"_legacy": {int(k): v for k, v in cl.items()}}
+
+    # ── Custom clusterings ─────────────────────────────────────────────
+    custom_clusterings = {}
+    clust_dir = Path(zarr_path) / "viewer_session" / "clusterings"
+    custom_names = attrs.get("custom_clustering_names", [])
+    for name in custom_names:
+        pq = clust_dir / f"{name}.parquet"
+        if pq.exists():
+            df = pd.read_parquet(pq)
+            custom_clusterings[name] = df.iloc[:, 0]
+    result["custom_clusterings"] = custom_clusterings
 
     # ── Analysis DataFrames ───────────────────────────────────────────
     session_dir = Path(zarr_path) / "viewer_session"

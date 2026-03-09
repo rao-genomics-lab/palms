@@ -335,6 +335,13 @@ def main(data_path: Path, no_cache: bool = False):
     print(f"\nViewer ready in {total_time:.1f}s. Close the napari window to exit.")
     napari.run()
 
+    # ── Auto-save reproducible code ──────────────────────────────────────────
+    if _state.get("record_code") and _state["code_journal"]:
+        code_path = data_path / "code.py"
+        with open(code_path, 'w') as f:
+            f.write("\n".join(_state["code_journal"]) + "\n")
+        print(f"Reproducible code saved to {code_path}")
+
     # ── Save session state on exit ────────────────────────────────────────────
     if not no_cache and zarr_path.exists():
         from utils.session import save_session
@@ -465,9 +472,10 @@ def _build_control_panel(
         "co_fig": None,  # matplotlib Figure
         "plot_format": "png",  # "png" or "svg" — set via Preferences menu
         "plot_font_size": 10,  # matplotlib font.size — set via Preferences menu
-        "record_code": False,       # toggle via Preferences
+        "record_code": True,        # toggle via Preferences
         "code_journal": [],         # list of code block strings
         "code_journal_tags": set(), # dedup tags for preamble sections
+        "custom_clusterings": {},   # custom clusterings to persist (Leiden, imported)
     }
 
     # ── Preferences menu (plot format) ────────────────────────────────────────
@@ -507,7 +515,7 @@ def _build_control_panel(
     fontsize_group.triggered.connect(_on_fontsize_changed)
 
     # --- Record code checkbox ---
-    record_action = QAction("Record reproducible code", prefs_menu, checkable=True, checked=False)
+    record_action = QAction("Record reproducible code", prefs_menu, checkable=True, checked=True)
     prefs_menu.addAction(record_action)
 
     def _on_record_toggled(checked):
@@ -862,6 +870,7 @@ def _build_control_panel(
         series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs = result
         key = f"leiden_r{resolution}"
         clusterings[key] = series
+        _state["custom_clusterings"][key] = series
         _refresh_clustering_choices()
 
         leiden_status_text.setPlainText(
@@ -920,6 +929,7 @@ def _build_control_panel(
             series = pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0].values)
         name = Path(path).stem
         clusterings[name] = series
+        _state["custom_clusterings"][name] = series
         _refresh_clustering_choices()
         clustering_widget.value = name
         leiden_status.value = f"Imported '{name}' ({series.nunique()} groups, {len(series)} cells)"
@@ -3074,6 +3084,15 @@ def _build_control_panel(
             n_clusterings = len(cl)
             n_labels = sum(len(v) for v in cl.values() if isinstance(v, dict))
             print(f"  Restored cluster labels: {n_labels} labels across {n_clusterings} clustering(s)")
+
+        # Custom clusterings (Leiden, imported)
+        cc = session.get("custom_clusterings", {})
+        if cc:
+            for name, series in cc.items():
+                clusterings[name] = series
+                _state["custom_clusterings"][name] = series
+            _refresh_clustering_choices()
+            print(f"  Restored {len(cc)} custom clustering(s): {', '.join(cc.keys())}")
 
         # Analysis results: rank genes
         rg = session.get("rank_genes_df")

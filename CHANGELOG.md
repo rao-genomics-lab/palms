@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased] — 2026-03-09
+
+### Added
+- **Auto-save reproducible code on exit** — code recording is now on by default
+  and automatically saves to `{data_dir}/code.py` when the viewer closes (if
+  recording is enabled and journal is non-empty).
+- **Persist custom clusterings across sessions** — Leiden and imported clusterings
+  are saved as parquet files in `viewer_session/clusterings/` inside the zarr
+  cache, and restored on next launch.
+
+### Changed
+- `record_code` default changed from `False` to `True` (always-on recording).
+
 ## [Unreleased] — 2026-03-06
 
 ### Added
