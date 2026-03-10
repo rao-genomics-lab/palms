@@ -19,29 +19,13 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-# Categorical palettes for clusters (max 20 clusters)
-CLUSTER_PALETTE = np.array([
-    [0.12, 0.47, 0.71, 1.0],  # blue
-    [1.00, 0.50, 0.05, 1.0],  # orange
-    [0.17, 0.63, 0.17, 1.0],  # green
-    [0.84, 0.15, 0.16, 1.0],  # red
-    [0.58, 0.40, 0.74, 1.0],  # purple
-    [0.55, 0.34, 0.29, 1.0],  # brown
-    [0.89, 0.47, 0.76, 1.0],  # pink
-    [0.50, 0.50, 0.50, 1.0],  # gray
-    [0.74, 0.74, 0.13, 1.0],  # olive
-    [0.09, 0.75, 0.81, 1.0],  # cyan
-    [0.65, 0.81, 0.89, 1.0],  # light blue
-    [0.98, 0.60, 0.60, 1.0],  # light red
-    [0.70, 0.87, 0.54, 1.0],  # light green
-    [0.99, 0.75, 0.44, 1.0],  # light orange
-    [0.79, 0.70, 0.84, 1.0],  # light purple
-    [0.70, 0.49, 0.38, 1.0],  # light brown
-    [0.99, 0.71, 0.94, 1.0],  # light pink
-    [0.90, 0.90, 0.90, 1.0],  # light gray
-    [0.90, 0.90, 0.60, 1.0],  # light olive
-    [0.73, 0.93, 0.96, 1.0],  # light cyan
-], dtype=np.float32)
+# 256 maximally-distinct categorical colors for clusters (from colorcet glasbey_dark)
+import colorcet as _cc
+CLUSTER_PALETTE = np.array(
+    [[int(h[i:i+2], 16) / 255.0 for i in (1, 3, 5)] + [1.0]
+     for h in _cc.glasbey_dark],
+    dtype=np.float32,
+)
 
 # 10 maximally-distinct RGBA colors for multi-gene transcript overlay
 TRANSCRIPT_PALETTE = np.array([

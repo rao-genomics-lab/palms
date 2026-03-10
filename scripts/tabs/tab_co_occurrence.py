@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
-from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
+from qtpy.QtWidgets import (
+    QTextEdit, QHBoxLayout, QWidget, QFileDialog,
+    QLabel, QScrollArea, QGridLayout, QCheckBox,
+)
 from napari.qt.threading import thread_worker
 from tabs._helpers import make_tab, StatusProxy
 
@@ -32,6 +35,74 @@ def build_tab(ctx: ViewerContext) -> tuple:
     co_save_plot_button = PushButton(label="Save Plot as PNG...", enabled=False)
     co_export_button = PushButton(label="Export CSV...", enabled=False)
     co_filter_targets = CheckBox(label="Filter targets", value=False, enabled=True)
+
+    # ── Cluster selector ─────────────────────────────────────────────────
+    co_cluster_label = QLabel("Select clusters:")
+    co_select_all_btn = PushButton(label="Select All")
+    co_deselect_all_btn = PushButton(label="Deselect All")
+
+    co_cluster_container = QWidget()
+    co_cluster_grid = QGridLayout()
+    co_cluster_grid.setContentsMargins(0, 0, 0, 0)
+    co_cluster_container.setLayout(co_cluster_grid)
+
+    co_cluster_scroll = QScrollArea()
+    co_cluster_scroll.setWidget(co_cluster_container)
+    co_cluster_scroll.setWidgetResizable(True)
+    co_cluster_scroll.setMaximumHeight(150)
+
+    state["co_cluster_checkboxes"] = {}
+
+    def _co_select_all():
+        for cb in state["co_cluster_checkboxes"].values():
+            cb.setChecked(True)
+
+    def _co_deselect_all():
+        for cb in state["co_cluster_checkboxes"].values():
+            cb.setChecked(False)
+
+    co_select_all_btn.clicked.connect(_co_select_all)
+    co_deselect_all_btn.clicked.connect(_co_deselect_all)
+
+    def _repopulate_co_cluster_checkboxes():
+        grid = co_cluster_grid
+        while grid.count():
+            item = grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        state["co_cluster_checkboxes"].clear()
+
+        key = co_clustering_widget.value
+        if not key or key not in ctx.clusterings:
+            return
+        raw_ids = ctx.clusterings[key].dropna().unique().tolist()
+        try:
+            ids = sorted([int(x) for x in raw_ids])
+        except (ValueError, TypeError):
+            ids = sorted(raw_ids, key=lambda x: str(x))
+        labels = ctx.get_labels_for(key) if ctx.get_labels_for else {}
+        cols = 3
+        for i, cid in enumerate(ids):
+            display = str(labels.get(cid, labels.get(str(cid), cid)))
+            cb = QCheckBox(display)
+            cb.setChecked(True)
+            grid.addWidget(cb, i // cols, i % cols)
+            state["co_cluster_checkboxes"][cid] = cb
+
+    co_clustering_widget.changed.connect(lambda _: _repopulate_co_cluster_checkboxes())
+    _repopulate_co_cluster_checkboxes()
+
+    def _get_co_selected_clusters():
+        """Return sorted list of checked cluster IDs (str), or None if all checked."""
+        cbs = state["co_cluster_checkboxes"]
+        if not cbs:
+            return None
+        selected = [str(cid) for cid, cb in cbs.items() if cb.isChecked()]
+        if len(selected) == len(cbs):
+            return None
+        return sorted(selected, key=lambda x: (int(x) if x.isdigit() else x))
+
     co_status = StatusProxy(ctx.viewer)
 
     from utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
@@ -46,11 +117,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["_co_params"] = {"interval": interval}
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
+        co_selected = _get_co_selected_clusters()
+
         @thread_worker(connect={"returned": _on_co_occurrence_ready})
         def _run():
             adata_norm = get_normalized_adata(_adata)
             add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
             adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
+            if co_selected is not None:
+                mask = adata_norm.obs[clustering_key].astype(str).isin(co_selected)
+                adata_norm = adata_norm[mask].copy()
             result = run_co_occurrence(adata_norm, clustering_key, interval=interval)
             result['_adata_norm'] = adata_norm
             result['_cluster_key'] = clustering_key
@@ -82,7 +158,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"Number of distance bins: {len(interval_arr) - 1}",
             "",
             "Use 'Show Co-occurrence Plot' to visualize.",
-            "Filter clusters via Cell Coloring tab to plot a subset.",
+            "Use cluster checkboxes above to filter.",
         ]
 
         co_results_text.setPlainText("\n".join(lines))
@@ -103,7 +179,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         result = state.get("co_result")
         if result is None:
             return
-        groups = ctx.get_cluster_filter()
+        groups = _get_co_selected_clusters()
         filter_targets = co_filter_targets.value and groups
         cc = state.get("cluster_to_color")
         co_ck = result.get('_cluster_key', co_clustering_widget.value)
@@ -170,7 +246,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         clusters = result['clusters']
         distances = interval_arr[1:]
 
-        groups = ctx.get_cluster_filter()
+        groups = _get_co_selected_clusters()
 
         rows = []
         for i, src in enumerate(clusters):
@@ -206,8 +282,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
     co_plot_btn_layout.addWidget(co_save_plot_button.native)
     co_plot_btn_row.setLayout(co_plot_btn_layout)
 
+    co_sel_btn_row = QWidget()
+    co_sel_btn_layout = QHBoxLayout()
+    co_sel_btn_layout.setContentsMargins(0, 0, 0, 0)
+    co_sel_btn_layout.addWidget(co_select_all_btn.native)
+    co_sel_btn_layout.addWidget(co_deselect_all_btn.native)
+    co_sel_btn_row.setLayout(co_sel_btn_layout)
+
     widget = make_tab(
         co_clustering_widget,
+        co_cluster_label,
+        co_sel_btn_row,
+        co_cluster_scroll,
         co_interval_slider,
         co_run_button,
         co_results_text,
