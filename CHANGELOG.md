@@ -1,6 +1,40 @@
 # Changelog
 
-## [Unreleased] — 2026-03-09
+## [Unreleased] — 2026-03-10
+
+### Changed
+- **Decomposed `02_xenium_viewer.py` into per-tab modules** — the 4295-line monolith
+  has been split into 14 new files. `_build_control_panel()` shrinks from ~3850 lines
+  to ~80 lines (thin orchestrator). Each of the 11 tabs is now a standalone module in
+  `scripts/tabs/` with a single `build_tab(ctx)` entry point. Cross-tab state is managed
+  through a `ViewerContext` dataclass (`scripts/utils/viewer_context.py`) instead of 18
+  closure-captured parameters. Shared helpers (status proxy, code recording, clustering
+  refresh, label editor, plot save, etc.) live in `scripts/tabs/_helpers.py`. No
+  behavioral changes — all features, session persistence, and code recording work
+  identically.
+
+  New files:
+  - `scripts/utils/viewer_context.py` — ViewerContext dataclass
+  - `scripts/tabs/__init__.py` — re-exports all tab builders
+  - `scripts/tabs/_helpers.py` — make_tab, StatusProxy, create_shared_helpers, create_preferences_menu
+  - `scripts/tabs/tab_clustering.py` — Tab 0: Leiden, import/export
+  - `scripts/tabs/tab_cell_coloring.py` — Tab 1: gene/cluster coloring, filter checkboxes
+  - `scripts/tabs/tab_transcripts.py` — Tab 2: multi-gene transcript overlay
+  - `scripts/tabs/tab_umap.py` — Tab 3: UMAP viewer
+  - `scripts/tabs/tab_roi.py` — Tab 4: ROI analysis + ROI DEG
+  - `scripts/tabs/tab_he_registration.py` — Tab 5: H&E registration
+  - `scripts/tabs/tab_gene_analysis.py` — Tab 6: rank genes, dotplot, volcanos
+  - `scripts/tabs/tab_ligrec.py` — Tab 7: ligand-receptor
+  - `scripts/tabs/tab_nhood.py` — Tab 8: neighborhood enrichment
+  - `scripts/tabs/tab_co_occurrence.py` — Tab 9: co-occurrence
+  - `scripts/tabs/tab_arms.py` — Tab 10: ARMS overlay
+
+### Added
+- **ARMS tab code recording** — All ARMS operations (H&E load, landmark registration,
+  GeoJSON/CSV load, tile DEG, DEG export, volcano plots) now emit `_record_code()`
+  entries so they appear in the reproducible `code.py` journal.
+
+## [2026-03-09]
 
 ### Fixed
 - **ARMS metadata not persisting across sessions** — `save_session()` overwrote

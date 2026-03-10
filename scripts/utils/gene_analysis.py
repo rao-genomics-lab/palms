@@ -193,6 +193,7 @@ def compute_arms_tile_deg(
     cluster_ids: np.ndarray,
     min_cells_per_cluster: int = 10,
     method: str = 'wilcoxon',
+    cluster_mask: Optional[np.ndarray] = None,
 ) -> tuple:
     """Differential expression between ARMS tile clusters.
 
@@ -222,6 +223,8 @@ def compute_arms_tile_deg(
         if not shapely_poly.is_valid:
             shapely_poly = shapely_poly.buffer(0)
         inside = contains_xy(shapely_poly, centroids_yx[:, 1], centroids_yx[:, 0])
+        if cluster_mask is not None:
+            inside = inside & cluster_mask
         cell_cluster[inside] = cluster_ids[i]
 
     # Drop cells not in any tile
