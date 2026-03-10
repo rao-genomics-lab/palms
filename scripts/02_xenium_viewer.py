@@ -3204,6 +3204,7 @@ def _build_control_panel(
     arms_deg_text.setFontFamily("monospace")
     arms_deg_text.setMaximumHeight(250)
     arms_deg_export_button = PushButton(label="Export ARMS DEG CSV...", enabled=False)
+    arms_volcano_button = PushButton(label="Generate ARMS Volcano Plots...", enabled=False)
 
     def _build_arms_flip_affine():
         """Build a 3x3 affine that flips the ARMS H&E image around its center."""
@@ -3697,7 +3698,7 @@ def _build_control_panel(
         _run()
 
     def _on_arms_deg_ready(result):
-        deg_df, summary = result
+        deg_df, summary, adata_norm = result
         _state["arms_tile_deg_df"] = deg_df
         arms_deg_button.enabled = True
         if deg_df.empty:
@@ -3708,12 +3709,15 @@ def _build_control_panel(
             )
             arms_status_label.value = "ARMS DEG: no results"
             arms_deg_export_button.enabled = False
+            arms_volcano_button.enabled = False
             return
+        _state["arms_deg_adata_norm"] = adata_norm
         summary_str = ", ".join(f"C{k}: {v}" for k, v in sorted(summary.items()))
         preview = deg_df.head(50).to_string(index=False)
         arms_deg_text.setPlainText(f"Cells per cluster: {summary_str}\n\n{preview}")
         arms_status_label.value = f"ARMS DEG complete: {len(deg_df)} gene-group results"
         arms_deg_export_button.enabled = True
+        arms_volcano_button.enabled = True
 
     def on_export_arms_deg():
         df = _state.get("arms_tile_deg_df")
@@ -3727,8 +3731,51 @@ def _build_control_panel(
         df.to_csv(path, index=False)
         arms_status_label.value = f"Exported {len(df)} rows to {path}"
 
+    def on_arms_generate_volcanos():
+        adata_norm = _state.get("arms_deg_adata_norm")
+        if adata_norm is None:
+            arms_status_label.value = "Run ARMS Tile DEG first"
+            return
+        output_dir = QFileDialog.getExistingDirectory(None, "Select output directory for ARMS volcano plots")
+        if not output_dir:
+            return
+        arms_volcano_button.enabled = False
+        arms_status_label.value = "Generating ARMS volcano plots..."
+        method = arms_deg_method.value
+
+        @thread_worker(connect={"yielded": lambda msg: setattr(arms_status_label, 'value', msg),
+                                "returned": _on_arms_volcanos_done})
+        def _run():
+            from pathlib import Path
+            import itertools as _it
+            from utils.gene_analysis import run_pairwise_deg, make_volcano_plot
+            import matplotlib.pyplot as _plt
+
+            out = Path(output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            groups = sorted(
+                [g for g in adata_norm.obs['arms_cluster'].cat.categories if str(g) != '-1'],
+                key=lambda x: (int(x) if str(x).lstrip('-').isdigit() else 0, str(x)),
+            )
+            pairs = list(_it.combinations(groups, 2))
+            total = len(pairs)
+            for i, (a, b) in enumerate(pairs):
+                yield f"Volcano plot {i + 1}/{total}: ARMS C{a} vs C{b}"
+                df = run_pairwise_deg(adata_norm, 'arms_cluster', str(a), str(b), method=method)
+                fig = make_volcano_plot(df, f"ARMS C{a}", f"ARMS C{b}")
+                fig.savefig(out / f'volcano_ARMS_C{a}_vs_ARMS_C{b}.png', dpi=300)
+                _plt.close(fig)
+            return total, output_dir
+        _run()
+
+    def _on_arms_volcanos_done(result):
+        count, out_dir = result
+        arms_volcano_button.enabled = True
+        arms_status_label.value = f"{count} ARMS volcano plots saved to {out_dir}"
+
     arms_deg_button.clicked.connect(on_arms_deg)
     arms_deg_export_button.clicked.connect(on_export_arms_deg)
+    arms_volcano_button.clicked.connect(on_arms_generate_volcanos)
 
     # Wire ARMS events
     arms_load_he_button.clicked.connect(on_arms_load_he)
@@ -3768,6 +3815,7 @@ def _build_control_panel(
             arms_deg_button,
             arms_deg_text,
             arms_deg_export_button,
+            arms_volcano_button,
         ),
         "ARMS Overlay",
     )

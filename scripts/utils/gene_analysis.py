@@ -207,7 +207,9 @@ def compute_arms_tile_deg(
 
     Returns
     -------
-    (deg_df, summary_dict) where summary_dict = {cluster_id: n_cells}
+    (deg_df, summary_dict, adata_norm) where summary_dict = {cluster_id: n_cells}
+    and adata_norm is the normalized subset AnnData (for pairwise volcano plots).
+    When no valid clusters exist, adata_norm is None.
     """
     from shapely.geometry import Polygon as ShapelyPolygon
     from shapely import contains_xy
@@ -226,7 +228,7 @@ def compute_arms_tile_deg(
     mask = cell_cluster >= 0
     if mask.sum() == 0:
         empty = pd.DataFrame(columns=['group', 'names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj'])
-        return (empty, {})
+        return (empty, {}, None)
 
     subset = adata[mask].copy()
     subset.obs['arms_cluster'] = pd.Categorical(cell_cluster[mask].astype(str))
@@ -238,7 +240,7 @@ def compute_arms_tile_deg(
 
     if len(keep_clusters) < 2:
         empty = pd.DataFrame(columns=['group', 'names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj'])
-        return (empty, summary)
+        return (empty, summary, None)
 
     subset = subset[subset.obs['arms_cluster'].isin(keep_clusters)].copy()
     subset.obs['arms_cluster'] = pd.Categorical(subset.obs['arms_cluster'].values)
@@ -248,7 +250,7 @@ def compute_arms_tile_deg(
 
     sc.tl.rank_genes_groups(subset, 'arms_cluster', method=method, reference='rest')
     deg_df = sc.get.rank_genes_groups_df(subset, group=None)
-    return (deg_df, summary)
+    return (deg_df, summary, subset)
 
 
 def run_pairwise_deg(

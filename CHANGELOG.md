@@ -21,6 +21,11 @@
   registration affine before point-in-polygon tests. Clusters with <10 cells are
   excluded. Results display in a text widget and can be exported to CSV. Session
   persistence saves/restores DEG results across viewer restarts.
+- **ARMS pairwise volcano plots** — "Generate ARMS Volcano Plots..." button
+  (enabled after ARMS Tile DEG completes) runs pairwise DEG for every pair of
+  ARMS tile clusters and saves volcano PNGs to a user-selected directory.
+  Progress updates shown in status bar. `compute_arms_tile_deg()` now returns
+  the normalized subset adata as a 3rd element for downstream pairwise analysis.
 - **Pairwise volcano plots** — "Generate All Volcano Plots..." button in Gene
   Analysis tab runs DEG for every pairwise cluster comparison and saves volcano
   PNGs (3-color scatter with threshold lines and top gene labels) to a
