@@ -807,14 +807,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
             @thread_worker(connect={"returned": lambda result: _on_arms_restored(result, _session_arms_data)})
             def _load_arms_from_sdata():
+                import dask.array as da
                 arms_dt = sdata.images["arms_he_image"]
                 pyramid = _extract_dt_scales(arms_dt)
                 pyramid_rgb = []
                 for arr in pyramid:
-                    computed = arr.compute() if hasattr(arr, 'compute') else np.asarray(arr)
-                    if computed.ndim == 3 and computed.shape[0] in (3, 4):
-                        computed = np.transpose(computed, (1, 2, 0))
-                    pyramid_rgb.append(computed)
+                    if not isinstance(arr, da.Array):
+                        arr = da.from_array(arr)
+                    if arr.ndim == 3 and arr.shape[0] in (3, 4):
+                        arr = da.transpose(arr, (1, 2, 0))
+                    pyramid_rgb.append(arr)
                 return pyramid_rgb
             _load_arms_from_sdata()
         elif session.get("arms_he_filename"):
