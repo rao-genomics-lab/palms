@@ -117,16 +117,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["_co_params"] = {"interval": interval}
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        co_selected = _get_co_selected_clusters()
-
         @thread_worker(connect={"returned": _on_co_occurrence_ready})
         def _run():
             adata_norm = get_normalized_adata(_adata)
             add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
             adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
-            if co_selected is not None:
-                mask = adata_norm.obs[clustering_key].astype(str).isin(co_selected)
-                adata_norm = adata_norm[mask].copy()
             result = run_co_occurrence(adata_norm, clustering_key, interval=interval)
             result['_adata_norm'] = adata_norm
             result['_cluster_key'] = clustering_key
@@ -158,7 +153,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"Number of distance bins: {len(interval_arr) - 1}",
             "",
             "Use 'Show Co-occurrence Plot' to visualize.",
-            "Use cluster checkboxes above to filter.",
+            "Select clusters above to choose subplots. Use 'Filter targets' + Cell Coloring to restrict lines.",
         ]
 
         co_results_text.setPlainText("\n".join(lines))
@@ -179,38 +174,26 @@ def build_tab(ctx: ViewerContext) -> tuple:
         result = state.get("co_result")
         if result is None:
             return
-        groups = _get_co_selected_clusters()
-        filter_targets = co_filter_targets.value and groups
+        subplot_clusters = _get_co_selected_clusters()       # local checkboxes → subplots
+        target_filter = ctx.get_cluster_filter() if co_filter_targets.value else None  # Cell Coloring → lines
         cc = state.get("cluster_to_color")
         co_ck = result.get('_cluster_key', co_clustering_widget.value)
         labels = ctx.get_labels_for(co_ck)
         import matplotlib.pyplot as _plt
         ctx.apply_plot_font_size()
         try:
-            if filter_targets or cc is not None or labels:
-                fig = make_co_occurrence_plot(
-                    result,
-                    clusters_to_plot=groups if filter_targets else groups,
-                    target_clusters=groups if filter_targets else None,
-                    cluster_colors=cc,
-                    cluster_labels=labels,
-                )
-            else:
-                adata_norm = result.get('_adata_norm')
-                cluster_key = result.get('_cluster_key')
-                if adata_norm is not None and cluster_key is not None:
-                    import squidpy as _sq
-                    _sq.pl.co_occurrence(
-                        adata_norm, cluster_key=cluster_key, clusters=groups,
-                    )
-                    fig = _plt.gcf()
-                else:
-                    fig = make_co_occurrence_plot(result, clusters_to_plot=groups, cluster_colors=cc)
+            fig = make_co_occurrence_plot(
+                result,
+                clusters_to_plot=subplot_clusters,
+                target_clusters=target_filter,
+                cluster_colors=cc,
+                cluster_labels=labels,
+            )
             state["co_fig"] = fig
             _plt.show(block=False)
             co_save_plot_button.enabled = True
-            if groups:
-                co_status.value = f"Co-occurrence plot (clusters: {', '.join(groups)})"
+            if subplot_clusters:
+                co_status.value = f"Co-occurrence plot (subplots: {', '.join(subplot_clusters)})"
             else:
                 co_status.value = "Co-occurrence plot displayed"
 
@@ -218,7 +201,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             ctx.record_code(
                 f"\n# Co-occurrence plot\n"
                 f"sq.pl.co_occurrence(adata, cluster_key=\"{_co_ck}\""
-                + (f", clusters={groups}" if groups else "")
+                + (f", clusters={subplot_clusters}" if subplot_clusters else "")
                 + ")\nplt.show()"
             )
         except Exception as e:

@@ -2,7 +2,21 @@
 
 ## [Unreleased] — 2026-03-10
 
+### Fixed
+- **Co-occurrence plot colors now match labels layer** — replaced seaborn `tab20`
+  fallback in `make_co_occurrence_plot()` with `CLUSTER_PALETTE` from
+  `utils/coloring.py`, ensuring line colors match the cell labels layer colors.
+
 ### Changed
+- **Custom nhood enrichment heatmap now matches squidpy native style** — rewrote
+  `make_nhood_enrichment_plot()` in `spatial_analysis.py` to use `imshow` +
+  `make_axes_locatable` instead of `sns.heatmap`. Uses `viridis` colormap with
+  symmetric normalization for z-score, colored cluster category bars on left + top
+  edges (using `CLUSTER_PALETTE`), cluster labels on the left bar, right-side
+  vertical colorbar with `%0.2f` ticks, no gridlines. Added `annotate` parameter
+  (default False) with luminance-based white/black text. Figsize scales with cluster
+  count matching squidpy's `(2*n//3, 2*n//3)` formula.
+
 - **Decomposed `02_xenium_viewer.py` into per-tab modules** — the 4295-line monolith
   has been split into 14 new files. `_build_control_panel()` shrinks from ~3850 lines
   to ~80 lines (thin orchestrator). Each of the 11 tabs is now a standalone module in

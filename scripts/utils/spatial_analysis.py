@@ -134,8 +134,9 @@ def make_nhood_enrichment_plot(
     mode: str = 'zscore',
     cluster_filter: list[str] | None = None,
     cluster_labels: dict | None = None,
+    annotate: bool = False,
 ) -> plt.Figure:
-    """Create a neighborhood enrichment heatmap. Returns matplotlib Figure.
+    """Create a neighborhood enrichment heatmap matching squidpy native style.
 
     Parameters
     ----------
@@ -146,50 +147,112 @@ def make_nhood_enrichment_plot(
     cluster_filter : list of str or None
         If provided, subset to only these cluster labels.
     cluster_labels : dict or None
-        Maps cluster ID -> display label. Applied to axis tick labels.
+        Maps cluster ID -> display label. Applied to category bar tick labels.
+    annotate : bool
+        If True, overlay numeric values on each cell.
     """
-    import seaborn as sns
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    from matplotlib.colors import ListedColormap, BoundaryNorm
+    from utils.coloring import CLUSTER_PALETTE
 
     matrix = result[mode].copy()
     clusters = list(result['clusters'])
 
-    # Build DataFrame for labeling
+    # Build DataFrame for subsetting
     df = pd.DataFrame(matrix, index=clusters, columns=clusters)
 
-    # Apply cluster labels to index/columns
-    if cluster_labels:
-        label_map = {str(k): v for k, v in cluster_labels.items()}
-        df.rename(index=label_map, columns=label_map, inplace=True)
-
-    # Subset if cluster filter provided
+    # Subset if cluster filter provided (before label mapping)
     if cluster_filter:
         keep = [c for c in cluster_filter if c in df.index]
         if keep:
             df = df.loc[keep, keep]
 
+    display_clusters = list(df.index)
+    n = len(display_clusters)
+
+    # Build display labels
+    if cluster_labels:
+        label_map = {str(k): v for k, v in cluster_labels.items()}
+    else:
+        label_map = {}
+    display_names = [label_map.get(c, c) for c in display_clusters]
+
+    # Build cluster colors (cycle palette for >20 clusters)
+    palette = CLUSTER_PALETTE
+    cluster_colors = [tuple(palette[i % len(palette)][:3]) for i in range(n)]
+
+    # Colormap / normalization
+    data = df.values
     if mode == 'zscore':
-        cmap = 'coolwarm'
-        vmax = max(abs(df.values.min()), abs(df.values.max()), 1.0)
-        vmin = -vmax
-        fmt = '.1f'
+        cmap = plt.get_cmap('viridis')
+        vmin = np.nanmin(data)
+        vmax = np.nanmax(data)
         title = 'Neighborhood Enrichment (z-score)'
     else:
-        cmap = 'YlOrRd'
-        vmin = None
-        vmax = None
-        fmt = '.0f'
+        cmap = plt.get_cmap('viridis')
+        vmin = np.nanmin(data)
+        vmax = np.nanmax(data)
         title = 'Neighborhood Enrichment (count)'
 
-    fig, ax = plt.subplots(figsize=(max(6, len(df) * 0.6), max(5, len(df) * 0.5)))
-    sns.heatmap(
-        df, annot=True, fmt=fmt, cmap=cmap,
-        vmin=vmin, vmax=vmax,
-        linewidths=0.5, ax=ax,
-        square=True,
+    # Figure size matching squidpy: (2*n//3, 2*n//3) with minimum (4, 4)
+    sz = max(4, 2 * n // 3)
+    fig, ax = plt.subplots(figsize=(sz, sz), constrained_layout=False)
+
+    # Main heatmap via imshow
+    im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax, aspect='equal')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.grid(False)
+
+    # Optional text annotations (squidpy style: white/black based on luminance)
+    if annotate:
+        fmt = '.2f' if mode == 'zscore' else '.0f'
+        norm_data = (data - vmin) / (vmax - vmin + 1e-12)
+        cmap_array = cmap(norm_data)
+        for i in range(n):
+            for j in range(n):
+                rgb = cmap_array[i, j, :3]
+                lum = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+                color = 'white' if lum < 0.5 else 'black'
+                ax.text(j, i, f'{data[i, j]:{fmt}}',
+                        ha='center', va='center', fontsize=6, color=color)
+
+    # Divider for category bars and colorbar
+    divider = make_axes_locatable(ax)
+
+    # --- Top category bar ---
+    ax_top = divider.append_axes('top', size='3%', pad=0.0)
+    cat_cmap = ListedColormap(cluster_colors)
+    bounds = np.arange(n + 1)
+    cat_norm = BoundaryNorm(bounds, cat_cmap.N)
+    cb_top = fig.colorbar(
+        plt.cm.ScalarMappable(norm=cat_norm, cmap=cat_cmap),
+        cax=ax_top, orientation='horizontal',
     )
-    ax.set_title(title)
-    ax.set_xlabel('Cluster')
-    ax.set_ylabel('Cluster')
+    cb_top.set_ticks([])
+    ax_top.set_title(title, fontsize=10)
+    ax_top.xaxis.set_ticks_position('top')
+
+    # --- Left category bar ---
+    ax_left = divider.append_axes('left', size='3%', pad=0.0)
+    cb_left = fig.colorbar(
+        plt.cm.ScalarMappable(norm=cat_norm, cmap=cat_cmap),
+        cax=ax_left, orientation='vertical',
+    )
+    cb_left.set_ticks(np.arange(n) + 0.5)
+    cb_left.set_ticklabels(display_names)
+    ax_left.invert_yaxis()
+    ax_left.yaxis.set_ticks_position('left')
+    ax_left.tick_params(axis='y', length=0, labelsize=8)
+
+    # --- Right colorbar ---
+    ax_cbar = divider.append_axes('right', size='3%', pad='2%')
+    cbar = fig.colorbar(im, cax=ax_cbar)
+    n_ticks = 5
+    tick_vals = np.linspace(vmin, vmax, n_ticks)
+    cbar.set_ticks(tick_vals)
+    cbar.set_ticklabels([f'{v:0.2f}' for v in tick_vals])
+
     fig.tight_layout()
     return fig
 
@@ -324,13 +387,17 @@ def make_co_occurrence_plot(
         # Convert int cluster_id -> RGBA to string cluster_id -> RGB tuple
         color_map = {str(cid): tuple(rgba[:3]) for cid, rgba in cluster_colors.items()}
         # Fallback for any cluster not in the dict
-        fallback = sns.color_palette("tab20", n_colors=len(clusters))
+        from utils.coloring import CLUSTER_PALETTE
         for i, c in enumerate(clusters):
             if c not in color_map:
-                color_map[c] = fallback[i]
+                rgba = CLUSTER_PALETTE[i % len(CLUSTER_PALETTE)]
+                color_map[c] = tuple(rgba[:3].tolist())
     else:
-        palette = sns.color_palette("tab20", n_colors=len(clusters))
-        color_map = {c: palette[i] for i, c in enumerate(clusters)}
+        from utils.coloring import CLUSTER_PALETTE
+        color_map = {}
+        for i, c in enumerate(clusters):
+            rgba = CLUSTER_PALETTE[i % len(CLUSTER_PALETTE)]
+            color_map[c] = tuple(rgba[:3].tolist())
 
     # Determine which clusters to draw as target lines
     if target_clusters:
