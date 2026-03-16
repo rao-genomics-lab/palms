@@ -350,7 +350,7 @@ def create_shared_helpers(ctx: ViewerContext):
 
 # ── File menu ────────────────────────────────────────────────────────────────
 
-def create_file_menu(ctx: ViewerContext, on_open_dataset):
+def create_file_menu(ctx: ViewerContext, on_open_dataset, on_preprocess_dataset=None):
     """Build a File menu on the napari menu bar with an Open Dataset action."""
     from qtpy.QtWidgets import QMenu
     from qtpy.QtGui import QAction
@@ -367,6 +367,12 @@ def create_file_menu(ctx: ViewerContext, on_open_dataset):
     act.setShortcut("Ctrl+O")
     file_menu.addAction(act)
     act.triggered.connect(on_open_dataset)
+
+    if on_preprocess_dataset is not None:
+        file_menu.addSeparator()
+        act2 = QAction("Preprocess Dataset...", file_menu)
+        file_menu.addAction(act2)
+        act2.triggered.connect(on_preprocess_dataset)
 
 
 # ── Preferences menu ─────────────────────────────────────────────────────────

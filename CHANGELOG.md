@@ -2,6 +2,19 @@
 
 ## [Unreleased] — 2026-03-16
 
+### Added
+- **File > Preprocess Dataset...** — new menu item that runs both preprocessing
+  steps (zarr cache creation via `01_load_sdata.py` and per-gene transcript
+  feather splitting via `00_preprocess_transcripts.py`) in a background thread
+  so the UI stays responsive. Auto-detects whether the selected folder is a
+  single Xenium dataset or a parent folder containing several datasets, and
+  processes all found datasets sequentially. A modal progress dialog with a
+  live progress bar is shown during preprocessing. The current viewer data is
+  cleared before starting to avoid a RAM peak of old dataset + I/O overhead.
+  Implemented via `PreprocessWorker(QThread)`, `_find_xenium_datasets()`, and
+  `_make_progress_dialog()` in `02_xenium_viewer.py`; `create_file_menu()` in
+  `tabs/_helpers.py` updated to accept the new `on_preprocess_dataset` callback.
+
 ### Changed
 - **Memory: free old dataset before loading new one** — in `_on_open_dataset()`,
   all heavy `ctx` fields (`sdata`, `adata`, `clusterings`, `color_manager`,

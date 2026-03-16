@@ -143,6 +143,84 @@ def _import_loader():
     return mod
 
 
+def _find_xenium_datasets(folder: Path) -> list:
+    """Return Xenium dataset paths at or immediately under *folder*."""
+    if (folder / "experiment.xenium").exists():
+        return [folder]
+    return sorted(
+        p for p in folder.iterdir()
+        if p.is_dir() and (p / "experiment.xenium").exists()
+    )
+
+
+def _make_progress_dialog(title: str, parent=None):
+    """Return (dialog, progress_bar, label) — caller shows and manages them."""
+    from qtpy.QtWidgets import QDialog, QVBoxLayout, QLabel, QProgressBar
+    from qtpy.QtCore import Qt
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowCloseButtonHint)
+    dlg.setMinimumWidth(500)
+    layout = QVBoxLayout(dlg)
+    lbl = QLabel("Starting…")
+    lbl.setWordWrap(True)
+    bar = QProgressBar()
+    bar.setRange(0, 100)
+    layout.addWidget(lbl)
+    layout.addWidget(bar)
+    return dlg, bar, lbl
+
+
+from qtpy.QtCore import QThread, Signal as QtSignal
+
+
+class PreprocessWorker(QThread):
+    progress = QtSignal(int, str)   # (percent 0-100, message)
+    finished = QtSignal(bool, str)  # (success, message)
+
+    def __init__(self, datasets: list):
+        super().__init__()
+        self.datasets = datasets
+
+    def run(self):
+        import importlib.util as _ilu
+
+        # Load 00_preprocess_transcripts.py via importlib (numeric prefix)
+        _spec = _ilu.spec_from_file_location(
+            "preprocess_transcripts",
+            Path(__file__).parent / "00_preprocess_transcripts.py",
+        )
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        preprocess = _mod.preprocess
+
+        loader_mod = _import_loader()
+
+        n = len(self.datasets)
+        total_steps = n * 2
+        for i, ds in enumerate(self.datasets):
+            # Step A: zarr cache
+            pct = int(i * 2 * 100 / total_steps)
+            self.progress.emit(pct, f"[{i+1}/{n}] Creating zarr cache: {ds.name}")
+            try:
+                loader_mod.load_sdata(ds, use_cache=True)
+            except Exception as exc:
+                self.finished.emit(False, f"Zarr creation failed for {ds.name}:\n{exc}")
+                return
+            # Step B: transcript feathers
+            pct = int((i * 2 + 1) * 100 / total_steps)
+            self.progress.emit(pct, f"[{i+1}/{n}] Preprocessing transcripts: {ds.name}")
+            try:
+                preprocess(
+                    parquet_path=ds / "transcripts.parquet",
+                    cache_dir=ds / "transcript_cache",
+                )
+            except Exception as exc:
+                self.finished.emit(False, f"Transcript preprocessing failed for {ds.name}:\n{exc}")
+                return
+        self.finished.emit(True, f"Done. {n} dataset(s) preprocessed.")
+
+
 def _extract_dt_scales(dt):
     """
     Extract an ordered list of dask arrays from a spatialdata DataTree.
@@ -217,7 +295,7 @@ def _add_layers_manually(viewer, sdata):
                 print(f"  Warning: could not extract {key} scales")
 
 
-def _build_control_panel(ctx: ViewerContext, on_open_dataset=None):
+def _build_control_panel(ctx: ViewerContext, on_open_dataset=None, on_preprocess_dataset=None):
     """Build the tabbed control panel using per-tab modules.
 
     Returns (tab_widget, state, he_state, restore_session).
@@ -259,7 +337,7 @@ def _build_control_panel(ctx: ViewerContext, on_open_dataset=None):
 
     # ── Create File menu (if callback provided) ───────────────────────────
     if on_open_dataset is not None:
-        create_file_menu(ctx, on_open_dataset)
+        create_file_menu(ctx, on_open_dataset, on_preprocess_dataset)
 
     # ── Create Preferences menu ──────────────────────────────────────────
     create_preferences_menu(ctx)
@@ -774,7 +852,7 @@ def main(data_path: Path, no_cache: bool = False):
 
             # 15. Rebuild control panel
             panel, _state_new, _he_state_new, restore_fn = _build_control_panel(
-                ctx, on_open_dataset=_on_open_dataset
+                ctx, on_open_dataset=_on_open_dataset, on_preprocess_dataset=_on_preprocess_dataset
             )
             _app["dock_widget"] = viewer.window.add_dock_widget(
                 panel, name="Xenium Controls", area="right"
@@ -798,9 +876,80 @@ def main(data_path: Path, no_cache: bool = False):
         finally:
             _app["reload_in_progress"] = False
 
+    # ── Preprocess Dataset callback ──────────────────────────────────────────
+    def _on_preprocess_dataset():
+        from qtpy.QtWidgets import QFileDialog, QMessageBox
+
+        folder_str = QFileDialog.getExistingDirectory(
+            None, "Select Xenium Dataset or Parent Folder"
+        )
+        if not folder_str:
+            return
+        folder = Path(folder_str)
+
+        datasets = _find_xenium_datasets(folder)
+        if not datasets:
+            QMessageBox.warning(
+                None, "No Datasets Found",
+                f"No Xenium datasets (experiment.xenium) found in:\n{folder}",
+            )
+            return
+
+        if len(datasets) == 1:
+            msg = (
+                f"Preprocess dataset:\n  {datasets[0].name}\n\n"
+                "This will create the zarr cache and per-gene transcript feathers.\n"
+                "The current viewer session will be cleared to free memory."
+            )
+        else:
+            names = "\n".join(f"  \u2022 {d.name}" for d in datasets)
+            msg = (
+                f"Preprocess {len(datasets)} datasets:\n{names}\n\n"
+                "This will create zarr caches and per-gene transcript feathers.\n"
+                "The current viewer session will be cleared to free memory."
+            )
+        reply = QMessageBox.question(
+            None, "Preprocess Dataset", msg,
+            QMessageBox.Ok | QMessageBox.Cancel,
+        )
+        if reply != QMessageBox.Ok:
+            return
+
+        # Clear viewer to free memory before heavy I/O
+        viewer.layers.clear()
+        ctx.sdata = None;  ctx.adata = None;  ctx.clusterings = None
+        ctx.color_manager = None;  ctx.transcript_loader = None
+        ctx.label_to_obs = None;  ctx.gene_names = None
+        ctx.clustering_names = None;  ctx.centroids_yx = None
+        ctx.cell_labels_layer = None;  ctx.transcript_layer = None
+        ctx.roi_layer = None;  ctx.morph_thumb = None
+        gc.collect()
+
+        dlg, bar, lbl = _make_progress_dialog("Preprocessing Datasets")
+        worker = PreprocessWorker(datasets)
+
+        def _on_progress(pct, msg):
+            bar.setValue(pct)
+            lbl.setText(msg)
+
+        def _on_finished(success, msg):
+            dlg.accept()
+            if success:
+                QMessageBox.information(
+                    None, "Preprocessing Complete",
+                    msg + "\n\nUse File \u2192 Open Dataset to load a dataset.",
+                )
+            else:
+                QMessageBox.critical(None, "Preprocessing Failed", msg)
+
+        worker.progress.connect(_on_progress)
+        worker.finished.connect(_on_finished)
+        worker.start()
+        dlg.exec_()  # blocks Qt event loop until dlg.accept() is called
+
     # ── Control panel ────────────────────────────────────────────────────────
     panel, _state, _he_state, restore_session = _build_control_panel(
-        ctx, on_open_dataset=_on_open_dataset
+        ctx, on_open_dataset=_on_open_dataset, on_preprocess_dataset=_on_preprocess_dataset
     )
     _app["dock_widget"] = viewer.window.add_dock_widget(
         panel, name="Xenium Controls", area="right"
