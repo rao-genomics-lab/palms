@@ -348,6 +348,27 @@ def create_shared_helpers(ctx: ViewerContext):
     ctx.get_cluster_filter = _get_cluster_filter
 
 
+# ── File menu ────────────────────────────────────────────────────────────────
+
+def create_file_menu(ctx: ViewerContext, on_open_dataset):
+    """Build a File menu on the napari menu bar with an Open Dataset action."""
+    from qtpy.QtWidgets import QMenu
+    from qtpy.QtGui import QAction
+
+    menu_bar = ctx.viewer.window._qt_window.menuBar()
+    file_menu = QMenu("File", menu_bar)
+    existing = menu_bar.actions()
+    if existing:
+        menu_bar.insertMenu(existing[0], file_menu)  # insert before Preferences
+    else:
+        menu_bar.addMenu(file_menu)
+
+    act = QAction("Open Dataset...", file_menu)
+    act.setShortcut("Ctrl+O")
+    file_menu.addAction(act)
+    act.triggered.connect(on_open_dataset)
+
+
 # ── Preferences menu ─────────────────────────────────────────────────────────
 
 def create_preferences_menu(ctx: ViewerContext):

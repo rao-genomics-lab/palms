@@ -82,3 +82,6 @@ class ViewerContext:
     cluster_filter_grid: Any = None
     select_all_btn: Any = None
     deselect_all_btn: Any = None
+
+    # ── Dataset generation counter (incremented on dataset reload) ────────────
+    dataset_generation: int = 0

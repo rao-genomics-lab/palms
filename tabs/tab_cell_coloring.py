@@ -119,7 +119,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             if combo is not None and value in [c for c in combo.choices]:
                 combo.value = value
 
-    def _on_gene_colors_ready(result):
+    def _on_gene_colors_ready(result, _gen):
+        if ctx.dataset_generation != _gen:
+            return  # dataset reloaded while worker ran
         gene, color_arr, selected_ids, clustering_key = result
         if selected_ids is not None and clustering_key:
             _, label_to_cluster_arr = ctx.get_cluster_ids_per_obs(clustering_key)
@@ -143,7 +145,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         )
         apply_color_button.enabled = True
 
-    def _on_cluster_colors_ready(result):
+    def _on_cluster_colors_ready(result, _gen):
+        if ctx.dataset_generation != _gen:
+            return  # dataset reloaded while worker ran
         clustering_key, (color_arr, cluster_to_color), selected_ids = result
         state["cluster_to_color"] = cluster_to_color
         cluster_ids_per_obs, label_to_cluster = ctx.get_cluster_ids_per_obs(clustering_key)
@@ -179,6 +183,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         mode = state["color_mode"]
         status_label.value = "Computing cell colors..."
         apply_color_button.enabled = False
+        gen = ctx.dataset_generation
 
         if mode == "Gene Expression":
             gene = gene_widget.value
@@ -190,11 +195,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
             selected_ids = ctx.get_selected_cluster_ids() if use_filter else None
             c_key = clustering_widget.value if use_filter else None
 
-            @thread_worker(connect={"returned": _on_gene_colors_ready})
+            @thread_worker
             def compute_gene():
                 color_arr = ctx.color_manager.get_gene_colors(gene, colormap=cmap)
                 return gene, color_arr, selected_ids, c_key
-            compute_gene()
+
+            worker = compute_gene()
+            worker.returned.connect(lambda result: _on_gene_colors_ready(result, gen))
+            worker.start()
 
         else:  # Cluster
             clustering_key = clustering_widget.value
@@ -205,10 +213,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
             use_filter = filter_check.value
             selected_ids = ctx.get_selected_cluster_ids() if use_filter else None
 
-            @thread_worker(connect={"returned": _on_cluster_colors_ready})
+            @thread_worker
             def compute_cluster():
                 return clustering_key, ctx.color_manager.get_cluster_colors(cluster_series), selected_ids
-            compute_cluster()
+
+            worker = compute_cluster()
+            worker.returned.connect(lambda result: _on_cluster_colors_ready(result, gen))
+            worker.start()
 
     def on_bg_change(value):
         ctx.viewer.window._qt_viewer.canvas.bgcolor = (1, 1, 1, 1) if value else (0, 0, 0, 1)

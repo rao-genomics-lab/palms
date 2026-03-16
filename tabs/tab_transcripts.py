@@ -75,7 +75,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         gene_list_qt.clear()
         _update_legend()
 
-    def _on_transcripts_ready(result):
+    def _on_transcripts_ready(result, _gen):
+        if ctx.dataset_generation != _gen:
+            return  # dataset reloaded while worker ran
         points, colors = result
         ctx.transcript_layer.data = points
         ctx.transcript_layer.face_color = colors
@@ -95,11 +97,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if transcript_check.value and genes:
             status_label.value = f"Loading transcripts for {len(genes)} gene(s)..."
             apply_transcripts_button.enabled = False
+            gen = ctx.dataset_generation
 
-            @thread_worker(connect={"returned": _on_transcripts_ready})
+            @thread_worker
             def fetch():
                 return ctx.transcript_loader.get_multi_gene_points(genes)
-            fetch()
+
+            worker = fetch()
+            worker.returned.connect(lambda result: _on_transcripts_ready(result, gen))
+            worker.start()
         elif transcript_check.value and not genes:
             status_label.value = "No genes in list — add genes first"
         else:

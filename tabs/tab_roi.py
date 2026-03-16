@@ -205,6 +205,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         roi_deg_status.value = "Running differential expression..."
         roi_deg_button.enabled = False
+        gen = ctx.dataset_generation
 
         use_filter = roi_deg_filter_check.value
         cluster_mask = None
@@ -222,15 +223,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
         method = roi_deg_method_widget.value
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        @thread_worker(connect={"returned": _on_roi_deg_ready})
+        @thread_worker
         def _run():
             return compute_roi_deg(
                 _adata, ctx.centroids_yx, polygons, ctx.pixel_size,
                 cluster_mask=cluster_mask, method=method,
             )
-        _run()
 
-    def _on_roi_deg_ready(df):
+        worker = _run()
+        worker.returned.connect(lambda df: _on_roi_deg_ready(df, gen))
+        worker.start()
+
+    def _on_roi_deg_ready(df, _gen):
+        if ctx.dataset_generation != _gen:
+            return  # dataset reloaded while worker ran
         state["roi_deg_df"] = df
         roi_deg_button.enabled = True
         if not df.empty:

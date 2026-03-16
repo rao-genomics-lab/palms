@@ -41,7 +41,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     leiden_status = StatusProxy(ctx.viewer)
 
-    def _on_leiden_ready(result):
+    def _on_leiden_ready(result, _gen):
+        if ctx.dataset_generation != _gen:
+            return  # dataset reloaded while worker ran
         series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs = result
         key = f"leiden_r{resolution}"
         ctx.clusterings[key] = series
@@ -95,10 +97,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         n_hvgs = leiden_n_hvgs.value
         leiden_run_button.enabled = False
         leiden_status.value = "Running Leiden clustering..."
+        gen = ctx.dataset_generation
 
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        @thread_worker(connect={"returned": _on_leiden_ready})
+        @thread_worker
         def _run():
             import scanpy as sc
             if use_hvg or do_scale:
@@ -124,7 +127,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
             )
             n_clusters = series.nunique()
             return series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs
-        _run()
+
+        worker = _run()
+        worker.returned.connect(lambda result: _on_leiden_ready(result, gen))
+        worker.start()
 
     leiden_run_button.clicked.connect(on_run_leiden)
 

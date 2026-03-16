@@ -234,11 +234,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         he_status_label.value = "Loading H&E..."
         he_load_button.enabled = False
+        gen = ctx.dataset_generation
 
-        @thread_worker(connect={"returned": _on_he_loaded})
+        @thread_worker
         def load_task():
             return load_he_pyramid(path), path
-        load_task()
+
+        worker = load_task()
+        worker.returned.connect(lambda result: _on_he_loaded(result) if ctx.dataset_generation == gen else None)
+        worker.start()
 
     def on_he_opacity(value):
         if he_state["he_layer"] is not None:
@@ -269,8 +273,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         reg_status_label.value = "Computing coarse alignment..."
         coarse_align_button.enabled = False
+        gen = ctx.dataset_generation
 
-        @thread_worker(connect={"returned": _on_coarse_done})
+        @thread_worker
         def _compute_coarse():
             he_pyramid = he_state["he_layer"].data
             he_low = np.asarray(he_pyramid[-1])
@@ -284,7 +289,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 target_downsample=target_ds, source_downsample=source_ds,
             )
             return coarse_affine_yx
-        _compute_coarse()
+
+        worker = _compute_coarse()
+        worker.returned.connect(lambda result: _on_coarse_done(result) if ctx.dataset_generation == gen else None)
+        worker.start()
 
     def on_add_xenium_lm():
         lm = he_state["xenium_lm_layer"]
@@ -505,11 +513,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 "he_shape_yx": session.get("he_shape_yx"),
             }
             he_status_label.value = "Restoring H&E from cache..."
+            gen = ctx.dataset_generation
 
             # Import _extract_dt_scales at runtime from the main module
             from tabs.tab_he_registration import _extract_dt_scales
 
-            @thread_worker(connect={"returned": lambda result: _on_he_restored_from_sdata(result, _session_he_data)})
+            @thread_worker
             def _load_he_from_sdata():
                 he_dt = sdata.images["he_image"]
                 pyramid = _extract_dt_scales(he_dt)
@@ -520,7 +529,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
                         computed = np.transpose(computed, (1, 2, 0))
                     pyramid_rgb.append(computed)
                 return pyramid_rgb
-            _load_he_from_sdata()
+
+            worker = _load_he_from_sdata()
+            worker.returned.connect(
+                lambda result: _on_he_restored_from_sdata(result, _session_he_data)
+                if ctx.dataset_generation == gen else None
+            )
+            worker.start()
         elif session.get("he_filename"):
             print(f"  Warning: H&E image not found in sdata cache, skipping H&E restore")
 

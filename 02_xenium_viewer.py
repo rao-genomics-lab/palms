@@ -22,6 +22,7 @@ Performance notes:
   - Second launch uses zarr cache for ~60-70% faster startup
 """
 
+import gc
 import os
 import sys
 import json
@@ -66,7 +67,7 @@ from utils.coloring import CellColorManager
 from utils.transcript_index import TranscriptLoader
 from utils.umap_widget import UMAPViewer
 from utils.viewer_context import ViewerContext
-from tabs._helpers import create_shared_helpers, create_preferences_menu
+from tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu
 
 # ─── Channel metadata ───────────────────────────────────────────────────────
 CHANNEL_NAMES = [
@@ -216,7 +217,7 @@ def _add_layers_manually(viewer, sdata):
                 print(f"  Warning: could not extract {key} scales")
 
 
-def _build_control_panel(ctx: ViewerContext):
+def _build_control_panel(ctx: ViewerContext, on_open_dataset=None):
     """Build the tabbed control panel using per-tab modules.
 
     Returns (tab_widget, state, he_state, restore_session).
@@ -255,6 +256,10 @@ def _build_control_panel(ctx: ViewerContext):
 
     # ── Populate initial cluster checkboxes ──────────────────────────────
     ctx.repopulate_cluster_checkboxes()
+
+    # ── Create File menu (if callback provided) ───────────────────────────
+    if on_open_dataset is not None:
+        create_file_menu(ctx, on_open_dataset)
 
     # ── Create Preferences menu ──────────────────────────────────────────
     create_preferences_menu(ctx)
@@ -326,19 +331,15 @@ def _build_control_panel(ctx: ViewerContext):
     return tab_widget, state, he_state, restore_session
 
 
-def main(data_path: Path, no_cache: bool = False):
-    print("=" * 60)
-    print("Xenium Linux Viewer")
-    print(f"Dataset: {data_path}")
-    print("=" * 60)
+def _load_dataset(data_path: Path, no_cache: bool) -> dict:
+    """Load all data for a Xenium dataset. No Qt or napari calls.
 
-    t_start = time.perf_counter()
-
-    # ── Read pixel size ──────────────────────────────────────────────────────
+    Returns a dict with: pixel_size, sdata, adata, umap_df, clusterings,
+    label_to_obs, gene_names, clustering_names, color_manager, transcript_loader.
+    """
     pixel_size = _read_pixel_size(data_path)
     print(f"Pixel size: {pixel_size} um/px")
 
-    # ── Load data ────────────────────────────────────────────────────────────
     loader_mod = _import_loader()
 
     t0 = time.perf_counter()
@@ -362,10 +363,8 @@ def main(data_path: Path, no_cache: bool = False):
     adata = sdata["table"]
     gene_names = list(adata.var_names)
     clustering_names = list(clusterings.keys())
-
     print(f"Genes: {len(gene_names)}, Clusterings: {len(clustering_names)}")
 
-    # ── Managers ─────────────────────────────────────────────────────────────
     color_manager = CellColorManager(adata, label_to_obs)
     transcript_loader = TranscriptLoader(
         cache_dir=data_path / "transcript_cache",
@@ -373,17 +372,30 @@ def main(data_path: Path, no_cache: bool = False):
         pixel_size=pixel_size,
     )
 
-    # ── Napari viewer (must be created before any QWidgets) ──────────────────
-    t0 = time.perf_counter()
-    print("Opening napari...")
-    viewer = napari.Viewer(title=f"Xenium Viewer — {data_path.name}")
+    return {
+        "pixel_size": pixel_size,
+        "sdata": sdata,
+        "adata": adata,
+        "umap_df": umap_df,
+        "clusterings": clusterings,
+        "label_to_obs": label_to_obs,
+        "gene_names": gene_names,
+        "clustering_names": clustering_names,
+        "color_manager": color_manager,
+        "transcript_loader": transcript_loader,
+    }
 
-    # ── UMAP viewer (separate napari window, deferred until first coloring) ──
-    cell_ids = adata.obs['cell_id'].values
-    umap_viewer = UMAPViewer(umap_df, cell_ids)
-    print(f"  Viewer + UMAP viewer created in {time.perf_counter() - t0:.1f}s")
 
-    # ── Add layers from sdata ─────────────────────────────────────────────────
+def _populate_viewer(viewer, data: dict) -> dict:
+    """Add layers to the napari viewer from loaded data.
+
+    Returns a dict with: cell_labels_layer, transcript_layer, roi_layer,
+    morph_thumb, morph_full_shape_yx, centroids_yx.
+    """
+    sdata = data["sdata"]
+    adata = data["adata"]
+    pixel_size = data["pixel_size"]
+
     t0 = time.perf_counter()
     _add_layers_manually(viewer, sdata)
     print(f"  Layers added in {time.perf_counter() - t0:.1f}s")
@@ -443,31 +455,65 @@ def main(data_path: Path, no_cache: bool = False):
         visible=False,
     )
 
-    # ── Build ViewerContext ──────────────────────────────────────────────────
-    ctx = ViewerContext(
-        viewer=viewer,
-        adata=adata,
-        sdata=sdata,
-        clusterings=clusterings,
-        color_manager=color_manager,
-        transcript_loader=transcript_loader,
-        umap_viewer=umap_viewer,
-        label_to_obs=label_to_obs,
-        centroids_yx=centroids_yx,
-        pixel_size=pixel_size,
-        data_path=data_path,
-        no_cache=no_cache,
-        gene_names=gene_names,
-        clustering_names=clustering_names,
-        cell_labels_layer=cell_labels_layer,
-        transcript_layer=transcript_layer,
-        roi_layer=roi_layer,
-        morph_thumb=morph_thumb,
-        morph_full_shape_yx=morph_full_shape_yx,
+    return {
+        "cell_labels_layer": cell_labels_layer,
+        "transcript_layer": transcript_layer,
+        "roi_layer": roi_layer,
+        "morph_thumb": morph_thumb,
+        "morph_full_shape_yx": morph_full_shape_yx,
+        "centroids_yx": centroids_yx,
+    }
+
+
+def _snapshot_layers(ctx: ViewerContext) -> dict:
+    """Capture napari layer data while Qt objects are still alive.
+
+    Returns a snapshot dict suitable for passing to save_session().
+    """
+    snapshot = {}
+
+    # ROI polygons
+    snapshot["roi_data"] = [
+        np.asarray(p, dtype=np.float64) for p in ctx.roi_layer.data
+    ] if ctx.roi_layer is not None else []
+
+    # H&E landmark layer data
+    he_state = ctx.he_state
+    xen_lm = he_state.get("xenium_lm_layer")
+    he_lm = he_state.get("he_lm_layer")
+    snapshot["xenium_landmarks"] = (
+        np.asarray(xen_lm.data, dtype=np.float64)
+        if xen_lm is not None and len(xen_lm.data) > 0 else None
+    )
+    snapshot["he_landmarks"] = (
+        np.asarray(he_lm.data, dtype=np.float64)
+        if he_lm is not None and len(he_lm.data) > 0 else None
     )
 
-    # Initialize mutable state dicts
-    ctx.state = {
+    # ARMS overlay landmark data
+    arms_state = ctx.arms_state
+    arms_xen_lm = arms_state.get("xenium_lm_layer")
+    arms_he_lm = arms_state.get("he_lm_layer")
+    snapshot["arms_xenium_landmarks"] = (
+        np.asarray(arms_xen_lm.data, dtype=np.float64)
+        if arms_xen_lm is not None and len(arms_xen_lm.data) > 0 else None
+    )
+    snapshot["arms_he_landmarks"] = (
+        np.asarray(arms_he_lm.data, dtype=np.float64)
+        if arms_he_lm is not None and len(arms_he_lm.data) > 0 else None
+    )
+    # ARMS state (exclude non-serializable napari layers)
+    snapshot["arms_state"] = {
+        k: v for k, v in arms_state.items()
+        if k not in ("he_layer", "he_tif", "xenium_lm_layer", "he_lm_layer", "shapes_layer")
+    }
+
+    return snapshot
+
+
+def _make_initial_state(gene_names: list, clustering_names: list) -> dict:
+    """Return a fresh viewer state dict."""
+    return {
         "current_gene": gene_names[0] if gene_names else None,
         "current_clustering": clustering_names[0] if clustering_names else None,
         "current_colormap": "viridis",
@@ -490,7 +536,10 @@ def main(data_path: Path, no_cache: bool = False):
         "custom_clusterings": {},
     }
 
-    ctx.he_state = {
+
+def _make_initial_he_state() -> dict:
+    """Return a fresh H&E registration state dict."""
+    return {
         "he_layer": None,
         "he_tif": None,
         "he_filename": None,
@@ -504,7 +553,10 @@ def main(data_path: Path, no_cache: bool = False):
         "flip_h": False,
     }
 
-    ctx.arms_state = {
+
+def _make_initial_arms_state() -> dict:
+    """Return a fresh ARMS overlay state dict."""
+    return {
         "he_layer": None,
         "he_tif": None,
         "he_filename": None,
@@ -523,9 +575,237 @@ def main(data_path: Path, no_cache: bool = False):
         "cluster_checkboxes": {},
     }
 
+
+def main(data_path: Path, no_cache: bool = False):
+    print("=" * 60)
+    print("Xenium Linux Viewer")
+    print(f"Dataset: {data_path}")
+    print("=" * 60)
+
+    t_start = time.perf_counter()
+
+    # ── Load data ────────────────────────────────────────────────────────────
+    data = _load_dataset(data_path, no_cache)
+
+    # ── Napari viewer (must be created before any QWidgets) ──────────────────
+    t0 = time.perf_counter()
+    print("Opening napari...")
+    viewer = napari.Viewer(title=f"Xenium Viewer — {data_path.name}")
+
+    # ── UMAP viewer (separate napari window, deferred until first coloring) ──
+    adata = data["adata"]
+    cell_ids = adata.obs['cell_id'].values
+    umap_viewer = UMAPViewer(data["umap_df"], cell_ids)
+    print(f"  Viewer + UMAP viewer created in {time.perf_counter() - t0:.1f}s")
+
+    # ── Add layers and collect layer references ───────────────────────────────
+    layers = _populate_viewer(viewer, data)
+
+    # ── Build ViewerContext ──────────────────────────────────────────────────
+    ctx = ViewerContext(
+        viewer=viewer,
+        adata=adata,
+        sdata=data["sdata"],
+        clusterings=data["clusterings"],
+        color_manager=data["color_manager"],
+        transcript_loader=data["transcript_loader"],
+        umap_viewer=umap_viewer,
+        label_to_obs=data["label_to_obs"],
+        centroids_yx=layers["centroids_yx"],
+        pixel_size=data["pixel_size"],
+        data_path=data_path,
+        no_cache=no_cache,
+        gene_names=data["gene_names"],
+        clustering_names=data["clustering_names"],
+        cell_labels_layer=layers["cell_labels_layer"],
+        transcript_layer=layers["transcript_layer"],
+        roi_layer=layers["roi_layer"],
+        morph_thumb=layers["morph_thumb"],
+        morph_full_shape_yx=layers["morph_full_shape_yx"],
+    )
+
+    # Initialize mutable state dicts
+    ctx.state = _make_initial_state(data["gene_names"], data["clustering_names"])
+    ctx.he_state = _make_initial_he_state()
+    ctx.arms_state = _make_initial_arms_state()
+
+    # ── App-level mutable container ──────────────────────────────────────────
+    _app = {
+        "dock_widget": None,
+        "restore_fn": None,
+        "snapshot": {},
+        "reload_in_progress": False,
+    }
+
+    # ── Open Dataset callback ────────────────────────────────────────────────
+    def _on_open_dataset():
+        """Reload the viewer with a different Xenium dataset directory."""
+        from qtpy.QtWidgets import QFileDialog, QMessageBox
+
+        if _app["reload_in_progress"]:
+            return
+        _app["reload_in_progress"] = True
+
+        try:
+            # 1. Ask user for directory
+            new_path_str = QFileDialog.getExistingDirectory(
+                None, "Select Xenium Output Directory"
+            )
+            if not new_path_str:
+                return
+
+            new_path = Path(new_path_str)
+
+            # 2. Validate
+            if not (new_path / "experiment.xenium").exists():
+                QMessageBox.warning(
+                    None,
+                    "Invalid Directory",
+                    f"No experiment.xenium found in:\n{new_path}\n\n"
+                    "Please select a valid Xenium output directory.",
+                )
+                return
+
+            print(f"\nOpening dataset: {new_path}")
+
+            # 3. Snapshot current layer data while layers still alive
+            _app["snapshot"] = _snapshot_layers(ctx)
+
+            # 4. Save session for current dataset
+            zarr_path_old = ctx.data_path / "sdata_cached.zarr"
+            if not ctx.no_cache and zarr_path_old.exists():
+                from utils.session import save_session
+                save_session(zarr_path_old, ctx.state, ctx.he_state, _app["snapshot"])
+                print("Session saved for previous dataset.")
+
+            # 5. Close UMAP second window if open
+            if ctx.umap_viewer is not None:
+                try:
+                    ctx.umap_viewer.close()
+                except Exception:
+                    pass
+                ctx.umap_viewer = None
+
+            # 6. Remove old dock widget
+            if _app["dock_widget"] is not None:
+                try:
+                    viewer.window.remove_dock_widget(_app["dock_widget"])
+                except Exception:
+                    pass
+                _app["dock_widget"] = None
+
+            # 7. Clear all layers
+            viewer.layers.clear()
+
+            # 8. Increment generation counter (stale-worker guard)
+            ctx.dataset_generation += 1
+
+            # 8b. Release old dataset objects before loading new one
+            ctx.sdata = None
+            ctx.adata = None
+            ctx.clusterings = None
+            ctx.color_manager = None
+            ctx.transcript_loader = None
+            ctx.label_to_obs = None
+            ctx.gene_names = None
+            ctx.clustering_names = None
+            ctx.centroids_yx = None
+            ctx.cell_labels_layer = None
+            ctx.transcript_layer = None
+            ctx.roi_layer = None
+            ctx.morph_thumb = None
+            gc.collect()
+
+            # 9. Load new dataset data
+            try:
+                new_data = _load_dataset(new_path, no_cache)
+            except Exception as exc:
+                QMessageBox.critical(
+                    None,
+                    "Dataset Load Error",
+                    f"Failed to load dataset:\n{new_path}\n\nError:\n{exc}",
+                )
+                return
+
+            # 10. Mutate ctx fields in-place with new dataset
+            new_adata = new_data["adata"]
+            ctx.data_path = new_path
+            ctx.pixel_size = new_data["pixel_size"]
+            ctx.sdata = new_data["sdata"]
+            ctx.adata = new_adata
+            ctx.clusterings = new_data["clusterings"]
+            ctx.label_to_obs = new_data["label_to_obs"]
+            ctx.gene_names = new_data["gene_names"]
+            ctx.clustering_names = new_data["clustering_names"]
+            ctx.color_manager = new_data["color_manager"]
+            ctx.transcript_loader = new_data["transcript_loader"]
+
+            # 11. Re-add layers
+            new_layers = _populate_viewer(viewer, new_data)
+            ctx.cell_labels_layer = new_layers["cell_labels_layer"]
+            ctx.transcript_layer = new_layers["transcript_layer"]
+            ctx.roi_layer = new_layers["roi_layer"]
+            ctx.morph_thumb = new_layers["morph_thumb"]
+            ctx.morph_full_shape_yx = new_layers["morph_full_shape_yx"]
+            ctx.centroids_yx = new_layers["centroids_yx"]
+
+            # 12. New UMAP viewer
+            new_cell_ids = new_adata.obs['cell_id'].values
+            ctx.umap_viewer = UMAPViewer(new_data["umap_df"], new_cell_ids)
+
+            # 13. Reset state dicts
+            ctx.state = _make_initial_state(new_data["gene_names"], new_data["clustering_names"])
+            ctx.he_state = _make_initial_he_state()
+            ctx.arms_state = _make_initial_arms_state()
+
+            # 14. Null out cross-tab widget refs so tabs rebuild cleanly
+            ctx.clustering_widget = None
+            ctx.gene_widget = None
+            ctx.filter_check = None
+            ctx.colormap_widget = None
+            ctx.ga_clustering_widget = None
+            ctx.lr_clustering_widget = None
+            ctx.ne_clustering_widget = None
+            ctx.co_clustering_widget = None
+            ctx.cluster_scroll = None
+            ctx.cluster_filter_grid = None
+            ctx.select_all_btn = None
+            ctx.deselect_all_btn = None
+
+            # 15. Rebuild control panel
+            panel, _state_new, _he_state_new, restore_fn = _build_control_panel(
+                ctx, on_open_dataset=_on_open_dataset
+            )
+            _app["dock_widget"] = viewer.window.add_dock_widget(
+                panel, name="Xenium Controls", area="right"
+            )
+            _app["restore_fn"] = restore_fn
+
+            # 16. Restore session for new dataset if available
+            new_zarr_path = new_path / "sdata_cached.zarr"
+            if not no_cache and new_zarr_path.exists():
+                from utils.session import load_session
+                session = load_session(new_zarr_path)
+                if session is not None:
+                    print("Restoring session for new dataset...")
+                    restore_fn(session)
+                    print("Session restored.")
+
+            # 17. Update viewer title
+            viewer.title = f"Xenium Viewer — {new_path.name}"
+            print(f"Dataset switched to: {new_path.name}")
+
+        finally:
+            _app["reload_in_progress"] = False
+
     # ── Control panel ────────────────────────────────────────────────────────
-    panel, _state, _he_state, restore_session = _build_control_panel(ctx)
-    viewer.window.add_dock_widget(panel, name="Xenium Controls", area="right")
+    panel, _state, _he_state, restore_session = _build_control_panel(
+        ctx, on_open_dataset=_on_open_dataset
+    )
+    _app["dock_widget"] = viewer.window.add_dock_widget(
+        panel, name="Xenium Controls", area="right"
+    )
+    _app["restore_fn"] = restore_session
 
     # ── Restore saved session ────────────────────────────────────────────────
     zarr_path = data_path / "sdata_cached.zarr"
@@ -538,48 +818,10 @@ def main(data_path: Path, no_cache: bool = False):
             print("Session restored.")
 
     # ── Snapshot layer data before Qt teardown, then save on exit ────────────
-    _snapshot = {}  # filled by the about_to_close handler
-    _arms_state = ctx.arms_state
-
     if not no_cache:
         def _on_viewer_closing(_event=None):
             """Capture napari layer data while Qt objects are still alive."""
-            # ROI polygons
-            _snapshot["roi_data"] = [
-                np.asarray(p, dtype=np.float64) for p in roi_layer.data
-            ] if roi_layer is not None else []
-
-            # Landmark layer data
-            xen_lm = _he_state.get("xenium_lm_layer")
-            he_lm = _he_state.get("he_lm_layer")
-            _snapshot["xenium_landmarks"] = (
-                np.asarray(xen_lm.data, dtype=np.float64) if xen_lm is not None and len(xen_lm.data) > 0 else None
-            )
-            _snapshot["he_landmarks"] = (
-                np.asarray(he_lm.data, dtype=np.float64) if he_lm is not None and len(he_lm.data) > 0 else None
-            )
-
-            # ARMS overlay landmark data
-            try:
-                arms_xen_lm = _arms_state.get("xenium_lm_layer")
-                arms_he_lm = _arms_state.get("he_lm_layer")
-                _snapshot["arms_xenium_landmarks"] = (
-                    np.asarray(arms_xen_lm.data, dtype=np.float64)
-                    if arms_xen_lm is not None and len(arms_xen_lm.data) > 0 else None
-                )
-                _snapshot["arms_he_landmarks"] = (
-                    np.asarray(arms_he_lm.data, dtype=np.float64)
-                    if arms_he_lm is not None and len(arms_he_lm.data) > 0 else None
-                )
-                # ARMS state (exclude non-serializable napari layers)
-                _snapshot["arms_state"] = {
-                    k: v for k, v in _arms_state.items()
-                    if k not in ("he_layer", "he_tif", "xenium_lm_layer", "he_lm_layer", "shapes_layer")
-                }
-            except NameError:
-                _snapshot["arms_xenium_landmarks"] = None
-                _snapshot["arms_he_landmarks"] = None
-                _snapshot["arms_state"] = {}
+            _app["snapshot"] = _snapshot_layers(ctx)
 
         from qtpy.QtWidgets import QApplication
         QApplication.instance().aboutToQuit.connect(_on_viewer_closing)
@@ -589,9 +831,10 @@ def main(data_path: Path, no_cache: bool = False):
     napari.run()
 
     # ── Save session state on exit ────────────────────────────────────────
-    if not no_cache and zarr_path.exists():
+    final_zarr_path = ctx.data_path / "sdata_cached.zarr"
+    if not no_cache and final_zarr_path.exists():
         from utils.session import save_session
-        save_session(zarr_path, _state, _he_state, _snapshot)
+        save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
         print("Session saved to zarr cache.")
 
 

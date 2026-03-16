@@ -209,11 +209,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         arms_status_label.value = "Loading ARMS H&E..."
         arms_load_he_button.enabled = False
+        gen = ctx.dataset_generation
 
-        @thread_worker(connect={"returned": _on_arms_he_loaded})
+        @thread_worker
         def load_task():
             return load_he_pyramid(path), path
-        load_task()
+
+        worker = load_task()
+        worker.returned.connect(lambda result: _on_arms_he_loaded(result) if ctx.dataset_generation == gen else None)
+        worker.start()
 
     def on_arms_he_opacity(value):
         if arms_state["he_layer"] is not None:
@@ -548,6 +552,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_deg_button.enabled = False
         method = arms_deg_method.value
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+        gen = ctx.dataset_generation
 
         cluster_mask = None
         if arms_deg_filter_check.value:
@@ -570,13 +575,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"    method=\"{method}\")"
         )
 
-        @thread_worker(connect={"returned": _on_arms_deg_ready})
+        @thread_worker
         def _run():
             return compute_arms_tile_deg(
                 _adata, centroids_yx, transformed_polys, cluster_ids_arr,
                 method=method, cluster_mask=cluster_mask,
             )
-        _run()
+
+        worker = _run()
+        worker.returned.connect(lambda result: _on_arms_deg_ready(result) if ctx.dataset_generation == gen else None)
+        worker.start()
 
     def _on_arms_deg_ready(result):
         deg_df, summary, adata_norm = result
@@ -624,6 +632,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_volcano_button.enabled = False
         arms_status_label.value = "Generating ARMS volcano plots..."
         method = arms_deg_method.value
+        gen = ctx.dataset_generation
         ctx.record_code(
             f"\n# Generate ARMS pairwise volcano plots\n"
             f"from utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
@@ -632,8 +641,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"# Uses arms_adata_norm from DEG step, method=\"{method}\""
         )
 
-        @thread_worker(connect={"yielded": lambda msg: setattr(arms_status_label, 'value', msg),
-                                "returned": _on_arms_volcanos_done})
+        @thread_worker
         def _run():
             from pathlib import Path
             import itertools as _it
@@ -655,7 +663,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 fig.savefig(out / f'volcano_ARMS_C{a}_vs_ARMS_C{b}.png', dpi=300)
                 _plt.close(fig)
             return total, output_dir
-        _run()
+
+        worker = _run()
+        worker.yielded.connect(lambda msg: setattr(arms_status_label, 'value', msg) if ctx.dataset_generation == gen else None)
+        worker.returned.connect(lambda result: _on_arms_volcanos_done(result) if ctx.dataset_generation == gen else None)
+        worker.start()
 
     def _on_arms_volcanos_done(result):
         count, out_dir = result
@@ -802,10 +814,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 "csv_path": session.get("arms_csv_path"),
             }
             arms_status_label.value = "Restoring ARMS H&E from cache..."
+            gen = ctx.dataset_generation
 
             from tabs.tab_he_registration import _extract_dt_scales
 
-            @thread_worker(connect={"returned": lambda result: _on_arms_restored(result, _session_arms_data)})
+            @thread_worker
             def _load_arms_from_sdata():
                 import dask.array as da
                 arms_dt = sdata.images["arms_he_image"]
@@ -818,7 +831,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
                         arr = da.transpose(arr, (1, 2, 0))
                     pyramid_rgb.append(arr)
                 return pyramid_rgb
-            _load_arms_from_sdata()
+
+            worker = _load_arms_from_sdata()
+            worker.returned.connect(
+                lambda result: _on_arms_restored(result, _session_arms_data)
+                if ctx.dataset_generation == gen else None
+            )
+            worker.start()
         elif session.get("arms_he_filename"):
             print(f"  Warning: ARMS H&E image not found in sdata cache, skipping ARMS restore")
 

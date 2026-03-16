@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased] — 2026-03-16
+
+### Changed
+- **Memory: free old dataset before loading new one** — in `_on_open_dataset()`,
+  all heavy `ctx` fields (`sdata`, `adata`, `clusterings`, `color_manager`,
+  `transcript_loader`, layer references, etc.) are now explicitly set to `None`
+  and `gc.collect()` is called after clearing napari layers (step 8b) and before
+  `_load_dataset()` is called (step 9). This prevents peak RSS from reaching
+  old-dataset + new-dataset simultaneously during a dataset switch.
+
+## [Unreleased] — 2026-03-14
+
+### Added
+- **File > Open Dataset** — new menu entry (and `Ctrl+O` shortcut) lets the user
+  switch to a different Xenium output directory without restarting the application.
+  The current session is saved automatically before the swap; the new dataset's
+  session is restored if a zarr cache exists. All napari layers are replaced and
+  the full control-panel dock widget is rebuilt in-place.
+
+  Implementation details:
+  - `utils/viewer_context.py` — added `dataset_generation: int = 0` field.
+  - `tabs/_helpers.py` — new `create_file_menu(ctx, on_open_dataset)` function;
+    `_build_control_panel()` now accepts an optional `on_open_dataset` callback.
+  - `02_xenium_viewer.py` — extracted `_load_dataset()`, `_populate_viewer()`,
+    `_snapshot_layers()`, `_make_initial_state()`, `_make_initial_he_state()`, and
+    `_make_initial_arms_state()` as standalone helpers; introduced `_app` container
+    in `main()`; implemented `_on_open_dataset()` closure with re-entry guard,
+    session save/restore, and full viewer reload sequence.
+  - Stale thread-worker guard added to six tab modules (`tab_transcripts.py`,
+    `tab_cell_coloring.py`, `tab_clustering.py`, `tab_roi.py`,
+    `tab_he_registration.py`, `tab_arms.py`): each worker captures
+    `ctx.dataset_generation` at dispatch time and silently drops its result if
+    the generation has changed when the worker returns.
+
 ## [Unreleased] — 2026-03-10
 
 ### Fixed
