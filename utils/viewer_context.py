@@ -35,6 +35,7 @@ class ViewerContext:
     # ── Napari layers ────────────────────────────────────────────────────────
     cell_labels_layer: Any = None
     transcript_layer: Any = None
+    transcript_bins_layer: Any = None   # Image layer for transcript density heatmap
     roi_layer: Any = None
 
     # ── Morphology data (for coarse align) ──────────────────────────────────

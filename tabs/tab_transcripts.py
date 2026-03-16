@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import numpy as np
 from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QListWidget, QHBoxLayout, QWidget, QLabel
 from napari.qt.threading import thread_worker
@@ -126,6 +127,103 @@ def build_tab(ctx: ViewerContext) -> tuple:
     btn_layout.addWidget(clear_genes_button.native)
     btn_row.setLayout(btn_layout)
 
+    # ── Transcript Density section ────────────────────────────────────────────
+    density_separator = QLabel("── Transcript Density ──")
+
+    density_gene_widget = ComboBox(
+        label="Density gene",
+        choices=ctx.gene_names,
+        value=ctx.gene_names[0] if ctx.gene_names else None,
+    )
+    bin_size_slider = Slider(label="Bin size (µm)", min=10, max=500, value=50)
+    cluster_filter_density_check = CheckBox(label="Filter by selected clusters", value=False)
+    normalise_cells_check = CheckBox(label="Normalise by cells per bin", value=False)
+    compute_density_button = PushButton(label="Compute Density")
+    density_status = QLabel("")
+
+    def _compute_density_worker(gene, bin_size_um, use_cluster_filter, normalise):
+        pts = ctx.transcript_loader.get_points_array(gene)  # (N, 2) [y, x] pixels
+        H, W = ctx.morph_full_shape_yx
+        bin_px = bin_size_um / ctx.pixel_size
+        n_bins_y = max(1, int(H / bin_px))
+        n_bins_x = max(1, int(W / bin_px))
+
+        active_centroids = None
+        if use_cluster_filter and ctx.state.get("label_to_cluster") is not None:
+            selected_ids = ctx.translate_selected_ids_to_int(ctx.get_selected_cluster_ids())
+            if selected_ids:
+                selected_set = set(selected_ids)
+                label_to_cluster = ctx.state["label_to_cluster"]
+                all_labels = np.arange(len(label_to_cluster))
+                selected_labels = all_labels[np.isin(label_to_cluster, list(selected_set))]
+                obs_indices = ctx.label_to_obs[selected_labels]
+                valid = obs_indices >= 0
+                active_centroids = ctx.centroids_yx[obs_indices[valid]]  # (K, 2) [y, x]
+                cy_bin = np.clip((active_centroids[:, 0] / bin_px).astype(int), 0, n_bins_y - 1)
+                cx_bin = np.clip((active_centroids[:, 1] / bin_px).astype(int), 0, n_bins_x - 1)
+                coverage = np.zeros((n_bins_y, n_bins_x), dtype=bool)
+                coverage[cy_bin, cx_bin] = True
+                ty_bin = np.clip((pts[:, 0] / bin_px).astype(int), 0, n_bins_y - 1)
+                tx_bin = np.clip((pts[:, 1] / bin_px).astype(int), 0, n_bins_x - 1)
+                mask = coverage[ty_bin, tx_bin]
+                pts = pts[mask]
+
+        hist, _, _ = np.histogram2d(
+            pts[:, 0], pts[:, 1],
+            bins=[n_bins_y, n_bins_x],
+            range=[[0, H], [0, W]],
+        )
+
+        if normalise:
+            centroids_for_count = active_centroids if active_centroids is not None else ctx.centroids_yx
+            cell_count, _, _ = np.histogram2d(
+                centroids_for_count[:, 0], centroids_for_count[:, 1],
+                bins=[n_bins_y, n_bins_x],
+                range=[[0, H], [0, W]],
+            )
+            hist = np.where(cell_count > 0, hist / cell_count, 0).astype(np.float32)
+
+        return hist.astype(np.float32), bin_px, normalise
+
+    def _on_density_ready(result):
+        hist, bin_px, normalised = result
+        ctx.transcript_bins_layer.data = hist
+        ctx.transcript_bins_layer.scale = [bin_px, bin_px]
+        nonzero = hist[hist > 0]
+        if nonzero.size > 0:
+            ctx.transcript_bins_layer.contrast_limits = [0, float(np.percentile(nonzero, 99))]
+        else:
+            ctx.transcript_bins_layer.contrast_limits = [0, 1]
+        ctx.transcript_bins_layer.visible = True
+        if normalised:
+            density_status.setText(f"Done — {int(hist[hist > 0].size):,} non-zero bins, normalised by cells")
+        else:
+            density_status.setText(f"Done — {int(hist.sum()):,} transcripts binned")
+        compute_density_button.enabled = True
+
+    def on_compute_density():
+        gene = density_gene_widget.value
+        if gene is None:
+            return
+        if ctx.morph_full_shape_yx is None:
+            density_status.setText("No morphology data — cannot compute density")
+            return
+        compute_density_button.enabled = False
+        density_status.setText(f"Computing density for {gene}...")
+        bin_um = bin_size_slider.value
+        use_filter = cluster_filter_density_check.value
+        normalise = normalise_cells_check.value
+
+        @thread_worker
+        def _run():
+            return _compute_density_worker(gene, bin_um, use_filter, normalise)
+
+        worker = _run()
+        worker.returned.connect(_on_density_ready)
+        worker.start()
+
+    compute_density_button.clicked.connect(on_compute_density)
+
     widget = make_tab(
         transcript_gene_widget,
         transcript_check,
@@ -134,5 +232,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         gene_list_qt,
         btn_row,
         legend_label_qt,
+        density_separator,
+        density_gene_widget,
+        bin_size_slider,
+        cluster_filter_density_check,
+        normalise_cells_check,
+        compute_density_button,
+        density_status,
     )
     return widget, {}

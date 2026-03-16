@@ -2,7 +2,40 @@
 
 ## [Unreleased] — 2026-03-16
 
+### Changed
+- **Cursor hover debounce** — `_on_cursor_move` in `02_xenium_viewer.py` now fires
+  `get_value()` at most every 80 ms via a `QTimer` debounce, eliminating main-thread
+  stutter during rapid pan/zoom.
+- **Vectorized cell coloring** — `get_cluster_colors()` in `utils/coloring.py` now
+  builds the per-obs RGBA array with a NumPy integer LUT instead of a Python
+  `for` loop (~100× faster on 100K+ cells).
+- **Faster colormap dict** — `build_direct_label_colormap()` uses bulk `.tolist()`
+  (C-level) before building the `color_dict`, eliminating 100K+ Python object
+  allocations per colormap rebuild.
+
 ### Added
+- **Interactive minimap** (`utils/minimap_widget.py`) — floating overlay in the
+  top-right corner of the napari canvas showing the DAPI thumbnail with a white
+  viewport rectangle. Updates live as the camera pans/zooms; clicking navigates
+  the camera. Repositions itself when the window is resized. Instantiated
+  automatically after dataset load in `_do_full_init()`.
+
+- **Transcript density bins** — new "Transcript Density" section in the
+  Transcripts tab. Aggregates per-gene transcript counts into spatial bins
+  (user-controlled µm bin size via slider) and displays a `transcript_density`
+  napari Image layer (hot colormap). Supports optional cluster-based filtering
+  using centroids from the Cell Coloring tab. Computation runs in a background
+  thread worker; contrast limits are set to the 99th percentile of non-zero bins.
+  New `transcript_bins_layer` field added to `ViewerContext`.
+
+- **Transcript density normalisation** — "Normalise by cells per bin" checkbox
+  in the Transcript Density section. When ticked, each bin value is divided by
+  the number of cells in that bin (transcripts-per-cell), correcting for local
+  cell-density variation. Bins with zero cells remain zero. When combined with
+  "Filter by selected clusters", the cell count per bin uses only selected-cluster
+  cell centroids.
+
+
 - **Empty-viewer startup** — cancelling the startup folder dialog (or omitting the
   CLI path argument) now opens a bare napari window instead of calling `sys.exit(0)`.
   A minimal File menu (Open Dataset... `Ctrl+O` + Preprocess Dataset...) is attached

@@ -364,7 +364,13 @@ def _build_control_panel(ctx: ViewerContext, on_open_dataset=None, on_preprocess
 
     # ── Mouse hover: show cluster ID in status bar ───────────────────────
     if ctx.cell_labels_layer is not None:
-        def _on_cursor_move(event):
+        _cursor_timer = QTimer()
+        _cursor_timer.setSingleShot(True)
+        _cursor_timer.setInterval(80)
+
+        def _do_cursor_lookup():
+            if ctx.cell_labels_layer is None:
+                return
             lut = state["label_to_cluster"]
             if lut is None:
                 return
@@ -388,6 +394,13 @@ def _build_control_panel(ctx: ViewerContext, on_open_dataset=None, on_preprocess
                 else:
                     text = f"Cell {int(label_val)} \u2014 {name}: unassigned"
                 QTimer.singleShot(0, lambda t=text: setattr(ctx.viewer, 'status', t))
+
+        _cursor_timer.timeout.connect(_do_cursor_lookup)
+
+        def _on_cursor_move(event):
+            if ctx.cell_labels_layer is None:
+                return
+            _cursor_timer.start()  # restart resets the 80ms window
 
         ctx.viewer.cursor.events.position.connect(_on_cursor_move)
 
@@ -545,9 +558,19 @@ def _populate_viewer(viewer, data: dict) -> dict:
         visible=False,
     )
 
+    # ── Transcript density heatmap layer ─────────────────────────────────────
+    transcript_bins_layer = viewer.add_image(
+        np.zeros((1, 1), dtype=np.float32),
+        name="transcript_density",
+        colormap="hot",
+        opacity=0.7,
+        visible=False,
+    )
+
     return {
         "cell_labels_layer": cell_labels_layer,
         "transcript_layer": transcript_layer,
+        "transcript_bins_layer": transcript_bins_layer,
         "roi_layer": roi_layer,
         "morph_thumb": morph_thumb,
         "morph_full_shape_yx": morph_full_shape_yx,
@@ -694,6 +717,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict,
         clustering_names=data["clustering_names"],
         cell_labels_layer=layers["cell_labels_layer"],
         transcript_layer=layers["transcript_layer"],
+        transcript_bins_layer=layers["transcript_bins_layer"],
         roi_layer=layers["roi_layer"],
         morph_thumb=layers["morph_thumb"],
         morph_full_shape_yx=layers["morph_full_shape_yx"],
@@ -734,6 +758,20 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict,
             print("Session restored.")
 
     viewer.title = f"Xenium Viewer — {data_path.name}"
+
+    # ── Minimap overlay ───────────────────────────────────────────────────────
+    if ctx.morph_thumb is not None and ctx.morph_full_shape_yx is not None:
+        try:
+            from utils.minimap_widget import MinimapWidget
+            canvas_native = viewer.window._qt_viewer.canvas.native
+            minimap = MinimapWidget(
+                ctx.viewer, ctx.morph_thumb, ctx.morph_full_shape_yx, canvas_native
+            )
+            minimap.show()
+            _app["minimap"] = minimap
+        except Exception as exc:
+            print(f"  Warning: minimap could not be created: {exc}")
+
     return ctx
 
 
