@@ -3,6 +3,43 @@
 ## [Unreleased] — 2026-03-16
 
 ### Added
+- **Empty-viewer startup** — cancelling the startup folder dialog (or omitting the
+  CLI path argument) now opens a bare napari window instead of calling `sys.exit(0)`.
+  A minimal File menu (Open Dataset... `Ctrl+O` + Preprocess Dataset...) is attached
+  directly to the bare viewer via the new `_attach_bare_file_menu()` helper. When the
+  user picks a dataset from File → Open Dataset, `_do_full_init()` builds the full UI
+  (layers, dock widget, session restore) and replaces the bare menu. Works identically
+  for the first load and subsequent dataset switches.
+
+- **`_do_full_init()` helper** — extracted from `main()`: loads a dataset, creates
+  `UMAPViewer`, populates napari layers, builds `ViewerContext`, rebuilds the control
+  panel dock widget, and restores the session. Called both at initial startup (when
+  `data_path` is given) and from `_on_open_dataset()` for every subsequent switch.
+  `main()` is now ~100 lines shorter and `_on_open_dataset()` no longer duplicates the
+  load/build sequence.
+
+### Changed
+- **Zarr skip logic in `PreprocessWorker`** — `PreprocessWorker.run()` now performs a
+  staleness pre-check before calling `load_sdata()`: if `sdata_cached.zarr` already
+  exists and its mtime ≥ `experiment.xenium` mtime, the zarr step is skipped and the
+  progress dialog shows "Zarr cache already up to date, skipping: …" instead of the
+  misleading "Creating zarr cache…" message. Uses the same mtime comparison as
+  `load_sdata()`.
+
+- **`_on_open_dataset()` refactored** — now uses `nonlocal ctx` and delegates the
+  load/build sequence to `_do_full_init()`. Cleanup path (session save, UMAP close,
+  generation counter increment, ref nulling, gc) is guarded by `if ctx is not None`
+  so it also handles the first load from an empty viewer correctly.
+
+- **`_on_preprocess_dataset()` hardened** — all `ctx` accesses are guarded by
+  `if ctx is not None`, so preprocessing works from an empty viewer. The confirmation
+  dialog's "session will be cleared" line is omitted when no dataset is loaded.
+
+- **`_parse_args()`** — dialog cancel now returns `(None, no_cache)` instead of
+  calling `sys.exit(0)`. `experiment.xenium` validation only runs when a path was
+  actually selected.
+
+### Added (continued from 2026-03-16)
 - **File > Preprocess Dataset...** — new menu item that runs both preprocessing
   steps (zarr cache creation via `01_load_sdata.py` and per-gene transcript
   feather splitting via `00_preprocess_transcripts.py`) in a background thread

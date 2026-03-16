@@ -111,11 +111,11 @@ def _parse_args():
             None, "Select Xenium Output Directory"
         )
         if not data_path_str:
-            print("No directory selected. Exiting.")
-            sys.exit(0)
+            print("No directory selected. Starting with empty viewer.")
+            return None, args.no_cache
         data_path = Path(data_path_str)
 
-    # Validate
+    # Validate only when a path was given
     experiment_file = data_path / "experiment.xenium"
     if not experiment_file.exists():
         print(f"Error: {experiment_file} not found. Is this a Xenium output directory?")
@@ -199,14 +199,26 @@ class PreprocessWorker(QThread):
         n = len(self.datasets)
         total_steps = n * 2
         for i, ds in enumerate(self.datasets):
-            # Step A: zarr cache
+            # Step A: zarr cache (skip if already fresh)
+            cache_path = ds / "sdata_cached.zarr"
+            experiment_path = ds / "experiment.xenium"
+            zarr_is_fresh = False
+            if cache_path.exists():
+                if not experiment_path.exists():
+                    zarr_is_fresh = True          # no experiment.xenium to compare against
+                elif cache_path.stat().st_mtime >= experiment_path.stat().st_mtime:
+                    zarr_is_fresh = True
+
             pct = int(i * 2 * 100 / total_steps)
-            self.progress.emit(pct, f"[{i+1}/{n}] Creating zarr cache: {ds.name}")
-            try:
-                loader_mod.load_sdata(ds, use_cache=True)
-            except Exception as exc:
-                self.finished.emit(False, f"Zarr creation failed for {ds.name}:\n{exc}")
-                return
+            if zarr_is_fresh:
+                self.progress.emit(pct, f"[{i+1}/{n}] Zarr cache already up to date, skipping: {ds.name}")
+            else:
+                self.progress.emit(pct, f"[{i+1}/{n}] Creating zarr cache: {ds.name}")
+                try:
+                    loader_mod.load_sdata(ds, use_cache=True)
+                except Exception as exc:
+                    self.finished.emit(False, f"Zarr creation failed for {ds.name}:\n{exc}")
+                    return
             # Step B: transcript feathers
             pct = int((i * 2 + 1) * 100 / total_steps)
             self.progress.emit(pct, f"[{i+1}/{n}] Preprocessing transcripts: {ds.name}")
@@ -654,32 +666,17 @@ def _make_initial_arms_state() -> dict:
     }
 
 
-def main(data_path: Path, no_cache: bool = False):
-    print("=" * 60)
-    print("Xenium Linux Viewer")
-    print(f"Dataset: {data_path}")
-    print("=" * 60)
+def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict,
+                  on_open_dataset, on_preprocess_dataset) -> ViewerContext:
+    """Load a dataset and build the full UI. Returns a fresh ViewerContext."""
+    from utils.session import load_session
 
-    t_start = time.perf_counter()
-
-    # ── Load data ────────────────────────────────────────────────────────────
     data = _load_dataset(data_path, no_cache)
-
-    # ── Napari viewer (must be created before any QWidgets) ──────────────────
-    t0 = time.perf_counter()
-    print("Opening napari...")
-    viewer = napari.Viewer(title=f"Xenium Viewer — {data_path.name}")
-
-    # ── UMAP viewer (separate napari window, deferred until first coloring) ──
     adata = data["adata"]
     cell_ids = adata.obs['cell_id'].values
     umap_viewer = UMAPViewer(data["umap_df"], cell_ids)
-    print(f"  Viewer + UMAP viewer created in {time.perf_counter() - t0:.1f}s")
-
-    # ── Add layers and collect layer references ───────────────────────────────
     layers = _populate_viewer(viewer, data)
 
-    # ── Build ViewerContext ──────────────────────────────────────────────────
     ctx = ViewerContext(
         viewer=viewer,
         adata=adata,
@@ -701,11 +698,84 @@ def main(data_path: Path, no_cache: bool = False):
         morph_thumb=layers["morph_thumb"],
         morph_full_shape_yx=layers["morph_full_shape_yx"],
     )
-
-    # Initialize mutable state dicts
     ctx.state = _make_initial_state(data["gene_names"], data["clustering_names"])
     ctx.he_state = _make_initial_he_state()
     ctx.arms_state = _make_initial_arms_state()
+
+    # Remove bare File menu if one was added before a dataset was loaded
+    if _app.get("bare_file_menu") is not None:
+        menu_bar = viewer.window._qt_window.menuBar()
+        menu_bar.removeAction(_app["bare_file_menu"].menuAction())
+        _app["bare_file_menu"] = None
+
+    # Remove old dock widget if present
+    if _app["dock_widget"] is not None:
+        try:
+            viewer.window.remove_dock_widget(_app["dock_widget"])
+        except Exception:
+            pass
+        _app["dock_widget"] = None
+
+    panel, _state, _he_state, restore_fn = _build_control_panel(
+        ctx, on_open_dataset=on_open_dataset, on_preprocess_dataset=on_preprocess_dataset
+    )
+    _app["dock_widget"] = viewer.window.add_dock_widget(
+        panel, name="Xenium Controls", area="right"
+    )
+    _app["restore_fn"] = restore_fn
+
+    # Restore session if available
+    zarr_path = data_path / "sdata_cached.zarr"
+    if not no_cache and zarr_path.exists():
+        session = load_session(zarr_path)
+        if session is not None:
+            print("Restoring session from zarr cache...")
+            restore_fn(session)
+            print("Session restored.")
+
+    viewer.title = f"Xenium Viewer — {data_path.name}"
+    return ctx
+
+
+def _attach_bare_file_menu(viewer, on_open_dataset, on_preprocess_dataset, _app):
+    """Attach a minimal File menu to a bare napari viewer (no dataset loaded)."""
+    from qtpy.QtWidgets import QMenu
+    from qtpy.QtGui import QAction
+
+    menu_bar = viewer.window._qt_window.menuBar()
+    file_menu = QMenu("File", menu_bar)
+    existing = menu_bar.actions()
+    if existing:
+        menu_bar.insertMenu(existing[0], file_menu)
+    else:
+        menu_bar.addMenu(file_menu)
+
+    act = QAction("Open Dataset...", file_menu)
+    act.setShortcut("Ctrl+O")
+    file_menu.addAction(act)
+    act.triggered.connect(on_open_dataset)
+
+    file_menu.addSeparator()
+    act2 = QAction("Preprocess Dataset...", file_menu)
+    file_menu.addAction(act2)
+    act2.triggered.connect(on_preprocess_dataset)
+
+    _app["bare_file_menu"] = file_menu
+
+
+def main(data_path=None, no_cache: bool = False):
+    print("=" * 60)
+    print("Xenium Linux Viewer")
+    if data_path:
+        print(f"Dataset: {data_path}")
+    else:
+        print("No dataset — starting with empty viewer.")
+    print("=" * 60)
+
+    t_start = time.perf_counter()
+
+    # ── Napari viewer (must be created before any QWidgets) ──────────────────
+    viewer = napari.Viewer(title="Xenium Viewer")
 
     # ── App-level mutable container ──────────────────────────────────────────
     _app = {
@@ -713,11 +783,14 @@ def main(data_path: Path, no_cache: bool = False):
         "restore_fn": None,
         "snapshot": {},
         "reload_in_progress": False,
+        "bare_file_menu": None,
     }
+
+    ctx = None  # set after first dataset load
 
     # ── Open Dataset callback ────────────────────────────────────────────────
     def _on_open_dataset():
-        """Reload the viewer with a different Xenium dataset directory."""
+        nonlocal ctx
         from qtpy.QtWidgets import QFileDialog, QMessageBox
 
         if _app["reload_in_progress"]:
@@ -725,7 +798,6 @@ def main(data_path: Path, no_cache: bool = False):
         _app["reload_in_progress"] = True
 
         try:
-            # 1. Ask user for directory
             new_path_str = QFileDialog.getExistingDirectory(
                 None, "Select Xenium Output Directory"
             )
@@ -734,7 +806,6 @@ def main(data_path: Path, no_cache: bool = False):
 
             new_path = Path(new_path_str)
 
-            # 2. Validate
             if not (new_path / "experiment.xenium").exists():
                 QMessageBox.warning(
                     None,
@@ -746,57 +817,51 @@ def main(data_path: Path, no_cache: bool = False):
 
             print(f"\nOpening dataset: {new_path}")
 
-            # 3. Snapshot current layer data while layers still alive
-            _app["snapshot"] = _snapshot_layers(ctx)
+            if ctx is not None:
+                # 1. Snapshot current layer data while layers still alive
+                _app["snapshot"] = _snapshot_layers(ctx)
 
-            # 4. Save session for current dataset
-            zarr_path_old = ctx.data_path / "sdata_cached.zarr"
-            if not ctx.no_cache and zarr_path_old.exists():
-                from utils.session import save_session
-                save_session(zarr_path_old, ctx.state, ctx.he_state, _app["snapshot"])
-                print("Session saved for previous dataset.")
+                # 2. Save session for current dataset
+                zarr_path_old = ctx.data_path / "sdata_cached.zarr"
+                if not ctx.no_cache and zarr_path_old.exists():
+                    from utils.session import save_session
+                    save_session(zarr_path_old, ctx.state, ctx.he_state, _app["snapshot"])
+                    print("Session saved for previous dataset.")
 
-            # 5. Close UMAP second window if open
-            if ctx.umap_viewer is not None:
-                try:
-                    ctx.umap_viewer.close()
-                except Exception:
-                    pass
-                ctx.umap_viewer = None
+                # 3. Close UMAP second window if open
+                if ctx.umap_viewer is not None:
+                    try:
+                        ctx.umap_viewer.close()
+                    except Exception:
+                        pass
+                    ctx.umap_viewer = None
 
-            # 6. Remove old dock widget
-            if _app["dock_widget"] is not None:
-                try:
-                    viewer.window.remove_dock_widget(_app["dock_widget"])
-                except Exception:
-                    pass
-                _app["dock_widget"] = None
+                # 4. Increment generation counter (stale-worker guard)
+                ctx.dataset_generation += 1
 
-            # 7. Clear all layers
+                # 5. Release old dataset objects before loading new one
+                ctx.sdata = None
+                ctx.adata = None
+                ctx.clusterings = None
+                ctx.color_manager = None
+                ctx.transcript_loader = None
+                ctx.label_to_obs = None
+                ctx.gene_names = None
+                ctx.clustering_names = None
+                ctx.centroids_yx = None
+                ctx.cell_labels_layer = None
+                ctx.transcript_layer = None
+                ctx.roi_layer = None
+                ctx.morph_thumb = None
+                gc.collect()
+
+            # 6. Clear all layers
             viewer.layers.clear()
 
-            # 8. Increment generation counter (stale-worker guard)
-            ctx.dataset_generation += 1
-
-            # 8b. Release old dataset objects before loading new one
-            ctx.sdata = None
-            ctx.adata = None
-            ctx.clusterings = None
-            ctx.color_manager = None
-            ctx.transcript_loader = None
-            ctx.label_to_obs = None
-            ctx.gene_names = None
-            ctx.clustering_names = None
-            ctx.centroids_yx = None
-            ctx.cell_labels_layer = None
-            ctx.transcript_layer = None
-            ctx.roi_layer = None
-            ctx.morph_thumb = None
-            gc.collect()
-
-            # 9. Load new dataset data
+            # 7. Full init (loads data, builds ctx, control panel, restores session)
             try:
-                new_data = _load_dataset(new_path, no_cache)
+                ctx = _do_full_init(viewer, new_path, no_cache, _app,
+                                    _on_open_dataset, _on_preprocess_dataset)
             except Exception as exc:
                 QMessageBox.critical(
                     None,
@@ -805,73 +870,7 @@ def main(data_path: Path, no_cache: bool = False):
                 )
                 return
 
-            # 10. Mutate ctx fields in-place with new dataset
-            new_adata = new_data["adata"]
-            ctx.data_path = new_path
-            ctx.pixel_size = new_data["pixel_size"]
-            ctx.sdata = new_data["sdata"]
-            ctx.adata = new_adata
-            ctx.clusterings = new_data["clusterings"]
-            ctx.label_to_obs = new_data["label_to_obs"]
-            ctx.gene_names = new_data["gene_names"]
-            ctx.clustering_names = new_data["clustering_names"]
-            ctx.color_manager = new_data["color_manager"]
-            ctx.transcript_loader = new_data["transcript_loader"]
-
-            # 11. Re-add layers
-            new_layers = _populate_viewer(viewer, new_data)
-            ctx.cell_labels_layer = new_layers["cell_labels_layer"]
-            ctx.transcript_layer = new_layers["transcript_layer"]
-            ctx.roi_layer = new_layers["roi_layer"]
-            ctx.morph_thumb = new_layers["morph_thumb"]
-            ctx.morph_full_shape_yx = new_layers["morph_full_shape_yx"]
-            ctx.centroids_yx = new_layers["centroids_yx"]
-
-            # 12. New UMAP viewer
-            new_cell_ids = new_adata.obs['cell_id'].values
-            ctx.umap_viewer = UMAPViewer(new_data["umap_df"], new_cell_ids)
-
-            # 13. Reset state dicts
-            ctx.state = _make_initial_state(new_data["gene_names"], new_data["clustering_names"])
-            ctx.he_state = _make_initial_he_state()
-            ctx.arms_state = _make_initial_arms_state()
-
-            # 14. Null out cross-tab widget refs so tabs rebuild cleanly
-            ctx.clustering_widget = None
-            ctx.gene_widget = None
-            ctx.filter_check = None
-            ctx.colormap_widget = None
-            ctx.ga_clustering_widget = None
-            ctx.lr_clustering_widget = None
-            ctx.ne_clustering_widget = None
-            ctx.co_clustering_widget = None
-            ctx.cluster_scroll = None
-            ctx.cluster_filter_grid = None
-            ctx.select_all_btn = None
-            ctx.deselect_all_btn = None
-
-            # 15. Rebuild control panel
-            panel, _state_new, _he_state_new, restore_fn = _build_control_panel(
-                ctx, on_open_dataset=_on_open_dataset, on_preprocess_dataset=_on_preprocess_dataset
-            )
-            _app["dock_widget"] = viewer.window.add_dock_widget(
-                panel, name="Xenium Controls", area="right"
-            )
-            _app["restore_fn"] = restore_fn
-
-            # 16. Restore session for new dataset if available
-            new_zarr_path = new_path / "sdata_cached.zarr"
-            if not no_cache and new_zarr_path.exists():
-                from utils.session import load_session
-                session = load_session(new_zarr_path)
-                if session is not None:
-                    print("Restoring session for new dataset...")
-                    restore_fn(session)
-                    print("Session restored.")
-
-            # 17. Update viewer title
-            viewer.title = f"Xenium Viewer — {new_path.name}"
-            print(f"Dataset switched to: {new_path.name}")
+            print(f"Dataset opened: {new_path.name}")
 
         finally:
             _app["reload_in_progress"] = False
@@ -895,18 +894,20 @@ def main(data_path: Path, no_cache: bool = False):
             )
             return
 
+        session_line = (
+            "\nThe current viewer session will be cleared to free memory."
+            if ctx is not None else ""
+        )
         if len(datasets) == 1:
             msg = (
                 f"Preprocess dataset:\n  {datasets[0].name}\n\n"
-                "This will create the zarr cache and per-gene transcript feathers.\n"
-                "The current viewer session will be cleared to free memory."
+                f"This will create the zarr cache and per-gene transcript feathers.{session_line}"
             )
         else:
             names = "\n".join(f"  \u2022 {d.name}" for d in datasets)
             msg = (
                 f"Preprocess {len(datasets)} datasets:\n{names}\n\n"
-                "This will create zarr caches and per-gene transcript feathers.\n"
-                "The current viewer session will be cleared to free memory."
+                f"This will create zarr caches and per-gene transcript feathers.{session_line}"
             )
         reply = QMessageBox.question(
             None, "Preprocess Dataset", msg,
@@ -917,12 +918,13 @@ def main(data_path: Path, no_cache: bool = False):
 
         # Clear viewer to free memory before heavy I/O
         viewer.layers.clear()
-        ctx.sdata = None;  ctx.adata = None;  ctx.clusterings = None
-        ctx.color_manager = None;  ctx.transcript_loader = None
-        ctx.label_to_obs = None;  ctx.gene_names = None
-        ctx.clustering_names = None;  ctx.centroids_yx = None
-        ctx.cell_labels_layer = None;  ctx.transcript_layer = None
-        ctx.roi_layer = None;  ctx.morph_thumb = None
+        if ctx is not None:
+            ctx.sdata = None;  ctx.adata = None;  ctx.clusterings = None
+            ctx.color_manager = None;  ctx.transcript_loader = None
+            ctx.label_to_obs = None;  ctx.gene_names = None
+            ctx.clustering_names = None;  ctx.centroids_yx = None
+            ctx.cell_labels_layer = None;  ctx.transcript_layer = None
+            ctx.roi_layer = None;  ctx.morph_thumb = None
         gc.collect()
 
         dlg, bar, lbl = _make_progress_dialog("Preprocessing Datasets")
@@ -947,44 +949,33 @@ def main(data_path: Path, no_cache: bool = False):
         worker.start()
         dlg.exec_()  # blocks Qt event loop until dlg.accept() is called
 
-    # ── Control panel ────────────────────────────────────────────────────────
-    panel, _state, _he_state, restore_session = _build_control_panel(
-        ctx, on_open_dataset=_on_open_dataset, on_preprocess_dataset=_on_preprocess_dataset
-    )
-    _app["dock_widget"] = viewer.window.add_dock_widget(
-        panel, name="Xenium Controls", area="right"
-    )
-    _app["restore_fn"] = restore_session
-
-    # ── Restore saved session ────────────────────────────────────────────────
-    zarr_path = data_path / "sdata_cached.zarr"
-    if not no_cache and zarr_path.exists():
-        from utils.session import load_session
-        session = load_session(zarr_path)
-        if session is not None:
-            print("Restoring session from zarr cache...")
-            restore_session(session)
-            print("Session restored.")
-
     # ── Snapshot layer data before Qt teardown, then save on exit ────────────
     if not no_cache:
         def _on_viewer_closing(_event=None):
-            """Capture napari layer data while Qt objects are still alive."""
-            _app["snapshot"] = _snapshot_layers(ctx)
+            if ctx is not None:
+                _app["snapshot"] = _snapshot_layers(ctx)
 
         from qtpy.QtWidgets import QApplication
         QApplication.instance().aboutToQuit.connect(_on_viewer_closing)
 
-    total_time = time.perf_counter() - t_start
-    print(f"\nViewer ready in {total_time:.1f}s. Close the napari window to exit.")
+    if data_path is not None:
+        ctx = _do_full_init(viewer, data_path, no_cache, _app,
+                            _on_open_dataset, _on_preprocess_dataset)
+        total_time = time.perf_counter() - t_start
+        print(f"\nViewer ready in {total_time:.1f}s. Close the napari window to exit.")
+    else:
+        _attach_bare_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset, _app)
+        print("Viewer ready (no dataset loaded). Use File menu to open or preprocess.")
+
     napari.run()
 
     # ── Save session state on exit ────────────────────────────────────────
-    final_zarr_path = ctx.data_path / "sdata_cached.zarr"
-    if not no_cache and final_zarr_path.exists():
-        from utils.session import save_session
-        save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
-        print("Session saved to zarr cache.")
+    if ctx is not None and not no_cache:
+        final_zarr_path = ctx.data_path / "sdata_cached.zarr"
+        if final_zarr_path.exists():
+            from utils.session import save_session
+            save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
+            print("Session saved to zarr cache.")
 
 
 if __name__ == "__main__":
