@@ -6,12 +6,16 @@
 - **Cursor hover debounce** — `_on_cursor_move` in `02_xenium_viewer.py` now fires
   `get_value()` at most every 80 ms via a `QTimer` debounce, eliminating main-thread
   stutter during rapid pan/zoom.
-- **Vectorized cell coloring** — `get_cluster_colors()` in `utils/coloring.py` now
-  builds the per-obs RGBA array with a NumPy integer LUT instead of a Python
-  `for` loop (~100× faster on 100K+ cells).
+- **Cluster coloring off main thread** — cluster filter (numpy masking) and
+  `build_direct_label_colormap()` (100K dict allocations) now run inside the
+  `@thread_worker`; the main-thread callback only sets `colormap` and calls
+  `refresh()`, eliminating the UI stall on Apply.
 - **Faster colormap dict** — `build_direct_label_colormap()` uses bulk `.tolist()`
   (C-level) before building the `color_dict`, eliminating 100K+ Python object
   allocations per colormap rebuild.
+- **Revert vectorized cluster loop** — `get_cluster_colors()` reverted to a simple
+  Python `for` loop; result is cached so the vectorization complexity wasn't
+  visible to users.
 
 ### Added
 - **Interactive minimap** (`utils/minimap_widget.py`) — floating overlay in the

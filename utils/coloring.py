@@ -273,16 +273,11 @@ class CellColorManager:
         for i, c in enumerate(unique_clusters):
             cluster_to_color[c] = palette[i % len(palette)]
 
-        # Build RGBA array per obs (vectorized via integer LUT)
-        max_c = max(unique_clusters) if unique_clusters else 0
-        lut = np.full(max_c + 2, -1, dtype=np.int64)
-        for i, c in enumerate(unique_clusters):
-            lut[c] = i
-        valid = (cluster_values >= 0) & (cluster_values <= max_c)
-        safe_vals = np.where(valid, cluster_values, 0)
-        palette_idx = np.where(valid, lut[safe_vals], 0)
-        rgba_obs = palette[palette_idx % len(palette)].copy()
-        rgba_obs[~valid] = 0.0
+        # Build RGBA array per obs
+        rgba_obs = np.zeros((len(self.adata), 4), dtype=np.float32)
+        for obs_idx, c in enumerate(cluster_values):
+            if c >= 0:
+                rgba_obs[obs_idx] = cluster_to_color[c]
 
         # Build label-indexed array
         color_arr = self._empty_color_array()

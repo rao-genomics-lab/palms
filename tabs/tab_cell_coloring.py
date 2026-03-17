@@ -148,24 +148,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _on_cluster_colors_ready(result, _gen):
         if ctx.dataset_generation != _gen:
             return  # dataset reloaded while worker ran
-        clustering_key, (color_arr, cluster_to_color), selected_ids = result
+        (clustering_key, colormap, color_arr, cluster_to_color,
+         label_to_cluster, cluster_ids_per_obs, selected_ids) = result
+
         state["cluster_to_color"] = cluster_to_color
-        cluster_ids_per_obs, label_to_cluster = ctx.get_cluster_ids_per_obs(clustering_key)
+        state["label_to_cluster"] = label_to_cluster
+        state["active_clustering_name"] = clustering_key
 
-        if selected_ids is not None:
-            int_ids = ctx.translate_selected_ids_to_int(selected_ids)
-            color_arr = color_arr.copy()
-            mask_out = ~np.isin(label_to_cluster, int_ids)
-            valid_range = min(len(mask_out), len(color_arr))
-            color_arr[:valid_range][mask_out[:valid_range]] = 0
+        ctx.cell_labels_layer.colormap = colormap
+        ctx.cell_labels_layer.refresh()
 
-        ctx.color_manager.apply_to_labels_layer(ctx.cell_labels_layer, color_arr)
         ctx.umap_viewer.color_by_cluster(
             clustering_key, color_arr, ctx.label_to_obs,
             cluster_ids_per_obs=cluster_ids_per_obs,
         )
-        state["label_to_cluster"] = label_to_cluster
-        state["active_clustering_name"] = clustering_key
         filter_desc = f" (clusters: {sorted(selected_ids)})" if selected_ids is not None else ""
         status_label.value = f"Cells colored by cluster: {clustering_key}{filter_desc}"
         ctx.record_code(
@@ -215,7 +211,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
             @thread_worker
             def compute_cluster():
-                return clustering_key, ctx.color_manager.get_cluster_colors(cluster_series), selected_ids
+                color_arr, cluster_to_color = ctx.color_manager.get_cluster_colors(cluster_series)
+                cluster_ids_per_obs, label_to_cluster = ctx.get_cluster_ids_per_obs(clustering_key)
+
+                if selected_ids is not None:
+                    int_ids = ctx.translate_selected_ids_to_int(selected_ids)
+                    color_arr = color_arr.copy()
+                    mask_out = ~np.isin(label_to_cluster, int_ids)
+                    valid_range = min(len(mask_out), len(color_arr))
+                    color_arr[:valid_range][mask_out[:valid_range]] = 0
+
+                colormap = ctx.color_manager.build_direct_label_colormap(color_arr)
+                return (clustering_key, colormap, color_arr, cluster_to_color,
+                        label_to_cluster, cluster_ids_per_obs, selected_ids)
 
             worker = compute_cluster()
             worker.returned.connect(lambda result: _on_cluster_colors_ready(result, gen))
