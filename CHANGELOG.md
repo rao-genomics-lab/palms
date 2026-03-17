@@ -17,6 +17,16 @@
   Python `for` loop; result is cached so the vectorization complexity wasn't
   visible to users.
 
+### Fixed
+- **"Filter by selected clusters" in Transcript Density** — the checkbox was
+  silently ignored when `label_to_cluster` was not yet populated (e.g. before
+  clicking "Apply Cell Coloring" or after switching to gene coloring). The fix
+  pre-computes filter data on the main thread in `on_compute_density()`: if a
+  clustering is selected it builds `label_to_cluster` on-the-fly when needed;
+  if no clustering is available it shows "No clustering applied — filter
+  skipped" in the status label and returns early instead of silently falling
+  through.
+
 ### Added
 - **Transcript cache completeness check** (`00_preprocess_transcripts.py`) — writes a
   `.complete` sentinel file to `transcript_cache/` on successful completion, storing the

@@ -141,7 +141,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     compute_density_button = PushButton(label="Compute Density")
     density_status = QLabel("")
 
-    def _compute_density_worker(gene, bin_size_um, use_cluster_filter, normalise):
+    def _compute_density_worker(gene, bin_size_um, filter_data, normalise):
         pts = ctx.transcript_loader.get_points_array(gene)  # (N, 2) [y, x] pixels
         H, W = ctx.morph_full_shape_yx
         bin_px = bin_size_um / ctx.pixel_size
@@ -149,11 +149,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         n_bins_x = max(1, int(W / bin_px))
 
         active_centroids = None
-        if use_cluster_filter and ctx.state.get("label_to_cluster") is not None:
-            selected_ids = ctx.translate_selected_ids_to_int(ctx.get_selected_cluster_ids())
+        if filter_data is not None:
+            label_to_cluster, selected_ids = filter_data
             if selected_ids:
                 selected_set = set(selected_ids)
-                label_to_cluster = ctx.state["label_to_cluster"]
                 all_labels = np.arange(len(label_to_cluster))
                 selected_labels = all_labels[np.isin(label_to_cluster, list(selected_set))]
                 obs_indices = ctx.label_to_obs[selected_labels]
@@ -208,15 +207,28 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if ctx.morph_full_shape_yx is None:
             density_status.setText("No morphology data — cannot compute density")
             return
+
+        filter_data = None
+        if cluster_filter_density_check.value:
+            clustering_key = ctx.state.get("active_clustering_name") or getattr(ctx.clustering_widget, 'value', None)
+            if clustering_key and clustering_key in (ctx.clusterings or {}):
+                label_to_cluster = ctx.state.get("label_to_cluster")
+                if label_to_cluster is None:
+                    _, label_to_cluster = ctx.get_cluster_ids_per_obs(clustering_key)
+                selected_ids = ctx.translate_selected_ids_to_int(ctx.get_selected_cluster_ids())
+                filter_data = (label_to_cluster, selected_ids)
+            else:
+                density_status.setText("No clustering applied — filter skipped")
+                return
+
         compute_density_button.enabled = False
         density_status.setText(f"Computing density for {gene}...")
         bin_um = bin_size_slider.value
-        use_filter = cluster_filter_density_check.value
         normalise = normalise_cells_check.value
 
         @thread_worker
         def _run():
-            return _compute_density_worker(gene, bin_um, use_filter, normalise)
+            return _compute_density_worker(gene, bin_um, filter_data, normalise)
 
         worker = _run()
         worker.returned.connect(_on_density_ready)
