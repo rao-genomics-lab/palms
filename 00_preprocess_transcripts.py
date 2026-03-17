@@ -16,6 +16,7 @@ Output size: ~1 GB total in transcript_cache/
 """
 
 import sys
+import json
 from pathlib import Path
 from collections import defaultdict
 
@@ -35,6 +36,28 @@ KEEP_COLS = ["x_location", "y_location", "qv", GENE_COL]
 # Minimum quality value threshold
 MIN_QV = 20
 CHUNK_SIZE = 1_000_000  # rows per batch
+SENTINEL_FILENAME = ".complete"
+
+
+def _write_sentinel(cache_dir: Path, parquet_path: Path):
+    stat = parquet_path.stat()
+    sentinel = cache_dir / SENTINEL_FILENAME
+    sentinel.write_text(json.dumps({
+        "mtime": stat.st_mtime,
+        "size": stat.st_size,
+    }))
+
+
+def _cache_is_valid(cache_dir: Path, parquet_path: Path) -> bool:
+    sentinel = cache_dir / SENTINEL_FILENAME
+    if not sentinel.exists():
+        return False
+    try:
+        info = json.loads(sentinel.read_text())
+        stat = parquet_path.stat()
+        return info["mtime"] == stat.st_mtime and info["size"] == stat.st_size
+    except Exception:
+        return False
 
 
 def preprocess(parquet_path: Path = PARQUET_PATH,
@@ -43,10 +66,16 @@ def preprocess(parquet_path: Path = PARQUET_PATH,
                chunk_size: int = CHUNK_SIZE):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check what genes are already cached
-    existing = {p.stem for p in cache_dir.glob("*.feather")}
-    if existing:
-        print(f"Found {len(existing)} existing feather files in {cache_dir}")
+    if _cache_is_valid(cache_dir, parquet_path):
+        print(f"Transcript cache is up to date ({cache_dir}). Nothing to do.")
+        return
+
+    # Stale or missing sentinel — wipe existing feather files before reprocessing
+    for f in cache_dir.glob("*.feather"):
+        f.unlink()
+    if (cache_dir / SENTINEL_FILENAME).exists():
+        (cache_dir / SENTINEL_FILENAME).unlink()
+    print("Rebuilding transcript cache...")
 
     print(f"Reading {parquet_path} in chunks of {chunk_size:,} rows ...")
     print(f"Filtering: is_gene=True, qv >= {min_qv}")
@@ -98,6 +127,8 @@ def preprocess(parquet_path: Path = PARQUET_PATH,
     # Final flush
     _flush_buffers(buffers, cache_dir)
     buffers.clear()
+
+    _write_sentinel(cache_dir, parquet_path)
 
     print(f"\n\nDone. Processed {processed:,} rows, kept {kept:,} gene transcripts.")
     feather_files = list(cache_dir.glob("*.feather"))

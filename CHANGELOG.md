@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — 2026-03-16
+## [Unreleased] — 2026-03-17
 
 ### Changed
 - **Cursor hover debounce** — `_on_cursor_move` in `02_xenium_viewer.py` now fires
@@ -18,6 +18,12 @@
   visible to users.
 
 ### Added
+- **Transcript cache completeness check** (`00_preprocess_transcripts.py`) — writes a
+  `.complete` sentinel file to `transcript_cache/` on successful completion, storing the
+  parquet mtime and size. Re-running the script detects an up-to-date cache and exits
+  immediately. If the parquet has changed, stale feather files are wiped before
+  reprocessing, preventing silent data duplication.
+
 - **Interactive minimap** (`utils/minimap_widget.py`) — floating overlay in the
   top-right corner of the napari canvas showing the DAPI thumbnail with a white
   viewport rectangle. Updates live as the camera pans/zooms; clicking navigates
