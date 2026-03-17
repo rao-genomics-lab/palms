@@ -395,6 +395,10 @@ def create_shared_helpers(ctx: ViewerContext):
             if "cluster_labels" not in state or not isinstance(state["cluster_labels"], dict):
                 state["cluster_labels"] = {}
             state["cluster_labels"][clustering_key] = new_labels
+            ctx.record_code(
+                f"\n# Edit cluster labels for '{clustering_key}'\n"
+                f"# {len(new_labels)} clusters relabeled"
+            )
             return True
         return False
 

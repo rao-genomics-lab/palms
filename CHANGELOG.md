@@ -2,6 +2,20 @@
 
 ## [Unreleased] — 2026-03-17
 
+### Added
+- **Complete code recording coverage** — all analysis actions now record parameters to
+  `code.py` via `ctx.record_code()`:
+  - **Transcripts**: QV threshold in overlay recording; new density heatmap recording
+    (gene, bin_size, normalise, cluster_filter)
+  - **Ligand-receptor**: interaction database selection and CellPhoneDB flag
+  - **ROI DEG**: cluster filter status and selected clusters
+  - **UMAP**: display action recorded as comment
+  - **Cell coloring**: background color toggle
+  - **H&E registration**: flip state changes
+  - **ARMS overlay**: flip state changes; Xenium cluster filter in tile DEG
+  - **Co-occurrence**: cluster subset in run recording; filter_targets in plot recording
+  - **Cluster labels**: label editing recorded in `_helpers.py`
+
 ### Fixed
 - **Progress feedback not showing** — two bugs prevented tqdm progress from appearing in
   the status bar during nhood/L-R/co-occurrence analyses:

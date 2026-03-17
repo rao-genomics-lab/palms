@@ -130,6 +130,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if arms_flip_h.value: flips.append("H")
         if flips:
             arms_status_label.value = f"ARMS flip applied: {'+'.join(flips)}"
+        ctx.record_code(
+            f"\n# ARMS H&E image flip\n"
+            f"# flip_vertical={arms_flip_v.value}, flip_horizontal={arms_flip_h.value}"
+        )
 
     arms_flip_v.changed.connect(on_arms_flip_changed)
     arms_flip_h.changed.connect(on_arms_flip_changed)
@@ -566,10 +570,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
             cluster_mask = ctx.make_cluster_mask(clusters_aligned.values, selected_ids)
 
         selected_clusters = sorted(cid for cid, cb in arms_state["cluster_checkboxes"].items() if cb.isChecked()) if arms_state["cluster_checkboxes"] else "all"
+        _filter_desc = ""
+        if arms_deg_filter_check.value:
+            _filter_desc = f", xenium_cluster_filter=active, clusters={sorted(selected_ids)}"
         ctx.record_code(
             f"\n# ARMS Tile DEG analysis\n"
             f"from utils.gene_analysis import compute_arms_tile_deg\n"
-            f"# method={method}, selected_clusters={selected_clusters}\n"
+            f"# method={method}, selected_clusters={selected_clusters}{_filter_desc}\n"
             f"arms_deg_df, arms_summary, arms_adata_norm = compute_arms_tile_deg(\n"
             f"    adata, centroids_yx, transformed_polys, cluster_ids,\n"
             f"    method=\"{method}\")"

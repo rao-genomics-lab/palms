@@ -16,6 +16,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     def on_show_umap():
         ctx.umap_viewer.show()
+        ctx.record_code(
+            "\n# Show UMAP scatter plot\n"
+            "# UMAP coordinates loaded from Xenium analysis output"
+        )
 
     def on_umap_size_change(value):
         ctx.umap_viewer.set_point_size(value / 100.0)

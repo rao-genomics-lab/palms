@@ -231,6 +231,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     def on_bg_change(value):
         ctx.viewer.window._qt_viewer.canvas.bgcolor = (1, 1, 1, 1) if value else (0, 0, 0, 1)
+        ctx.record_code(
+            f"\n# Background color\n"
+            f"# background={'white' if value else 'black'}"
+        )
 
     # ── Wire events ──────────────────────────────────────────────────────
     mode_widget.changed.connect(on_mode_change)

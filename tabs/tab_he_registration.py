@@ -94,6 +94,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if he_flip_h.value: flips.append("H")
         if flips:
             he_status_label.value = f"Flip applied: {'+'.join(flips)}"
+        ctx.record_code(
+            f"\n# H&E image flip\n"
+            f"# flip_vertical={he_flip_v.value}, flip_horizontal={he_flip_h.value}"
+        )
 
     he_flip_v.changed.connect(on_flip_changed)
     he_flip_h.changed.connect(on_flip_changed)

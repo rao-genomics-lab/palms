@@ -68,10 +68,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
         clustering_key = lr_clustering_widget.value
         n_perms = lr_perms_slider.value
         n_neighs = lr_neighs_slider.value
+        # Build interactions description for code recording
+        ds_names = []
+        if lr_ds_omnipath.isChecked(): ds_names.append("OmniPath")
+        if lr_ds_ligrecextra.isChecked(): ds_names.append("LigRecExtra")
+        if lr_ds_pathwayextra.isChecked(): ds_names.append("PathwayExtra")
+        if lr_ds_kinaseextra.isChecked(): ds_names.append("KinaseExtra")
+        interactions_desc = ", ".join(ds_names) if ds_names else "none"
+        if lr_cpdb_only.isChecked():
+            interactions_desc += ", CellPhoneDB_only=True"
+
         state["_lr_params"] = {
             "clustering_key": clustering_key,
             "n_perms": n_perms,
             "n_neighs": n_neighs,
+            "interactions_desc": interactions_desc,
         }
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
@@ -155,8 +166,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _lr_nn = _lr_p.get("n_neighs", 6)
         ctx.record_clustering(_lr_ck)
         ctx.record_spatial_neighbors(_lr_nn)
+        _lr_idesc = _lr_p.get("interactions_desc", "")
         ctx.record_code(
             f"\n# Ligand-receptor analysis (n_perms={_lr_np})\n"
+            f"# interactions: {_lr_idesc}\n"
             f"sq.gr.ligrec(\n"
             f"    adata, cluster_key=\"{_lr_ck}\", n_perms={_lr_np},\n"
             f"    threshold=0.01, seed=42,\n"

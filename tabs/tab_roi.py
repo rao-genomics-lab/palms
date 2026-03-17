@@ -230,21 +230,27 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 cluster_mask=cluster_mask, method=method,
             )
 
+        _use_filter = use_filter
+        _selected_ids = selected_ids if use_filter else None
+
         worker = _run()
-        worker.returned.connect(lambda df: _on_roi_deg_ready(df, gen))
+        worker.returned.connect(lambda df: _on_roi_deg_ready(df, gen, _use_filter, _selected_ids))
         worker.start()
 
-    def _on_roi_deg_ready(df, _gen):
+    def _on_roi_deg_ready(df, _gen, _use_filter, _selected_ids):
         if ctx.dataset_generation != _gen:
             return  # dataset reloaded while worker ran
         state["roi_deg_df"] = df
         roi_deg_button.enabled = True
         if not df.empty:
             n_regions = len(ctx.roi_layer.data) if ctx.roi_layer is not None else 0
+            filter_desc = ""
+            if _use_filter:
+                filter_desc = f", cluster_filter=active, clusters={sorted(_selected_ids)}"
             ctx.record_code(
                 f"\n# ROI differential expression\n"
                 f"from utils.gene_analysis import compute_roi_deg\n"
-                f"# {n_regions} ROI regions, method={roi_deg_method_widget.value}"
+                f"# {n_regions} ROI regions, method={roi_deg_method_widget.value}{filter_desc}"
             )
         if df.empty:
             roi_deg_text.setPlainText("No significant results or insufficient cells in ROIs.")

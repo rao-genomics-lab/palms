@@ -89,7 +89,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         )
         ctx.record_code(
             f"\n# Display transcript overlay\n"
-            f"# genes={genes}, {len(points):,} spots total"
+            f"# genes={genes}, qv_threshold={qv_slider.value}, {len(points):,} spots total"
         )
         apply_transcripts_button.enabled = True
 
@@ -182,10 +182,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
             )
             hist = np.where(cell_count > 0, hist / cell_count, 0).astype(np.float32)
 
-        return hist.astype(np.float32), bin_px, normalise
+        return hist.astype(np.float32), bin_px, normalise, gene, bin_size_um, filter_data is not None
 
     def _on_density_ready(result):
-        hist, bin_px, normalised = result
+        hist, bin_px, normalised, _gene, _bin_um, _had_filter = result
         ctx.transcript_bins_layer.data = hist
         ctx.transcript_bins_layer.scale = [bin_px, bin_px]
         nonzero = hist[hist > 0]
@@ -198,6 +198,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             density_status.setText(f"Done — {int(hist[hist > 0].size):,} non-zero bins, normalised by cells")
         else:
             density_status.setText(f"Done — {int(hist.sum()):,} transcripts binned")
+        ctx.record_code(
+            f"\n# Transcript density heatmap\n"
+            f"# gene={_gene}, bin_size={_bin_um}\u00b5m, normalise_by_cells={normalised}"
+            + (f", cluster_filter=active" if _had_filter else "")
+        )
         compute_density_button.enabled = True
 
     def on_compute_density():

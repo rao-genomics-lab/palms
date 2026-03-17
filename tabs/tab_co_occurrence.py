@@ -174,11 +174,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         _co_ck = result.get('_cluster_key', '')
         _co_iv = state.get("_co_params", {}).get("interval", 50)
+        _co_sel = _get_co_selected_clusters()
         ctx.record_clustering(_co_ck)
         ctx.record_code(
             f"\n# Co-occurrence (interval={_co_iv})\n"
             f"sq.gr.co_occurrence(adata, cluster_key=\"{_co_ck}\", "
             f"interval={_co_iv})"
+            + (f"\n# cluster_subset={_co_sel}" if _co_sel else "")
         )
 
     def on_show_co_plot():
@@ -213,7 +215,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 f"\n# Co-occurrence plot\n"
                 f"sq.pl.co_occurrence(adata, cluster_key=\"{_co_ck}\""
                 + (f", clusters={subplot_clusters}" if subplot_clusters else "")
-                + ")\nplt.show()"
+                + ")\n"
+                + (f"# filter_targets={target_filter}\n" if target_filter else "")
+                + "plt.show()"
             )
         except Exception as e:
             co_status.value = f"Plot error: {e}"
