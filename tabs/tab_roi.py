@@ -281,11 +281,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     widget = make_tab(
         roi_calc_button,
+        roi_text,
         roi_export_button,
         roi_deg_header,
         roi_deg_method_widget,
         roi_deg_filter_check,
         roi_deg_button,
+        roi_deg_text,
         roi_deg_export_button,
     )
 
