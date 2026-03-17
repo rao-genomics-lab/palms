@@ -331,15 +331,25 @@ def build_tab(ctx: ViewerContext) -> tuple:
         def _on_celltypist_ready(result):
             cell_predictions, clust_key = result
             _clustering_series_local = ctx.clusterings[clust_key]
+            _orig_adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
             ga_ct_annotate_button.enabled = True
+
+            # Build per-obs_name cluster assignment (same alignment as add_clustering_to_obs)
+            import pandas as _pd
+            if 'cell_id' in _orig_adata.obs.columns:
+                cell_ids = _orig_adata.obs['cell_id'].values
+                aligned_clusters = _clustering_series_local.reindex(cell_ids)
+            else:
+                aligned_clusters = _clustering_series_local.reindex(_orig_adata.obs_names)
+            # Index by obs_names so it matches cell_predictions index
+            aligned_clusters.index = _orig_adata.obs_names
 
             # Majority vote: map per-cell predictions to per-cluster labels
             labels = {}
-            for cluster_id in _clustering_series_local.unique():
-                mask = _clustering_series_local == cluster_id
-                # Align predictions to clustering index
-                cluster_cells = _clustering_series_local.index[mask]
-                preds = cell_predictions.reindex(cluster_cells).dropna()
+            for cluster_id in aligned_clusters.dropna().unique():
+                mask = aligned_clusters == cluster_id
+                obs_in_cluster = aligned_clusters.index[mask]
+                preds = cell_predictions.reindex(obs_in_cluster).dropna()
                 if len(preds) == 0:
                     labels[cluster_id] = "Unknown"
                 else:
