@@ -1,6 +1,7 @@
 """Tab 6: Gene Analysis — rank genes, dotplot, volcanos."""
 
 from __future__ import annotations
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
@@ -14,7 +15,16 @@ if TYPE_CHECKING:
 from utils.gene_analysis import (
     get_normalized_adata, add_clustering_to_obs, run_rank_genes,
     make_rank_genes_dotplot, make_rank_genes_plot, generate_all_volcano_plots,
+    run_celltypist_annotation,
 )
+
+# Check if celltypist is available
+try:
+    import celltypist
+    from celltypist import models as ct_models
+    _HAS_CELLTYPIST = True
+except ImportError:
+    _HAS_CELLTYPIST = False
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -46,6 +56,31 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_results_text.setMaximumHeight(300)
     ga_export_button = PushButton(label="Export Full Results CSV...", enabled=False)
     ga_volcano_button = PushButton(label="Generate All Volcano Plots...", enabled=False)
+
+    # -- CellTypist annotation widgets --
+    from qtpy.QtWidgets import QLabel
+    ga_ct_separator = QLabel("── CellTypist Annotation ──")
+    ga_ct_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
+    ga_ct_model_widget = ComboBox(label="CellTypist Model", choices=[])
+    ga_ct_download_button = PushButton(label="Download Models")
+    ga_ct_annotate_button = PushButton(label="Annotate with CellTypist", enabled=False)
+
+    if not _HAS_CELLTYPIST:
+        ga_ct_model_widget.enabled = False
+        ga_ct_download_button.enabled = False
+        ga_ct_annotate_button.enabled = False
+        ga_ct_separator.setText("── CellTypist (not installed) ──")
+    else:
+        # Populate with locally available models
+        try:
+            _local_models = sorted(Path(ct_models.models_path).glob("*.pkl"))
+            _model_names = [m.name for m in _local_models]
+            if _model_names:
+                ga_ct_model_widget.choices = _model_names
+                ga_ct_annotate_button.enabled = True
+        except Exception:
+            pass
+
     ga_status = StatusProxy(ctx.viewer)
 
     def on_run_rank_genes():
@@ -242,6 +277,107 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_volcano_button.enabled = True
         ga_status.value = f"{count} volcano plots saved to {out_dir}"
 
+    # -- CellTypist handlers --
+    def on_download_models():
+        if not _HAS_CELLTYPIST:
+            ga_status.value = "CellTypist is not installed (pip install celltypist)"
+            return
+        ga_ct_download_button.enabled = False
+        ga_status.value = "Downloading CellTypist models..."
+
+        @thread_worker
+        def _download():
+            ct_models.download_models()
+            return sorted(m.name for m in Path(ct_models.models_path).glob("*.pkl"))
+
+        def _on_download_done(model_names):
+            ga_ct_download_button.enabled = True
+            if model_names:
+                ga_ct_model_widget.choices = model_names
+                ga_ct_annotate_button.enabled = True
+                ga_status.value = f"Downloaded {len(model_names)} CellTypist models"
+            else:
+                ga_status.value = "No CellTypist models found after download"
+
+        worker = _download()
+        worker.returned.connect(_on_download_done)
+        worker.start()
+
+    def on_celltypist_annotate():
+        if not _HAS_CELLTYPIST:
+            ga_status.value = "CellTypist is not installed"
+            return
+        model_name = ga_ct_model_widget.value
+        if not model_name:
+            ga_status.value = "Select a CellTypist model first"
+            return
+        clustering_key = ga_clustering_widget.value
+        if not clustering_key or clustering_key not in ctx.clusterings:
+            ga_status.value = "Select a valid clustering first"
+            return
+
+        ga_ct_annotate_button.enabled = False
+        ga_status.value = f"Running CellTypist ({model_name})..."
+
+        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+        _clustering_series = ctx.clusterings[clustering_key]
+
+        @thread_worker
+        def _run():
+            adata_norm = get_normalized_adata(_adata)
+            cell_predictions = run_celltypist_annotation(adata_norm, model_name)
+            return cell_predictions, clustering_key
+
+        def _on_celltypist_ready(result):
+            cell_predictions, clust_key = result
+            _clustering_series_local = ctx.clusterings[clust_key]
+            ga_ct_annotate_button.enabled = True
+
+            # Majority vote: map per-cell predictions to per-cluster labels
+            labels = {}
+            for cluster_id in _clustering_series_local.unique():
+                mask = _clustering_series_local == cluster_id
+                # Align predictions to clustering index
+                cluster_cells = _clustering_series_local.index[mask]
+                preds = cell_predictions.reindex(cluster_cells).dropna()
+                if len(preds) == 0:
+                    labels[cluster_id] = "Unknown"
+                else:
+                    labels[cluster_id] = preds.value_counts().idxmax()
+
+            # Store in the same system as manual labels
+            if "cluster_labels" not in state:
+                state["cluster_labels"] = {}
+            state["cluster_labels"][clust_key] = labels
+
+            # Summary
+            label_counts = {}
+            for lbl in labels.values():
+                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+            summary_parts = [f"{lbl} ({n})" for lbl, n in sorted(label_counts.items(), key=lambda x: -x[1])]
+            summary = ", ".join(summary_parts)
+            ga_status.value = f"{len(labels)} clusters annotated: {summary}"
+
+            # Code recording
+            ctx.record_code(
+                f"\n# CellTypist annotation\n"
+                f"import celltypist\n"
+                f"from celltypist import models\n"
+                f"model = models.Model.load(\"{model_name}\")\n"
+                f"predictions = celltypist.annotate(adata, model=model, majority_voting=False)\n"
+                f"# Majority vote per cluster: {clust_key}\n"
+                f"# Assigned labels: {labels}"
+            )
+
+        worker = _run()
+        timer, _ = attach_spinner(worker, lambda m: setattr(ga_status, 'value', m), "Running CellTypist...")
+        state['_ct_spinner_timer'] = timer
+        worker.returned.connect(_on_celltypist_ready)
+        worker.start()
+
+    ga_ct_download_button.clicked.connect(on_download_models)
+    ga_ct_annotate_button.clicked.connect(on_celltypist_annotate)
+
     ga_run_button.clicked.connect(on_run_rank_genes)
     ga_dotplot_button.clicked.connect(on_show_dotplot)
     ga_edit_labels_button.clicked.connect(_open_label_editor)
@@ -259,6 +395,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_dotplot_btn_layout.addWidget(ga_save_dotplot_button.native)
     ga_dotplot_btn_row.setLayout(ga_dotplot_btn_layout)
 
+    # CellTypist button row
+    ga_ct_btn_row = QWidget()
+    ga_ct_btn_layout = QHBoxLayout()
+    ga_ct_btn_layout.setContentsMargins(0, 0, 0, 0)
+    ga_ct_btn_layout.addWidget(ga_ct_download_button.native)
+    ga_ct_btn_layout.addWidget(ga_ct_annotate_button.native)
+    ga_ct_btn_row.setLayout(ga_ct_btn_layout)
+
     widget = make_tab(
         ga_clustering_widget,
         ga_method_widget,
@@ -270,6 +414,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_rank_plot_button,
         ga_export_button,
         ga_volcano_button,
+        ga_ct_separator,
+        ga_ct_model_widget,
+        ga_ct_btn_row,
     )
 
     def _restore_session(session):

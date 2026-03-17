@@ -128,6 +128,27 @@ def make_rank_genes_plot(
     return plt.gcf()
 
 
+def run_celltypist_annotation(adata, model_name):
+    """Run CellTypist annotation and return per-cell predictions.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Log-normalized AnnData (from get_normalized_adata()).
+    model_name : str
+        Name of a CellTypist model (e.g. 'Immune_All_Low.pkl').
+
+    Returns
+    -------
+    pd.Series of cell type strings, indexed by obs_names.
+    """
+    import celltypist
+    from celltypist import models
+    model = models.Model.load(model_name)
+    predictions = celltypist.annotate(adata, model=model, majority_voting=False)
+    return predictions.predicted_labels['predicted_labels']
+
+
 def compute_roi_deg(
     adata: sc.AnnData,
     centroids_yx: np.ndarray,

@@ -3,6 +3,15 @@
 ## [Unreleased] — 2026-03-17
 
 ### Added
+- **CellTypist automated cell type annotation** — new "CellTypist Annotation" section
+  in the Gene Analysis tab. Select a CellTypist model from a dropdown, click "Annotate
+  with CellTypist" to run per-cell predictions, then majority-vote assigns cell type
+  labels to each cluster. Labels are stored in `state["cluster_labels"]` (same system
+  as manual labels), so dotplots, rank genes plots, hover info, and exports all pick
+  up the new names automatically. Includes "Download Models" button for one-time model
+  download. Gracefully degrades when celltypist is not installed (widgets shown but
+  disabled). New `run_celltypist_annotation()` utility in `utils/gene_analysis.py`.
+
 - **Complete code recording coverage** — all analysis actions now record parameters to
   `code.py` via `ctx.record_code()`:
   - **Transcripts**: QV threshold in overlay recording; new density heatmap recording
