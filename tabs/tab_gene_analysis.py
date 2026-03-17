@@ -74,7 +74,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return df, adata_norm, clustering_key
 
         worker = _run()
-        attach_spinner(worker, lambda m: setattr(ga_status, 'value', m), "Running rank genes...")
+        timer, _ = attach_spinner(worker, lambda m: setattr(ga_status, 'value', m), "Running rank genes...")
+        state['_spinner_timer'] = timer  # prevent GC
         worker.returned.connect(_on_rank_genes_ready)
         worker.start()
 

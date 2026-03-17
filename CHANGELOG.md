@@ -2,6 +2,18 @@
 
 ## [Unreleased] — 2026-03-17
 
+### Fixed
+- **Progress feedback not showing** — two bugs prevented tqdm progress from appearing in
+  the status bar during nhood/L-R/co-occurrence analyses:
+  - QTimer objects were garbage-collected immediately after `worker.start()` because no
+    Python reference was retained; fixed by storing timers in `state['_spinner_timer']`
+    and `state['_progress_timer']`
+  - `qt_tqdm_context` was not patching `tqdm.std.tqdm` (only `tqdm.tqdm` and
+    `tqdm.auto.tqdm`); squidpy's `parallelize()` imports from `tqdm.std` when
+    `ipywidgets` is absent, so the monkey-patch had no effect; fixed by also patching
+    `tqdm.std.tqdm`
+  - `attach_tqdm_progress` now returns `(post_fn, timer)` instead of just `post_fn`
+
 ### Added
 - **Progress feedback for long-running analyses** — status bar now updates during analyses
   instead of showing a static "Running…" message:

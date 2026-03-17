@@ -133,11 +133,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         worker = _run()
         worker.returned.connect(lambda result: _on_leiden_ready(result, gen))
-        _, update_msg = attach_spinner(
+        timer, update_msg = attach_spinner(
             worker,
             lambda m: setattr(leiden_status, 'value', m),
             "Preparing data...",
         )
+        state['_spinner_timer'] = timer  # prevent GC
         worker.yielded.connect(update_msg)
         worker.start()
 

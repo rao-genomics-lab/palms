@@ -103,7 +103,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return result
 
         worker = _run()
-        _progress[0] = attach_tqdm_progress(
+        _progress[0], state['_progress_timer'] = attach_tqdm_progress(
             worker,
             lambda m: setattr(lr_status, 'value', m),
             "L-R permutations: ",

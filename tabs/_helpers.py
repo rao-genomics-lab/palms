@@ -107,7 +107,7 @@ def attach_tqdm_progress(worker, set_status_fn, base_msg: str = ""):
     timer.timeout.connect(_poll)
     timer.start(100)
     worker.finished.connect(timer.stop)
-    return mailbox.post
+    return mailbox.post, timer   # caller must hold timer reference to prevent GC
 
 
 from contextlib import contextmanager
@@ -138,13 +138,18 @@ def qt_tqdm_context(post_fn, base_msg: str = ""):
             else:
                 post_fn(f"{base_msg}{self.n} iterations")
 
+    import tqdm.std as _tqdm_std
+    original_std = _tqdm_std.tqdm
+
     _tqdm_module.tqdm = _StatusTqdm
     _tqdm_auto.tqdm = _StatusTqdm
+    _tqdm_std.tqdm = _StatusTqdm
     try:
         yield
     finally:
         _tqdm_module.tqdm = original_tqdm
         _tqdm_auto.tqdm = original_auto
+        _tqdm_std.tqdm = original_std
 
 
 # ── Shared helper factory ────────────────────────────────────────────────────
