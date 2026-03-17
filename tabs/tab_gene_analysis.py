@@ -58,12 +58,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["_rg_method"] = method
         state["_rg_n_genes"] = n_genes
 
+        if not ctx.clusterings or not clustering_key or clustering_key not in ctx.clusterings:
+            ga_status.value = "Error: clustering data not available. Please wait for data to finish loading."
+            ga_run_button.enabled = True
+            return
+
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+        _clustering_series = ctx.clusterings[clustering_key]
 
         @thread_worker(connect={"returned": _on_rank_genes_ready})
         def _run():
             adata_norm = get_normalized_adata(_adata)
-            add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
+            add_clustering_to_obs(adata_norm, _adata, _clustering_series, clustering_key)
             df = run_rank_genes(adata_norm, clustering_key, method=method, n_genes=n_genes)
             return df, adata_norm, clustering_key
         _run()
