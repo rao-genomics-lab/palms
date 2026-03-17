@@ -9,8 +9,12 @@
   labels to each cluster. Labels are stored in `state["cluster_labels"]` (same system
   as manual labels), so dotplots, rank genes plots, hover info, and exports all pick
   up the new names automatically. Includes "Download Models" button for one-time model
-  download. Gracefully degrades when celltypist is not installed (widgets shown but
-  disabled). New `run_celltypist_annotation()` utility in `utils/gene_analysis.py`.
+  download, and a **confidence threshold slider** (default 0.5) that filters out
+  low-confidence per-cell predictions before the majority vote — prevents immune-focused
+  models from labeling non-immune clusters as "T cells". Status bar shows how many cells
+  passed the threshold. Gracefully degrades when celltypist is not installed (widgets
+  shown but disabled). New `run_celltypist_annotation()` utility in
+  `utils/gene_analysis.py`.
 
 - **Complete code recording coverage** — all analysis actions now record parameters to
   `code.py` via `ctx.record_code()`:

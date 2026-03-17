@@ -129,7 +129,7 @@ def make_rank_genes_plot(
 
 
 def run_celltypist_annotation(adata, model_name):
-    """Run CellTypist annotation and return per-cell predictions.
+    """Run CellTypist annotation and return per-cell predictions with confidence.
 
     Parameters
     ----------
@@ -140,13 +140,17 @@ def run_celltypist_annotation(adata, model_name):
 
     Returns
     -------
-    pd.Series of cell type strings, indexed by obs_names.
+    (predictions, confidence) : tuple[pd.Series, pd.Series]
+        predictions: cell type strings, indexed by obs_names.
+        confidence: max probability per cell (0–1), indexed by obs_names.
     """
     import celltypist
     from celltypist import models
     model = models.Model.load(model_name)
-    predictions = celltypist.annotate(adata, model=model, majority_voting=False)
-    return predictions.predicted_labels['predicted_labels']
+    result = celltypist.annotate(adata, model=model, majority_voting=False)
+    predictions = result.predicted_labels['predicted_labels']
+    confidence = result.probability_matrix.max(axis=1)
+    return predictions, confidence
 
 
 def compute_roi_deg(

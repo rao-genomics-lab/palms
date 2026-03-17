@@ -62,11 +62,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_ct_separator = QLabel("── CellTypist Annotation ──")
     ga_ct_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
     ga_ct_model_widget = ComboBox(label="CellTypist Model", choices=[])
+    from magicgui.widgets import FloatSlider
+    ga_ct_conf_slider = FloatSlider(label="Min confidence", min=0.0, max=1.0, value=0.5, step=0.05)
     ga_ct_download_button = PushButton(label="Download Models")
     ga_ct_annotate_button = PushButton(label="Annotate with CellTypist", enabled=False)
 
     if not _HAS_CELLTYPIST:
         ga_ct_model_widget.enabled = False
+        ga_ct_conf_slider.enabled = False
         ga_ct_download_button.enabled = False
         ga_ct_annotate_button.enabled = False
         ga_ct_separator.setText("── CellTypist (not installed) ──")
@@ -317,7 +320,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
 
         ga_ct_annotate_button.enabled = False
-        ga_status.value = f"Running CellTypist ({model_name})..."
+        conf_threshold = ga_ct_conf_slider.value
+        ga_status.value = f"Running CellTypist ({model_name}, conf≥{conf_threshold:.2f})..."
 
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
         _clustering_series = ctx.clusterings[clustering_key]
@@ -325,17 +329,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
         @thread_worker
         def _run():
             adata_norm = get_normalized_adata(_adata)
-            cell_predictions = run_celltypist_annotation(adata_norm, model_name)
-            return cell_predictions, clustering_key
+            cell_predictions, cell_confidence = run_celltypist_annotation(adata_norm, model_name)
+            return cell_predictions, cell_confidence, clustering_key
 
         def _on_celltypist_ready(result):
-            cell_predictions, clust_key = result
+            cell_predictions, cell_confidence, clust_key = result
             _clustering_series_local = ctx.clusterings[clust_key]
             _orig_adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
             ga_ct_annotate_button.enabled = True
 
             # Build per-obs_name cluster assignment (same alignment as add_clustering_to_obs)
-            import pandas as _pd
             if 'cell_id' in _orig_adata.obs.columns:
                 cell_ids = _orig_adata.obs['cell_id'].values
                 aligned_clusters = _clustering_series_local.reindex(cell_ids)
@@ -344,12 +347,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
             # Index by obs_names so it matches cell_predictions index
             aligned_clusters.index = _orig_adata.obs_names
 
+            # Filter out low-confidence predictions
+            high_conf_mask = cell_confidence >= conf_threshold
+            filtered_predictions = cell_predictions[high_conf_mask]
+            n_total = len(cell_predictions)
+            n_passed = len(filtered_predictions)
+
             # Majority vote: map per-cell predictions to per-cluster labels
             labels = {}
             for cluster_id in aligned_clusters.dropna().unique():
                 mask = aligned_clusters == cluster_id
                 obs_in_cluster = aligned_clusters.index[mask]
-                preds = cell_predictions.reindex(obs_in_cluster).dropna()
+                preds = filtered_predictions.reindex(obs_in_cluster).dropna()
                 if len(preds) == 0:
                     labels[cluster_id] = "Unknown"
                 else:
@@ -366,15 +375,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 label_counts[lbl] = label_counts.get(lbl, 0) + 1
             summary_parts = [f"{lbl} ({n})" for lbl, n in sorted(label_counts.items(), key=lambda x: -x[1])]
             summary = ", ".join(summary_parts)
-            ga_status.value = f"{len(labels)} clusters annotated: {summary}"
+            pct_passed = 100 * n_passed / n_total if n_total > 0 else 0
+            ga_status.value = (
+                f"{len(labels)} clusters annotated ({n_passed}/{n_total} cells "
+                f"passed conf≥{conf_threshold:.2f}, {pct_passed:.0f}%): {summary}"
+            )
 
             # Code recording
             ctx.record_code(
-                f"\n# CellTypist annotation\n"
+                f"\n# CellTypist annotation (confidence threshold={conf_threshold})\n"
                 f"import celltypist\n"
                 f"from celltypist import models\n"
                 f"model = models.Model.load(\"{model_name}\")\n"
                 f"predictions = celltypist.annotate(adata, model=model, majority_voting=False)\n"
+                f"# Filtered to cells with max probability >= {conf_threshold}\n"
                 f"# Majority vote per cluster: {clust_key}\n"
                 f"# Assigned labels: {labels}"
             )
@@ -426,6 +440,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_volcano_button,
         ga_ct_separator,
         ga_ct_model_widget,
+        ga_ct_conf_slider,
         ga_ct_btn_row,
     )
 
