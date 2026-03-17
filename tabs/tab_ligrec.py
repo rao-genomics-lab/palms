@@ -8,7 +8,7 @@ from qtpy.QtWidgets import (
     QTextEdit, QHBoxLayout, QWidget, QFileDialog, QCheckBox, QGridLayout, QGroupBox,
 )
 from napari.qt.threading import thread_worker
-from tabs._helpers import make_tab, StatusProxy
+from tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context
 
 if TYPE_CHECKING:
     from utils.viewer_context import ViewerContext
@@ -62,7 +62,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     lr_export_pvals_button = PushButton(label="Export P-values CSV...", enabled=False)
 
     def on_run_ligrec():
-        lr_status.value = "Running L-R analysis... (this may take several minutes)"
+        lr_status.value = "Running L-R analysis..."
         lr_run_button.enabled = False
 
         clustering_key = lr_clustering_widget.value
@@ -89,16 +89,27 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if lr_cpdb_only.isChecked():
             interactions_params["resources"] = "CellPhoneDB"
 
-        @thread_worker(connect={"returned": _on_ligrec_ready})
+        _progress = [None]  # filled after worker is created
+
+        @thread_worker
         def _run():
             adata_norm = get_normalized_adata(_adata)
             add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
             adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
             compute_spatial_neighbors(adata_norm, n_neighs=n_neighs)
-            result = run_ligrec(adata_norm, clustering_key, n_perms=n_perms,
-                                interactions_params=interactions_params)
+            with qt_tqdm_context(_progress[0], "L-R permutations: "):
+                result = run_ligrec(adata_norm, clustering_key, n_perms=n_perms,
+                                    interactions_params=interactions_params)
             return result
-        _run()
+
+        worker = _run()
+        _progress[0] = attach_tqdm_progress(
+            worker,
+            lambda m: setattr(lr_status, 'value', m),
+            "L-R permutations: ",
+        )
+        worker.returned.connect(_on_ligrec_ready)
+        worker.start()
 
     def _on_ligrec_ready(result):
         state["ligrec_result"] = result

@@ -7,7 +7,7 @@ import numpy as np
 from magicgui.widgets import ComboBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
-from tabs._helpers import make_tab, StatusProxy
+from tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context
 
 if TYPE_CHECKING:
     from utils.viewer_context import ViewerContext
@@ -44,7 +44,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
 
     def on_run_nhood():
-        ne_status.value = "Running neighborhood enrichment... (this may take a minute)"
+        ne_status.value = "Running neighborhood enrichment..."
         ne_run_button.enabled = False
 
         clustering_key = ne_clustering_widget.value
@@ -53,17 +53,28 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["_ne_params"] = {"n_perms": n_perms, "n_neighs": n_neighs}
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        @thread_worker(connect={"returned": _on_nhood_ready})
+        _progress = [None]  # filled after worker is created
+
+        @thread_worker
         def _run():
             adata_norm = get_normalized_adata(_adata)
             add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
             adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
             compute_spatial_neighbors(adata_norm, n_neighs=n_neighs)
-            result = run_nhood_enrichment(adata_norm, clustering_key, n_perms=n_perms)
+            with qt_tqdm_context(_progress[0], "Enrichment permutations: "):
+                result = run_nhood_enrichment(adata_norm, clustering_key, n_perms=n_perms)
             result['_adata_norm'] = adata_norm
             result['_cluster_key'] = clustering_key
             return result
-        _run()
+
+        worker = _run()
+        _progress[0] = attach_tqdm_progress(
+            worker,
+            lambda m: setattr(ne_status, 'value', m),
+            "Enrichment permutations: ",
+        )
+        worker.returned.connect(_on_nhood_ready)
+        worker.start()
 
     def _on_nhood_ready(result):
         state["nhood_result"] = result

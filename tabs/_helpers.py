@@ -46,6 +46,107 @@ class StatusProxy:
         self._viewer.status = msg
 
 
+# ── Progress helpers ──────────────────────────────────────────────────────────
+
+class ProgressMailbox:
+    """Thread-safe single-slot message passing (background → main thread)."""
+    def __init__(self):
+        self._msg = None
+
+    def post(self, msg: str):       # called from background thread
+        self._msg = msg
+
+    def read(self) -> str | None:   # called from main thread
+        msg = self._msg
+        self._msg = None
+        return msg
+
+
+def attach_spinner(worker, set_status_fn, initial_msg: str):
+    """Animate a spinner in the status bar while *worker* runs.
+
+    Returns ``(timer, update_msg_fn)`` where ``update_msg_fn(msg)`` changes the
+    animated text (connect to ``worker.yielded`` for stage messages).
+    """
+    from qtpy.QtCore import QTimer
+    _FRAMES = ["|", "/", "-", "\\"]
+    _idx = [0]
+    _msg = [initial_msg]
+
+    timer = QTimer()
+
+    def _tick():
+        set_status_fn(f"{_FRAMES[_idx[0] % 4]} {_msg[0]}")
+        _idx[0] += 1
+
+    def update_msg(msg: str):
+        _msg[0] = msg
+
+    timer.timeout.connect(_tick)
+    timer.start(150)
+    worker.finished.connect(timer.stop)
+    return timer, update_msg
+
+
+def attach_tqdm_progress(worker, set_status_fn, base_msg: str = ""):
+    """Wire a ProgressMailbox + QTimer to relay tqdm updates to the status bar.
+
+    Returns a ``post_fn`` callable safe to call from the background thread;
+    pass it into :func:`qt_tqdm_context` inside the worker.
+    """
+    from qtpy.QtCore import QTimer
+    mailbox = ProgressMailbox()
+
+    timer = QTimer()
+
+    def _poll():
+        msg = mailbox.read()
+        if msg:
+            set_status_fn(msg)
+
+    timer.timeout.connect(_poll)
+    timer.start(100)
+    worker.finished.connect(timer.stop)
+    return mailbox.post
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def qt_tqdm_context(post_fn, base_msg: str = ""):
+    """Context manager (run inside a background thread) that routes tqdm
+    progress updates to *post_fn* instead of the terminal.
+    """
+    import tqdm as _tqdm_module
+    import tqdm.auto as _tqdm_auto
+    import io
+
+    original_tqdm = _tqdm_module.tqdm
+    original_auto = _tqdm_auto.tqdm
+
+    class _StatusTqdm(original_tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault('file', io.StringIO())  # suppress stderr output
+            super().__init__(*args, **kwargs)
+
+        def update(self, n=1):
+            super().update(n)
+            if self.total:
+                pct = int(100 * self.n / self.total)
+                post_fn(f"{base_msg}{self.n}/{self.total} ({pct}%)")
+            else:
+                post_fn(f"{base_msg}{self.n} iterations")
+
+    _tqdm_module.tqdm = _StatusTqdm
+    _tqdm_auto.tqdm = _StatusTqdm
+    try:
+        yield
+    finally:
+        _tqdm_module.tqdm = original_tqdm
+        _tqdm_auto.tqdm = original_auto
+
+
 # ── Shared helper factory ────────────────────────────────────────────────────
 
 def create_shared_helpers(ctx: ViewerContext):

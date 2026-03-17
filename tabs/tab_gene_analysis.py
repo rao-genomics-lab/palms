@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
-from tabs._helpers import make_tab, StatusProxy
+from tabs._helpers import make_tab, StatusProxy, attach_spinner
 
 if TYPE_CHECKING:
     from utils.viewer_context import ViewerContext
@@ -66,13 +66,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
         _clustering_series = ctx.clusterings[clustering_key]
 
-        @thread_worker(connect={"returned": _on_rank_genes_ready})
+        @thread_worker
         def _run():
             adata_norm = get_normalized_adata(_adata)
             add_clustering_to_obs(adata_norm, _adata, _clustering_series, clustering_key)
             df = run_rank_genes(adata_norm, clustering_key, method=method, n_genes=n_genes)
             return df, adata_norm, clustering_key
-        _run()
+
+        worker = _run()
+        attach_spinner(worker, lambda m: setattr(ga_status, 'value', m), "Running rank genes...")
+        worker.returned.connect(_on_rank_genes_ready)
+        worker.start()
 
     def _on_rank_genes_ready(result):
         df, adata_norm, clustering_key = result

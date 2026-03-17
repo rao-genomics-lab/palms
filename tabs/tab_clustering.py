@@ -7,7 +7,7 @@ from pathlib import Path
 from magicgui.widgets import CheckBox, PushButton, Slider, FloatSpinBox
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
-from tabs._helpers import make_tab, StatusProxy
+from tabs._helpers import make_tab, StatusProxy, attach_spinner
 
 if TYPE_CHECKING:
     from utils.viewer_context import ViewerContext
@@ -104,6 +104,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         @thread_worker
         def _run():
             import scanpy as sc
+            yield "Preparing data..."
             if use_hvg or do_scale:
                 adata_work = _adata.copy()
                 sc.pp.normalize_total(adata_work, target_sum=1e4)
@@ -116,7 +117,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 sc.pp.pca(adata_work)
             else:
                 adata_work = get_normalized_adata(_adata)
+            yield "Computing neighbors..."
             sc.pp.neighbors(adata_work, n_neighbors=n_neighbors, n_pcs=n_pcs)
+            yield "Running Leiden algorithm..."
             sc.tl.leiden(adata_work, resolution=resolution, key_added="leiden")
             import pandas as pd
             cell_ids = _adata.obs['cell_id'].values if 'cell_id' in _adata.obs.columns else _adata.obs_names
@@ -130,6 +133,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         worker = _run()
         worker.returned.connect(lambda result: _on_leiden_ready(result, gen))
+        _, update_msg = attach_spinner(
+            worker,
+            lambda m: setattr(leiden_status, 'value', m),
+            "Preparing data...",
+        )
+        worker.yielded.connect(update_msg)
         worker.start()
 
     leiden_run_button.clicked.connect(on_run_leiden)

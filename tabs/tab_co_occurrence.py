@@ -10,7 +10,7 @@ from qtpy.QtWidgets import (
     QLabel, QScrollArea, QGridLayout, QCheckBox,
 )
 from napari.qt.threading import thread_worker
-from tabs._helpers import make_tab, StatusProxy
+from tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context
 
 if TYPE_CHECKING:
     from utils.viewer_context import ViewerContext
@@ -109,7 +109,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     from utils.spatial_analysis import run_co_occurrence, make_co_occurrence_plot
 
     def on_run_co_occurrence():
-        co_status.value = "Running co-occurrence analysis... (this may take a minute)"
+        co_status.value = "Running co-occurrence analysis..."
         co_run_button.enabled = False
 
         clustering_key = co_clustering_widget.value
@@ -117,16 +117,27 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["_co_params"] = {"interval": interval}
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        @thread_worker(connect={"returned": _on_co_occurrence_ready})
+        _progress = [None]  # filled after worker is created
+
+        @thread_worker
         def _run():
             adata_norm = get_normalized_adata(_adata)
             add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
             adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
-            result = run_co_occurrence(adata_norm, clustering_key, interval=interval)
+            with qt_tqdm_context(_progress[0], "Co-occurrence: "):
+                result = run_co_occurrence(adata_norm, clustering_key, interval=interval)
             result['_adata_norm'] = adata_norm
             result['_cluster_key'] = clustering_key
             return result
-        _run()
+
+        worker = _run()
+        _progress[0] = attach_tqdm_progress(
+            worker,
+            lambda m: setattr(co_status, 'value', m),
+            "Co-occurrence: ",
+        )
+        worker.returned.connect(_on_co_occurrence_ready)
+        worker.start()
 
     def _on_co_occurrence_ready(result):
         state["co_result"] = result

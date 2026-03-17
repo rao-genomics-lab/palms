@@ -2,6 +2,18 @@
 
 ## [Unreleased] — 2026-03-17
 
+### Added
+- **Progress feedback for long-running analyses** — status bar now updates during analyses
+  instead of showing a static "Running…" message:
+  - **Leiden clustering**: animated spinner (`| / - \`) with stage messages
+    (`"Preparing data…"` → `"Computing neighbors…"` → `"Running Leiden algorithm…"`)
+  - **Rank genes**: animated spinner while scanpy computes
+  - **Neighborhood enrichment**: live permutation counter (`"Enrichment permutations: 450/1000 (45%)"`)
+  - **Ligand-receptor**: live permutation counter (`"L-R permutations: 230/1000 (23%)"`)
+  - **Co-occurrence**: live interval counter (`"Co-occurrence: 23/50 iterations"`)
+- New helpers in `tabs/_helpers.py`: `attach_spinner`, `attach_tqdm_progress`,
+  `qt_tqdm_context`, `ProgressMailbox`
+
 ### Changed
 - **Cursor hover debounce** — `_on_cursor_move` in `02_xenium_viewer.py` now fires
   `get_value()` at most every 80 ms via a `QTimer` debounce, eliminating main-thread
