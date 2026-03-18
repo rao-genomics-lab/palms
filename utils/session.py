@@ -307,6 +307,21 @@ def save_rank_genes_incremental(zarr_path: Path, df, adata_norm, groupby: str) -
             return
         session_dir = Path(zarr_path) / "viewer_session"
         df.to_parquet(session_dir / "rank_genes.parquet")
+        # pandas 3.0 uses ArrowStringArray by default; anndata's h5ad writer
+        # has no serializer for it — convert to plain object dtype first.
+        import pandas as _pd
+        for _df in (adata_norm.obs, adata_norm.var):
+            for _col in _df.columns:
+                try:
+                    if type(_df[_col].array).__name__ in ("ArrowStringArray", "ArrowExtensionArray"):
+                        _df[_col] = _df[_col].astype(object)
+                except Exception:
+                    pass
+            try:
+                if type(_df.index.array).__name__ in ("ArrowStringArray", "ArrowExtensionArray"):
+                    _df.index = _pd.Index(_df.index.to_numpy(dtype=object, na_value=""))
+            except Exception:
+                pass
         adata_norm.write_h5ad(session_dir / "rank_genes_adata_norm.h5ad")
         store["viewer_session"].attrs["has_rank_genes"] = True
         store["viewer_session"].attrs["rank_genes_groupby"] = groupby
