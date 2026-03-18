@@ -154,6 +154,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["rank_genes_df"] = df
         state["rank_genes_adata_norm"] = adata_norm
         state["rank_genes_groupby"] = clustering_key
+        zarr_path = ctx.data_path / "sdata_cached.zarr"
+        if not ctx.no_cache and zarr_path.exists():
+            from utils.session import save_rank_genes_incremental
+            save_rank_genes_incremental(zarr_path, df, adata_norm, clustering_key)
         ga_run_button.enabled = True
         ga_dotplot_button.enabled = True
         ga_rank_plot_button.enabled = True
@@ -759,8 +763,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
         rg = session.get("rank_genes_df")
         if rg is not None:
             state["rank_genes_df"] = rg
+            state["rank_genes_adata_norm"] = session.get("rank_genes_adata_norm")
+            state["rank_genes_groupby"] = session.get("rank_genes_groupby")
+            ga_dotplot_button.enabled = state["rank_genes_adata_norm"] is not None
+            ga_rank_plot_button.enabled = True
+            ga_edit_labels_button.enabled = True
+            ga_reset_labels_button.enabled = True
             ga_export_button.enabled = True
-            ga_volcano_button.enabled = True
+            ga_volcano_button.enabled = state["rank_genes_adata_norm"] is not None
+            llm_annotate_button.enabled = True
+            preview = rg.head(50).to_string(index=False)
+            ga_results_text.setPlainText(preview)
             print(f"  Restored rank genes ({len(rg)} rows)")
 
     return widget, {"ga_clustering_widget": ga_clustering_widget, "restore_session": _restore_session}

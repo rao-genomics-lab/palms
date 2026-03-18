@@ -3,6 +3,15 @@
 ## [Unreleased] — 2026-03-18
 
 ### Added
+- **Gene Correlation tab** — scatter plot of per-cell expression for any two selected
+  genes, annotated with Pearson r and Spearman ρ (both with p-values). Optionally
+  restricted to the current cluster filter selection. Plot can be saved in the
+  user's preferred format (PNG/SVG).
+- **Normalisation options for Gene Correlation** — new "Normalisation" ComboBox with three
+  choices: *Raw counts* (default off), *Fraction of total* (library-size correction), and
+  *Log1p(CPM)* (default; matches normalisation used in DEG / dotplot tabs). Axis labels and
+  status-bar output reflect the selected mode. `code.py` emits the correct normalisation
+  snippet for each choice.
 - **Filter small clusters by cell count** — new "Min cluster size" slider (100–10,000)
   and "Filter Small Clusters" button in the Cell Colouring tab. Clicking the button
   auto-unchecks clusters with fewer than N cells and enables the cluster filter,
@@ -10,6 +19,18 @@
   neighborhood enrichment, co-occurrence).
 
 ### Fixed
+- **Rank genes results lost on crash** — rank genes results are now auto-saved immediately
+  after computation via `save_rank_genes_incremental` in `utils/session.py`. This writes
+  `rank_genes.parquet`, `rank_genes_adata_norm.h5ad`, and the `rank_genes_groupby` key
+  to the zarr session. On session restore, all downstream buttons (dotplot, rank plot,
+  volcano, edit/reset labels, export, LLM annotate) are re-enabled and the results
+  preview is repopulated. Previously, only export and volcano were re-enabled and
+  dotplot/rank-plot required re-running rank genes. Skipped when `--no-cache` is active.
+- **Custom clusterings lost on crash** — Leiden runs and CSV imports now write an
+  incremental parquet + update `custom_clustering_names` in the zarr session immediately
+  after creation (`save_clustering_incremental` in `utils/session.py`). Previously,
+  clusterings were only persisted on clean exit; a force-kill or crash meant they were lost.
+  Skipped automatically when `--no-cache` is active or the zarr store does not yet exist.
 - **Duplicate File/Preferences menus on dataset reload** — `create_file_menu()` now appends
   Xenium actions to napari's native `viewer.window.file_menu` (called once at startup) instead
   of creating a parallel custom "File" QMenu on every dataset load. `create_preferences_menu()`

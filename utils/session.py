@@ -181,6 +181,7 @@ def save_session(
             attrs["has_rank_genes"] = True
         else:
             attrs["has_rank_genes"] = False
+        attrs["rank_genes_groupby"] = state.get("rank_genes_groupby")
 
         # roi_deg_df
         roi_deg_df = state.get("roi_deg_df")
@@ -275,6 +276,44 @@ def save_session(
         print(f"Warning: could not save session: {e}")
 
 
+def save_clustering_incremental(zarr_path: Path, name: str, series, all_names: list) -> None:
+    """Write a single custom clustering to the session store without a full session rebuild.
+
+    Safe to call immediately after clustering creation. No-ops silently if the
+    viewer_session group does not yet exist (first launch before any exit).
+    """
+    try:
+        store = zarr.open_group(str(zarr_path), mode="r+", use_consolidated=False)
+        if "viewer_session" not in store:
+            return
+        clust_dir = Path(zarr_path) / "viewer_session" / "clusterings"
+        clust_dir.mkdir(exist_ok=True)
+        series.to_frame(name="cluster").to_parquet(clust_dir / f"{name}.parquet")
+        store["viewer_session"].attrs["custom_clustering_names"] = list(all_names)
+    except Exception as e:
+        print(f"Warning: could not auto-save clustering '{name}': {e}")
+
+
+def save_rank_genes_incremental(zarr_path: Path, df, adata_norm, groupby: str) -> None:
+    """Write rank genes results to the session store without a full session rebuild.
+
+    Saves the results DataFrame as parquet, the normalized AnnData as h5ad, and
+    records the groupby key in zarr attrs. Safe to call immediately after rank
+    genes computation completes. No-ops silently if viewer_session does not exist.
+    """
+    try:
+        store = zarr.open_group(str(zarr_path), mode="r+", use_consolidated=False)
+        if "viewer_session" not in store:
+            return
+        session_dir = Path(zarr_path) / "viewer_session"
+        df.to_parquet(session_dir / "rank_genes.parquet")
+        adata_norm.write_h5ad(session_dir / "rank_genes_adata_norm.h5ad")
+        store["viewer_session"].attrs["has_rank_genes"] = True
+        store["viewer_session"].attrs["rank_genes_groupby"] = groupby
+    except Exception as e:
+        print(f"Warning: could not auto-save rank genes: {e}")
+
+
 def load_session(zarr_path: Path) -> Optional[dict]:
     """
     Load viewer session state from zarr store.
@@ -315,6 +354,8 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "flip_h": attrs.get("flip_h", False),
         "cluster_labels": None,
         "rank_genes_df": None,
+        "rank_genes_adata_norm": None,
+        "rank_genes_groupby": None,
         "roi_deg_df": None,
         "arms_tile_deg_df": None,
         "ligrec_means": None,
@@ -398,10 +439,15 @@ def load_session(zarr_path: Path) -> Optional[dict]:
     # ── Analysis DataFrames ───────────────────────────────────────────
     session_dir = Path(zarr_path) / "viewer_session"
 
+    result["rank_genes_groupby"] = attrs.get("rank_genes_groupby")
     if attrs.get("has_rank_genes"):
         p = session_dir / "rank_genes.parquet"
         if p.exists():
             result["rank_genes_df"] = pd.read_parquet(p)
+        p = session_dir / "rank_genes_adata_norm.h5ad"
+        if p.exists():
+            import scanpy as sc
+            result["rank_genes_adata_norm"] = sc.read_h5ad(p)
 
     if attrs.get("has_roi_deg"):
         p = session_dir / "roi_deg.parquet"
