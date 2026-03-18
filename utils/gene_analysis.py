@@ -13,6 +13,9 @@ Provides:
 from __future__ import annotations
 
 import itertools
+import json
+import re
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +27,35 @@ from typing import Optional, Callable
 
 # Module-level cache: id(adata) -> normalized copy
 _norm_cache: dict[int, sc.AnnData] = {}
+
+
+def _build_label_mapping(categories, cluster_labels: dict) -> dict[str, str]:
+    """Build str(cluster_id) -> label mapping, handling int or str keys."""
+    mapping = {}
+    for c in categories:
+        label = cluster_labels.get(
+            c, cluster_labels.get(int(c) if str(c).lstrip('-').isdigit() else c, str(c))
+        )
+        mapping[str(c)] = str(label)
+    return mapping
+
+
+def _relabel_axes(fig: plt.Figure, mapping: dict[str, str]) -> None:
+    """Replace integer cluster IDs in axis tick labels with user-assigned labels."""
+    for ax in fig.get_axes():
+        for get_fn, set_fn in (
+            (ax.get_xticklabels, ax.set_xticklabels),
+            (ax.get_yticklabels, ax.set_yticklabels),
+        ):
+            ticks = get_fn()
+            if not ticks:
+                continue
+            texts = [t.get_text() for t in ticks]
+            new_texts = [mapping.get(t, t) for t in texts]
+            if new_texts != texts:
+                set_fn(new_texts,
+                       rotation=ticks[0].get_rotation(),
+                       fontsize=ticks[0].get_fontsize())
 
 
 def get_normalized_adata(adata: sc.AnnData) -> sc.AnnData:
@@ -80,29 +112,31 @@ def make_rank_genes_dotplot(
     dendrogram: bool = True,
 ) -> plt.Figure:
     """Create a dotplot of top marker genes per cluster. Returns matplotlib Figure."""
-    # Work on a copy if we need to rename categories
-    if cluster_labels:
-        ad = adata_norm.copy()
-        cat = ad.obs[groupby].cat
-        new_cats = [cluster_labels.get(c, cluster_labels.get(int(c), c) if c.lstrip('-').isdigit() else c)
-                    for c in cat.categories]
-        ad.obs[groupby] = ad.obs[groupby].cat.rename_categories(new_cats)
-        # Re-run rank_genes so the group names match
-        method = adata_norm.uns.get('rank_genes_groups', {}).get('params', {}).get('method', 'wilcoxon')
-        sc.tl.rank_genes_groups(ad, groupby, method=method, n_genes=n_genes)
-    else:
-        ad = adata_norm
+    label_mapping = _build_label_mapping(
+        adata_norm.obs[groupby].cat.categories, cluster_labels or {}
+    )
 
     if dendrogram:
         try:
-            sc.tl.dendrogram(ad, groupby)
+            sc.tl.dendrogram(adata_norm, groupby)
         except Exception:
             dendrogram = False
 
     dp = sc.pl.rank_genes_groups_dotplot(
-        ad, groupby=groupby, n_genes=n_genes,
+        adata_norm, groupby=groupby, n_genes=n_genes,
         dendrogram=dendrogram, show=False, return_fig=True,
     )
+    if label_mapping:
+        if isinstance(dp, plt.Figure):
+            fig = dp
+        elif hasattr(dp, 'fig') and dp.fig is not None:
+            fig = dp.fig
+        elif hasattr(dp, 'figure') and dp.figure is not None:
+            fig = dp.figure
+        else:
+            fig = None
+        if fig is not None:
+            _relabel_axes(fig, label_mapping)
     return dp
 
 
@@ -112,20 +146,15 @@ def make_rank_genes_plot(
     cluster_labels: Optional[dict] = None,
 ) -> plt.Figure:
     """Create the standard rank_genes_groups panel plot. Returns matplotlib Figure."""
-    if cluster_labels:
-        ad = adata_norm.copy()
-        groupby = ad.uns.get('rank_genes_groups', {}).get('params', {}).get('groupby')
-        if groupby and groupby in ad.obs.columns:
-            cat = ad.obs[groupby].cat
-            new_cats = [cluster_labels.get(c, cluster_labels.get(int(c), c) if c.lstrip('-').isdigit() else c)
-                        for c in cat.categories]
-            ad.obs[groupby] = ad.obs[groupby].cat.rename_categories(new_cats)
-            method = ad.uns.get('rank_genes_groups', {}).get('params', {}).get('method', 'wilcoxon')
-            sc.tl.rank_genes_groups(ad, groupby, method=method, n_genes=n_genes)
-        sc.pl.rank_genes_groups(ad, n_genes=n_genes, show=False)
-    else:
-        sc.pl.rank_genes_groups(adata_norm, n_genes=n_genes, show=False)
-    return plt.gcf()
+    groupby = adata_norm.uns.get('rank_genes_groups', {}).get('params', {}).get('groupby')
+    sc.pl.rank_genes_groups(adata_norm, n_genes=n_genes, show=False)
+    fig = plt.gcf()
+    if cluster_labels and groupby and groupby in adata_norm.obs.columns:
+        label_mapping = _build_label_mapping(
+            adata_norm.obs[groupby].cat.categories, cluster_labels
+        )
+        _relabel_axes(fig, label_mapping)
+    return fig
 
 
 def run_celltypist_annotation(adata, model_name):
@@ -151,6 +180,148 @@ def run_celltypist_annotation(adata, model_name):
     predictions = result.predicted_labels['predicted_labels']
     confidence = result.probability_matrix.max(axis=1)
     return predictions, confidence
+
+
+def load_reference_h5ad(path: str | Path) -> sc.AnnData:
+    """Load a reference scRNA-seq h5ad file."""
+    path = Path(path).expanduser()
+    return sc.read_h5ad(path)
+
+
+def get_annotation_columns(ref_adata: sc.AnnData, max_cardinality: int = 200) -> list[str]:
+    """Return obs columns suitable as annotation labels (categorical/object/string, 2–200 unique)."""
+    cols = []
+    for col in ref_adata.obs.columns:
+        dtype = ref_adata.obs[col].dtype
+        if isinstance(dtype, pd.CategoricalDtype) or dtype == object or dtype.name == 'string':
+            n_unique = ref_adata.obs[col].nunique()
+            if 2 <= n_unique <= max_cardinality:
+                cols.append(col)
+    return cols
+
+
+def run_label_transfer(
+    xenium_adata: sc.AnnData,
+    ref_adata: sc.AnnData,
+    annotation_col: str,
+) -> tuple[pd.Series, int]:
+    """Transfer labels from reference to Xenium data via sc.tl.ingest().
+
+    Parameters
+    ----------
+    xenium_adata : AnnData
+        Raw-count Xenium AnnData.
+    ref_adata : AnnData
+        Reference scRNA-seq AnnData with annotation_col in obs.
+    annotation_col : str
+        Column in ref_adata.obs containing cell type labels.
+
+    Returns
+    -------
+    (predictions, n_common_genes) : tuple[pd.Series, int]
+        predictions: transferred labels indexed by xenium obs_names.
+        n_common_genes: number of common genes used.
+    """
+    # Find common genes
+    common_genes = list(set(xenium_adata.var_names) & set(ref_adata.var_names))
+    n_common = len(common_genes)
+    if n_common < 10:
+        raise ValueError(
+            f"Only {n_common} common genes between Xenium and reference — "
+            f"need at least 10 for label transfer."
+        )
+    common_genes = sorted(common_genes)
+
+    # Subset both to common genes
+    ref_sub = ref_adata[:, common_genes].copy()
+    xen_sub = xenium_adata[:, common_genes].copy()
+
+    # Preprocess reference: normalize → log1p → HVG → PCA → neighbors → UMAP
+    sc.pp.normalize_total(ref_sub, target_sum=1e4)
+    sc.pp.log1p(ref_sub)
+    sc.pp.highly_variable_genes(ref_sub)
+    sc.pp.pca(ref_sub)
+    sc.pp.neighbors(ref_sub)
+    sc.tl.umap(ref_sub)
+
+    # Preprocess Xenium subset: normalize → log1p
+    sc.pp.normalize_total(xen_sub, target_sum=1e4)
+    sc.pp.log1p(xen_sub)
+
+    # Label transfer via ingest
+    sc.tl.ingest(xen_sub, ref_sub, obs=annotation_col)
+
+    predictions = xen_sub.obs[annotation_col]
+    predictions.index = xenium_adata.obs_names
+    return predictions, n_common
+
+
+def build_llm_annotation_prompt(rank_df: pd.DataFrame, n_genes: int = 10) -> str:
+    """Build an LLM prompt from rank genes results asking for cell type annotation."""
+    cluster_lines = []
+    for group, grp_df in rank_df.groupby("group"):
+        top_genes = grp_df.head(n_genes)["names"].tolist()
+        cluster_lines.append(f"Cluster {group}: {', '.join(top_genes)}")
+
+    cluster_text = "\n".join(cluster_lines)
+    return (
+        "You are a bioinformatics expert. I have single-cell RNA-seq data clustered "
+        f"into {len(cluster_lines)} groups. Below are the top {n_genes} differentially "
+        "expressed marker genes for each cluster (ranked by statistical significance).\n\n"
+        "Identify the most likely cell type for each cluster based on these marker genes.\n\n"
+        "Return ONLY a valid JSON object mapping cluster ID (as string) to cell type name. "
+        'Example: {"0": "CD8+ T cells", "1": "Fibroblasts", ...}\n\n'
+        f"{cluster_text}"
+    )
+
+
+def parse_llm_annotation_response(stdout: str) -> dict:
+    """Extract a JSON dict from LLM stdout, handling markdown fences and extra text."""
+    # Try to find JSON in markdown code blocks first
+    fence_match = re.search(r"```(?:json)?\s*\n?({.*?})\s*\n?```", stdout, re.DOTALL)
+    if fence_match:
+        return json.loads(fence_match.group(1))
+
+    # Try to find a JSON object directly
+    brace_match = re.search(r"\{[^{}]*\}", stdout, re.DOTALL)
+    if brace_match:
+        return json.loads(brace_match.group(0))
+
+    raise ValueError(f"Could not parse JSON from LLM response:\n{stdout[:500]}")
+
+
+def run_llm_annotation(rank_df: pd.DataFrame, cli: str, n_genes: int = 10) -> dict:
+    """Run LLM-based cluster annotation via a local CLI tool.
+
+    Parameters
+    ----------
+    rank_df : DataFrame
+        Output of sc.get.rank_genes_groups_df (columns: group, names, scores, ...).
+    cli : str
+        One of 'claude', 'gemini', 'codex'.
+    n_genes : int
+        Number of top genes per cluster to include in the prompt.
+
+    Returns
+    -------
+    dict mapping cluster ID (str) to cell type name (str).
+    """
+    prompt = build_llm_annotation_prompt(rank_df, n_genes=n_genes)
+
+    if cli == "claude":
+        cmd = ["claude", "-p", prompt, "--model", "haiku", "--allowedTools", "", "--max-turns", "1"]
+    elif cli == "gemini":
+        cmd = ["gemini", "-p", prompt]
+    elif cli == "codex":
+        cmd = ["codex", "-q", prompt, "--full-auto"]
+    else:
+        raise ValueError(f"Unknown CLI: {cli}")
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(f"{cli} failed (exit {result.returncode}): {result.stderr[:500]}")
+
+    return parse_llm_annotation_response(result.stdout)
 
 
 def compute_roi_deg(

@@ -355,7 +355,11 @@ def create_shared_helpers(ctx: ViewerContext):
         if not clustering_key or clustering_key not in ctx.clusterings:
             return False
         cluster_series = ctx.clusterings[clustering_key]
-        ids = sorted(cluster_series.dropna().unique().tolist(), key=lambda x: (str(x),))
+        _ids = cluster_series.dropna().unique().tolist()
+        try:
+            ids = sorted(_ids, key=lambda x: int(x))
+        except (ValueError, TypeError):
+            ids = sorted(_ids, key=lambda x: str(x))
         existing = _get_labels_for(clustering_key)
 
         dialog = QDialog()
@@ -460,42 +464,53 @@ def create_shared_helpers(ctx: ViewerContext):
 
 # ── File menu ────────────────────────────────────────────────────────────────
 
-def create_file_menu(ctx: ViewerContext, on_open_dataset, on_preprocess_dataset=None):
-    """Build a File menu on the napari menu bar with an Open Dataset action."""
-    from qtpy.QtWidgets import QMenu
+def create_file_menu(viewer, on_open_dataset, on_preprocess_dataset=None):
+    """Add Xenium actions to napari's existing File menu (call once at startup)."""
     from qtpy.QtGui import QAction
 
-    menu_bar = ctx.viewer.window._qt_window.menuBar()
-    file_menu = QMenu("File", menu_bar)
-    existing = menu_bar.actions()
-    if existing:
-        menu_bar.insertMenu(existing[0], file_menu)  # insert before Preferences
-    else:
-        menu_bar.addMenu(file_menu)
+    file_menu = viewer.window.file_menu
 
-    act = QAction("Open Dataset...", file_menu)
-    act.setShortcut("Ctrl+O")
-    file_menu.addAction(act)
-    act.triggered.connect(on_open_dataset)
+    sep = file_menu.addSeparator()
+    sep.setObjectName("xenium_sep")
+
+    open_act = QAction("Open Dataset...", file_menu)
+    open_act.setObjectName("xenium_open")
+    open_act.setShortcut("Ctrl+O")
+    open_act.triggered.connect(on_open_dataset)
+    file_menu.addAction(open_act)
 
     if on_preprocess_dataset is not None:
-        file_menu.addSeparator()
-        act2 = QAction("Preprocess Dataset...", file_menu)
-        file_menu.addAction(act2)
-        act2.triggered.connect(on_preprocess_dataset)
+        pre_act = QAction("Preprocess Dataset...", file_menu)
+        pre_act.setObjectName("xenium_preprocess")
+        pre_act.triggered.connect(on_preprocess_dataset)
+        file_menu.addAction(pre_act)
 
 
 # ── Preferences menu ─────────────────────────────────────────────────────────
 
 def create_preferences_menu(ctx: ViewerContext):
-    """Build the Preferences menu on the napari menu bar."""
+    """Build the Preferences menu on the napari menu bar.
+
+    Reuses an existing Preferences menu if present, clearing stale actions
+    from the previous dataset load before repopulating.
+    """
     from qtpy.QtWidgets import QActionGroup, QMenu
     from qtpy.QtGui import QAction
 
     state = ctx.state
     menu_bar = ctx.viewer.window._qt_window.menuBar()
-    prefs_menu = QMenu("Preferences", menu_bar)
-    menu_bar.addMenu(prefs_menu)
+
+    # Reuse existing Preferences menu if present; clear stale actions from previous dataset
+    prefs_menu = None
+    for act in menu_bar.actions():
+        if act.menu() and act.menu().title() == "Preferences":
+            prefs_menu = act.menu()
+            break
+    if prefs_menu is None:
+        prefs_menu = QMenu("Preferences", menu_bar)
+        menu_bar.addMenu(prefs_menu)
+    else:
+        prefs_menu.clear()
 
     # Plot format
     format_menu = prefs_menu.addMenu("Plot format")

@@ -32,7 +32,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     leiden_run_button = PushButton(label="Run Leiden Clustering", enabled=True)
     leiden_import_button = PushButton(label="Import Clustering...", enabled=True)
     leiden_export_button = PushButton(label="Export Clustering...", enabled=True)
-    leiden_edit_labels_button = PushButton(label="Edit Cluster Labels...", enabled=True)
 
     leiden_status_text = QTextEdit()
     leiden_status_text.setReadOnly(True)
@@ -201,18 +200,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     leiden_import_button.clicked.connect(_on_import_clustering)
     leiden_export_button.clicked.connect(_on_export_clustering)
 
-    # ── Edit cluster labels ──────────────────────────────────────────────
-    def _open_clustering_label_editor():
-        clustering_key = ctx.clustering_widget.value
-        if not clustering_key or clustering_key not in ctx.clusterings:
-            leiden_status.value = "No clustering selected"
-            return
-        if ctx.build_label_editor_dialog(clustering_key):
-            leiden_status.value = f"Labels updated for {clustering_key}"
-            ctx.repopulate_cluster_checkboxes()
-
-    leiden_edit_labels_button.clicked.connect(_open_clustering_label_editor)
-
     # ── Layout ───────────────────────────────────────────────────────────
     leiden_io_row = QWidget()
     leiden_io_layout = QHBoxLayout()
@@ -231,7 +218,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         leiden_run_button,
         leiden_status_text,
         leiden_io_row,
-        leiden_edit_labels_button,
     )
 
     def _restore_session(session):

@@ -1,8 +1,81 @@
 # Changelog
 
-## [Unreleased] — 2026-03-17
+## [Unreleased] — 2026-03-18
 
 ### Added
+- **Filter small clusters by cell count** — new "Min cluster size" slider (100–10,000)
+  and "Filter Small Clusters" button in the Cell Colouring tab. Clicking the button
+  auto-unchecks clusters with fewer than N cells and enables the cluster filter,
+  propagating to all downstream analyses (cell colouring, ligand-receptor,
+  neighborhood enrichment, co-occurrence).
+
+### Fixed
+- **Duplicate File/Preferences menus on dataset reload** — `create_file_menu()` now appends
+  Xenium actions to napari's native `viewer.window.file_menu` (called once at startup) instead
+  of creating a parallel custom "File" QMenu on every dataset load. `create_preferences_menu()`
+  now finds-or-creates a single "Preferences" menu and clears stale actions before repopulating,
+  so N dataset loads no longer produce N Preferences menus. The now-redundant
+  `_attach_bare_file_menu()` helper and its cleanup code in `_do_full_init()` have been removed.
+- **Dotplot crash with `'NoneType' object has no attribute 'get_axes'`** — in a
+  `@thread_worker` context `plt.gcf()` returns `None`; the `_relabel_axes` fallback
+  now checks `.fig` and `.figure` attributes explicitly and skips relabelling rather
+  than crashing when no figure object is found.
+- **Dotplot/Rank Genes Plot crash with duplicate cluster labels** — when multiple clusters
+  share the same user-assigned label (e.g. several clusters all named "Unknown"), the old
+  code called `rename_categories()` which raised `ValueError: Categorical categories must
+  be unique`. Fixed by removing the rename + re-run approach entirely: plots now use the
+  original integer cluster IDs from `uns['rank_genes_groups']` and apply label substitution
+  post-hoc via axis tick replacement (`_relabel_axes`).
+- **Minimap persists on dataset reload** — when opening a new dataset via File > Open Dataset,
+  the old `MinimapWidget` is now explicitly hidden and scheduled for deletion before the new
+  dataset is loaded, preventing stale thumbnails from overlapping the new minimap.
+- **Cluster label dialog sorts numerically** — the "Edit Cluster Labels" dialog in the
+  Clustering and Gene Analysis tabs now sorts cluster IDs numerically (0, 1, 2, … 19) instead
+  of lexicographically (0, 1, 10, 11, … 19, 2, 3); falls back to string sort for non-integer IDs.
+
+### Changed
+- **"Edit Cluster Labels..." moved to Cell Colouring tab** — the button is now in the Cell
+  Colouring tab (below "Apply Cell Coloring"), where it is more naturally discovered alongside
+  the clustering selector and cluster filter controls. Removed from the Clustering tab.
+
+### Added
+- **LLM-based cluster annotation** — new "LLM Annotation" section in Gene Analysis tab.
+  After running Rank Genes, click "Annotate with LLM" to send top 10 marker genes per
+  cluster to a locally installed AI CLI (Claude, Gemini, or Codex). The LLM returns cell
+  type annotations as JSON, which are stored as cluster labels and shown in dotplots,
+  rank gene plots, and hover text. Runs in a background thread to keep UI responsive.
+
+- **Cluster ID shown on hover** — when hovering over cells with custom labels (from
+  CellTypist, label transfer, or LLM annotation), the status bar now shows both the
+  numeric cluster ID and the label name, e.g. "Cell 12345 — leiden: 3 (T cells)".
+
+- **Reference dataset auto-discovery** — the label transfer section now discovers
+  reference datasets from `.metadata.json` sidecar files in `reference_datasets/`
+  instead of using a hardcoded dictionary. Each h5ad gets a companion JSON file with
+  structured metadata (paper, authors, journal, year, platform, tissue, annotation
+  columns, default column, annotation workflow). Selecting a dataset in the ComboBox
+  shows paper/platform/tissue info in the status bar. New datasets can be added by
+  placing an h5ad + metadata.json pair in `reference_datasets/`.
+
+- **`scripts/fetch_reference_datasets.py`** — standalone download & conversion script
+  for 4 additional public scRNA-seq reference datasets: Prostate Cell Atlas
+  (Clatworthy/Tuong 2021, direct h5ad), HuPSA (Cheng et al. 2024, Seurat .rds via
+  rpy2), GSE176031 (Song/Huang 2021, GEO TXT matrices), GSE181294 (Mei et al. 2023,
+  GEO MTX/CSV). Run with `--all` or `--dataset <name>`. Supports `--force` re-download,
+  `--keep-raw` to preserve staging files. Each dataset generates both an h5ad file and a
+  `.metadata.json` sidecar.
+
+- **Label transfer via sc.tl.ingest()** — new "Label Transfer" section in Gene Analysis
+  tab. Select a reference scRNA-seq dataset (two preconfigured prostate cancer datasets
+  included, or browse for any h5ad file), load it, pick an annotation column, and click
+  "Run Label Transfer" to project cell type labels onto Xenium clusters. Pipeline: find
+  common genes → subset both → preprocess reference (normalize, log1p, HVG, PCA, neighbors,
+  UMAP) → preprocess Xenium (normalize, log1p) → `sc.tl.ingest()` → majority vote per
+  cluster. Reference datasets are cached in memory after first load. Preconfigured datasets:
+  Zhao et al. (222K cells, ct.main/ct.sub/ct.sub.epi) and eBioMedicine (21K cells,
+  ID/ID_coarse/refinedID). New utility functions: `load_reference_h5ad()`,
+  `get_annotation_columns()`, `run_label_transfer()` in `utils/gene_analysis.py`.
+
 - **CellTypist automated cell type annotation** — new "CellTypist Annotation" section
   in the Gene Analysis tab. Select a CellTypist model from a dropdown, click "Annotate
   with CellTypist" to run per-cell predictions, then majority-vote assigns cell type
@@ -15,6 +88,10 @@
   passed the threshold. Gracefully degrades when celltypist is not installed (widgets
   shown but disabled). New `run_celltypist_annotation()` utility in
   `utils/gene_analysis.py`.
+
+- **Reset Labels button** in Gene Analysis tab — quickly reverts cluster labels back to
+  original numeric IDs after CellTypist annotation or manual editing. Removes the entry
+  from `state["cluster_labels"]` for the selected clustering.
 
 - **Complete code recording coverage** — all analysis actions now record parameters to
   `code.py` via `ctx.record_code()`:

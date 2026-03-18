@@ -307,7 +307,7 @@ def _add_layers_manually(viewer, sdata):
                 print(f"  Warning: could not extract {key} scales")
 
 
-def _build_control_panel(ctx: ViewerContext, on_open_dataset=None, on_preprocess_dataset=None):
+def _build_control_panel(ctx: ViewerContext):
     """Build the tabbed control panel using per-tab modules.
 
     Returns (tab_widget, state, he_state, restore_session).
@@ -346,10 +346,6 @@ def _build_control_panel(ctx: ViewerContext, on_open_dataset=None, on_preprocess
 
     # ── Populate initial cluster checkboxes ──────────────────────────────
     ctx.repopulate_cluster_checkboxes()
-
-    # ── Create File menu (if callback provided) ───────────────────────────
-    if on_open_dataset is not None:
-        create_file_menu(ctx, on_open_dataset, on_preprocess_dataset)
 
     # ── Create Preferences menu ──────────────────────────────────────────
     create_preferences_menu(ctx)
@@ -390,7 +386,10 @@ def _build_control_panel(ctx: ViewerContext, on_open_dataset=None, on_preprocess
                     raw_cid = raw_map[cid] if raw_map and cid in raw_map else cid
                     labels = ctx.get_active_labels()
                     display_cid = labels.get(raw_cid, labels.get(str(raw_cid), raw_cid))
-                    text = f"Cell {int(label_val)} \u2014 {name}: {display_cid}"
+                    if str(display_cid) != str(raw_cid):
+                        text = f"Cell {int(label_val)} \u2014 {name}: {raw_cid} ({display_cid})"
+                    else:
+                        text = f"Cell {int(label_val)} \u2014 {name}: {display_cid}"
                 else:
                     text = f"Cell {int(label_val)} \u2014 {name}: unassigned"
                 QTimer.singleShot(0, lambda t=text: setattr(ctx.viewer, 'status', t))
@@ -689,8 +688,7 @@ def _make_initial_arms_state() -> dict:
     }
 
 
-def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict,
-                  on_open_dataset, on_preprocess_dataset) -> ViewerContext:
+def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> ViewerContext:
     """Load a dataset and build the full UI. Returns a fresh ViewerContext."""
     from utils.session import load_session
 
@@ -726,12 +724,6 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict,
     ctx.he_state = _make_initial_he_state()
     ctx.arms_state = _make_initial_arms_state()
 
-    # Remove bare File menu if one was added before a dataset was loaded
-    if _app.get("bare_file_menu") is not None:
-        menu_bar = viewer.window._qt_window.menuBar()
-        menu_bar.removeAction(_app["bare_file_menu"].menuAction())
-        _app["bare_file_menu"] = None
-
     # Remove old dock widget if present
     if _app["dock_widget"] is not None:
         try:
@@ -740,9 +732,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict,
             pass
         _app["dock_widget"] = None
 
-    panel, _state, _he_state, restore_fn = _build_control_panel(
-        ctx, on_open_dataset=on_open_dataset, on_preprocess_dataset=on_preprocess_dataset
-    )
+    panel, _state, _he_state, restore_fn = _build_control_panel(ctx)
     _app["dock_widget"] = viewer.window.add_dock_widget(
         panel, name="Xenium Controls", area="right"
     )
@@ -775,31 +765,6 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict,
     return ctx
 
 
-def _attach_bare_file_menu(viewer, on_open_dataset, on_preprocess_dataset, _app):
-    """Attach a minimal File menu to a bare napari viewer (no dataset loaded)."""
-    from qtpy.QtWidgets import QMenu
-    from qtpy.QtGui import QAction
-
-    menu_bar = viewer.window._qt_window.menuBar()
-    file_menu = QMenu("File", menu_bar)
-    existing = menu_bar.actions()
-    if existing:
-        menu_bar.insertMenu(existing[0], file_menu)
-    else:
-        menu_bar.addMenu(file_menu)
-
-    act = QAction("Open Dataset...", file_menu)
-    act.setShortcut("Ctrl+O")
-    file_menu.addAction(act)
-    act.triggered.connect(on_open_dataset)
-
-    file_menu.addSeparator()
-    act2 = QAction("Preprocess Dataset...", file_menu)
-    file_menu.addAction(act2)
-    act2.triggered.connect(on_preprocess_dataset)
-
-    _app["bare_file_menu"] = file_menu
-
 
 def main(data_path=None, no_cache: bool = False):
     print("=" * 60)
@@ -821,7 +786,6 @@ def main(data_path=None, no_cache: bool = False):
         "restore_fn": None,
         "snapshot": {},
         "reload_in_progress": False,
-        "bare_file_menu": None,
     }
 
     ctx = None  # set after first dataset load
@@ -893,13 +857,22 @@ def main(data_path=None, no_cache: bool = False):
                 ctx.morph_thumb = None
                 gc.collect()
 
+            # Clean up old minimap before creating a new one
+            old_minimap = _app.get("minimap")
+            if old_minimap is not None:
+                try:
+                    old_minimap.hide()
+                    old_minimap.deleteLater()
+                except Exception:
+                    pass
+                _app["minimap"] = None
+
             # 6. Clear all layers
             viewer.layers.clear()
 
             # 7. Full init (loads data, builds ctx, control panel, restores session)
             try:
-                ctx = _do_full_init(viewer, new_path, no_cache, _app,
-                                    _on_open_dataset, _on_preprocess_dataset)
+                ctx = _do_full_init(viewer, new_path, no_cache, _app)
             except Exception as exc:
                 QMessageBox.critical(
                     None,
@@ -987,6 +960,9 @@ def main(data_path=None, no_cache: bool = False):
         worker.start()
         dlg.exec_()  # blocks Qt event loop until dlg.accept() is called
 
+    # ── File menu — added once to napari's native File menu ──────────────────
+    create_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset)
+
     # ── Snapshot layer data before Qt teardown, then save on exit ────────────
     if not no_cache:
         def _on_viewer_closing(_event=None):
@@ -997,12 +973,10 @@ def main(data_path=None, no_cache: bool = False):
         QApplication.instance().aboutToQuit.connect(_on_viewer_closing)
 
     if data_path is not None:
-        ctx = _do_full_init(viewer, data_path, no_cache, _app,
-                            _on_open_dataset, _on_preprocess_dataset)
+        ctx = _do_full_init(viewer, data_path, no_cache, _app)
         total_time = time.perf_counter() - t_start
         print(f"\nViewer ready in {total_time:.1f}s. Close the napari window to exit.")
     else:
-        _attach_bare_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset, _app)
         print("Viewer ready (no dataset loaded). Use File menu to open or preprocess.")
 
     napari.run()

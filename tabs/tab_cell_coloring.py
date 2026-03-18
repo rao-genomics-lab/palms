@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-from magicgui.widgets import ComboBox, CheckBox, PushButton, RadioButtons
+from magicgui.widgets import ComboBox, CheckBox, PushButton, RadioButtons, Slider
 from qtpy.QtWidgets import (
     QWidget, QHBoxLayout, QScrollArea, QGridLayout,
 )
@@ -47,6 +47,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     filter_check = CheckBox(label="Filter by cluster", value=False, enabled=True)
 
+    min_cells_widget = Slider(
+        label="Min cluster size", min=100, max=10000, value=500, step=100
+    )
+    filter_small_btn = PushButton(label="Filter Small Clusters", enabled=True)
+
     # Scrollable checkbox grid for multi-cluster selection
     cluster_filter_container = QWidget()
     cluster_filter_grid = QGridLayout()
@@ -66,6 +71,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     bg_white_check = CheckBox(label="White background", value=False)
     apply_color_button = PushButton(label="Apply Cell Coloring", enabled=True)
+    edit_labels_button = PushButton(label="Edit Cluster Labels...", enabled=True)
 
     status_label = StatusProxy(ctx.viewer)
 
@@ -236,12 +242,52 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"# background={'white' if value else 'black'}"
         )
 
+    def _on_filter_small_clusters():
+        clustering_key = clustering_widget.value
+        if not clustering_key or clustering_key not in ctx.clusterings:
+            status_label.value = "No clustering selected"
+            return
+        threshold = min_cells_widget.value
+        series = ctx.clusterings[clustering_key]
+        counts = series.value_counts()
+        # Enable filter checkbox so the filter is actually applied downstream
+        filter_check.value = True
+        # Repopulate checkboxes if not yet populated
+        if not state["cluster_checkboxes"]:
+            ctx.repopulate_cluster_checkboxes()
+        # Uncheck clusters smaller than threshold
+        n_excluded = 0
+        for cid, cb in state["cluster_checkboxes"].items():
+            cell_count = counts.get(cid, counts.get(str(cid), 0))
+            include = int(cell_count) >= threshold
+            cb.setChecked(include)
+            if not include:
+                n_excluded += 1
+        status_label.value = (
+            f"Size filter: {n_excluded} cluster(s) with < {threshold} cells excluded"
+        )
+        ctx.record_code(
+            f"\n# Filter clusters by size\n"
+            f"# min_cells={threshold}, {n_excluded} cluster(s) excluded"
+        )
+
+    def _on_edit_labels():
+        clustering_key = clustering_widget.value
+        if not clustering_key or clustering_key not in ctx.clusterings:
+            status_label.value = "No clustering selected"
+            return
+        if ctx.build_label_editor_dialog(clustering_key):
+            status_label.value = f"Labels updated for {clustering_key}"
+            ctx.repopulate_cluster_checkboxes()
+
     # ── Wire events ──────────────────────────────────────────────────────
     mode_widget.changed.connect(on_mode_change)
     filter_check.changed.connect(on_filter_change)
     clustering_widget.changed.connect(on_clustering_change)
     apply_color_button.clicked.connect(on_apply_color)
     bg_white_check.changed.connect(on_bg_change)
+    edit_labels_button.clicked.connect(_on_edit_labels)
+    filter_small_btn.clicked.connect(_on_filter_small_clusters)
 
     # Select All / Deselect All buttons row
     cluster_btn_row = QWidget()
@@ -258,9 +304,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         colormap_widget,
         clustering_widget,
         filter_check,
+        min_cells_widget,
+        filter_small_btn,
         cluster_btn_row,
         cluster_scroll,
         apply_color_button,
+        edit_labels_button,
     )
 
     return widget, {

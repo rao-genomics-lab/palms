@@ -1,6 +1,7 @@
 """Tab 6: Gene Analysis — rank genes, dotplot, volcanos."""
 
 from __future__ import annotations
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,7 +17,37 @@ from utils.gene_analysis import (
     get_normalized_adata, add_clustering_to_obs, run_rank_genes,
     make_rank_genes_dotplot, make_rank_genes_plot, generate_all_volcano_plots,
     run_celltypist_annotation,
+    load_reference_h5ad, get_annotation_columns, run_label_transfer,
+    run_llm_annotation,
 )
+
+_APP_DIR = Path(__file__).resolve().parent.parent
+_REF_DIR = _APP_DIR / "reference_datasets"
+
+
+def _load_dataset_registry() -> dict:
+    """Discover reference datasets from .metadata.json sidecar files."""
+    registry = {}
+    for meta_path in sorted(_REF_DIR.glob("*.metadata.json")):
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        h5ad_path = _REF_DIR / meta["filename"]
+        if not h5ad_path.exists():
+            continue  # skip if h5ad not yet downloaded
+        display = meta.get("display_name", meta["filename"])
+        registry[display] = {
+            "path": str(h5ad_path),
+            "default_col": meta.get("default_col"),
+            "metadata": meta,
+        }
+    registry["Browse..."] = {"path": None, "default_col": None, "metadata": None}
+    return registry
+
+
+_REFERENCE_DATASETS = _load_dataset_registry()
 
 # Check if celltypist is available
 try:
@@ -47,6 +78,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_dotplot_button = PushButton(label="Show Dotplot", enabled=False)
     ga_edit_labels_button = PushButton(label="Edit Cluster Labels...", enabled=False)
     ga_save_dotplot_button = PushButton(label="Save Dotplot as PNG...", enabled=False)
+    ga_reset_labels_button = PushButton(label="Reset Labels", enabled=False)
 
     ga_rank_plot_button = PushButton(label="Show Rank Genes Plot", enabled=False)
 
@@ -126,8 +158,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_dotplot_button.enabled = True
         ga_rank_plot_button.enabled = True
         ga_edit_labels_button.enabled = True
+        ga_reset_labels_button.enabled = True
         ga_export_button.enabled = True
         ga_volcano_button.enabled = True
+        llm_annotate_button.enabled = True
         preview = df.head(50).to_string(index=False)
         ga_results_text.setPlainText(preview)
         ga_status.value = f"Rank genes done: {len(df)} results ({clustering_key}, {ga_method_widget.value})"
@@ -182,6 +216,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
             + f"sc.pl.rank_genes_groups_dotplot(adata, n_genes={_dp_n}, "
             f"dendrogram={_dp_dendro})\nplt.show()"
         )
+
+    def _reset_labels():
+        clustering_key = ga_clustering_widget.value
+        all_labels = state.get("cluster_labels", {})
+        if clustering_key in all_labels:
+            del all_labels[clustering_key]
+        ga_status.value = f"Labels reset for {clustering_key}"
+        ctx.record_code(f"\n# Reset cluster labels for {clustering_key}")
 
     def _open_label_editor():
         clustering_key = ga_clustering_widget.value
@@ -402,9 +444,262 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_ct_download_button.clicked.connect(on_download_models)
     ga_ct_annotate_button.clicked.connect(on_celltypist_annotate)
 
+    # -- LLM Annotation widgets --
+    llm_separator = QLabel("── LLM Annotation ──")
+    llm_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
+    llm_provider_widget = ComboBox(
+        label="LLM Provider",
+        choices=["Claude (claude)", "Gemini (gemini)", "Codex (codex)"],
+        value="Claude (claude)",
+    )
+    llm_annotate_button = PushButton(label="Annotate with LLM", enabled=False)
+
+    def on_llm_annotate():
+        rank_df = state.get("rank_genes_df")
+        if rank_df is None or rank_df.empty:
+            ga_status.value = "Run Rank Genes first"
+            return
+        clustering_key = state.get("rank_genes_groupby")
+        if not clustering_key:
+            ga_status.value = "Run Rank Genes first"
+            return
+
+        # Parse CLI name from combo choice
+        provider_str = llm_provider_widget.value
+        cli = provider_str.split("(")[-1].rstrip(")")
+
+        llm_annotate_button.enabled = False
+        ga_status.value = f"Running LLM annotation ({cli})..."
+
+        @thread_worker
+        def _run():
+            return run_llm_annotation(rank_df, cli, n_genes=10)
+
+        def _on_llm_ready(labels):
+            llm_annotate_button.enabled = True
+            if "cluster_labels" not in state:
+                state["cluster_labels"] = {}
+            state["cluster_labels"][clustering_key] = labels
+
+            label_counts = {}
+            for lbl in labels.values():
+                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+            summary_parts = [f"{lbl} ({n})" for lbl, n in sorted(label_counts.items(), key=lambda x: -x[1])]
+            summary = ", ".join(summary_parts)
+            ga_status.value = f"{len(labels)} clusters annotated via {cli}: {summary}"
+
+            ctx.record_code(
+                f"\n# LLM annotation via {cli}\n"
+                f"from utils.gene_analysis import run_llm_annotation\n"
+                f"llm_labels = run_llm_annotation(rank_df, cli=\"{cli}\", n_genes=10)\n"
+                f"# Assigned labels: {labels}"
+            )
+
+        def _on_llm_error(exc):
+            llm_annotate_button.enabled = True
+            ga_status.value = f"LLM annotation failed: {exc}"
+
+        worker = _run()
+        timer, _ = attach_spinner(worker, lambda m: setattr(ga_status, 'value', m), f"Running {cli}...")
+        state['_llm_spinner_timer'] = timer
+        worker.returned.connect(_on_llm_ready)
+        worker.errored.connect(_on_llm_error)
+        worker.start()
+
+    llm_annotate_button.clicked.connect(on_llm_annotate)
+
+    # -- Label Transfer (sc.tl.ingest) widgets --
+    lt_separator = QLabel("── Label Transfer (sc.tl.ingest) ──")
+    lt_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
+    lt_ref_widget = ComboBox(label="Reference Dataset", choices=list(_REFERENCE_DATASETS.keys()))
+    lt_col_widget = ComboBox(label="Annotation Column", choices=[])
+    lt_load_ref_button = PushButton(label="Load Reference")
+    lt_transfer_button = PushButton(label="Run Label Transfer", enabled=False)
+
+    state["_lt_custom_paths"] = {}
+    state["_lt_ref_cache"] = {}
+
+    def on_lt_ref_changed(value):
+        if value == "Browse...":
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Select Reference h5ad", "", "AnnData Files (*.h5ad)",
+            )
+            if path:
+                name = Path(path).stem
+                display = f"{name} (custom)"
+                state["_lt_custom_paths"][display] = path
+                # Add to choices before Browse...
+                choices = list(lt_ref_widget.choices)
+                if display not in choices:
+                    choices.insert(len(choices) - 1, display)
+                    lt_ref_widget.choices = choices
+                lt_ref_widget.value = display
+            else:
+                # User cancelled — revert to first choice
+                lt_ref_widget.value = list(_REFERENCE_DATASETS.keys())[0]
+        elif value in _REFERENCE_DATASETS:
+            meta = _REFERENCE_DATASETS[value].get("metadata")
+            if meta:
+                authors = meta.get("authors", "")
+                journal = meta.get("journal", "")
+                year = meta.get("year", "")
+                platform = meta.get("platform", "")
+                tissue = meta.get("tissue", "")
+                ga_status.value = f"Paper: {authors} ({journal}, {year}) | Platform: {platform} | Tissue: {tissue}"
+
+    lt_ref_widget.changed.connect(on_lt_ref_changed)
+
+    def _resolve_ref_path():
+        """Resolve the path for the currently selected reference dataset."""
+        value = lt_ref_widget.value
+        if value in _REFERENCE_DATASETS:
+            return _REFERENCE_DATASETS[value]["path"]
+        return state["_lt_custom_paths"].get(value)
+
+    def _get_default_col():
+        value = lt_ref_widget.value
+        if value in _REFERENCE_DATASETS:
+            return _REFERENCE_DATASETS[value]["default_col"]
+        return None
+
+    def on_load_reference():
+        path = _resolve_ref_path()
+        if not path:
+            ga_status.value = "No reference dataset selected"
+            return
+        lt_load_ref_button.enabled = False
+        ga_status.value = "Loading reference dataset..."
+
+        cache_key = path
+
+        @thread_worker
+        def _run():
+            if cache_key in state["_lt_ref_cache"]:
+                return state["_lt_ref_cache"][cache_key]
+            ref = load_reference_h5ad(path)
+            state["_lt_ref_cache"][cache_key] = ref
+            return ref
+
+        def _on_ref_loaded(ref):
+            lt_load_ref_button.enabled = True
+            cols = get_annotation_columns(ref)
+            if not cols:
+                ga_status.value = "No suitable annotation columns found in reference"
+                return
+            lt_col_widget.choices = cols
+            default = _get_default_col()
+            if default and default in cols:
+                lt_col_widget.value = default
+            lt_transfer_button.enabled = True
+            ga_status.value = (
+                f"Loaded: {ref.n_obs} cells × {ref.n_vars} genes, "
+                f"{len(cols)} annotation columns"
+            )
+
+        worker = _run()
+        timer, _ = attach_spinner(worker, lambda m: setattr(ga_status, 'value', m), "Loading reference...")
+        state['_lt_spinner_timer'] = timer
+        worker.returned.connect(_on_ref_loaded)
+        worker.start()
+
+    def on_label_transfer():
+        clustering_key = ga_clustering_widget.value
+        if not clustering_key or clustering_key not in ctx.clusterings:
+            ga_status.value = "Select a valid clustering first"
+            return
+        ref_path = _resolve_ref_path()
+        if not ref_path or ref_path not in state["_lt_ref_cache"]:
+            ga_status.value = "Load a reference dataset first"
+            return
+        annotation_col = lt_col_widget.value
+        if not annotation_col:
+            ga_status.value = "Select an annotation column"
+            return
+
+        lt_transfer_button.enabled = False
+        ga_status.value = f"Running label transfer ({annotation_col})..."
+
+        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+        ref_adata = state["_lt_ref_cache"][ref_path]
+        _clustering_series = ctx.clusterings[clustering_key]
+
+        @thread_worker
+        def _run():
+            predictions, n_common = run_label_transfer(_adata, ref_adata, annotation_col)
+            return predictions, n_common, clustering_key
+
+        def _on_lt_ready(result):
+            predictions, n_common, clust_key = result
+            _clustering_series_local = ctx.clusterings[clust_key]
+            _orig_adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+            lt_transfer_button.enabled = True
+
+            # Align clustering to obs_names (same pattern as CellTypist)
+            if 'cell_id' in _orig_adata.obs.columns:
+                cell_ids = _orig_adata.obs['cell_id'].values
+                aligned_clusters = _clustering_series_local.reindex(cell_ids)
+            else:
+                aligned_clusters = _clustering_series_local.reindex(_orig_adata.obs_names)
+            aligned_clusters.index = _orig_adata.obs_names
+
+            # Majority vote per cluster (no confidence filtering for ingest)
+            labels = {}
+            for cluster_id in aligned_clusters.dropna().unique():
+                mask = aligned_clusters == cluster_id
+                obs_in_cluster = aligned_clusters.index[mask]
+                preds = predictions.reindex(obs_in_cluster).dropna()
+                if len(preds) == 0:
+                    labels[cluster_id] = "Unknown"
+                else:
+                    labels[cluster_id] = preds.value_counts().idxmax()
+
+            # Store labels
+            if "cluster_labels" not in state:
+                state["cluster_labels"] = {}
+            state["cluster_labels"][clust_key] = labels
+
+            # Summary
+            label_counts = {}
+            for lbl in labels.values():
+                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+            summary_parts = [f"{lbl} ({n})" for lbl, n in sorted(label_counts.items(), key=lambda x: -x[1])]
+            summary = ", ".join(summary_parts)
+            ga_status.value = (
+                f"{len(labels)} clusters annotated ({n_common} common genes): {summary}"
+            )
+
+            # Code recording
+            ctx.record_code(
+                f"\n# Label transfer via sc.tl.ingest()\n"
+                f"# Reference: {ref_path}\n"
+                f"# Annotation column: {annotation_col}\n"
+                f"# Common genes: {n_common}\n"
+                f"ref_adata = sc.read_h5ad(\"{ref_path}\")\n"
+                f"common_genes = sorted(set(adata.var_names) & set(ref_adata.var_names))\n"
+                f"ref_sub = ref_adata[:, common_genes].copy()\n"
+                f"xen_sub = adata[:, common_genes].copy()\n"
+                f"sc.pp.normalize_total(ref_sub, target_sum=1e4); sc.pp.log1p(ref_sub)\n"
+                f"sc.pp.highly_variable_genes(ref_sub); sc.pp.pca(ref_sub)\n"
+                f"sc.pp.neighbors(ref_sub); sc.tl.umap(ref_sub)\n"
+                f"sc.pp.normalize_total(xen_sub, target_sum=1e4); sc.pp.log1p(xen_sub)\n"
+                f"sc.tl.ingest(xen_sub, ref_sub, obs=\"{annotation_col}\")\n"
+                f"# Majority vote per cluster: {clust_key}\n"
+                f"# Assigned labels: {labels}"
+            )
+
+        worker = _run()
+        timer, _ = attach_spinner(worker, lambda m: setattr(ga_status, 'value', m), "Running label transfer...")
+        state['_lt_transfer_timer'] = timer
+        worker.returned.connect(_on_lt_ready)
+        worker.start()
+
+    lt_load_ref_button.clicked.connect(on_load_reference)
+    lt_transfer_button.clicked.connect(on_label_transfer)
+
     ga_run_button.clicked.connect(on_run_rank_genes)
     ga_dotplot_button.clicked.connect(on_show_dotplot)
     ga_edit_labels_button.clicked.connect(_open_label_editor)
+    ga_reset_labels_button.clicked.connect(_reset_labels)
     ga_save_dotplot_button.clicked.connect(on_save_dotplot)
     ga_rank_plot_button.clicked.connect(on_show_rank_plot)
     ga_export_button.clicked.connect(on_export_rank_genes)
@@ -417,6 +712,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_dotplot_btn_layout.addWidget(ga_dotplot_button.native)
     ga_dotplot_btn_layout.addWidget(ga_edit_labels_button.native)
     ga_dotplot_btn_layout.addWidget(ga_save_dotplot_button.native)
+    ga_dotplot_btn_layout.addWidget(ga_reset_labels_button.native)
     ga_dotplot_btn_row.setLayout(ga_dotplot_btn_layout)
 
     # CellTypist button row
@@ -426,6 +722,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_ct_btn_layout.addWidget(ga_ct_download_button.native)
     ga_ct_btn_layout.addWidget(ga_ct_annotate_button.native)
     ga_ct_btn_row.setLayout(ga_ct_btn_layout)
+
+    # Label Transfer button row
+    lt_btn_row = QWidget()
+    lt_btn_layout = QHBoxLayout()
+    lt_btn_layout.setContentsMargins(0, 0, 0, 0)
+    lt_btn_layout.addWidget(lt_load_ref_button.native)
+    lt_btn_layout.addWidget(lt_transfer_button.native)
+    lt_btn_row.setLayout(lt_btn_layout)
 
     widget = make_tab(
         ga_clustering_widget,
@@ -442,6 +746,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_ct_model_widget,
         ga_ct_conf_slider,
         ga_ct_btn_row,
+        llm_separator,
+        llm_provider_widget,
+        llm_annotate_button,
+        lt_separator,
+        lt_ref_widget,
+        lt_col_widget,
+        lt_btn_row,
     )
 
     def _restore_session(session):
