@@ -308,20 +308,29 @@ def save_rank_genes_incremental(zarr_path: Path, df, adata_norm, groupby: str) -
         session_dir = Path(zarr_path) / "viewer_session"
         df.to_parquet(session_dir / "rank_genes.parquet")
         # pandas 3.0 uses ArrowStringArray by default; anndata's h5ad writer
-        # has no serializer for it — convert to plain object dtype first.
+        # has no serializer for it. Temporarily disable infer_string and rebuild
+        # obs/var with plain object dtype (same approach as 01_load_sdata.py).
         import pandas as _pd
-        for _df in (adata_norm.obs, adata_norm.var):
-            for _col in _df.columns:
-                try:
-                    if type(_df[_col].array).__name__ in ("ArrowStringArray", "ArrowExtensionArray"):
-                        _df[_col] = _df[_col].astype(object)
-                except Exception:
-                    pass
-            try:
-                if type(_df.index.array).__name__ in ("ArrowStringArray", "ArrowExtensionArray"):
-                    _df.index = _pd.Index(_df.index.to_numpy(dtype=object, na_value=""))
-            except Exception:
-                pass
+        _old_infer = _pd.options.future.infer_string
+        _pd.options.future.infer_string = False
+        try:
+            for _attr in ("obs", "var"):
+                _src = getattr(adata_norm, _attr)
+                _rebuilt = _src.copy()
+                if _pd.api.types.is_string_dtype(_rebuilt.index):
+                    _rebuilt.index = _pd.Index(_rebuilt.index.to_numpy(dtype=object))
+                for _col in _rebuilt.columns:
+                    if isinstance(_rebuilt[_col].dtype, _pd.CategoricalDtype):
+                        _cat = _rebuilt[_col].cat
+                        if _pd.api.types.is_string_dtype(_cat.categories):
+                            _rebuilt[_col] = _rebuilt[_col].cat.rename_categories(
+                                dict(zip(_cat.categories, _cat.categories.astype(object)))
+                            )
+                    elif _pd.api.types.is_string_dtype(_rebuilt[_col]):
+                        _rebuilt[_col] = _rebuilt[_col].to_numpy(dtype=object)
+                setattr(adata_norm, _attr, _rebuilt)
+        finally:
+            _pd.options.future.infer_string = _old_infer
         adata_norm.write_h5ad(session_dir / "rank_genes_adata_norm.h5ad")
         store["viewer_session"].attrs["has_rank_genes"] = True
         store["viewer_session"].attrs["rank_genes_groupby"] = groupby
