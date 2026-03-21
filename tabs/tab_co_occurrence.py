@@ -32,7 +32,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     co_results_text.setFontFamily("monospace")
     co_results_text.setMaximumHeight(250)
     co_plot_button = PushButton(label="Show Co-occurrence Plot", enabled=False)
-    co_save_plot_button = PushButton(label="Save Plot as PNG...", enabled=False)
     co_export_button = PushButton(label="Export CSV...", enabled=False)
     co_filter_targets = CheckBox(label="Filter targets", value=False, enabled=True)
 
@@ -148,7 +147,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
             co_status.value = f"Co-occurrence: {warning}"
             co_results_text.setPlainText(warning)
             co_plot_button.enabled = False
-            co_save_plot_button.enabled = False
             co_export_button.enabled = False
             return
 
@@ -204,34 +202,25 @@ def build_tab(ctx: ViewerContext) -> tuple:
             )
             state["co_fig"] = fig
             _plt.show(block=False)
-            co_save_plot_button.enabled = True
+            path = ctx.auto_save_plot(fig, "co_occurrence")
             if subplot_clusters:
-                co_status.value = f"Co-occurrence plot (subplots: {', '.join(subplot_clusters)})"
+                co_status.value = f"Co-occurrence plot (subplots: {', '.join(subplot_clusters)}) — saved to {path}"
             else:
-                co_status.value = "Co-occurrence plot displayed"
+                co_status.value = f"Co-occurrence plot displayed — saved to {path}"
 
             _co_ck = result.get('_cluster_key', '')
+            _co_fmt = ctx.state.get("plot_format", "svg")
             ctx.record_code(
                 f"\n# Co-occurrence plot\n"
                 f"sq.pl.co_occurrence(adata, cluster_key=\"{_co_ck}\""
                 + (f", clusters={subplot_clusters}" if subplot_clusters else "")
                 + ")\n"
                 + (f"# filter_targets={target_filter}\n" if target_filter else "")
-                + "plt.show()"
+                + f"plt.show()\n"
+                + f"fig.savefig(\"co_occurrence.{_co_fmt}\", dpi=300, bbox_inches='tight')"
             )
         except Exception as e:
             co_status.value = f"Plot error: {e}"
-
-    def on_save_co_plot():
-        fig = state.get("co_fig")
-        if fig is None:
-            return
-        path = ctx.get_plot_save_path("Save Co-occurrence Plot", "co_occurrence")
-        if not path:
-            return
-        fig.savefig(path, dpi=300, bbox_inches='tight')
-        co_status.value = f"Plot saved to {path}"
-        ctx.record_code(f"\n# Save co-occurrence plot\n# co_occurrence -> \"{path}\"")
 
     def on_export_co():
         result = state.get("co_result")
@@ -270,15 +259,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     co_run_button.clicked.connect(on_run_co_occurrence)
     co_plot_button.clicked.connect(on_show_co_plot)
-    co_save_plot_button.clicked.connect(on_save_co_plot)
     co_export_button.clicked.connect(on_export_co)
-
-    co_plot_btn_row = QWidget()
-    co_plot_btn_layout = QHBoxLayout()
-    co_plot_btn_layout.setContentsMargins(0, 0, 0, 0)
-    co_plot_btn_layout.addWidget(co_plot_button.native)
-    co_plot_btn_layout.addWidget(co_save_plot_button.native)
-    co_plot_btn_row.setLayout(co_plot_btn_layout)
 
     co_sel_btn_row = QWidget()
     co_sel_btn_layout = QHBoxLayout()
@@ -296,7 +277,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         co_run_button,
         co_results_text,
         co_filter_targets,
-        co_plot_btn_row,
+        co_plot_button,
         co_export_button,
     )
 

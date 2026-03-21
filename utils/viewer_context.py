@@ -65,7 +65,7 @@ class ViewerContext:
     record_clustering: Any = None
     record_spatial_neighbors: Any = None
     refresh_clustering_choices: Any = None
-    get_plot_save_path: Any = None
+    auto_save_plot: Any = None
     repopulate_cluster_checkboxes: Any = None
     get_selected_cluster_ids: Any = None
     make_cluster_mask: Any = None

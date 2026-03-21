@@ -1,6 +1,36 @@
 # Changelog
 
-## [Unreleased] — 2026-03-18
+## [Unreleased] — 2026-03-20
+
+### Added
+- **Spatial Domains tab (Novae)** — new tab that runs [Novae](https://mics-lab.github.io/novae/)
+  zero-shot spatial domain inference. Select species (human/mouse), optionally specify N domains
+  (0 = auto-detect), and click "Run Novae Domains". On completion the cell labels layer is
+  automatically recolored by inferred domains, the `novae_domains` key is added to the clustering
+  dropdowns, and results are persisted to the session cache so they are restored on relaunch.
+  Requires `pip install novae`. The full pipeline is recorded to `code.py`.
+
+## [Unreleased] — 2026-03-19
+
+### Added
+- **Session-scoped code file** — each viewer session now writes to a timestamped file
+  (`code_YYYYMMDD_HHMMSS.py`) instead of overwriting `code.py`. Opening a second dataset
+  creates a fresh timestamped file; prior session files are preserved.
+- **"Continue from existing code file" in Preferences** — lets users resume a previous
+  session's code journal. Opens a file dialog, warns about potential duplication, then
+  re-detects preamble/normalize/clustering tags from the file content so subsequent actions
+  do not emit duplicate boilerplate.
+- **Cluster label mapping recorded as executable dict** — editing cluster labels via the
+  label editor now emits a `cluster_labels_<key> = {...}` dict to the code journal instead
+  of a generic comment, making the output directly usable in downstream plotting calls.
+
+### Changed
+- **Auto-save plots on Show** — clicking "Show" in the Neighborhood Enrichment,
+  Co-occurrence, Ligand-Receptor, Gene Correlation, and Gene Analysis (dotplot) tabs now
+  automatically saves the figure to `<data_dir>/plots/<stem>.<format>` and reports the
+  path in the status bar. The separate "Save Plot" button has been removed from all tabs.
+- **Default plot format is now SVG** — plots are saved as vector graphics out of the box;
+  PNG remains available via Preferences → Plot Format.
 
 ### Added
 - **Gene Correlation tab** — scatter plot of per-cell expression for any two selected

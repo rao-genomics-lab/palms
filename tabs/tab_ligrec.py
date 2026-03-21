@@ -57,7 +57,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         value="0.05",
     )
     lr_plot_button = PushButton(label="Show L-R Plot", enabled=False)
-    lr_save_plot_button = PushButton(label="Save L-R Plot as PNG...", enabled=False)
     lr_export_means_button = PushButton(label="Export Means CSV...", enabled=False)
     lr_export_pvals_button = PushButton(label="Export P-values CSV...", enabled=False)
 
@@ -133,7 +132,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if warning:
             lr_status.value = f"L-R: {warning}"
             lr_plot_button.enabled = False
-            lr_save_plot_button.enabled = False
             lr_export_means_button.enabled = False
             lr_export_pvals_button.enabled = False
             return
@@ -156,7 +154,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         lr_results_text.setPlainText("\n".join(lines))
         lr_status.value = f"L-R done: {n_interactions} interactions, {n_sig} significant"
         lr_plot_button.enabled = n_interactions > 0
-        lr_save_plot_button.enabled = False
         lr_export_means_button.enabled = not means.empty
         lr_export_pvals_button.enabled = not pvalues.empty
 
@@ -196,33 +193,24 @@ def build_tab(ctx: ViewerContext) -> tuple:
             )
             state["ligrec_fig"] = fig
             _plt.show(block=False)
-            lr_save_plot_button.enabled = True
+            path = ctx.auto_save_plot(fig, "ligrec")
             if groups:
-                lr_status.value = f"L-R plot displayed (clusters: {', '.join(groups)})"
+                lr_status.value = f"L-R plot displayed (clusters: {', '.join(groups)}) — saved to {path}"
             else:
-                lr_status.value = "L-R plot displayed"
+                lr_status.value = f"L-R plot displayed — saved to {path}"
 
             _lr_ck = state.get("_lr_params", {}).get("clustering_key", "")
+            _lr_fmt = ctx.state.get("plot_format", "svg")
             ctx.record_code(
                 f"\n# L-R dotplot (pvalue_threshold={pval_thresh})\n"
                 f"sq.pl.ligrec(adata, cluster_key=\"{_lr_ck}\", "
                 f"pvalue_threshold={pval_thresh}"
                 + (f", source_groups={groups}, target_groups={groups}" if groups else "")
-                + ")\nplt.show()"
+                + f")\nplt.show()\n"
+                + f"fig.savefig(\"ligrec.{_lr_fmt}\", dpi=300, bbox_inches='tight')"
             )
         except Exception as e:
             lr_status.value = f"Plot error: {e}"
-
-    def on_save_lr_plot():
-        fig = state.get("ligrec_fig")
-        if fig is None:
-            return
-        path = ctx.get_plot_save_path("Save L-R Plot", "ligrec_plot")
-        if not path:
-            return
-        fig.savefig(path, dpi=300, bbox_inches='tight')
-        lr_status.value = f"L-R plot saved to {path}"
-        ctx.record_code(f"\n# Save L-R plot\n# ligrec_plot -> \"{path}\"")
 
     def on_export_lr_means():
         result = state.get("ligrec_result")
@@ -252,7 +240,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     lr_run_button.clicked.connect(on_run_ligrec)
     lr_plot_button.clicked.connect(on_show_lr_plot)
-    lr_save_plot_button.clicked.connect(on_save_lr_plot)
     lr_export_means_button.clicked.connect(on_export_lr_means)
     lr_export_pvals_button.clicked.connect(on_export_lr_pvals)
 
@@ -263,13 +250,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     lr_export_btn_layout.addWidget(lr_export_pvals_button.native)
     lr_export_btn_row.setLayout(lr_export_btn_layout)
 
-    lr_plot_btn_row = QWidget()
-    lr_plot_btn_layout = QHBoxLayout()
-    lr_plot_btn_layout.setContentsMargins(0, 0, 0, 0)
-    lr_plot_btn_layout.addWidget(lr_plot_button.native)
-    lr_plot_btn_layout.addWidget(lr_save_plot_button.native)
-    lr_plot_btn_row.setLayout(lr_plot_btn_layout)
-
     widget = make_tab(
         lr_clustering_widget,
         lr_perms_slider,
@@ -278,7 +258,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         lr_cpdb_only,
         lr_run_button,
         lr_pval_widget,
-        lr_plot_btn_row,
+        lr_plot_button,
         lr_export_btn_row,
     )
 

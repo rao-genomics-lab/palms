@@ -62,6 +62,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         leiden_status.value = f"Leiden done: {n_clusters} clusters ({key})"
         leiden_run_button.enabled = True
 
+        zarr_path = ctx.data_path / "sdata_cached.zarr"
+        if not ctx.no_cache and zarr_path.exists():
+            from utils.session import save_clustering_incremental
+            save_clustering_incremental(
+                zarr_path, key, series, list(state["custom_clusterings"].keys())
+            )
+
         if use_hvg or do_scale:
             code_lines = [
                 "\n# Custom preprocessing for Leiden",
@@ -163,6 +170,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.refresh_clustering_choices()
         ctx.clustering_widget.value = name
         leiden_status.value = f"Imported '{name}' ({series.nunique()} groups, {len(series)} cells)"
+
+        zarr_path = ctx.data_path / "sdata_cached.zarr"
+        if not ctx.no_cache and zarr_path.exists():
+            from utils.session import save_clustering_incremental
+            save_clustering_incremental(
+                zarr_path, name, series, list(state["custom_clusterings"].keys())
+            )
         ctx.record_code(
             f"\n# Import clustering from file\n"
             f"# name={name}, {series.nunique()} groups, {len(series)} cells\n"

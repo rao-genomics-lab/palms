@@ -29,6 +29,7 @@ import json
 import time
 import argparse
 import warnings
+from datetime import datetime
 from pathlib import Path
 
 # ─── Prevent ICE/X11 EPIPE crash on Linux ────────────────────────────────
@@ -330,6 +331,8 @@ def _build_control_panel(ctx: ViewerContext):
     from tabs.tab_nhood import build_tab as build_nhood_tab
     from tabs.tab_co_occurrence import build_tab as build_co_occurrence_tab
     from tabs.tab_arms import build_tab as build_arms_tab
+    from tabs.tab_gene_correlation import build_tab as build_gene_correlation_tab
+    from tabs.tab_novae import build_tab as build_novae_tab
 
     # ── Build Cell Coloring first (creates cross-tab widgets) ────────────
     coloring_widget, coloring_exports = build_cell_coloring_tab(ctx)
@@ -340,6 +343,7 @@ def _build_control_panel(ctx: ViewerContext):
     lr_widget, lr_exports = build_ligrec_tab(ctx)
     nhood_widget, nhood_exports = build_nhood_tab(ctx)
     co_widget, co_exports = build_co_occurrence_tab(ctx)
+    novae_widget, novae_exports = build_novae_tab(ctx)
 
     # ── Create shared helpers (needs all widgets registered) ─────────────
     create_shared_helpers(ctx)
@@ -357,6 +361,7 @@ def _build_control_panel(ctx: ViewerContext):
     roi_widget, roi_exports = build_roi_tab(ctx)
     he_widget, he_exports = build_he_registration_tab(ctx)
     arms_widget, arms_exports = build_arms_tab(ctx)
+    corr_widget, corr_exports = build_gene_correlation_tab(ctx)
 
     # ── Mouse hover: show cluster ID in status bar ───────────────────────
     if ctx.cell_labels_layer is not None:
@@ -415,13 +420,15 @@ def _build_control_panel(ctx: ViewerContext):
     tab_widget.addTab(lr_widget, "Ligand-Receptor")
     tab_widget.addTab(nhood_widget, "Nhood Enrichment")
     tab_widget.addTab(co_widget, "Co-occurrence")
+    tab_widget.addTab(novae_widget, "Spatial Domains")
     tab_widget.addTab(arms_widget, "ARMS Overlay")
+    tab_widget.addTab(corr_widget, "Gene Correlation")
 
     # ── Compose session restore from per-tab restorers ───────────────────
     all_exports = [
         clustering_exports, coloring_exports, transcripts_exports,
         umap_exports, roi_exports, he_exports, ga_exports,
-        lr_exports, nhood_exports, co_exports, arms_exports,
+        lr_exports, nhood_exports, co_exports, novae_exports, arms_exports, corr_exports,
     ]
 
     def restore_session(session):
@@ -640,11 +647,12 @@ def _make_initial_state(gene_names: list, clustering_names: list) -> dict:
         "nhood_fig": None,
         "co_result": None,
         "co_fig": None,
-        "plot_format": "png",
+        "plot_format": "svg",
         "plot_font_size": 10,
         "record_code": True,
         "code_journal": [],
         "code_journal_tags": set(),
+        "code_file": f"code_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py",
         "custom_clusterings": {},
     }
 

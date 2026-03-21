@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from magicgui.widgets import ComboBox, PushButton, Slider
-from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
+from qtpy.QtWidgets import QTextEdit, QFileDialog
 from napari.qt.threading import thread_worker
 from tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context
 
@@ -34,7 +34,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ne_results_text.setFontFamily("monospace")
     ne_results_text.setMaximumHeight(250)
     ne_plot_button = PushButton(label="Show Heatmap", enabled=False)
-    ne_save_plot_button = PushButton(label="Save Plot as PNG...", enabled=False)
     ne_export_button = PushButton(label="Export Z-scores CSV...", enabled=False)
     ne_status = StatusProxy(ctx.viewer)
 
@@ -85,7 +84,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
             ne_status.value = f"Nhood: {warning}"
             ne_results_text.setPlainText(warning)
             ne_plot_button.enabled = False
-            ne_save_plot_button.enabled = False
             ne_export_button.enabled = False
             return
 
@@ -163,32 +161,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
                     )
             state["nhood_fig"] = fig
             _plt.show(block=False)
-            ne_save_plot_button.enabled = True
+            path = ctx.auto_save_plot(fig, "nhood_enrichment")
             if groups:
-                ne_status.value = f"Heatmap displayed (clusters: {', '.join(groups)})"
+                ne_status.value = f"Heatmap displayed (clusters: {', '.join(groups)}) — saved to {path}"
             else:
-                ne_status.value = "Heatmap displayed"
+                ne_status.value = f"Heatmap displayed — saved to {path}"
 
             _ne_mode = ne_mode_widget.value
             _ne_ck = result.get('_cluster_key', '')
+            _ne_fmt = ctx.state.get("plot_format", "svg")
             ctx.record_code(
                 f"\n# Nhood enrichment heatmap (mode={_ne_mode})\n"
                 f"sq.pl.nhood_enrichment(adata, cluster_key=\"{_ne_ck}\", "
-                f"mode=\"{_ne_mode}\")\nplt.show()"
+                f"mode=\"{_ne_mode}\")\nplt.show()\n"
+                f"fig.savefig(\"nhood_enrichment.{_ne_fmt}\", dpi=300, bbox_inches='tight')"
             )
         except Exception as e:
             ne_status.value = f"Plot error: {e}"
-
-    def on_save_nhood_plot():
-        fig = state.get("nhood_fig")
-        if fig is None:
-            return
-        path = ctx.get_plot_save_path("Save Nhood Enrichment Plot", "nhood_enrichment")
-        if not path:
-            return
-        fig.savefig(path, dpi=300, bbox_inches='tight')
-        ne_status.value = f"Plot saved to {path}"
-        ctx.record_code(f"\n# Save nhood enrichment plot\n# nhood_enrichment -> \"{path}\"")
 
     def on_export_nhood():
         result = state.get("nhood_result")
@@ -214,15 +203,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     ne_run_button.clicked.connect(on_run_nhood)
     ne_plot_button.clicked.connect(on_show_nhood_plot)
-    ne_save_plot_button.clicked.connect(on_save_nhood_plot)
     ne_export_button.clicked.connect(on_export_nhood)
-
-    ne_plot_btn_row = QWidget()
-    ne_plot_btn_layout = QHBoxLayout()
-    ne_plot_btn_layout.setContentsMargins(0, 0, 0, 0)
-    ne_plot_btn_layout.addWidget(ne_plot_button.native)
-    ne_plot_btn_layout.addWidget(ne_save_plot_button.native)
-    ne_plot_btn_row.setLayout(ne_plot_btn_layout)
 
     widget = make_tab(
         ne_clustering_widget,
@@ -231,7 +212,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ne_run_button,
         ne_mode_widget,
         ne_results_text,
-        ne_plot_btn_row,
+        ne_plot_button,
         ne_export_button,
     )
 

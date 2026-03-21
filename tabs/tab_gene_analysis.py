@@ -77,7 +77,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_dendro_check = CheckBox(label="Dendrogram", value=True)
     ga_dotplot_button = PushButton(label="Show Dotplot", enabled=False)
     ga_edit_labels_button = PushButton(label="Edit Cluster Labels...", enabled=False)
-    ga_save_dotplot_button = PushButton(label="Save Dotplot as PNG...", enabled=False)
     ga_reset_labels_button = PushButton(label="Reset Labels", enabled=False)
 
     ga_rank_plot_button = PushButton(label="Show Rank Genes Plot", enabled=False)
@@ -206,19 +205,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _on_dotplot_ready(fig):
         state["dotplot_fig"] = fig
         ga_dotplot_button.enabled = True
-        ga_save_dotplot_button.enabled = True
         import matplotlib.pyplot as _plt
         _plt.show(block=False)
-        ga_status.value = "Dotplot displayed"
+        path = ctx.auto_save_plot(fig, "dotplot")
+        ga_status.value = f"Dotplot displayed — saved to {path}"
 
         _dp_n = ga_dotplot_n_slider.value
         _dp_dendro = ga_dendro_check.value
         _dp_groupby = state.get("rank_genes_groupby", "")
+        _dp_fmt = ctx.state.get("plot_format", "svg")
         ctx.record_code(
             f"\n# Dotplot (n_genes={_dp_n}, dendrogram={_dp_dendro})\n"
             + (f"sc.tl.dendrogram(adata, groupby=\"{_dp_groupby}\")\n" if _dp_dendro else "")
             + f"sc.pl.rank_genes_groups_dotplot(adata, n_genes={_dp_n}, "
-            f"dendrogram={_dp_dendro})\nplt.show()"
+            f"dendrogram={_dp_dendro})\nplt.show()\n"
+            f"fig.savefig(\"dotplot.{_dp_fmt}\", dpi=300, bbox_inches='tight')"
         )
 
     def _reset_labels():
@@ -233,17 +234,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         clustering_key = ga_clustering_widget.value
         if ctx.build_label_editor_dialog(clustering_key):
             ga_status.value = f"Labels updated for {clustering_key}"
-
-    def on_save_dotplot():
-        fig = state.get("dotplot_fig")
-        if fig is None:
-            return
-        path = ctx.get_plot_save_path("Save Dotplot", "dotplot")
-        if not path:
-            return
-        fig.savefig(path, dpi=300, bbox_inches='tight')
-        ga_status.value = f"Dotplot saved to {path}"
-        ctx.record_code(f"\n# Save dotplot\n# dotplot -> \"{path}\"")
 
     def on_show_rank_plot():
         adata_norm = state.get("rank_genes_adata_norm")
@@ -704,7 +694,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_dotplot_button.clicked.connect(on_show_dotplot)
     ga_edit_labels_button.clicked.connect(_open_label_editor)
     ga_reset_labels_button.clicked.connect(_reset_labels)
-    ga_save_dotplot_button.clicked.connect(on_save_dotplot)
     ga_rank_plot_button.clicked.connect(on_show_rank_plot)
     ga_export_button.clicked.connect(on_export_rank_genes)
     ga_volcano_button.clicked.connect(on_generate_volcanos)
@@ -715,7 +704,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_dotplot_btn_layout.setContentsMargins(0, 0, 0, 0)
     ga_dotplot_btn_layout.addWidget(ga_dotplot_button.native)
     ga_dotplot_btn_layout.addWidget(ga_edit_labels_button.native)
-    ga_dotplot_btn_layout.addWidget(ga_save_dotplot_button.native)
     ga_dotplot_btn_layout.addWidget(ga_reset_labels_button.native)
     ga_dotplot_btn_row.setLayout(ga_dotplot_btn_layout)
 

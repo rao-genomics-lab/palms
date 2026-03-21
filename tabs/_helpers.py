@@ -184,7 +184,7 @@ def create_shared_helpers(ctx: ViewerContext):
                 return
             state["code_journal_tags"].add(tag)
         state["code_journal"].append(code)
-        code_path = ctx.data_path / "code.py"
+        code_path = ctx.data_path / state.get("code_file", "code.py")
         with open(code_path, 'w') as f:
             f.write("\n".join(state["code_journal"]) + "\n")
 
@@ -250,17 +250,17 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.record_spatial_neighbors = _record_spatial_neighbors
 
-    # ── get_plot_save_path ───────────────────────────────────────────────
-    def _get_plot_save_path(title: str, default_stem: str) -> str | None:
-        from qtpy.QtWidgets import QFileDialog
-        fmt = state.get("plot_format", "png")
-        filter_str = f"{fmt.upper()} Files (*.{fmt});;All Files (*)"
-        path, _ = QFileDialog.getSaveFileName(
-            None, title, f"{default_stem}.{fmt}", filter_str,
-        )
-        return path if path else None
+    # ── auto_save_plot ───────────────────────────────────────────────────
+    def _auto_save_plot(fig, stem: str) -> str:
+        """Save fig to data_dir/plots/<stem>.<format>. Returns the save path."""
+        fmt = state.get("plot_format", "svg")
+        plots_dir = os.path.join(ctx.data_path, "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        path = os.path.join(plots_dir, f"{stem}.{fmt}")
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        return path
 
-    ctx.get_plot_save_path = _get_plot_save_path
+    ctx.auto_save_plot = _auto_save_plot
 
     # ── refresh_clustering_choices ───────────────────────────────────────
     def _refresh_clustering_choices():
@@ -399,9 +399,11 @@ def create_shared_helpers(ctx: ViewerContext):
             if "cluster_labels" not in state or not isinstance(state["cluster_labels"], dict):
                 state["cluster_labels"] = {}
             state["cluster_labels"][clustering_key] = new_labels
+            safe_key = clustering_key.replace(" ", "_").replace("-", "_")
             ctx.record_code(
-                f"\n# Edit cluster labels for '{clustering_key}'\n"
-                f"# {len(new_labels)} clusters relabeled"
+                f"\n# Cluster label mapping for '{clustering_key}'\n"
+                f"cluster_labels_{safe_key} = {repr(new_labels)}\n"
+                f"# Pass as cluster_labels=cluster_labels_{safe_key} in plotting calls"
             )
             return True
         return False
@@ -516,8 +518,8 @@ def create_preferences_menu(ctx: ViewerContext):
     format_menu = prefs_menu.addMenu("Plot format")
     format_group = QActionGroup(format_menu)
     format_group.setExclusive(True)
-    png_action = QAction("PNG", format_group, checkable=True, checked=True)
-    svg_action = QAction("SVG", format_group, checkable=True)
+    png_action = QAction("PNG", format_group, checkable=True)
+    svg_action = QAction("SVG", format_group, checkable=True, checked=True)
     format_menu.addAction(png_action)
     format_menu.addAction(svg_action)
 
@@ -563,3 +565,39 @@ def create_preferences_menu(ctx: ViewerContext):
             with open(path, 'w') as f:
                 f.write("\n".join(state["code_journal"]) + "\n")
     save_code_action.triggered.connect(_on_save_code)
+
+    # Continue from existing code file action
+    continue_code_action = QAction("Continue from existing code file...", prefs_menu)
+    prefs_menu.addAction(continue_code_action)
+
+    def _on_continue_code():
+        from pathlib import Path as _Path
+        from qtpy.QtWidgets import QFileDialog as _QFD, QMessageBox as _QMB
+        path, _ = _QFD.getOpenFileName(
+            None, "Continue from Existing Code File",
+            str(ctx.data_path), "Python Files (*.py)",
+        )
+        if not path:
+            return
+        reply = _QMB.warning(
+            None, "Continue from Existing Code File",
+            "Continuing from an existing code file may result in incomplete or "
+            "duplicated analysis steps. Proceed?",
+            _QMB.Yes | _QMB.Cancel,
+        )
+        if reply != _QMB.Yes:
+            return
+        with open(path, 'r') as f:
+            content = f.read()
+        state["code_journal"] = [content.rstrip()]
+        state["code_journal_tags"].clear()
+        if "from spatialdata_io import xenium" in content:
+            state["code_journal_tags"].add("preamble")
+        if "sc.pp.normalize_total" in content:
+            state["code_journal_tags"].add("normalize")
+        for key in ctx.clusterings:
+            if f"# Add clustering: {key}" in content:
+                state["code_journal_tags"].add(f"clustering_{key}")
+        state["code_file"] = _Path(path).name
+        ctx.set_status(f"Continuing code recording in {_Path(path).name}")
+    continue_code_action.triggered.connect(_on_continue_code)
