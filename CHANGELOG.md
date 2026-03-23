@@ -5,6 +5,11 @@
 ### Added
 - **Level slider in Novae tab** — exposes the `level` parameter (hierarchical tree level,
   default 7, range 1–15) for `assign_domains()`, giving finer control over domain granularity.
+- **Console variable injection** — key variables (`adata`, `sdata`, `viewer`, `ctx`,
+  `clusterings`, `color_manager`, `gene_names`, `data_path`) are now pushed into napari's
+  built-in IPython console on dataset load, with a help message listing what's available.
+  Variables are refreshed on dataset reload. Enables a GUI-to-code handoff workflow alongside
+  the existing code recording feature.
 
 ## [Unreleased] — 2026-03-20
 

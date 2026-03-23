@@ -773,6 +773,30 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     return ctx
 
 
+def _push_to_console(viewer, ctx):
+    """Inject key variables into napari's IPython console."""
+    try:
+        console = viewer.window._qt_viewer.console
+        console.push({
+            'viewer': viewer,
+            'ctx': ctx,
+            'adata': ctx.adata,
+            'sdata': ctx.sdata,
+            'clusterings': ctx.clusterings,
+            'color_manager': ctx.color_manager,
+            'gene_names': ctx.gene_names,
+            'data_path': ctx.data_path,
+        })
+        console.execute(
+            'print("\\nXenium Viewer variables available:\\n"'
+            '"  adata, sdata, viewer, ctx, clusterings,\\n"'
+            '"  color_manager, gene_names, data_path\\n"'
+            '"\\nTip: recorded code is in ctx.data_path / ctx.state[\'code_file\']")',
+            hidden=True,
+        )
+    except Exception as exc:
+        print(f"  Warning: could not push variables to console: {exc}")
+
 
 def main(data_path=None, no_cache: bool = False):
     print("=" * 60)
@@ -881,6 +905,7 @@ def main(data_path=None, no_cache: bool = False):
             # 7. Full init (loads data, builds ctx, control panel, restores session)
             try:
                 ctx = _do_full_init(viewer, new_path, no_cache, _app)
+                _push_to_console(viewer, ctx)
             except Exception as exc:
                 QMessageBox.critical(
                     None,
@@ -982,6 +1007,7 @@ def main(data_path=None, no_cache: bool = False):
 
     if data_path is not None:
         ctx = _do_full_init(viewer, data_path, no_cache, _app)
+        _push_to_console(viewer, ctx)
         total_time = time.perf_counter() - t_start
         print(f"\nViewer ready in {total_time:.1f}s. Close the napari window to exit.")
     else:
