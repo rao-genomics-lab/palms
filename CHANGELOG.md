@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased] — 2026-03-23
+
+### Added
+- **Level slider in Novae tab** — exposes the `level` parameter (hierarchical tree level,
+  default 7, range 1–15) for `assign_domains()`, giving finer control over domain granularity.
+
 ## [Unreleased] — 2026-03-20
 
 ### Added
