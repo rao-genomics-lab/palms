@@ -812,6 +812,25 @@ def main(data_path=None, no_cache: bool = False):
     # ── Napari viewer (must be created before any QWidgets) ──────────────────
     viewer = napari.Viewer(title="Xenium Viewer")
 
+    # ── Improve console accessibility ─────────────────────────────────────
+    # Cap layer controls/list height so the console button stays visible,
+    # and start with a larger window to allow console resizing.
+    viewer.window.resize(1400, 900)
+    qt_viewer = viewer.window._qt_viewer
+    qt_viewer.dockLayerControls.setMaximumHeight(200)
+    qt_viewer.dockLayerList.setMaximumHeight(200)
+
+    # Force console to 300px when opened (napari doesn't allocate space by default)
+    from qtpy.QtCore import Qt as _Qt
+
+    def _on_console_visibility(visible):
+        if visible:
+            viewer.window._qt_window.resizeDocks(
+                [qt_viewer.dockConsole], [300], _Qt.Vertical
+            )
+
+    qt_viewer.dockConsole.visibilityChanged.connect(_on_console_visibility)
+
     # ── App-level mutable container ──────────────────────────────────────────
     _app = {
         "dock_widget": None,

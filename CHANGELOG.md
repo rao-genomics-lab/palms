@@ -11,6 +11,13 @@
   Variables are refreshed on dataset reload. Enables a GUI-to-code handoff workflow alongside
   the existing code recording feature.
 
+### Fixed
+- **Console button hidden by layer widgets** — capped layer controls and layer list dock
+  widgets to 200px max height so the console toggle button stays visible.
+- **Console not resizable when opened** — napari's `toggle_console_visibility` doesn't
+  allocate vertical space; added a `visibilityChanged` hook that calls `resizeDocks` to
+  give the console 300px when opened, making the resize handle functional.
+
 ## [Unreleased] — 2026-03-20
 
 ### Added
