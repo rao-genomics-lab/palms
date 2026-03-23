@@ -23,6 +23,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     n_domains_slider = Slider(label="N domains (0=auto)", min=0, max=30, value=0)
 
+    level_slider = Slider(label="Level", min=1, max=15, value=7)
+
     run_button = PushButton(label="Run Novae Domains", enabled=True)
 
     results_text = QTextEdit()
@@ -42,6 +44,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         species = species_widget.value
         n_domains = n_domains_slider.value
+        level = level_slider.value
         _adata = ctx.adata
         gen = ctx.dataset_generation
 
@@ -61,7 +64,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             model.compute_representations(_adata_copy, zero_shot=True)
 
             n_dom = n_domains if n_domains > 0 else None
-            model.assign_domains(_adata_copy, n_domains=n_dom)
+            model.assign_domains(_adata_copy, n_domains=n_dom, level=level)
 
             # novae names the column "novae_domain" or "novae_domains_N" depending on version
             domain_cols = [c for c in _adata_copy.obs.columns if c.startswith("novae_domain")]
@@ -151,7 +154,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"novae.spatial_neighbors(adata)\n"
             f"model = novae.Novae.from_pretrained('MICS-Lab/novae-{species}-0')\n"
             f"model.compute_representations(adata, zero_shot=True)\n"
-            f"model.assign_domains(adata, n_domains={n_dom_arg!r})\n"
+            f"model.assign_domains(adata, n_domains={n_dom_arg!r}, level={level})\n"
             f"# result: adata.obs['novae_domain']",
             tag="novae_domains",
         )
@@ -160,6 +163,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"Novae domain inference complete\n"
             f"  Domains: {n_unique}\n"
             f"  Species model: {species}\n"
+            f"  Level: {level}\n"
             f"  N domains requested: {'auto' if n_domains == 0 else n_domains}\n"
             f"\nResult stored as: novae_domains\n"
             f"Use Cell Coloring tab to re-apply or switch colorings."
@@ -175,6 +179,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     widget = make_tab(
         species_widget,
         n_domains_slider,
+        level_slider,
         run_button,
         results_text,
     )
