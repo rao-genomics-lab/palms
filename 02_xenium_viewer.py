@@ -821,13 +821,13 @@ def main(data_path=None, no_cache: bool = False):
     qt_viewer.dockLayerList.setMaximumHeight(200)
 
     # Force console to 300px when opened (napari doesn't allocate space by default)
-    from qtpy.QtCore import Qt as _Qt
+    from qtpy.QtCore import Qt as _Qt, QTimer as _QTimer
 
     def _on_console_visibility(visible):
         if visible:
-            viewer.window._qt_window.resizeDocks(
+            _QTimer.singleShot(0, lambda: viewer.window._qt_window.resizeDocks(
                 [qt_viewer.dockConsole], [300], _Qt.Vertical
-            )
+            ))
 
     qt_viewer.dockConsole.visibilityChanged.connect(_on_console_visibility)
 

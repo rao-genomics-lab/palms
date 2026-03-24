@@ -15,8 +15,9 @@ if TYPE_CHECKING:
 # ── Tab layout helper ────────────────────────────────────────────────────────
 
 def make_tab(*widgets_and_natives) -> QWidget:
-    """Pack magicgui widgets and raw QWidgets into a single QWidget."""
-    tab = QWidget()
+    """Pack magicgui widgets and raw QWidgets into a scrollable container."""
+    from qtpy.QtWidgets import QScrollArea
+    inner = QWidget()
     layout = QVBoxLayout()
     layout.setContentsMargins(4, 4, 4, 4)
     for w in widgets_and_natives:
@@ -25,8 +26,12 @@ def make_tab(*widgets_and_natives) -> QWidget:
         else:
             layout.addWidget(w)
     layout.addStretch()
-    tab.setLayout(layout)
-    return tab
+    inner.setLayout(layout)
+    scroll = QScrollArea()
+    scroll.setWidget(inner)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.NoFrame)
+    return scroll
 
 
 # ── Status proxy ─────────────────────────────────────────────────────────────

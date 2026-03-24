@@ -14,9 +14,11 @@
 ### Fixed
 - **Console button hidden by layer widgets** — capped layer controls and layer list dock
   widgets to 200px max height so the console toggle button stays visible.
-- **Console not resizable when opened** — napari's `toggle_console_visibility` doesn't
-  allocate vertical space; added a `visibilityChanged` hook that calls `resizeDocks` to
-  give the console 300px when opened, making the resize handle functional.
+- **Console not resizable when opened** — the Xenium Controls dock (QTabWidget with 13 tabs)
+  had a ~970px minimum height from stacked widget content, leaving no room for the console.
+  Fixed by wrapping tab content in `QScrollArea` inside `make_tab()`, dropping the dock's
+  minimum height to ~117px. Also defers the `resizeDocks` call via `QTimer.singleShot(0)` to
+  ensure it runs after Qt finishes the visibility layout pass.
 
 ## [Unreleased] — 2026-03-20
 
