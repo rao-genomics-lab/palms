@@ -839,7 +839,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
 
     # Load ROIs from sdata.shapes['rois'] (new format); zarr arrays in
     # load_session() serve as fallback for datasets not yet saved with new code.
-    sdata_rois = load_rois_from_sdata(sdata) if not no_cache else []
+    sdata_rois = load_rois_from_sdata(data["sdata"]) if not no_cache else []
 
     # Restore session if available
     if not no_cache and zarr_path.exists():
