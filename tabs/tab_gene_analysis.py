@@ -153,10 +153,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["rank_genes_df"] = df
         state["rank_genes_adata_norm"] = adata_norm
         state["rank_genes_groupby"] = clustering_key
-        zarr_path = ctx.data_path / "sdata_cached.zarr"
-        if not ctx.no_cache and zarr_path.exists():
-            from utils.session import save_rank_genes_incremental
-            save_rank_genes_incremental(zarr_path, df, adata_norm, clustering_key)
+        from utils.adata_persistence import save_rank_genes_to_adata
+        save_rank_genes_to_adata(ctx, df, adata_norm, clustering_key)
         ga_run_button.enabled = True
         ga_dotplot_button.enabled = True
         ga_rank_plot_button.enabled = True
@@ -748,17 +746,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
 
     def _restore_session(session):
-        rg = session.get("rank_genes_df")
+        # Check state first (populated from adata.uns at startup), fall back to session
+        rg = state.get("rank_genes_df") or session.get("rank_genes_df")
         if rg is not None:
             state["rank_genes_df"] = rg
-            state["rank_genes_adata_norm"] = session.get("rank_genes_adata_norm")
-            state["rank_genes_groupby"] = session.get("rank_genes_groupby")
-            ga_dotplot_button.enabled = state["rank_genes_adata_norm"] is not None
+            rg_norm = state.get("rank_genes_adata_norm") or session.get("rank_genes_adata_norm")
+            state["rank_genes_adata_norm"] = rg_norm
+            state["rank_genes_groupby"] = (
+                state.get("rank_genes_groupby") or session.get("rank_genes_groupby")
+            )
+            ga_dotplot_button.enabled = rg_norm is not None
             ga_rank_plot_button.enabled = True
             ga_edit_labels_button.enabled = True
             ga_reset_labels_button.enabled = True
             ga_export_button.enabled = True
-            ga_volcano_button.enabled = state["rank_genes_adata_norm"] is not None
+            ga_volcano_button.enabled = rg_norm is not None
             llm_annotate_button.enabled = True
             preview = rg.head(50).to_string(index=False)
             ga_results_text.setPlainText(preview)

@@ -3,6 +3,20 @@
 ## [Unreleased] — 2026-03-25
 
 ### Changed
+- **Phase 2 SpatialData storage refactoring** — rank genes results, normalized AnnData, and
+  ROI polygons migrated out of custom `viewer_session/` files into native SpatialData locations.
+  - **Rank genes** → `adata.uns['rank_genes_groups']` (scanpy native); DataFrame reconstructed
+    via `sc.get.rank_genes_groups_df()` on restore. Removes `rank_genes.parquet`.
+  - **Normalized AnnData** → `sdata.tables['adata_norm']` (zarr-backed); replaces the
+    `rank_genes_adata_norm.h5ad` file. Required for dotplot and volcano plots after restore.
+  - **ROI polygons** → `sdata.shapes['rois']` as a GeoDataFrame of shapely Polygons
+    (xy coords); replaces per-polygon zarr arrays in `viewer_session/rois/`. Old zarr arrays
+    serve as fallback for datasets not yet saved with the new code.
+  - Rank genes results now enable Show/Export buttons at startup (loaded before `restore_fn`,
+    same pattern as Phase 1 analyses).
+  - Old `rank_genes.parquet` + `rank_genes_adata_norm.h5ad` files are auto-migrated and
+    deleted on first launch with the new code.
+  - `utils/session.py` no longer handles rank genes or ROI polygon storage.
 - **Phase 1 SpatialData storage refactoring** — clusterings, nhood enrichment, co-occurrence,
   L-R interaction results, and UMAP coordinates are now stored in native AnnData locations
   (`adata.obs`, `adata.obsm["X_umap"]`, `adata.uns`) instead of custom zarr/parquet files in

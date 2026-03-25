@@ -778,22 +778,42 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     )
     _app["restore_fn"] = restore_fn
 
-    # Load analysis results from adata.uns (nhood, co-occ, ligrec)
+    # Load analysis results from adata.uns (nhood, co-occ, ligrec, rank genes)
     # Must run BEFORE restore_fn so tab _restore_session handlers find
     # the results in ctx.state and can enable their Show/Export buttons.
-    from utils.adata_persistence import load_analysis_results_from_adata
+    from utils.adata_persistence import (
+        load_analysis_results_from_adata,
+        load_rank_genes_from_adata,
+        load_rois_from_sdata,
+    )
     analysis = load_analysis_results_from_adata(adata)
     for key in ("nhood_result", "co_result", "ligrec_result"):
         if analysis.get(key) is not None and ctx.state.get(key) is None:
             ctx.state[key] = analysis[key]
 
+    rg_df, rg_adata_norm, rg_groupby = load_rank_genes_from_adata(adata, sdata)
+    if rg_df is not None and ctx.state.get('rank_genes_df') is None:
+        ctx.state['rank_genes_df'] = rg_df
+        ctx.state['rank_genes_adata_norm'] = rg_adata_norm
+        ctx.state['rank_genes_groupby'] = rg_groupby
+
+    # Load ROIs from sdata.shapes['rois'] (new format); zarr arrays in
+    # load_session() serve as fallback for datasets not yet saved with new code.
+    sdata_rois = load_rois_from_sdata(sdata) if not no_cache else []
+
     # Restore session if available
     if not no_cache and zarr_path.exists():
         session = load_session(zarr_path)
         if session is not None:
+            # sdata ROIs take priority over old zarr arrays in session dict
+            if sdata_rois:
+                session['rois'] = sdata_rois
             print("Restoring session from zarr cache...")
             restore_fn(session)
             print("Session restored.")
+    elif sdata_rois:
+        # No zarr session file but sdata has ROIs — restore them alone
+        restore_fn({'rois': sdata_rois})
 
     viewer.title = f"Xenium Viewer — {data_path.name}"
 
@@ -1080,8 +1100,10 @@ def main(data_path=None, no_cache: bool = False):
     if ctx is not None and not no_cache:
         final_zarr_path = ctx.data_path / "sdata_cached.zarr"
         if final_zarr_path.exists():
-            from utils.adata_persistence import _persist_table
+            from utils.adata_persistence import _persist_table, save_rois_to_sdata
             _persist_table(ctx)
+            roi_data = _app["snapshot"].get("roi_data", [])
+            save_rois_to_sdata(ctx, roi_data)
             from utils.session import save_session
             save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
             print("Session saved to zarr cache.")

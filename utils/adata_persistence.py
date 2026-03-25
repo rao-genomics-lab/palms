@@ -27,13 +27,12 @@ _persist_lock = threading.Lock()
 CLUSTERING_PREFIX = "clustering_"
 
 
-def _convert_arrow_strings(sdata) -> None:
-    """Convert ArrowStringArray columns in sdata's AnnData table to object dtype.
+def _convert_adata_arrow_strings(adata) -> None:
+    """Convert ArrowStringArray columns in an AnnData object to object dtype.
 
     pandas 3.0 with future.infer_string=True uses PyArrow-backed string arrays
     by default, but anndata's zarr writer has no serializer for ArrowStringArray.
     """
-    adata = sdata["table"]
     old_infer = pd.options.future.infer_string
     pd.options.future.infer_string = False
     try:
@@ -54,6 +53,11 @@ def _convert_arrow_strings(sdata) -> None:
             setattr(adata, attr, df)
     finally:
         pd.options.future.infer_string = old_infer
+
+
+def _convert_arrow_strings(sdata) -> None:
+    """Convert ArrowStringArray columns in sdata's main AnnData table to object dtype."""
+    _convert_adata_arrow_strings(sdata["table"])
 
 
 def _persist_table(ctx: ViewerContext) -> None:
@@ -138,6 +142,120 @@ def save_ligrec_to_adata(ctx: ViewerContext, result: dict) -> None:
         "pvalues": pvalues if pvalues is not None else pd.DataFrame(),
     }
     _persist_table(ctx)
+
+
+# ── Phase 2 save/load: rank genes, adata_norm, ROI polygons ──────────────
+
+def _persist_adata_norm(ctx: ViewerContext, adata_norm) -> None:
+    """Write adata_norm to sdata.tables['adata_norm'].
+
+    No-op if running in no-cache mode or sdata has no backing store.
+    Thread-safe (serialized via lock).
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    with _persist_lock:
+        try:
+            _convert_adata_arrow_strings(adata_norm)
+            if 'adata_norm' in ctx.sdata:
+                ctx.sdata.delete_element_from_disk('adata_norm')
+            ctx.sdata['adata_norm'] = adata_norm
+            ctx.sdata.write_element('adata_norm')
+        except Exception as e:
+            print(f"Warning: could not persist adata_norm: {e}")
+
+
+def save_rank_genes_to_adata(ctx: ViewerContext, df, adata_norm, groupby: str) -> None:
+    """Write rank genes results to adata.uns and persist.
+
+    Copies rank_genes_groups from adata_norm.uns into main adata.uns (so
+    sc.get.rank_genes_groups_df can reconstruct the DataFrame on restore),
+    and stores adata_norm as sdata.tables['adata_norm'] for dotplot/volcano.
+    """
+    if 'rank_genes_groups' in adata_norm.uns:
+        ctx.adata.uns['rank_genes_groups'] = adata_norm.uns['rank_genes_groups']
+    ctx.adata.uns['rank_genes_groupby'] = groupby
+    _persist_table(ctx)
+    _persist_adata_norm(ctx, adata_norm)
+
+
+def load_rank_genes_from_adata(adata, sdata) -> tuple:
+    """Read rank genes results from adata.uns and adata_norm from sdata.tables.
+
+    Returns (df, adata_norm, groupby) or (None, None, None) if not stored.
+    """
+    rgg = adata.uns.get('rank_genes_groups')
+    if rgg is None:
+        return None, None, None
+
+    groupby = adata.uns.get('rank_genes_groupby')
+
+    import scanpy as sc
+    try:
+        df = sc.get.rank_genes_groups_df(adata, group=None)
+    except Exception as e:
+        print(f"Warning: could not reconstruct rank genes DataFrame: {e}")
+        return None, None, None
+
+    adata_norm = None
+    if sdata is not None:
+        try:
+            adata_norm = sdata['adata_norm'] if 'adata_norm' in sdata else None
+        except Exception:
+            pass
+
+    return df, adata_norm, groupby
+
+
+def save_rois_to_sdata(ctx: ViewerContext, roi_data: list) -> None:
+    """Save ROI polygons to sdata.shapes['rois'] as a GeoDataFrame.
+
+    roi_data: list of Nx2 float64 arrays in yx (napari pixel) coordinates.
+    Converts to shapely Polygons in xy coords for GeoDataFrame storage.
+    No-op if no-cache mode or sdata has no backing store.
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+
+    from shapely.geometry import Polygon
+    import geopandas as gpd
+
+    try:
+        if 'rois' in ctx.sdata:
+            ctx.sdata.delete_element_from_disk('rois')
+
+        if not roi_data:
+            return
+
+        polys = [Polygon(arr[:, ::-1]) for arr in roi_data]  # yx → xy
+        gdf = gpd.GeoDataFrame(geometry=polys)
+        ctx.sdata['rois'] = gdf
+        ctx.sdata.write_element('rois')
+    except Exception as e:
+        print(f"Warning: could not save ROIs to sdata: {e}")
+
+
+def load_rois_from_sdata(sdata) -> list:
+    """Load ROI polygons from sdata.shapes['rois'].
+
+    Returns list of Nx2 float64 numpy arrays in yx (napari pixel) coords.
+    Returns [] if no ROIs are stored in sdata.
+    """
+    if sdata is None or 'rois' not in sdata:
+        return []
+
+    try:
+        gdf = sdata['rois']
+        rois = []
+        for geom in gdf.geometry:
+            if geom is None or geom.is_empty:
+                continue
+            coords = np.array(geom.exterior.coords[:-1], dtype=np.float64)  # xy, no closing pt
+            rois.append(coords[:, ::-1])  # xy → yx
+        return rois
+    except Exception as e:
+        print(f"Warning: could not load ROIs from sdata: {e}")
+        return []
 
 
 # ── Load functions ────────────────────────────────────────────────────────
@@ -305,7 +423,7 @@ def migrate_old_session_to_adata(
             migrated_any = True
             print("  Migrated L-R results to adata.uns")
 
-    # ── Persist and mark ──────────────────────────────────────────────
+    # ── Persist Phase 1 and mark ──────────────────────────────────────
     if migrated_any:
         try:
             _convert_arrow_strings(sdata)
@@ -320,3 +438,47 @@ def migrate_old_session_to_adata(
         session.attrs["migrated_to_adata"] = True
     except Exception:
         pass
+
+    # ── Phase 2 migration: rank genes parquet/h5ad → adata.uns + sdata ────
+    if not attrs.get("migrated_rank_genes_to_adata"):
+        session_dir = Path(zarr_path) / "viewer_session"
+        rg_parquet = session_dir / "rank_genes.parquet"
+        rg_h5ad = session_dir / "rank_genes_adata_norm.h5ad"
+        groupby = attrs.get("rank_genes_groupby")
+
+        if attrs.get("has_rank_genes") and rg_parquet.exists() and "rank_genes_groups" not in adata.uns:
+            # Migrate rank_genes_groups from h5ad into main adata.uns
+            if rg_h5ad.exists():
+                try:
+                    import scanpy as sc
+                    adata_norm = sc.read_h5ad(rg_h5ad)
+                    if 'rank_genes_groups' in adata_norm.uns:
+                        adata.uns['rank_genes_groups'] = adata_norm.uns['rank_genes_groups']
+                    if groupby:
+                        adata.uns['rank_genes_groupby'] = groupby
+                    # Persist updated main adata
+                    _convert_arrow_strings(sdata)
+                    sdata.delete_element_from_disk("table")
+                    sdata.write_element("table")
+                    # Migrate adata_norm to sdata.tables['adata_norm']
+                    if 'adata_norm' not in sdata:
+                        try:
+                            _convert_adata_arrow_strings(adata_norm)
+                            sdata['adata_norm'] = adata_norm
+                            sdata.write_element('adata_norm')
+                            print("  Migrated rank genes and adata_norm to sdata")
+                        except Exception as e:
+                            print(f"  Warning: could not migrate adata_norm to sdata: {e}")
+                    # Clean up old files
+                    try:
+                        rg_parquet.unlink(missing_ok=True)
+                        rg_h5ad.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    print(f"  Warning: rank genes migration failed: {e}")
+
+        try:
+            session.attrs["migrated_rank_genes_to_adata"] = True
+        except Exception:
+            pass

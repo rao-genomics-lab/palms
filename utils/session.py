@@ -90,10 +90,10 @@ def save_session(
         attrs = {}
 
         # ── ROIs ──────────────────────────────────────────────────────────
-        rois_group = session.create_group("rois")
+        # ROIs are now persisted to sdata.shapes['rois'] by save_rois_to_sdata()
+        # called from 02_xenium_viewer.py at exit. Keep roi_count attr for
+        # legacy reads and to avoid breaking old zarr session structures.
         roi_data = snapshot.get("roi_data", [])
-        for i, poly in enumerate(roi_data):
-            _write_array(rois_group, str(i), poly)
         attrs["roi_count"] = len(roi_data)
 
         # ── H&E registration ─────────────────────────────────────────────
@@ -167,13 +167,9 @@ def save_session(
         # ── Analysis DataFrames ───────────────────────────────────────────
         session_dir = Path(zarr_path) / "viewer_session"
 
-        # rank_genes_df
-        rank_genes_df = state.get("rank_genes_df")
-        if rank_genes_df is not None and not rank_genes_df.empty:
-            rank_genes_df.to_parquet(session_dir / "rank_genes.parquet")
-            attrs["has_rank_genes"] = True
-        else:
-            attrs["has_rank_genes"] = False
+        # rank_genes — now persisted to adata.uns + sdata.tables['adata_norm']
+        # by save_rank_genes_to_adata(). Keep attrs for legacy reads.
+        attrs["has_rank_genes"] = state.get("rank_genes_df") is not None
         attrs["rank_genes_groupby"] = state.get("rank_genes_groupby")
 
         # roi_deg_df
@@ -222,47 +218,12 @@ def save_session(
 
 
 def save_rank_genes_incremental(zarr_path: Path, df, adata_norm, groupby: str) -> None:
-    """Write rank genes results to the session store without a full session rebuild.
+    """Deprecated stub — rank genes are now saved via save_rank_genes_to_adata().
 
-    Saves the results DataFrame as parquet, the normalized AnnData as h5ad, and
-    records the groupby key in zarr attrs. Safe to call immediately after rank
-    genes computation completes. No-ops silently if viewer_session does not exist.
+    Callers in tab_gene_analysis have been updated to call that function directly.
+    This stub is retained for safety in case of any remaining references.
     """
-    try:
-        store = zarr.open_group(str(zarr_path), mode="r+", use_consolidated=False)
-        if "viewer_session" not in store:
-            return
-        session_dir = Path(zarr_path) / "viewer_session"
-        df.to_parquet(session_dir / "rank_genes.parquet")
-        # pandas 3.0 uses ArrowStringArray by default; anndata's h5ad writer
-        # has no serializer for it. Temporarily disable infer_string and rebuild
-        # obs/var with plain object dtype (same approach as 01_load_sdata.py).
-        import pandas as _pd
-        _old_infer = _pd.options.future.infer_string
-        _pd.options.future.infer_string = False
-        try:
-            for _attr in ("obs", "var"):
-                _src = getattr(adata_norm, _attr)
-                _rebuilt = _src.copy()
-                if _pd.api.types.is_string_dtype(_rebuilt.index):
-                    _rebuilt.index = _pd.Index(_rebuilt.index.to_numpy(dtype=object))
-                for _col in _rebuilt.columns:
-                    if isinstance(_rebuilt[_col].dtype, _pd.CategoricalDtype):
-                        _cat = _rebuilt[_col].cat
-                        if _pd.api.types.is_string_dtype(_cat.categories):
-                            _rebuilt[_col] = _rebuilt[_col].cat.rename_categories(
-                                dict(zip(_cat.categories, _cat.categories.astype(object)))
-                            )
-                    elif _pd.api.types.is_string_dtype(_rebuilt[_col]):
-                        _rebuilt[_col] = _rebuilt[_col].to_numpy(dtype=object)
-                setattr(adata_norm, _attr, _rebuilt)
-        finally:
-            _pd.options.future.infer_string = _old_infer
-        adata_norm.write_h5ad(session_dir / "rank_genes_adata_norm.h5ad")
-        store["viewer_session"].attrs["has_rank_genes"] = True
-        store["viewer_session"].attrs["rank_genes_groupby"] = groupby
-    except Exception as e:
-        print(f"Warning: could not auto-save rank genes: {e}")
+    pass
 
 
 def load_session(zarr_path: Path) -> Optional[dict]:
