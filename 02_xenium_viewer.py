@@ -480,8 +480,9 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
         umap_cols = [c for c in umap_df.columns if c.startswith("UMAP")]
         if len(umap_cols) >= 2:
             # umap_df is indexed by cell barcode; adata.obs.index may differ
+            import pandas as _pd
             if "cell_id" in adata.obs.columns:
-                cell_id_to_idx = pd.Series(adata.obs.index, index=adata.obs["cell_id"].values)
+                cell_id_to_idx = _pd.Series(adata.obs.index, index=adata.obs["cell_id"].values)
                 umap_reindexed = umap_df[umap_cols[:2]].rename(index=cell_id_to_idx).reindex(adata.obs.index)
             else:
                 umap_reindexed = umap_df[umap_cols[:2]].reindex(adata.obs.index)
