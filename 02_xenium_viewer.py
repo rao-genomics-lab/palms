@@ -831,7 +831,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         if analysis.get(key) is not None and ctx.state.get(key) is None:
             ctx.state[key] = analysis[key]
 
-    rg_df, rg_adata_norm, rg_groupby = load_rank_genes_from_adata(adata, sdata)
+    rg_df, rg_adata_norm, rg_groupby = load_rank_genes_from_adata(adata, data["sdata"])
     if rg_df is not None and ctx.state.get('rank_genes_df') is None:
         ctx.state['rank_genes_df'] = rg_df
         ctx.state['rank_genes_adata_norm'] = rg_adata_norm
