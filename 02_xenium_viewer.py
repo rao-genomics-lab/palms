@@ -453,6 +453,16 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
     pixel_size = _read_pixel_size(data_path)
     print(f"Pixel size: {pixel_size} um/px")
 
+    # Remove stray tables/adata_norm/ written by a brief bug that stored adata_norm
+    # as a SpatialData table element without required spatialdata_attrs, which causes
+    # spatialdata to fail loading the entire zarr store. Must run before load_sdata.
+    if not no_cache:
+        bad_adata_norm = data_path / "sdata_cached.zarr" / "tables" / "adata_norm"
+        if bad_adata_norm.exists():
+            import shutil
+            shutil.rmtree(bad_adata_norm, ignore_errors=True)
+            print("  Removed invalid tables/adata_norm from zarr store")
+
     loader_mod = _import_loader()
 
     t0 = time.perf_counter()
@@ -731,15 +741,6 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     # Migrate old viewer_session data into adata (one-time, idempotent)
     zarr_path = data_path / "sdata_cached.zarr"
     if not no_cache and zarr_path.exists():
-        # Remove stray tables/adata_norm/ if it was written without spatialdata_attrs
-        # (a brief bug where adata_norm was stored as an sdata table element, which
-        # caused spatialdata to fail loading the store on next launch).
-        bad_adata_norm = zarr_path / "tables" / "adata_norm"
-        if bad_adata_norm.exists():
-            import shutil
-            shutil.rmtree(bad_adata_norm, ignore_errors=True)
-            print("  Removed invalid tables/adata_norm from zarr store")
-
         from utils.adata_persistence import migrate_old_session_to_adata
         migrate_old_session_to_adata(zarr_path, data["sdata"], adata)
 
