@@ -778,6 +778,15 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     )
     _app["restore_fn"] = restore_fn
 
+    # Load analysis results from adata.uns (nhood, co-occ, ligrec)
+    # Must run BEFORE restore_fn so tab _restore_session handlers find
+    # the results in ctx.state and can enable their Show/Export buttons.
+    from utils.adata_persistence import load_analysis_results_from_adata
+    analysis = load_analysis_results_from_adata(adata)
+    for key in ("nhood_result", "co_result", "ligrec_result"):
+        if analysis.get(key) is not None and ctx.state.get(key) is None:
+            ctx.state[key] = analysis[key]
+
     # Restore session if available
     if not no_cache and zarr_path.exists():
         session = load_session(zarr_path)
@@ -785,13 +794,6 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
             print("Restoring session from zarr cache...")
             restore_fn(session)
             print("Session restored.")
-
-    # Load analysis results from adata.uns (nhood, co-occ, ligrec)
-    from utils.adata_persistence import load_analysis_results_from_adata
-    analysis = load_analysis_results_from_adata(adata)
-    for key in ("nhood_result", "co_result", "ligrec_result"):
-        if analysis.get(key) is not None and ctx.state.get(key) is None:
-            ctx.state[key] = analysis[key]
 
     viewer.title = f"Xenium Viewer — {data_path.name}"
 

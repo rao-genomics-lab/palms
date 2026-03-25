@@ -17,6 +17,10 @@
 - **Index alignment for adata persistence** — `adata.obs.index` uses integer strings (`'0'`, `'1'`, ...)
   while clustering series and UMAP are indexed by cell barcode (`'aaaagflk-1'`, ...). Save/load now
   maps between the two via the `cell_id` column.
+- **Show/Export buttons disabled at startup for persisted analyses** — nhood enrichment,
+  co-occurrence, and L-R results were loaded from `adata.uns` *after* tab session restore ran,
+  so the buttons stayed disabled despite results existing. Fixed by loading `adata.uns` analysis
+  results before calling `restore_fn()`.
 
 ## [Unreleased] — 2026-03-23
 
