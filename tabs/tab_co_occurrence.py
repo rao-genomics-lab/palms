@@ -142,6 +142,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["co_result"] = result
         co_run_button.enabled = True
 
+        # Persist to adata.uns immediately
+        from utils.adata_persistence import save_co_occurrence_to_adata
+        save_co_occurrence_to_adata(ctx, result)
+
         warning = result.get('warning')
         if warning:
             co_status.value = f"Co-occurrence: {warning}"
@@ -282,7 +286,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
 
     def _restore_session(session):
-        co = session.get("co_result")
+        # Check state first (populated from adata.uns at startup), fall back to session
+        co = state.get("co_result") or session.get("co_result")
         if co is not None:
             state["co_result"] = co
             co_plot_button.enabled = True

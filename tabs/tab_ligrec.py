@@ -125,6 +125,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["ligrec_result"] = result
         lr_run_button.enabled = True
 
+        # Persist to adata.uns immediately
+        from utils.adata_persistence import save_ligrec_to_adata
+        save_ligrec_to_adata(ctx, result)
+
         warning = result.get('warning')
         means = result['means']
         pvalues = result['pvalues']
@@ -264,16 +268,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     def _restore_session(session):
         import pandas as pd
-        lm = session.get("ligrec_means")
-        lp = session.get("ligrec_pvalues")
-        if lm is not None or lp is not None:
-            state["ligrec_result"] = {
-                "means": lm if lm is not None else pd.DataFrame(),
-                "pvalues": lp if lp is not None else pd.DataFrame(),
-                "warning": None,
-            }
-            lr_export_means_button.enabled = lm is not None
-            lr_export_pvals_button.enabled = lp is not None
+        # Check state first (populated from adata.uns at startup), fall back to session
+        lr = state.get("ligrec_result")
+        if lr is None:
+            lm = session.get("ligrec_means")
+            lp = session.get("ligrec_pvalues")
+            if lm is not None or lp is not None:
+                lr = {
+                    "means": lm if lm is not None else pd.DataFrame(),
+                    "pvalues": lp if lp is not None else pd.DataFrame(),
+                    "warning": None,
+                }
+        if lr is not None:
+            state["ligrec_result"] = lr
+            lm = lr.get("means")
+            lp = lr.get("pvalues")
+            lr_export_means_button.enabled = lm is not None and not lm.empty
+            lr_export_pvals_button.enabled = lp is not None and not lp.empty
             lr_plot_button.enabled = lm is not None and not lm.empty
             print(f"  Restored L-R results")
 

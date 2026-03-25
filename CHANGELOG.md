@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased] — 2026-03-25
+
+### Changed
+- **Phase 1 SpatialData storage refactoring** — clusterings, nhood enrichment, co-occurrence,
+  L-R interaction results, and UMAP coordinates are now stored in native AnnData locations
+  (`adata.obs`, `adata.obsm["X_umap"]`, `adata.uns`) instead of custom zarr/parquet files in
+  `viewer_session/`. Persisted via `sdata.delete_element_from_disk` + `sdata.write_element`.
+  - Analysis results are now saved immediately after computation (crash-safe), rather than
+    deferred to viewer exit.
+  - Old `viewer_session/` data is automatically migrated on first launch with the new code.
+  - New module: `utils/adata_persistence.py` centralizes all adata read/write/migration logic.
+  - `utils/session.py` no longer handles clusterings, nhood, co-occurrence, or L-R data.
+
 ## [Unreleased] — 2026-03-23
 
 ### Added

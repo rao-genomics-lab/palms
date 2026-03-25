@@ -333,6 +333,7 @@ def _build_control_panel(ctx: ViewerContext):
     from tabs.tab_arms import build_tab as build_arms_tab
     from tabs.tab_gene_correlation import build_tab as build_gene_correlation_tab
     from tabs.tab_novae import build_tab as build_novae_tab
+    from tabs.tab_notebook import build_tab as build_notebook_tab
 
     # ── Build Cell Coloring first (creates cross-tab widgets) ────────────
     coloring_widget, coloring_exports = build_cell_coloring_tab(ctx)
@@ -362,6 +363,7 @@ def _build_control_panel(ctx: ViewerContext):
     he_widget, he_exports = build_he_registration_tab(ctx)
     arms_widget, arms_exports = build_arms_tab(ctx)
     corr_widget, corr_exports = build_gene_correlation_tab(ctx)
+    notebook_widget, notebook_exports = build_notebook_tab(ctx)
 
     # ── Mouse hover: show cluster ID in status bar ───────────────────────
     if ctx.cell_labels_layer is not None:
@@ -423,12 +425,14 @@ def _build_control_panel(ctx: ViewerContext):
     tab_widget.addTab(novae_widget, "Spatial Domains")
     tab_widget.addTab(arms_widget, "ARMS Overlay")
     tab_widget.addTab(corr_widget, "Gene Correlation")
+    tab_widget.addTab(notebook_widget, "Notebook")
 
     # ── Compose session restore from per-tab restorers ───────────────────
     all_exports = [
         clustering_exports, coloring_exports, transcripts_exports,
         umap_exports, roi_exports, he_exports, ga_exports,
         lr_exports, nhood_exports, co_exports, novae_exports, arms_exports, corr_exports,
+        notebook_exports,
     ]
 
     def restore_session(session):
@@ -470,6 +474,21 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
     label_to_obs = loader_mod.get_label_to_obs_mapping(sdata)
 
     adata = sdata["table"]
+
+    # Store UMAP coordinates in adata.obsm for portability
+    if umap_df is not None and not umap_df.empty:
+        umap_cols = [c for c in umap_df.columns if c.startswith("UMAP")]
+        if len(umap_cols) >= 2:
+            umap_aligned = umap_df[umap_cols[:2]].reindex(adata.obs.index)
+            adata.obsm["X_umap"] = umap_aligned.values.astype(np.float32)
+
+    # Load custom clusterings previously saved into adata.obs
+    from utils.adata_persistence import load_custom_clusterings_from_adata
+    custom_from_adata = load_custom_clusterings_from_adata(adata)
+    if custom_from_adata:
+        clusterings.update(custom_from_adata)
+        print(f"  Loaded {len(custom_from_adata)} custom clustering(s) from adata.obs")
+
     gene_names = list(adata.var_names)
     clustering_names = list(clusterings.keys())
     print(f"Genes: {len(gene_names)}, Clusterings: {len(clustering_names)}")
@@ -702,6 +721,13 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
 
     data = _load_dataset(data_path, no_cache)
     adata = data["adata"]
+
+    # Migrate old viewer_session data into adata (one-time, idempotent)
+    zarr_path = data_path / "sdata_cached.zarr"
+    if not no_cache and zarr_path.exists():
+        from utils.adata_persistence import migrate_old_session_to_adata
+        migrate_old_session_to_adata(zarr_path, data["sdata"], adata)
+
     cell_ids = adata.obs['cell_id'].values
     umap_viewer = UMAPViewer(data["umap_df"], cell_ids)
     layers = _populate_viewer(viewer, data)
@@ -747,13 +773,19 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     _app["restore_fn"] = restore_fn
 
     # Restore session if available
-    zarr_path = data_path / "sdata_cached.zarr"
     if not no_cache and zarr_path.exists():
         session = load_session(zarr_path)
         if session is not None:
             print("Restoring session from zarr cache...")
             restore_fn(session)
             print("Session restored.")
+
+    # Load analysis results from adata.uns (nhood, co-occ, ligrec)
+    from utils.adata_persistence import load_analysis_results_from_adata
+    analysis = load_analysis_results_from_adata(adata)
+    for key in ("nhood_result", "co_result", "ligrec_result"):
+        if analysis.get(key) is not None and ctx.state.get(key) is None:
+            ctx.state[key] = analysis[key]
 
     viewer.title = f"Xenium Viewer — {data_path.name}"
 
@@ -877,6 +909,8 @@ def main(data_path=None, no_cache: bool = False):
                 # 2. Save session for current dataset
                 zarr_path_old = ctx.data_path / "sdata_cached.zarr"
                 if not ctx.no_cache and zarr_path_old.exists():
+                    from utils.adata_persistence import _persist_table
+                    _persist_table(ctx)
                     from utils.session import save_session
                     save_session(zarr_path_old, ctx.state, ctx.he_state, _app["snapshot"])
                     print("Session saved for previous dataset.")
@@ -1038,6 +1072,8 @@ def main(data_path=None, no_cache: bool = False):
     if ctx is not None and not no_cache:
         final_zarr_path = ctx.data_path / "sdata_cached.zarr"
         if final_zarr_path.exists():
+            from utils.adata_persistence import _persist_table
+            _persist_table(ctx)
             from utils.session import save_session
             save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
             print("Session saved to zarr cache.")

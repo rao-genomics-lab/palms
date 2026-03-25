@@ -135,13 +135,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         color_worker.returned.connect(_on_colors_ready)
         color_worker.start()
 
-        # Save to session cache
-        zarr_path = ctx.data_path / "sdata_cached.zarr"
-        if not ctx.no_cache and zarr_path.exists():
-            from utils.session import save_clustering_incremental
-            save_clustering_incremental(
-                zarr_path, key, series, list(state["custom_clusterings"].keys())
-            )
+        # Save to adata.obs
+        from utils.adata_persistence import save_clustering_to_adata
+        save_clustering_to_adata(ctx, key, series)
 
         # Record code
         species = species_widget.value

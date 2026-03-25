@@ -79,6 +79,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["nhood_result"] = result
         ne_run_button.enabled = True
 
+        # Persist to adata.uns immediately
+        from utils.adata_persistence import save_nhood_to_adata
+        save_nhood_to_adata(ctx, result)
+
         warning = result.get('warning')
         if warning:
             ne_status.value = f"Nhood: {warning}"
@@ -217,7 +221,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
 
     def _restore_session(session):
-        nh = session.get("nhood_result")
+        # Check state first (populated from adata.uns at startup), fall back to session
+        nh = state.get("nhood_result") or session.get("nhood_result")
         if nh is not None:
             state["nhood_result"] = nh
             ne_plot_button.enabled = True

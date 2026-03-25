@@ -62,12 +62,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         leiden_status.value = f"Leiden done: {n_clusters} clusters ({key})"
         leiden_run_button.enabled = True
 
-        zarr_path = ctx.data_path / "sdata_cached.zarr"
-        if not ctx.no_cache and zarr_path.exists():
-            from utils.session import save_clustering_incremental
-            save_clustering_incremental(
-                zarr_path, key, series, list(state["custom_clusterings"].keys())
-            )
+        from utils.adata_persistence import save_clustering_to_adata
+        save_clustering_to_adata(ctx, key, series)
 
         if use_hvg or do_scale:
             code_lines = [
@@ -171,12 +167,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.clustering_widget.value = name
         leiden_status.value = f"Imported '{name}' ({series.nunique()} groups, {len(series)} cells)"
 
-        zarr_path = ctx.data_path / "sdata_cached.zarr"
-        if not ctx.no_cache and zarr_path.exists():
-            from utils.session import save_clustering_incremental
-            save_clustering_incremental(
-                zarr_path, name, series, list(state["custom_clusterings"].keys())
-            )
+        from utils.adata_persistence import save_clustering_to_adata
+        save_clustering_to_adata(ctx, name, series)
         ctx.record_code(
             f"\n# Import clustering from file\n"
             f"# name={name}, {series.nunique()} groups, {len(series)} cells\n"
@@ -235,13 +227,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
 
     def _restore_session(session):
-        cc = session.get("custom_clusterings", {})
+        # Custom clusterings are now loaded from adata.obs at startup;
+        # sync them into state["custom_clusterings"] for compatibility
+        from utils.adata_persistence import load_custom_clusterings_from_adata
+        cc = load_custom_clusterings_from_adata(ctx.adata)
         if cc:
             for name, series in cc.items():
-                ctx.clusterings[name] = series
                 state["custom_clusterings"][name] = series
             ctx.refresh_clustering_choices()
-            print(f"  Restored {len(cc)} custom clustering(s): {', '.join(cc.keys())}")
+            print(f"  Restored {len(cc)} custom clustering(s) from adata.obs")
 
         cl = session.get("cluster_labels")
         if cl and isinstance(cl, dict):

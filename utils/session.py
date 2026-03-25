@@ -2,8 +2,12 @@
 Session persistence for the Xenium viewer.
 
 Saves and loads viewer state (ROIs, H&E registration, ARMS overlay,
-analysis results, cluster labels) to/from a zarr store so the session
-can be restored on the next launch.
+rank genes, ROI DEG, cluster labels) to/from a zarr store so the
+session can be restored on the next launch.
+
+NOTE: Clusterings, nhood enrichment, co-occurrence, L-R results, and
+UMAP coordinates are now persisted in adata.obs/obsm/uns via
+utils/adata_persistence.py (Phase 1 SpatialData refactoring).
 
 Storage layout inside sdata_cached.zarr/viewer_session/:
   rois/0, rois/1, ...         — zarr arrays (Nx2 float64) for each ROI polygon
@@ -16,8 +20,6 @@ Storage layout inside sdata_cached.zarr/viewer_session/:
   arms/he_landmarks            — zarr array Nx2
   rank_genes.parquet           — DataFrame
   roi_deg.parquet              — DataFrame
-  ligrec_means.parquet         — DataFrame
-  ligrec_pvalues.parquet       — DataFrame
   (group attrs contain JSON metadata)
 """
 
@@ -160,16 +162,7 @@ def save_session(
         else:
             attrs["cluster_labels"] = None
 
-        # ── Custom clusterings (Leiden, imported, etc.) ──────────────────
-        custom_clusterings = state.get("custom_clusterings", {})
-        if custom_clusterings:
-            clust_dir = Path(zarr_path) / "viewer_session" / "clusterings"
-            clust_dir.mkdir(exist_ok=True)
-            for name, series in custom_clusterings.items():
-                series.to_frame(name="cluster").to_parquet(clust_dir / f"{name}.parquet")
-            attrs["custom_clustering_names"] = list(custom_clusterings.keys())
-        else:
-            attrs["custom_clustering_names"] = []
+        # (Custom clusterings are now saved to adata.obs via adata_persistence)
 
         # ── Analysis DataFrames ───────────────────────────────────────────
         session_dir = Path(zarr_path) / "viewer_session"
@@ -199,48 +192,7 @@ def save_session(
         else:
             attrs["has_arms_tile_deg"] = False
 
-        # ligrec results
-        ligrec_result = state.get("ligrec_result")
-        has_ligrec = False
-        if ligrec_result is not None:
-            means = ligrec_result.get("means")
-            pvalues = ligrec_result.get("pvalues")
-            if means is not None and not means.empty:
-                means.to_parquet(session_dir / "ligrec_means.parquet")
-                has_ligrec = True
-            if pvalues is not None and not pvalues.empty:
-                pvalues.to_parquet(session_dir / "ligrec_pvalues.parquet")
-        attrs["has_ligrec"] = has_ligrec
-
-        # nhood enrichment results
-        nhood_result = state.get("nhood_result")
-        has_nhood = False
-        if nhood_result is not None and nhood_result.get("warning") is None:
-            zscore = nhood_result.get("zscore")
-            count = nhood_result.get("count")
-            clusters = nhood_result.get("clusters", [])
-            if zscore is not None and zscore.size > 0:
-                nhood_group = session.create_group("nhood")
-                _write_array(nhood_group, "zscore", zscore)
-                _write_array(nhood_group, "count", count)
-                nhood_group.attrs["clusters"] = clusters
-                has_nhood = True
-        attrs["has_nhood"] = has_nhood
-
-        # co-occurrence results
-        co_result = state.get("co_result")
-        has_co = False
-        if co_result is not None and co_result.get("warning") is None:
-            occ = co_result.get("occ")
-            interval_arr = co_result.get("interval")
-            clusters = co_result.get("clusters", [])
-            if occ is not None and occ.size > 0:
-                co_group = session.create_group("co_occ")
-                _write_array(co_group, "occ", occ)
-                _write_array(co_group, "interval", interval_arr)
-                co_group.attrs["clusters"] = clusters
-                has_co = True
-        attrs["has_co"] = has_co
+        # (ligrec, nhood, co-occurrence are now saved to adata.uns via adata_persistence)
 
         # Write all attrs at once
         session.attrs.update(attrs)
@@ -253,20 +205,12 @@ def save_session(
             parts.append(f"H&E ({attrs['he_filename']})")
         if attrs.get("cluster_labels"):
             parts.append(f"{len(attrs['cluster_labels'])} cluster labels")
-        if attrs.get("custom_clustering_names"):
-            parts.append(f"{len(attrs['custom_clustering_names'])} custom clusterings")
         if attrs["has_rank_genes"]:
             parts.append("rank genes")
         if attrs["has_roi_deg"]:
             parts.append("ROI DEG")
         if attrs.get("has_arms_tile_deg"):
             parts.append("ARMS Tile DEG")
-        if attrs["has_ligrec"]:
-            parts.append("L-R results")
-        if attrs.get("has_nhood"):
-            parts.append("nhood enrichment")
-        if attrs.get("has_co"):
-            parts.append("co-occurrence")
         if attrs.get("arms_he_filename"):
             parts.append(f"ARMS ({attrs['arms_he_filename']})")
         summary = ", ".join(parts) if parts else "empty session"
@@ -275,23 +219,6 @@ def save_session(
     except Exception as e:
         print(f"Warning: could not save session: {e}")
 
-
-def save_clustering_incremental(zarr_path: Path, name: str, series, all_names: list) -> None:
-    """Write a single custom clustering to the session store without a full session rebuild.
-
-    Safe to call immediately after clustering creation. No-ops silently if the
-    viewer_session group does not yet exist (first launch before any exit).
-    """
-    try:
-        store = zarr.open_group(str(zarr_path), mode="r+", use_consolidated=False)
-        if "viewer_session" not in store:
-            return
-        clust_dir = Path(zarr_path) / "viewer_session" / "clusterings"
-        clust_dir.mkdir(exist_ok=True)
-        series.to_frame(name="cluster").to_parquet(clust_dir / f"{name}.parquet")
-        store["viewer_session"].attrs["custom_clustering_names"] = list(all_names)
-    except Exception as e:
-        print(f"Warning: could not auto-save clustering '{name}': {e}")
 
 
 def save_rank_genes_incremental(zarr_path: Path, df, adata_norm, groupby: str) -> None:
@@ -449,18 +376,9 @@ def load_session(zarr_path: Path) -> Optional[dict]:
             # Old flat format: {str(int): label} — wrap under a generic key
             result["cluster_labels"] = {"_legacy": {int(k): v for k, v in cl.items()}}
 
-    # ── Custom clusterings ─────────────────────────────────────────────
-    custom_clusterings = {}
-    clust_dir = Path(zarr_path) / "viewer_session" / "clusterings"
-    custom_names = attrs.get("custom_clustering_names", [])
-    for name in custom_names:
-        pq = clust_dir / f"{name}.parquet"
-        if pq.exists():
-            df = pd.read_parquet(pq)
-            custom_clusterings[name] = df.iloc[:, 0]
-    result["custom_clusterings"] = custom_clusterings
+    # (Custom clusterings are now loaded from adata.obs via adata_persistence)
 
-    # ── Analysis DataFrames ───────────────────────────────────────────
+    # ── Analysis DataFrames (rank genes, ROI DEG, ARMS tile DEG remain here) ──
     session_dir = Path(zarr_path) / "viewer_session"
 
     result["rank_genes_groupby"] = attrs.get("rank_genes_groupby")
@@ -483,39 +401,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         if p.exists():
             result["arms_tile_deg_df"] = pd.read_parquet(p)
 
-    if attrs.get("has_ligrec"):
-        p = session_dir / "ligrec_means.parquet"
-        if p.exists():
-            result["ligrec_means"] = pd.read_parquet(p)
-        p = session_dir / "ligrec_pvalues.parquet"
-        if p.exists():
-            result["ligrec_pvalues"] = pd.read_parquet(p)
-
-    # ── Nhood enrichment ─────────────────────────────────────────────
-    if attrs.get("has_nhood") and "nhood" in session:
-        nhood_group = session["nhood"]
-        zscore = np.array(nhood_group["zscore"]) if "zscore" in nhood_group else np.array([])
-        count = np.array(nhood_group["count"]) if "count" in nhood_group else np.array([])
-        clusters = list(dict(nhood_group.attrs).get("clusters", []))
-        result["nhood_result"] = {
-            "zscore": zscore,
-            "count": count,
-            "clusters": clusters,
-            "warning": None,
-        }
-
-    # ── Co-occurrence ────────────────────────────────────────────────
-    if attrs.get("has_co") and "co_occ" in session:
-        co_group = session["co_occ"]
-        occ = np.array(co_group["occ"]) if "occ" in co_group else np.array([])
-        interval_arr = np.array(co_group["interval"]) if "interval" in co_group else np.array([])
-        clusters = list(dict(co_group.attrs).get("clusters", []))
-        result["co_result"] = {
-            "occ": occ,
-            "interval": interval_arr,
-            "clusters": clusters,
-            "warning": None,
-        }
+    # (ligrec, nhood, co-occurrence are now loaded from adata.uns via adata_persistence)
 
     # ── ARMS overlay ─────────────────────────────────────────────────
     # Prefer attrs (real-time saved) over zarr arrays (snapshot)
