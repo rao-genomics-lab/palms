@@ -82,9 +82,22 @@ def _persist_table(ctx: ViewerContext) -> None:
 # ── Save functions ────────────────────────────────────────────────────────
 
 def save_clustering_to_adata(ctx: ViewerContext, name: str, series: pd.Series) -> None:
-    """Write a clustering Series to adata.obs and persist."""
+    """Write a clustering Series to adata.obs and persist.
+
+    The series is indexed by cell_id (barcode), which may differ from
+    adata.obs.index. We align via the 'cell_id' column if present.
+    """
     col = f"{CLUSTERING_PREFIX}{name}"
-    ctx.adata.obs[col] = pd.Categorical(series.reindex(ctx.adata.obs.index))
+    adata = ctx.adata
+
+    if "cell_id" in adata.obs.columns:
+        # Build cell_id -> obs_index mapping, then align the series
+        cell_id_to_idx = pd.Series(adata.obs.index, index=adata.obs["cell_id"].values)
+        aligned = series.rename(cell_id_to_idx).reindex(adata.obs.index)
+    else:
+        aligned = series.reindex(adata.obs.index)
+
+    adata.obs[col] = pd.Categorical(aligned)
     _persist_table(ctx)
 
 
@@ -132,15 +145,24 @@ def save_ligrec_to_adata(ctx: ViewerContext, result: dict) -> None:
 def load_custom_clusterings_from_adata(adata: AnnData) -> dict:
     """Read custom clustering columns from adata.obs.
 
-    Returns dict mapping clustering name -> Series (stripped of prefix).
+    Returns dict mapping clustering name -> Series indexed by cell_id
+    (to match ctx.clusterings convention).
     """
     clusterings = {}
+    has_cell_id = "cell_id" in adata.obs.columns
     for col in adata.obs.columns:
         if col.startswith(CLUSTERING_PREFIX):
             name = col[len(CLUSTERING_PREFIX):]
-            series = adata.obs[col].dropna()
-            if len(series) > 0:
-                clusterings[name] = series
+            raw = adata.obs[col].dropna()
+            if len(raw) == 0:
+                continue
+            if has_cell_id:
+                # Re-index from adata.obs.index → cell_id values
+                cell_ids = adata.obs.loc[raw.index, "cell_id"].values
+                series = pd.Series(raw.values, index=cell_ids, name=name)
+            else:
+                series = raw
+            clusterings[name] = series
     return clusterings
 
 
@@ -227,9 +249,14 @@ def migrate_old_session_to_adata(
         pq = clust_dir / f"{name}.parquet"
         if pq.exists():
             df = pd.read_parquet(pq)
-            series = df.iloc[:, 0]
-            series.index = df.index if df.index.name == "cell_id" else series.index
-            adata.obs[col] = pd.Categorical(series.reindex(adata.obs.index))
+            series = df.iloc[:, 0]  # indexed by cell_id (barcode)
+            # Align cell_id-indexed series to adata.obs.index
+            if "cell_id" in adata.obs.columns:
+                cell_id_to_idx = pd.Series(adata.obs.index, index=adata.obs["cell_id"].values)
+                aligned = series.rename(cell_id_to_idx).reindex(adata.obs.index)
+            else:
+                aligned = series.reindex(adata.obs.index)
+            adata.obs[col] = pd.Categorical(aligned)
             migrated_any = True
             print(f"  Migrated clustering '{name}' to adata.obs")
 

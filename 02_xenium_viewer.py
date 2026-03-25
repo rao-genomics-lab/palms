@@ -479,8 +479,13 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
     if umap_df is not None and not umap_df.empty:
         umap_cols = [c for c in umap_df.columns if c.startswith("UMAP")]
         if len(umap_cols) >= 2:
-            umap_aligned = umap_df[umap_cols[:2]].reindex(adata.obs.index)
-            adata.obsm["X_umap"] = umap_aligned.values.astype(np.float32)
+            # umap_df is indexed by cell barcode; adata.obs.index may differ
+            if "cell_id" in adata.obs.columns:
+                cell_id_to_idx = pd.Series(adata.obs.index, index=adata.obs["cell_id"].values)
+                umap_reindexed = umap_df[umap_cols[:2]].rename(index=cell_id_to_idx).reindex(adata.obs.index)
+            else:
+                umap_reindexed = umap_df[umap_cols[:2]].reindex(adata.obs.index)
+            adata.obsm["X_umap"] = umap_reindexed.values.astype(np.float32)
 
     # Load custom clusterings previously saved into adata.obs
     from utils.adata_persistence import load_custom_clusterings_from_adata

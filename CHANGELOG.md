@@ -13,6 +13,11 @@
   - New module: `utils/adata_persistence.py` centralizes all adata read/write/migration logic.
   - `utils/session.py` no longer handles clusterings, nhood, co-occurrence, or L-R data.
 
+### Fixed
+- **Index alignment for adata persistence** — `adata.obs.index` uses integer strings (`'0'`, `'1'`, ...)
+  while clustering series and UMAP are indexed by cell barcode (`'aaaagflk-1'`, ...). Save/load now
+  maps between the two via the `cell_id` column.
+
 ## [Unreleased] — 2026-03-23
 
 ### Added
