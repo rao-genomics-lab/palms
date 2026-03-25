@@ -147,22 +147,21 @@ def save_ligrec_to_adata(ctx: ViewerContext, result: dict) -> None:
 # ── Phase 2 save/load: rank genes, adata_norm, ROI polygons ──────────────
 
 def _persist_adata_norm(ctx: ViewerContext, adata_norm) -> None:
-    """Write adata_norm to sdata.tables['adata_norm'].
+    """Write adata_norm as h5ad alongside the zarr cache.
 
+    Saves to <zarr_path>/adata_norm_cache.h5ad. Using a plain h5ad rather
+    than sdata.tables avoids spatialdata's table validation requirements
+    (region/region_key/instance_key), which adata_norm doesn't satisfy.
     No-op if running in no-cache mode or sdata has no backing store.
-    Thread-safe (serialized via lock).
     """
     if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
         return
-    with _persist_lock:
-        try:
-            _convert_adata_arrow_strings(adata_norm)
-            if 'adata_norm' in ctx.sdata:
-                ctx.sdata.delete_element_from_disk('adata_norm')
-            ctx.sdata['adata_norm'] = adata_norm
-            ctx.sdata.write_element('adata_norm')
-        except Exception as e:
-            print(f"Warning: could not persist adata_norm: {e}")
+    try:
+        norm_path = Path(ctx.sdata.path) / "adata_norm_cache.h5ad"
+        _convert_adata_arrow_strings(adata_norm)
+        adata_norm.write_h5ad(norm_path)
+    except Exception as e:
+        print(f"Warning: could not persist adata_norm: {e}")
 
 
 def save_rank_genes_to_adata(ctx: ViewerContext, df, adata_norm, groupby: str) -> None:
@@ -180,9 +179,10 @@ def save_rank_genes_to_adata(ctx: ViewerContext, df, adata_norm, groupby: str) -
 
 
 def load_rank_genes_from_adata(adata, sdata) -> tuple:
-    """Read rank genes results from adata.uns and adata_norm from sdata.tables.
+    """Read rank genes results from adata.uns and adata_norm from h5ad cache.
 
     Returns (df, adata_norm, groupby) or (None, None, None) if not stored.
+    adata_norm is loaded from <zarr_path>/adata_norm_cache.h5ad if present.
     """
     rgg = adata.uns.get('rank_genes_groups')
     if rgg is None:
@@ -198,11 +198,13 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
         return None, None, None
 
     adata_norm = None
-    if sdata is not None:
-        try:
-            adata_norm = sdata['adata_norm'] if 'adata_norm' in sdata else None
-        except Exception:
-            pass
+    if sdata is not None and sdata.path is not None:
+        norm_path = Path(sdata.path) / "adata_norm_cache.h5ad"
+        if norm_path.exists():
+            try:
+                adata_norm = sc.read_h5ad(norm_path)
+            except Exception as e:
+                print(f"Warning: could not load adata_norm cache: {e}")
 
     return df, adata_norm, groupby
 
@@ -460,15 +462,15 @@ def migrate_old_session_to_adata(
                     _convert_arrow_strings(sdata)
                     sdata.delete_element_from_disk("table")
                     sdata.write_element("table")
-                    # Migrate adata_norm to sdata.tables['adata_norm']
-                    if 'adata_norm' not in sdata:
+                    # Migrate adata_norm to h5ad cache alongside the zarr store
+                    norm_cache = Path(zarr_path) / "adata_norm_cache.h5ad"
+                    if not norm_cache.exists():
                         try:
                             _convert_adata_arrow_strings(adata_norm)
-                            sdata['adata_norm'] = adata_norm
-                            sdata.write_element('adata_norm')
-                            print("  Migrated rank genes and adata_norm to sdata")
+                            adata_norm.write_h5ad(norm_cache)
+                            print("  Migrated rank genes and adata_norm to zarr cache")
                         except Exception as e:
-                            print(f"  Warning: could not migrate adata_norm to sdata: {e}")
+                            print(f"  Warning: could not migrate adata_norm: {e}")
                     # Clean up old files
                     try:
                         rg_parquet.unlink(missing_ok=True)
