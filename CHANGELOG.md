@@ -21,6 +21,15 @@
     spatialdata labels and reloads the original clustering files.
 - `segmentation_source: str` field on `ViewerContext` (values: `"xenium"` | `"custom"`).
 
+## [Unreleased] — 2026-03-27 (3)
+
+### Fixed
+- **Annot. Nhood and Annot. Distance clustering dropdowns not refreshed on segmentation swap** —
+  both tabs created their `clustering_widget` ComboBoxes without registering them on `ctx`, so
+  `refresh_clustering_choices` skipped them. Fix: register as `ctx.annot_nhood_clustering_widget`
+  and `ctx.annot_dist_clustering_widget`, add corresponding fields to `ViewerContext`, and include
+  them in the refresh loop in `_helpers.py`.
+
 ## [Unreleased] — 2026-03-27 (2)
 
 ### Fixed

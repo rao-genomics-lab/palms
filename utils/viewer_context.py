@@ -37,6 +37,7 @@ class ViewerContext:
     transcript_layer: Any = None
     transcript_bins_layer: Any = None   # Image layer for transcript density heatmap
     roi_layer: Any = None
+    annotation_layer: Any = None        # Named tissue annotation shapes
 
     # ── Morphology data (for coarse align) ──────────────────────────────────
     morph_thumb: Any = None
@@ -57,6 +58,8 @@ class ViewerContext:
     lr_clustering_widget: Any = None
     ne_clustering_widget: Any = None
     co_clustering_widget: Any = None
+    annot_nhood_clustering_widget: Any = None
+    annot_dist_clustering_widget: Any = None
 
     # ── Shared helper callables (attached by create_shared_helpers) ──────────
     record_code: Any = None
@@ -86,3 +89,6 @@ class ViewerContext:
 
     # ── Dataset generation counter (incremented on dataset reload) ────────────
     dataset_generation: int = 0
+
+    # ── Segmentation source ───────────────────────────────────────────────────
+    segmentation_source: str = "xenium"   # "xenium" | "custom"

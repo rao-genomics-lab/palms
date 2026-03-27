@@ -189,6 +189,9 @@ def create_shared_helpers(ctx: ViewerContext):
                 return
             state["code_journal_tags"].add(tag)
         state["code_journal"].append(code)
+        sync_fn = state.get("_notebook_sync_fn")
+        if sync_fn:
+            sync_fn()
         code_path = ctx.data_path / state.get("code_file", "code.py")
         with open(code_path, 'w') as f:
             f.write("\n".join(state["code_journal"]) + "\n")
@@ -272,7 +275,9 @@ def create_shared_helpers(ctx: ViewerContext):
         names = list(ctx.clusterings.keys())
         for combo in [ctx.clustering_widget, ctx.ga_clustering_widget,
                       ctx.lr_clustering_widget, ctx.ne_clustering_widget,
-                      ctx.co_clustering_widget]:
+                      ctx.co_clustering_widget,
+                      ctx.annot_nhood_clustering_widget,
+                      ctx.annot_dist_clustering_widget]:
             if combo is None:
                 continue
             old_val = combo.value
@@ -491,6 +496,30 @@ def create_file_menu(viewer, on_open_dataset, on_preprocess_dataset=None):
         pre_act.setObjectName("xenium_preprocess")
         pre_act.triggered.connect(on_preprocess_dataset)
         file_menu.addAction(pre_act)
+
+
+# ── View menu ─────────────────────────────────────────────────────────────────
+
+def create_view_menu(viewer, _app):
+    """Add a 'Show Minimap' toggle to napari's native View menu (call once at startup)."""
+    from qtpy.QtGui import QAction
+
+    view_menu = viewer.window.view_menu
+    view_menu.addSeparator()
+
+    minimap_action = QAction("Show Minimap", view_menu, checkable=True)
+    minimap_action.setObjectName("xenium_minimap_toggle")
+    minimap_action.setChecked(False)
+    minimap_action.setEnabled(False)
+
+    def _on_toggled(checked):
+        minimap = _app.get("minimap")
+        if minimap is not None:
+            minimap.setVisible(checked)
+
+    minimap_action.toggled.connect(_on_toggled)
+    view_menu.addAction(minimap_action)
+    _app["minimap_action"] = minimap_action
 
 
 # ── Preferences menu ─────────────────────────────────────────────────────────
