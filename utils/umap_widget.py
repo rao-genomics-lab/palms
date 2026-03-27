@@ -195,7 +195,7 @@ class UMAPViewer:
         self._current_colors = rgba_obs
 
         # Store cluster IDs for hover
-        if cluster_ids_per_obs is not None:
+        if cluster_ids_per_obs is not None and len(cluster_ids_per_obs) == self.n_cells:
             self._cluster_ids = cluster_ids_per_obs[self._valid]
         else:
             self._cluster_ids = None

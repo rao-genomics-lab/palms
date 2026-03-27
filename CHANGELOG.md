@@ -1,8 +1,91 @@
 # Changelog
 
+## [Unreleased] — 2026-03-26 (2)
+
+### Added
+- **Custom cell segmentation** — two-stage pipeline to replace the native Xenium segmentation
+  with a custom one from a Seurat v5 RDS file.
+  - `scripts/extract_seurat_segmentation.R` — Stage 1: extracts polygon vertices, count matrix,
+    and cell metadata from a Seurat RDS via slot access (no Seurat installation required). Outputs
+    `segmentation_polygons.csv`, `counts.mtx`, `genes.txt`, `barcodes.txt`, `cell_metadata.csv`.
+  - `scripts/build_custom_segmentation.py` — Stage 2 (run in `xenium_viewer` conda env): reads
+    Stage 1 outputs, validates coordinate system against `cells.parquet`, rasterizes 300K+ polygons
+    using `rasterio.features.rasterize`, writes a multi-scale zarr label store
+    (`custom_labels.zarr`) and an AnnData file (`custom_segmentation.h5ad`) with
+    `obs['cell_id']` = integer label and `obsm['spatial']` = xy-µm centroids, plus a metadata JSON.
+  - **Segmentation tab** — new viewer tab with "Load Custom Segmentation..." and "Revert to Xenium
+    Segmentation" buttons. Load flow: select `custom_segmentation.h5ad` → zarr found automatically
+    via JSON metadata → cell labels layer replaced, `ctx.adata`, `ctx.color_manager`,
+    `ctx.centroids_yx`, `ctx.clusterings` all rebuilt from the new data, clustering ComboBoxes
+    refreshed across all tabs, stale analysis caches cleared. Revert restores the native
+    spatialdata labels and reloads the original clustering files.
+- `segmentation_source: str` field on `ViewerContext` (values: `"xenium"` | `"custom"`).
+
+## [Unreleased] — 2026-03-27 (2)
+
+### Fixed
+- **Custom segmentation: cluster coloring all-transparent** — obs columns (`cell_type`, etc.)
+  added to `ctx.clusterings` from `new_adata.obs` were indexed by obs row numbers (`'0'`, `'1'`,
+  …) rather than `cell_id` integer label values. `get_cluster_colors` calls
+  `cluster_series.reindex(cell_ids)` using label values as the lookup key, so the index mismatch
+  produced all-NaN alignments and every cell got RGBA `(0,0,0,0)`. Fix: wrap obs columns in a new
+  `pd.Series` indexed by `adata.obs['cell_id'].values` before storing in `ctx.clusterings`.
+  Gene expression coloring was unaffected because it uses `label_to_obs` directly.
+- **Custom segmentation: `IndexError` in UMAP hover** — `UMAPViewer._valid` has shape
+  `(n_original_cells,)` but `cluster_ids_per_obs` from a custom segmentation has a different
+  length. Guard added: skip UMAP hover cluster IDs when sizes don't match.
+
+## [Unreleased] — 2026-03-27
+
+### Added
+- **Annotation layer** — new napari Shapes layer "Annotations" for drawing named tissue regions
+  (bone, adipocyte, vessel, etc.) with per-shape type labels displayed as text overlays.
+  Annotations persist across sessions via `sdata.shapes['annotations']`.
+- **Annotations tab** — manage annotation type labels (assign, colour-pick, delete), import from
+  GeoJSON (compatible with QuPath exports), export to GeoJSON.
+- **Annot. Nhood tab** — neighbourhood enrichment analysis that includes annotation regions as
+  virtual cell types. Samples a configurable-density grid of virtual cells inside annotation
+  polygons, builds an augmented AnnData, and runs the squidpy neighbourhood enrichment pipeline.
+  Annotation types appear as rows/columns in the Z-score heatmap.
+- **Annot. Distance tab** — for each real cell computes minimum distance (µm) to the boundary of
+  a selected annotation type (using shapely's vectorised distance API). Visualises the distribution
+  per cell-type cluster as violin, box, or strip plots. Cells can optionally be coloured on the
+  canvas by their distance value using a Points layer.
+
+## [Unreleased] — 2026-03-26
+
+### Added
+- **View menu: Show Minimap toggle** — checkable "Show Minimap" action appended to napari's native
+  View menu. Enabled and checked when the minimap overlay is available; disabled (grayed out) when
+  there is no morphology data. State is reset on dataset reload.
+
 ## [Unreleased] — 2026-03-25
 
 ### Changed
+- **Phase 3 SpatialData storage refactoring** — H&E and ARMS landmark pairs, and ARMS tile
+  geometries migrated from custom zarr arrays into native SpatialData shapes elements, making
+  the sdata object self-sufficient for Python analysis.
+  - **H&E landmarks** → `sdata.shapes['he_xenium_landmarks']` and `sdata.shapes['he_he_landmarks']`
+    as GeoDataFrames of shapely Points (xy coords in native pixel spaces). Saved after each
+    registration event; cleared on landmark clear.
+  - **ARMS landmarks** → `sdata.shapes['arms_xenium_landmarks']` and `sdata.shapes['arms_he_landmarks']`
+    — same pattern as H&E landmarks.
+  - **ARMS tile polygons** → `sdata.shapes['arms_tiles']` as a GeoDataFrame of shapely Polygons
+    with `tile_name` and `cluster_id` columns. Saved after GeoJSON+CSV load; restored at startup
+    without requiring the original files.
+  - UI-only state (flip toggles, coarse_affine, file paths) remains in zarr attrs as before.
+  - `utils/session.py` no longer writes landmark zarr arrays; zarr load paths kept as migration
+    fallback for existing datasets.
+  - 4 new functions in `utils/adata_persistence.py`: `save_landmarks_to_sdata`,
+    `load_landmarks_from_sdata`, `save_arms_tiles_to_sdata`, `load_arms_tiles_from_sdata`.
+  - **Automatic migration**: on first launch after upgrade, `migrate_landmarks_to_sdata()`
+    migrates existing landmarks into sdata.shapes. Sources checked in order: (1) zarr session
+    arrays (snapshot-captured at close time), (2) `landmarks.json` in the dataset folder
+    (saved via Save Landmarks button). Also re-parses GeoJSON/CSV tile files into
+    sdata.shapes['arms_tiles'] if the files still exist. Marked with
+    `migrated_landmarks_to_sdata` flag so it only runs once.
+  - All shape GeoDataFrames now constructed via `ShapesModel.parse()` to ensure spatialdata
+    compatibility (attaches coordinate transform metadata required by the zarr writer).
 - **Phase 2 SpatialData storage refactoring** — rank genes results, normalized AnnData, and
   ROI polygons migrated out of custom `viewer_session/` files into native SpatialData locations.
   - **Rank genes** → `adata.uns['rank_genes_groups']` (scanpy native); DataFrame reconstructed
