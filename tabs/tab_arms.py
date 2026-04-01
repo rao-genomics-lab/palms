@@ -20,19 +20,12 @@ if TYPE_CHECKING:
 from utils.registration import load_he_pyramid, compute_landmark_affine
 from utils.gene_analysis import compute_arms_tile_deg
 
-ARMS_CLUSTER_PALETTE = [
-    [0.12, 0.47, 0.71, 0.6],
-    [1.00, 0.50, 0.05, 0.6],
-    [0.17, 0.63, 0.17, 0.6],
-    [0.84, 0.15, 0.16, 0.6],
-    [0.58, 0.40, 0.74, 0.6],
-    [0.55, 0.34, 0.29, 0.6],
-    [0.89, 0.47, 0.76, 0.6],
-    [0.50, 0.50, 0.50, 0.6],
-]
-ARMS_CLUSTER_NAMES = [
-    "blue", "orange", "green", "red", "purple", "brown", "pink", "gray",
-]
+import matplotlib.pyplot as _plt
+_tab20 = _plt.get_cmap("tab20")
+ARMS_CLUSTER_PALETTE = np.array(
+    [list(_tab20(i)[:3]) + [0.6] for i in range(20)],
+    dtype=np.float32,
+)
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -254,6 +247,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_residuals_qt.clear()
         arms_status_label.value = "ARMS landmarks cleared"
         arms_register_button.enabled = False
+        from utils.adata_persistence import save_landmarks_to_sdata
+        save_landmarks_to_sdata(ctx, 'arms_xenium_landmarks', None)
+        save_landmarks_to_sdata(ctx, 'arms_he_landmarks', None)
 
     def on_arms_register():
         xen_pts = arms_state["xenium_lm_layer"].data
@@ -278,6 +274,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_residuals_qt.setPlainText("\n".join(lines))
         arms_status_label.value = f"ARMS registered ({n} landmarks, mean residual {residuals.mean():.1f} px)"
         _save_arms_affine_to_sdata()
+        from utils.adata_persistence import save_landmarks_to_sdata
+        save_landmarks_to_sdata(ctx, 'arms_xenium_landmarks', xen_pts)
+        save_landmarks_to_sdata(ctx, 'arms_he_landmarks', he_pts)
         ctx.record_code(
             f"\n# ARMS landmark registration\n"
             f"from utils.registration import compute_landmark_affine\n"
@@ -458,8 +457,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
             cols = 3
             for i, cid in enumerate(unique_clusters):
-                idx = max(0, min(cid - 1, len(ARMS_CLUSTER_NAMES) - 1))
-                cb = QCheckBox(f"C{cid}: {ARMS_CLUSTER_NAMES[idx]}")
+                cb = QCheckBox(f"C{cid}")
                 cb.setChecked(True)
                 arms_cluster_filter_grid.addWidget(cb, i // cols, i % cols)
                 arms_state["cluster_checkboxes"][cid] = cb
@@ -472,9 +470,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             legend_lines.append("")
             legend_lines.append("Cluster legend:")
             for cid in unique_clusters:
-                idx = max(0, min(cid - 1, len(ARMS_CLUSTER_NAMES) - 1))
                 count = cluster_ids.count(cid)
-                legend_lines.append(f"  Cluster {cid}: {ARMS_CLUSTER_NAMES[idx]} ({count} tiles)")
+                legend_lines.append(f"  Cluster {cid} ({count} tiles)")
             arms_residuals_qt.setPlainText("\n".join(legend_lines))
             arms_status_label.value = f"ARMS tiles loaded: {matched} tiles, {len(unique_clusters)} clusters"
             return True
@@ -513,6 +510,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
                     store["viewer_session"].attrs["arms_csv_path"] = csv_path
             except Exception:
                 pass
+            from utils.adata_persistence import save_arms_tiles_to_sdata
+            polys = list(arms_state["shapes_layer"].data) if arms_state["shapes_layer"] is not None else []
+            save_arms_tiles_to_sdata(
+                ctx, polys, arms_state.get("tile_names", []), arms_state.get("cluster_ids", []),
+            )
         ctx.record_code(
             f"\n# Load ARMS tile boundaries + cluster assignments\n"
             f"import json\n"
@@ -778,19 +780,62 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_load_he_button.enabled = True
         arms_load_geojson_button.enabled = True
 
-        geojson_path = session_arms_data.get("geojson_path")
-        csv_path = session_arms_data.get("csv_path")
-        if geojson_path and csv_path:
-            if Path(geojson_path).exists() and Path(csv_path).exists():
-                _load_geojson_csv(geojson_path, csv_path)
-            else:
-                missing = []
-                if not Path(geojson_path).exists():
-                    missing.append(f"GeoJSON: {geojson_path}")
-                if not Path(csv_path).exists():
-                    missing.append(f"CSV: {csv_path}")
-                print(f"  Warning: ARMS tile files moved/missing: {', '.join(missing)}")
-                arms_status_label.value = "ARMS H&E restored (tile files not found)"
+        sdata_tiles = session_arms_data.get("arms_tiles_sdata")
+        if sdata_tiles and sdata_tiles[0]:
+            # Tiles loaded from sdata.shapes — skip file re-load
+            polys_yx, t_names, c_ids = sdata_tiles
+            face_colors = []
+            for cid in c_ids:
+                idx = max(0, min(int(cid) - 1, len(ARMS_CLUSTER_PALETTE) - 1))
+                face_colors.append(ARMS_CLUSTER_PALETTE[idx])
+            if arms_state["shapes_layer"] is not None:
+                try:
+                    viewer.layers.remove(arms_state["shapes_layer"])
+                except ValueError:
+                    pass
+            shapes_layer = viewer.add_shapes(
+                polys_yx, shape_type="polygon",
+                face_color=np.array(face_colors), edge_color="white",
+                edge_width=2, name="ARMS Tiles",
+                opacity=arms_tile_opacity_slider.value / 100.0,
+            )
+            arms_state["shapes_layer"] = shapes_layer
+            arms_state["tile_names"] = t_names
+            arms_state["cluster_ids"] = np.array(c_ids, dtype=int)
+            _apply_arms_affine()
+            arms_tile_opacity_slider.enabled = True
+            arms_deg_button.enabled = True
+            unique_clusters = sorted(set(int(c) for c in c_ids))
+            while arms_cluster_filter_grid.count():
+                item = arms_cluster_filter_grid.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+            arms_state["cluster_checkboxes"].clear()
+            cols = 3
+            from qtpy.QtWidgets import QCheckBox as _QCheckBox
+            for i, cid in enumerate(unique_clusters):
+                cb = _QCheckBox(f"C{cid}")
+                cb.setChecked(True)
+                arms_cluster_filter_grid.addWidget(cb, i // cols, i % cols)
+                arms_state["cluster_checkboxes"][cid] = cb
+            arms_select_all_btn.enabled = True
+            arms_deselect_all_btn.enabled = True
+            print(f"  Restored ARMS tiles from sdata ({len(polys_yx)} tiles)")
+        else:
+            geojson_path = session_arms_data.get("geojson_path")
+            csv_path = session_arms_data.get("csv_path")
+            if geojson_path and csv_path:
+                if Path(geojson_path).exists() and Path(csv_path).exists():
+                    _load_geojson_csv(geojson_path, csv_path)
+                else:
+                    missing = []
+                    if not Path(geojson_path).exists():
+                        missing.append(f"GeoJSON: {geojson_path}")
+                    if not Path(csv_path).exists():
+                        missing.append(f"CSV: {csv_path}")
+                    print(f"  Warning: ARMS tile files moved/missing: {', '.join(missing)}")
+                    arms_status_label.value = "ARMS H&E restored (tile files not found)"
 
         has_affine = arms_state["affine_3x3"] is not None
         if arms_status_label.value.startswith("Restoring"):
@@ -819,6 +864,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 "he_shape_yx": session.get("arms_he_shape_yx"),
                 "geojson_path": session.get("arms_geojson_path"),
                 "csv_path": session.get("arms_csv_path"),
+                "arms_tiles_sdata": session.get("arms_tiles_sdata"),
             }
             arms_status_label.value = "Restoring ARMS H&E from cache..."
             gen = ctx.dataset_generation

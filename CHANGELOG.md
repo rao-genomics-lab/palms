@@ -21,6 +21,13 @@
     spatialdata labels and reloads the original clustering files.
 - `segmentation_source: str` field on `ViewerContext` (values: `"xenium"` | `"custom"`).
 
+## [Unreleased] — 2026-04-01
+
+### Changed
+- **ARMS tiles: Tab20 color palette** — replaced the hardcoded 8-color custom palette with
+  matplotlib's Tab20 (20 distinct colors). Cluster filter checkboxes and the legend now show
+  `C{id}` labels without color names, which were only meaningful for the old named palette.
+
 ## [Unreleased] — 2026-03-27 (3)
 
 ### Fixed
