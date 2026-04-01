@@ -23,6 +23,11 @@
 
 ## [Unreleased] — 2026-04-01
 
+### Added
+- **ARMS tiles: "Outline only" checkbox** — when checked, tiles are rendered as colored outlines
+  (edge = cluster color, fill = transparent) instead of filled polygons. The checkbox is enabled
+  once tiles are loaded and toggles the existing layer in place without reloading.
+
 ### Changed
 - **ARMS tiles: ColorBrewer Set1+Set2 color palette** — replaced the hardcoded 8-color custom
   palette with a concatenation of ColorBrewer Set1 (9 colors) + Set2 (8 colors) = 17 distinct

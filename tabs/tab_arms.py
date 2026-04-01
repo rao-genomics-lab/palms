@@ -62,6 +62,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     arms_load_geojson_button = PushButton(label="Load GeoJSON + CSV...", enabled=False)
     arms_tile_opacity_slider = Slider(label="Tile opacity", min=0, max=100, value=50)
     arms_tile_opacity_slider.enabled = False
+    arms_outline_only_check = CheckBox(label="Outline only", value=False, enabled=False)
 
     # ARMS Tile DEG widgets
     arms_deg_method = ComboBox(label="DEG Method", choices=["wilcoxon", "t-test"], value="wilcoxon")
@@ -432,20 +433,28 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 except ValueError:
                     pass
 
+            cluster_ids_arr = np.array(cluster_ids, dtype=int)
+            if arms_outline_only_check.value:
+                init_face = np.zeros((len(cluster_ids_arr), 4), dtype=np.float32)
+                init_edge = np.array(face_colors)
+            else:
+                init_face = np.array(face_colors)
+                init_edge = np.ones((len(cluster_ids_arr), 4), dtype=np.float32)
             shapes_layer = viewer.add_shapes(
                 polygon_data, shape_type="polygon",
-                face_color=np.array(face_colors), edge_color="white",
+                face_color=init_face, edge_color=init_edge,
                 edge_width=2, name="ARMS Tiles",
                 opacity=arms_tile_opacity_slider.value / 100.0,
             )
             arms_state["shapes_layer"] = shapes_layer
             arms_state["tile_names"] = tile_names
-            arms_state["cluster_ids"] = np.array(cluster_ids, dtype=int)
+            arms_state["cluster_ids"] = cluster_ids_arr
             arms_state["geojson_path"] = geojson_path
             arms_state["csv_path"] = csv_path
 
             _apply_arms_affine()
             arms_tile_opacity_slider.enabled = True
+            arms_outline_only_check.enabled = True
             arms_deg_button.enabled = True
 
             # Populate cluster filter
@@ -528,6 +537,24 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if arms_state["shapes_layer"] is not None:
             arms_state["shapes_layer"].opacity = value / 100.0
     arms_tile_opacity_slider.changed.connect(on_arms_tile_opacity)
+
+    def _apply_tile_display_mode():
+        layer = arms_state["shapes_layer"]
+        cluster_ids_arr = arms_state.get("cluster_ids")
+        if layer is None or cluster_ids_arr is None:
+            return
+        cluster_colors = np.array([
+            ARMS_CLUSTER_PALETTE[max(0, min(int(cid) - 1, len(ARMS_CLUSTER_PALETTE) - 1))]
+            for cid in cluster_ids_arr
+        ])
+        if arms_outline_only_check.value:
+            layer.face_color = np.zeros((len(cluster_ids_arr), 4), dtype=np.float32)
+            layer.edge_color = cluster_colors
+        else:
+            layer.face_color = cluster_colors
+            layer.edge_color = np.ones((len(cluster_ids_arr), 4), dtype=np.float32)  # white
+
+    arms_outline_only_check.changed.connect(lambda _: _apply_tile_display_mode())
 
     # ── ARMS Tile DEG ────────────────────────────────────────────────────
     def on_arms_deg():
@@ -737,6 +764,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_residuals_qt,
         arms_load_geojson_button,
         arms_tile_opacity_slider,
+        arms_outline_only_check,
         arms_cluster_btn_row,
         arms_cluster_scroll,
         arms_deg_filter_check,
@@ -795,17 +823,25 @@ def build_tab(ctx: ViewerContext) -> tuple:
                     viewer.layers.remove(arms_state["shapes_layer"])
                 except ValueError:
                     pass
+            c_ids_arr = np.array(c_ids, dtype=int)
+            if arms_outline_only_check.value:
+                init_face = np.zeros((len(c_ids_arr), 4), dtype=np.float32)
+                init_edge = np.array(face_colors)
+            else:
+                init_face = np.array(face_colors)
+                init_edge = np.ones((len(c_ids_arr), 4), dtype=np.float32)
             shapes_layer = viewer.add_shapes(
                 polys_yx, shape_type="polygon",
-                face_color=np.array(face_colors), edge_color="white",
+                face_color=init_face, edge_color=init_edge,
                 edge_width=2, name="ARMS Tiles",
                 opacity=arms_tile_opacity_slider.value / 100.0,
             )
             arms_state["shapes_layer"] = shapes_layer
             arms_state["tile_names"] = t_names
-            arms_state["cluster_ids"] = np.array(c_ids, dtype=int)
+            arms_state["cluster_ids"] = c_ids_arr
             _apply_arms_affine()
             arms_tile_opacity_slider.enabled = True
+            arms_outline_only_check.enabled = True
             arms_deg_button.enabled = True
             unique_clusters = sorted(set(int(c) for c in c_ids))
             while arms_cluster_filter_grid.count():
