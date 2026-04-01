@@ -24,9 +24,9 @@
 ## [Unreleased] — 2026-04-01
 
 ### Changed
-- **ARMS tiles: Tab20 color palette** — replaced the hardcoded 8-color custom palette with
-  matplotlib's Tab20 (20 distinct colors). Cluster filter checkboxes and the legend now show
-  `C{id}` labels without color names, which were only meaningful for the old named palette.
+- **ARMS tiles: ColorBrewer Set1+Set2 color palette** — replaced the hardcoded 8-color custom
+  palette with a concatenation of ColorBrewer Set1 (9 colors) + Set2 (8 colors) = 17 distinct
+  colors. Cluster filter checkboxes and the legend now show `C{id}` labels without color names.
 
 ## [Unreleased] — 2026-03-27 (3)
 

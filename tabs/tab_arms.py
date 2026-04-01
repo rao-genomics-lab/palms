@@ -21,9 +21,11 @@ from utils.registration import load_he_pyramid, compute_landmark_affine
 from utils.gene_analysis import compute_arms_tile_deg
 
 import matplotlib.pyplot as _plt
-_tab20 = _plt.get_cmap("tab20")
+_set1 = _plt.get_cmap("Set1")
+_set2 = _plt.get_cmap("Set2")
 ARMS_CLUSTER_PALETTE = np.array(
-    [list(_tab20(i)[:3]) + [0.6] for i in range(20)],
+    [list(_set1(i)[:3]) + [0.6] for i in range(9)] +
+    [list(_set2(i)[:3]) + [0.6] for i in range(8)],
     dtype=np.float32,
 )
 
