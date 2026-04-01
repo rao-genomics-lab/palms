@@ -443,7 +443,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             shapes_layer = viewer.add_shapes(
                 polygon_data, shape_type="polygon",
                 face_color=init_face, edge_color=init_edge,
-                edge_width=2, name="ARMS Tiles",
+                edge_width=20, name="ARMS Tiles",
                 opacity=arms_tile_opacity_slider.value / 100.0,
             )
             arms_state["shapes_layer"] = shapes_layer
@@ -833,7 +833,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             shapes_layer = viewer.add_shapes(
                 polys_yx, shape_type="polygon",
                 face_color=init_face, edge_color=init_edge,
-                edge_width=2, name="ARMS Tiles",
+                edge_width=20, name="ARMS Tiles",
                 opacity=arms_tile_opacity_slider.value / 100.0,
             )
             arms_state["shapes_layer"] = shapes_layer
