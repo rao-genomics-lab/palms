@@ -542,8 +542,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
     arms_tile_opacity_slider.changed.connect(on_arms_tile_opacity)
 
     def on_arms_edge_width(value):
-        if arms_state["shapes_layer"] is not None:
-            arms_state["shapes_layer"].edge_width = value
+        layer = arms_state["shapes_layer"]
+        if layer is not None:
+            layer.edge_width = value
+            layer.refresh()
     arms_edge_width_slider.changed.connect(on_arms_edge_width)
 
     def _apply_tile_display_mode():
