@@ -27,6 +27,8 @@
 - **ARMS tiles: "Outline only" checkbox** — when checked, tiles are rendered as colored outlines
   (edge = cluster color, fill = transparent) instead of filled polygons. The checkbox is enabled
   once tiles are loaded and toggles the existing layer in place without reloading.
+- **ARMS tiles: "Tile edge width" slider** — adjusts outline thickness live (range 1–100, default
+  20). Enabled once tiles are loaded.
 
 ### Changed
 - **ARMS tiles: ColorBrewer Set1+Set2 color palette** — replaced the hardcoded 8-color custom

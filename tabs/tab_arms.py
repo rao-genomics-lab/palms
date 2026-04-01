@@ -63,6 +63,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     arms_tile_opacity_slider = Slider(label="Tile opacity", min=0, max=100, value=50)
     arms_tile_opacity_slider.enabled = False
     arms_outline_only_check = CheckBox(label="Outline only", value=False, enabled=False)
+    arms_edge_width_slider = Slider(label="Tile edge width", min=1, max=100, value=20)
+    arms_edge_width_slider.enabled = False
 
     # ARMS Tile DEG widgets
     arms_deg_method = ComboBox(label="DEG Method", choices=["wilcoxon", "t-test"], value="wilcoxon")
@@ -455,6 +457,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             _apply_arms_affine()
             arms_tile_opacity_slider.enabled = True
             arms_outline_only_check.enabled = True
+            arms_edge_width_slider.enabled = True
             arms_deg_button.enabled = True
 
             # Populate cluster filter
@@ -537,6 +540,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if arms_state["shapes_layer"] is not None:
             arms_state["shapes_layer"].opacity = value / 100.0
     arms_tile_opacity_slider.changed.connect(on_arms_tile_opacity)
+
+    def on_arms_edge_width(value):
+        if arms_state["shapes_layer"] is not None:
+            arms_state["shapes_layer"].edge_width = value
+    arms_edge_width_slider.changed.connect(on_arms_edge_width)
 
     def _apply_tile_display_mode():
         layer = arms_state["shapes_layer"]
@@ -765,6 +773,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_load_geojson_button,
         arms_tile_opacity_slider,
         arms_outline_only_check,
+        arms_edge_width_slider,
         arms_cluster_btn_row,
         arms_cluster_scroll,
         arms_deg_filter_check,
@@ -842,6 +851,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             _apply_arms_affine()
             arms_tile_opacity_slider.enabled = True
             arms_outline_only_check.enabled = True
+            arms_edge_width_slider.enabled = True
             arms_deg_button.enabled = True
             unique_clusters = sorted(set(int(c) for c in c_ids))
             while arms_cluster_filter_grid.count():
