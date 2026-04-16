@@ -26,6 +26,10 @@ _persist_lock = threading.Lock()
 # Prefix for custom clustering columns in adata.obs
 CLUSTERING_PREFIX = "clustering_"
 
+# SpatialData element keys for custom segmentation
+CUSTOM_LABELS_KEY = "custom_cell_labels"
+CUSTOM_TABLE_KEY = "custom_table"
+
 
 def _convert_adata_arrow_strings(adata) -> None:
     """Convert ArrowStringArray columns in an AnnData object to object dtype.
@@ -60,13 +64,42 @@ def _convert_arrow_strings(sdata) -> None:
     _convert_adata_arrow_strings(sdata["table"])
 
 
+def _persist_custom_table(ctx: ViewerContext) -> None:
+    """Write custom adata to sdata.tables['custom_table']. Caller must hold _persist_lock."""
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    try:
+        from spatialdata.models import TableModel
+        adata_copy = ctx.adata.copy()
+        _convert_adata_arrow_strings(adata_copy)
+        adata_copy = TableModel.parse(
+            adata_copy,
+            region=CUSTOM_LABELS_KEY,
+            region_key="region",
+            instance_key="cell_id",
+        )
+        sdata = ctx.sdata
+        if CUSTOM_TABLE_KEY in sdata.tables:
+            sdata.delete_element_from_disk(CUSTOM_TABLE_KEY)
+        sdata.tables[CUSTOM_TABLE_KEY] = adata_copy
+        sdata.write_element(CUSTOM_TABLE_KEY)
+    except Exception as e:
+        print(f"Warning: could not persist custom table to sdata: {e}")
+
+
 def _persist_table(ctx: ViewerContext) -> None:
     """Write adata back to the zarr-backed sdata store.
 
+    When custom segmentation is active, delegates to _persist_custom_table
+    so all per-action saves (clustering, rank genes, etc.) go to the right table.
     No-op if running in no-cache mode or sdata has no backing store.
     Thread-safe (serialized via lock).
     """
     if ctx.no_cache:
+        return
+    if getattr(ctx, "segmentation_source", "xenium") == "custom":
+        with _persist_lock:
+            _persist_custom_table(ctx)
         return
     sdata = ctx.sdata
     if sdata is None or sdata.path is None:
@@ -83,7 +116,84 @@ def _persist_table(ctx: ViewerContext) -> None:
             print(f"Warning: could not persist adata table: {e}")
 
 
+# Prefix for cluster label columns in adata.obs
+CLUSTER_LABELS_PREFIX = "cluster_labels_"
+
 # ── Save functions ────────────────────────────────────────────────────────
+
+def save_cluster_labels_to_sdata(ctx: "ViewerContext", clustering_key: str, label_dict: dict) -> None:
+    """Map cluster IDs → labels and persist as adata.obs['cluster_labels_<key>'].
+
+    Each cell gets the label for its cluster ID. This column can be read back
+    in a standalone Python session without the viewer.
+
+    The source clustering column may be stored as `clustering_key` directly
+    (built-in Xenium clusterings) or as `clustering_<clustering_key>` (custom
+    clusterings added via save_clustering_to_adata).
+    """
+    if ctx.no_cache or ctx.sdata is None:
+        return
+    adata = ctx.adata
+    if adata is None:
+        return
+    # Resolve which obs column holds the cluster IDs for this key
+    if clustering_key in adata.obs.columns:
+        src_col = clustering_key
+    elif f"{CLUSTERING_PREFIX}{clustering_key}" in adata.obs.columns:
+        src_col = f"{CLUSTERING_PREFIX}{clustering_key}"
+    else:
+        return
+    try:
+        str_map = {str(k): str(v) for k, v in label_dict.items()}
+        obs_key = f"{CLUSTER_LABELS_PREFIX}{clustering_key}"
+        adata.obs[obs_key] = (
+            adata.obs[src_col].astype(str).map(str_map).fillna("").astype(object)
+        )
+        _persist_table(ctx)
+    except Exception as e:
+        print(f"Warning: could not save cluster labels to sdata: {e}")
+
+
+def load_cluster_labels_from_sdata(sdata) -> dict:
+    """Read cluster_labels_* columns from adata.obs and reconstruct labels dict.
+
+    Returns {clustering_key: {cluster_id: label}} or {} if none found.
+    Works with both xenium 'table' and custom 'custom_table'.
+    """
+    if sdata is None:
+        return {}
+    table_key = "custom_table" if "custom_table" in (getattr(sdata, "tables", {}) or {}) else "table"
+    if table_key not in (getattr(sdata, "tables", {}) or {}):
+        return {}
+    try:
+        adata = sdata.tables[table_key]
+        result = {}
+        for col in adata.obs.columns:
+            if not col.startswith(CLUSTER_LABELS_PREFIX):
+                continue
+            clustering_key = col[len(CLUSTER_LABELS_PREFIX):]
+            # Find which obs column holds the cluster IDs
+            if clustering_key in adata.obs.columns:
+                src_col = clustering_key
+            elif f"{CLUSTERING_PREFIX}{clustering_key}" in adata.obs.columns:
+                src_col = f"{CLUSTERING_PREFIX}{clustering_key}"
+            else:
+                continue
+            pairs = adata.obs[[src_col, col]].drop_duplicates()
+            label_dict = {}
+            for _, row in pairs.iterrows():
+                cid = row[src_col]
+                try:
+                    cid = int(cid)
+                except (ValueError, TypeError):
+                    pass
+                label_dict[cid] = str(row[col])
+            result[clustering_key] = label_dict
+        return result
+    except Exception as e:
+        print(f"Warning: could not load cluster labels from sdata: {e}")
+        return {}
+
 
 def save_clustering_to_adata(ctx: ViewerContext, name: str, series: pd.Series) -> None:
     """Write a clustering Series to adata.obs and persist.
@@ -164,6 +274,80 @@ def _persist_adata_norm(ctx: ViewerContext, adata_norm) -> None:
         print(f"Warning: could not persist adata_norm: {e}")
 
 
+def save_custom_seg_to_sdata(ctx: ViewerContext, new_adata, scales: list) -> None:
+    """Persist custom segmentation labels and AnnData to the sdata zarr cache.
+
+    Writes:
+      - sdata.labels["custom_cell_labels"] — multiscale label raster
+      - sdata.tables["custom_table"]       — AnnData annotated via TableModel
+
+    No-op if running in no-cache mode or sdata has no backing store.
+    Thread-safe (serialized via _persist_lock).
+    scales: list of arrays (highest→lowest resolution) as loaded from source zarr.
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    with _persist_lock:
+        # ── Save label raster ────────────────────────────────────────────
+        try:
+            from spatialdata.models import LabelsModel
+            arr = scales[0]
+            if hasattr(arr, "compute"):
+                arr = arr.compute()
+            arr = np.asarray(arr)
+            n = len(scales)
+            scale_factors = [2] * (n - 1) if n > 1 else None
+            parsed = LabelsModel.parse(arr, dims=("y", "x"), scale_factors=scale_factors)
+            sdata = ctx.sdata
+            if CUSTOM_LABELS_KEY in sdata.labels:
+                sdata.delete_element_from_disk(CUSTOM_LABELS_KEY)
+            sdata.labels[CUSTOM_LABELS_KEY] = parsed
+            sdata.write_element(CUSTOM_LABELS_KEY)
+            print(f"Custom labels saved to sdata.labels['{CUSTOM_LABELS_KEY}']")
+        except Exception as e:
+            print(f"Warning: could not save custom labels to sdata: {e}")
+        # ── Save AnnData as sdata.tables["custom_table"] ─────────────────
+        _persist_custom_table(ctx)
+
+
+def load_custom_seg_from_sdata(sdata) -> tuple:
+    """Load custom segmentation from sdata if previously persisted.
+
+    Returns (adata, scales) where scales is a list of dask arrays suitable
+    for viewer.add_labels(), or (None, None) if not fully cached.
+    """
+    if sdata is None or CUSTOM_LABELS_KEY not in sdata.labels:
+        return None, None
+    if CUSTOM_TABLE_KEY not in sdata.tables:
+        return None, None
+    try:
+        import re
+        adata = sdata.tables[CUSTOM_TABLE_KEY]
+        dt = sdata.labels[CUSTOM_LABELS_KEY]
+
+        def _sort_key(name):
+            nums = re.findall(r"\d+", name)
+            return int(nums[0]) if nums else 0
+
+        scales = []
+        for name in sorted(dt.children.keys(), key=_sort_key):
+            child = dt.children[name]
+            ds = getattr(child, "ds", None)
+            if ds is None:
+                continue
+            if "image" in ds:
+                scales.append(ds["image"].data)
+            elif ds.data_vars:
+                scales.append(ds[next(iter(ds.data_vars))].data)
+
+        if not scales:
+            return None, None
+        return adata, scales
+    except Exception as e:
+        print(f"Warning: could not load custom seg from sdata: {e}")
+        return None, None
+
+
 def save_rank_genes_to_adata(ctx: ViewerContext, df, adata_norm, groupby: str) -> None:
     """Write rank genes results to adata.uns and persist.
 
@@ -209,6 +393,66 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
     return df, adata_norm, groupby
 
 
+# ── DEG result caches (sidecar parquets at zarr root) ─────────────────────────
+
+ROI_DEG_CACHE = "roi_deg_cache.parquet"
+ARMS_DEG_CACHE = "arms_tile_deg_cache.parquet"
+
+
+def save_roi_deg_to_sdata(ctx: "ViewerContext", df) -> None:
+    """Persist ROI DEG DataFrame to <zarr_path>/roi_deg_cache.parquet."""
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    if df is None or df.empty:
+        return
+    try:
+        cache_path = Path(ctx.sdata.path) / ROI_DEG_CACHE
+        df.to_parquet(cache_path, index=False)
+    except Exception as e:
+        print(f"Warning: could not save ROI DEG to sdata: {e}")
+
+
+def load_roi_deg_from_sdata(sdata) -> "pd.DataFrame | None":
+    """Load ROI DEG DataFrame from <zarr_path>/roi_deg_cache.parquet."""
+    if sdata is None or sdata.path is None:
+        return None
+    cache_path = Path(sdata.path) / ROI_DEG_CACHE
+    if not cache_path.exists():
+        return None
+    try:
+        return pd.read_parquet(cache_path)
+    except Exception as e:
+        print(f"Warning: could not load ROI DEG from sdata: {e}")
+        return None
+
+
+def save_arms_tile_deg_to_sdata(ctx: "ViewerContext", df) -> None:
+    """Persist ARMS tile DEG DataFrame to <zarr_path>/arms_tile_deg_cache.parquet."""
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    if df is None or df.empty:
+        return
+    try:
+        cache_path = Path(ctx.sdata.path) / ARMS_DEG_CACHE
+        df.to_parquet(cache_path, index=False)
+    except Exception as e:
+        print(f"Warning: could not save ARMS tile DEG to sdata: {e}")
+
+
+def load_arms_tile_deg_from_sdata(sdata) -> "pd.DataFrame | None":
+    """Load ARMS tile DEG DataFrame from <zarr_path>/arms_tile_deg_cache.parquet."""
+    if sdata is None or sdata.path is None:
+        return None
+    cache_path = Path(sdata.path) / ARMS_DEG_CACHE
+    if not cache_path.exists():
+        return None
+    try:
+        return pd.read_parquet(cache_path)
+    except Exception as e:
+        print(f"Warning: could not load ARMS tile DEG from sdata: {e}")
+        return None
+
+
 def save_rois_to_sdata(ctx: ViewerContext, roi_data: list) -> None:
     """Save ROI polygons to sdata.shapes['rois'] as a GeoDataFrame.
 
@@ -221,6 +465,7 @@ def save_rois_to_sdata(ctx: ViewerContext, roi_data: list) -> None:
 
     from shapely.geometry import Polygon
     import geopandas as gpd
+    from spatialdata.models import ShapesModel
 
     try:
         if 'rois' in ctx.sdata:
@@ -230,7 +475,7 @@ def save_rois_to_sdata(ctx: ViewerContext, roi_data: list) -> None:
             return
 
         polys = [Polygon(arr[:, ::-1]) for arr in roi_data]  # yx → xy
-        gdf = gpd.GeoDataFrame(geometry=polys)
+        gdf = ShapesModel.parse(gpd.GeoDataFrame(geometry=polys))
         ctx.sdata['rois'] = gdf
         ctx.sdata.write_element('rois')
     except Exception as e:
@@ -258,6 +503,177 @@ def load_rois_from_sdata(sdata) -> list:
     except Exception as e:
         print(f"Warning: could not load ROIs from sdata: {e}")
         return []
+
+
+def save_annotations_to_sdata(ctx: "ViewerContext") -> None:
+    """Save annotation layer shapes to sdata.shapes['annotations'] as a GeoDataFrame.
+
+    Stores shapely Polygon geometries with an 'annotation_type' column.
+    Coordinates are converted from yx-pixels (napari) to xy-pixels for shapely.
+    No-op if no-cache mode, sdata has no backing store, or no annotations exist.
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    if ctx.annotation_layer is None:
+        return
+
+    from shapely.geometry import Polygon
+    import geopandas as gpd
+    from spatialdata.models import ShapesModel
+
+    try:
+        if 'annotations' in ctx.sdata:
+            ctx.sdata.delete_element_from_disk('annotations')
+
+        layer = ctx.annotation_layer
+        shapes = layer.data
+        raw_types = list(layer.properties.get("annotation_type", []))
+        # Normalise: convert NaN / non-string entries to empty string
+        import math
+        types = [
+            str(t) if (t is not None and not (isinstance(t, float) and math.isnan(t))) else ""
+            for t in raw_types
+        ]
+        # Pad types list if shorter than shapes (can happen on initial assignment)
+        while len(types) < len(shapes):
+            types.append("")
+
+        if not shapes:
+            return
+
+        polys = [Polygon(arr[:, ::-1]) for arr in shapes]  # yx → xy
+        gdf = gpd.GeoDataFrame(
+            {"geometry": polys, "annotation_type": types},
+        )
+        gdf = ShapesModel.parse(gdf)
+        ctx.sdata['annotations'] = gdf
+        ctx.sdata.write_element('annotations')
+    except Exception as e:
+        print(f"Warning: could not save annotations to sdata: {e}")
+
+
+def load_annotations_from_sdata(sdata) -> tuple[list, list]:
+    """Load annotation shapes from sdata.shapes['annotations'].
+
+    Returns (list_of_yx_arrays, list_of_type_strings).
+    Arrays are Nx2 float64 in yx (napari pixel) coordinates.
+    Returns ([], []) if no annotations are stored.
+    """
+    if sdata is None or 'annotations' not in sdata:
+        return [], []
+
+    try:
+        gdf = sdata['annotations']
+        shapes = []
+        types = []
+        ann_col = gdf['annotation_type'] if 'annotation_type' in gdf.columns else None
+        for i, geom in enumerate(gdf.geometry):
+            if geom is None or geom.is_empty:
+                continue
+            coords = np.array(geom.exterior.coords[:-1], dtype=np.float64)  # xy, no closing pt
+            shapes.append(coords[:, ::-1])  # xy → yx
+            types.append(ann_col.iloc[i] if ann_col is not None else "")
+        return shapes, types
+    except Exception as e:
+        print(f"Warning: could not load annotations from sdata: {e}")
+        return [], []
+
+
+# ── Phase 3: Landmark and ARMS tile sdata persistence ─────────────────────
+
+def _make_landmark_gdf(points_yx):
+    """Build a spatialdata-compatible GeoDataFrame of Point shapes from Nx2 yx array."""
+    from shapely.geometry import Point
+    import geopandas as gpd
+    from spatialdata.models import ShapesModel
+    pts = np.asarray(points_yx, dtype=np.float64)
+    gdf = gpd.GeoDataFrame(
+        {"geometry": [Point(float(x), float(y)) for y, x in pts], "radius": 1.0},
+    )
+    return ShapesModel.parse(gdf)
+
+
+def save_landmarks_to_sdata(ctx, element_name: str, points_yx) -> None:
+    """Save Nx2 yx landmark array to sdata.shapes[element_name] as Point GeoDataFrame.
+
+    points_yx: Nx2 numpy array in yx (napari) coords, or None/empty to clear.
+    Converts to shapely Points in xy coords before storing.
+    No-op if no-cache mode or sdata has no backing store.
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    try:
+        if element_name in ctx.sdata:
+            ctx.sdata.delete_element_from_disk(element_name)
+        if points_yx is None or len(points_yx) == 0:
+            return
+        ctx.sdata[element_name] = _make_landmark_gdf(points_yx)
+        ctx.sdata.write_element(element_name)
+    except Exception as e:
+        print(f"Warning: could not save {element_name} to sdata: {e}")
+
+
+def load_landmarks_from_sdata(sdata, element_name: str):
+    """Load landmarks from sdata.shapes[element_name].
+
+    Returns Nx2 float64 array in yx (napari) coords, or None if not present.
+    """
+    if sdata is None or element_name not in sdata:
+        return None
+    try:
+        gdf = sdata[element_name]
+        return np.array([[p.y, p.x] for p in gdf.geometry], dtype=np.float64)
+    except Exception as e:
+        print(f"Warning: could not load {element_name} from sdata: {e}")
+        return None
+
+
+def save_arms_tiles_to_sdata(ctx, tile_polygons_yx, tile_names, cluster_ids) -> None:
+    """Save ARMS tile polygons with metadata to sdata.shapes['arms_tiles'].
+
+    tile_polygons_yx: list of Nx2 yx numpy arrays (napari pixel coords).
+    tile_names: list of str tile name identifiers.
+    cluster_ids: array-like of int cluster IDs.
+    No-op if no-cache mode or sdata has no backing store.
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    from shapely.geometry import Polygon
+    import geopandas as gpd
+    from spatialdata.models import ShapesModel
+    try:
+        if 'arms_tiles' in ctx.sdata:
+            ctx.sdata.delete_element_from_disk('arms_tiles')
+        if not tile_polygons_yx:
+            return
+        polys = [Polygon(arr[:, ::-1]) for arr in tile_polygons_yx]  # yx → xy
+        gdf = ShapesModel.parse(gpd.GeoDataFrame({
+            'geometry': polys,
+            'tile_name': list(tile_names),
+            'cluster_id': np.asarray(cluster_ids, dtype=np.int32),
+        }))
+        ctx.sdata['arms_tiles'] = gdf
+        ctx.sdata.write_element('arms_tiles')
+    except Exception as e:
+        print(f"Warning: could not save ARMS tiles to sdata: {e}")
+
+
+def load_arms_tiles_from_sdata(sdata) -> tuple:
+    """Load ARMS tile polygons from sdata.shapes['arms_tiles'].
+
+    Returns (polygons_yx, tile_names, cluster_ids) where polygons_yx is a list
+    of Nx2 yx float64 arrays in napari pixel coords. Returns ([], [], []) if
+    no tiles are stored.
+    """
+    if sdata is None or 'arms_tiles' not in sdata:
+        return [], [], []
+    try:
+        gdf = sdata['arms_tiles']
+        polys = [np.array(p.exterior.coords[:-1])[:, ::-1] for p in gdf.geometry]  # xy → yx
+        return polys, list(gdf['tile_name']), np.array(gdf['cluster_id'])
+    except Exception as e:
+        print(f"Warning: could not load ARMS tiles from sdata: {e}")
+        return [], [], []
 
 
 # ── Load functions ────────────────────────────────────────────────────────
@@ -327,6 +743,150 @@ def load_analysis_results_from_adata(adata: AnnData) -> dict:
 
 
 # ── Migration ─────────────────────────────────────────────────────────────
+
+def migrate_landmarks_to_sdata(zarr_path: "Path", sdata: "SpatialData", session: dict) -> None:
+    """One-time migration of zarr-stored landmarks and ARMS tile files → sdata.shapes.
+
+    Reads landmarks from the zarr session arrays and ARMS tiles from the original
+    GeoJSON/CSV files (if they still exist), writes them to sdata.shapes, and marks
+    the migration done so it never re-runs.
+
+    No-op if already migrated, if sdata has no backing store, or if no data to migrate.
+    """
+    if sdata is None or sdata.path is None:
+        return
+
+    import zarr as _zarr
+    try:
+        store = _zarr.open_group(str(zarr_path), mode="r+", use_consolidated=False)
+    except Exception:
+        return
+    if "viewer_session" not in store:
+        return
+    vs = store["viewer_session"]
+    if dict(vs.attrs).get("migrated_landmarks_to_sdata"):
+        return
+
+    from shapely.geometry import Point, Polygon
+    import geopandas as gpd
+
+    migrated_any = False
+
+    # ── Landmarks ────────────────────────────────────────────────────────
+    # Source 1: zarr session arrays (snapshot-captured at close time)
+    # Source 2: landmarks.json in the dataset folder (saved via Save Landmarks button)
+    # Source 2 takes priority for H&E since it's more reliably populated.
+
+    # Try to load from landmarks.json first (zarr_path.parent == data_path)
+    lm_json_path = zarr_path.parent / "landmarks.json"
+    lm_json = {}
+    if lm_json_path.exists():
+        try:
+            import json as _json
+            with open(lm_json_path) as f:
+                lm_json = _json.load(f)
+            print(f"  Found landmarks.json with {len(lm_json.get('xenium_landmarks_yx', []))} H&E landmark pairs")
+        except Exception as e:
+            print(f"  Warning: could not read landmarks.json: {e}")
+
+    # Build a unified lookup: prefer json, fall back to zarr session
+    def _get_pts(json_key, session_key):
+        pts = lm_json.get(json_key) or session.get(session_key)
+        return np.asarray(pts, dtype=np.float64) if pts is not None and len(pts) > 0 else None
+
+    _landmark_map = [
+        ('he_xenium_landmarks',   'xenium_landmarks_yx',   'xenium_landmarks'),
+        ('he_he_landmarks',       'he_landmarks_yx',       'he_landmarks'),
+        ('arms_xenium_landmarks', 'arms_xenium_landmarks_yx', 'arms_xenium_landmarks'),
+        ('arms_he_landmarks',     'arms_he_landmarks_yx',  'arms_he_landmarks'),
+    ]
+    for sdata_name, json_key, session_key in _landmark_map:
+        if sdata_name in sdata:
+            continue  # already present — skip
+        pts = _get_pts(json_key, session_key)
+        if pts is None:
+            continue
+        try:
+            sdata[sdata_name] = _make_landmark_gdf(pts)
+            sdata.write_element(sdata_name)
+            migrated_any = True
+            print(f"  Migrated {len(pts)} landmarks → sdata.shapes['{sdata_name}']")
+        except Exception as e:
+            print(f"  Warning: could not migrate {sdata_name}: {e}")
+
+    # ── ARMS tiles — re-parse from GeoJSON + CSV if files still exist ────
+    if 'arms_tiles' not in sdata:
+        attrs = dict(vs.attrs)
+        geojson_path = attrs.get("arms_geojson_path")
+        csv_path = attrs.get("arms_csv_path")
+        if geojson_path and csv_path:
+            gj = Path(geojson_path)
+            cp = Path(csv_path)
+            if gj.exists() and cp.exists():
+                try:
+                    import json as _json, csv as _csv, re as _re
+
+                    with open(gj) as f:
+                        geojson = _json.load(f)
+                    tile_polygons_xy = {}
+                    for feat in geojson.get("features", []):
+                        name = feat.get("properties", {}).get("name")
+                        if name is None:
+                            continue
+                        coords = feat["geometry"]["coordinates"]
+                        gtype = feat["geometry"]["type"]
+                        ring = coords[0][0] if gtype == "MultiPolygon" else (coords[0] if gtype == "Polygon" else None)
+                        if ring is None:
+                            continue
+                        tile_polygons_xy[name] = np.array(ring, dtype=np.float64)
+
+                    tile_clusters = {}
+                    with open(cp) as f:
+                        for row in _csv.DictReader(f):
+                            tname = row.get("tile", row.get("sample", "")).strip()
+                            cval = row.get("cluster", "").strip()
+                            if tname and cval:
+                                try:
+                                    tile_clusters[tname] = int(cval)
+                                except ValueError:
+                                    pass
+
+                    def _norm(n):
+                        n = n.strip().lower()
+                        return _re.sub(r'^plate', 'p', n)
+
+                    csv_norm = {_norm(k): v for k, v in tile_clusters.items()}
+
+                    polys, t_names, c_ids = [], [], []
+                    for name, arr_xy in tile_polygons_xy.items():
+                        cid = tile_clusters.get(name) or csv_norm.get(_norm(name))
+                        if cid is None:
+                            continue
+                        polys.append(Polygon(arr_xy))  # coords already in xy
+                        t_names.append(name)
+                        c_ids.append(cid)
+
+                    if polys:
+                        from spatialdata.models import ShapesModel as _SM
+                        gdf = _SM.parse(gpd.GeoDataFrame({
+                            'geometry': polys,
+                            'tile_name': t_names,
+                            'cluster_id': np.asarray(c_ids, dtype=np.int32),
+                        }))
+                        sdata['arms_tiles'] = gdf
+                        sdata.write_element('arms_tiles')
+                        migrated_any = True
+                        print(f"  Migrated {len(polys)} ARMS tiles → sdata.shapes['arms_tiles']")
+                except Exception as e:
+                    print(f"  Warning: could not migrate ARMS tiles: {e}")
+
+    # Mark migration done (even if there was nothing to migrate)
+    try:
+        vs.attrs["migrated_landmarks_to_sdata"] = True
+    except Exception:
+        pass
+
+
 
 def migrate_old_session_to_adata(
     zarr_path: Path,
@@ -484,3 +1044,242 @@ def migrate_old_session_to_adata(
             session.attrs["migrated_rank_genes_to_adata"] = True
         except Exception:
             pass
+
+    # ── Phase N migration: ROI DEG + ARMS DEG parquets → zarr root ───────
+    if not attrs.get("migrated_deg_to_sdata"):
+        session_dir = Path(zarr_path) / "viewer_session"
+        for old_name, new_name in [
+            ("roi_deg.parquet", ROI_DEG_CACHE),
+            ("arms_tile_deg.parquet", ARMS_DEG_CACHE),
+        ]:
+            old_path = session_dir / old_name
+            new_path = Path(zarr_path) / new_name
+            if old_path.exists() and not new_path.exists():
+                try:
+                    import shutil
+                    shutil.copy2(old_path, new_path)
+                    print(f"  Migrated {old_name} → zarr root")
+                except Exception as e:
+                    print(f"  Warning: could not migrate {old_name}: {e}")
+        try:
+            session.attrs["migrated_deg_to_sdata"] = True
+        except Exception:
+            pass
+
+
+# ── External multichannel image persistence ────────────────────────────────
+
+def _slugify(text: str) -> str:
+    """Make a filesystem-safe slug from a free-form name."""
+    import re
+    s = re.sub(r"[^A-Za-z0-9_-]+", "_", str(text)).strip("_")
+    return s or "image"
+
+
+def save_external_image_to_sdata(
+    ctx, element_name: str, pyramid, channel_axis, channel_names,
+) -> None:
+    """Persist an external multichannel image into ``sdata.images[element_name]``.
+
+    Uses ``Image2DModel.parse`` like the H&E / ARMS loaders so the image
+    travels with the zarr store. The base level of ``pyramid`` is written;
+    downstream levels are reconstructed via ``scale_factors`` (powers of two).
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    try:
+        from spatialdata.models import Image2DModel
+
+        if element_name in ctx.sdata:
+            ctx.sdata.delete_element_from_disk(element_name)
+
+        base = pyramid[0]
+        # Build axes string — Image2DModel wants ('c', 'y', 'x') or ('y', 'x', 'c').
+        if channel_axis is None:
+            # Single-channel — add leading channel dim.
+            base = base[None, ...]
+            dims = ("c", "y", "x")
+        else:
+            # Move channel axis to leading position for canonical (c, y, x).
+            if channel_axis != 0:
+                import dask.array as da
+                base = da.moveaxis(base, channel_axis, 0)
+            dims = ("c", "y", "x")
+
+        n_levels = len(pyramid)
+        scale_factors = [2] * max(0, n_levels - 1) if n_levels > 1 else None
+
+        parsed = Image2DModel.parse(
+            base, dims=dims, scale_factors=scale_factors,
+            c_coords=list(channel_names) if channel_names else None,
+        )
+        ctx.sdata[element_name] = parsed
+        ctx.sdata.write_element(element_name)
+    except Exception as e:
+        print(f"Warning: could not save external image {element_name} to sdata: {e}")
+
+
+def load_external_images_from_sdata(sdata, prefix: str = "ext_") -> list:
+    """Return entries for every ``sdata.images`` element whose name starts with ``prefix``.
+
+    Each entry is ``{"element_name": str, "pyramid": list[dask], "channel_names": list[str]}``.
+    """
+    out = []
+    if sdata is None:
+        return out
+    try:
+        for name in list(sdata.images.keys()):
+            if not name.startswith(prefix):
+                continue
+            try:
+                img = sdata.images[name]
+                pyramid, channel_names = _extract_image_pyramid(img)
+                out.append({
+                    "element_name": name,
+                    "pyramid": pyramid,
+                    "channel_names": channel_names,
+                })
+            except Exception as e:
+                print(f"Warning: could not read external image {name}: {e}")
+    except Exception:
+        pass
+    return out
+
+
+def _extract_image_pyramid(img):
+    """Return (list_of_dask_levels, channel_names) from a spatialdata image element."""
+    import dask.array as da
+    try:
+        from datatree import DataTree  # optional
+    except Exception:
+        DataTree = None
+    import xarray as xr
+
+    pyramid = []
+    channel_names: list[str] = []
+
+    if DataTree is not None and isinstance(img, DataTree):
+        scales = sorted(img.children.keys())
+        for s in scales:
+            node = img[s]
+            arr = node[list(node.data_vars)[0]] if hasattr(node, "data_vars") else node.to_array()
+            pyramid.append(da.asarray(arr.data))
+            if not channel_names and "c" in arr.coords:
+                channel_names = [str(c) for c in arr.coords["c"].values]
+    elif isinstance(img, xr.DataArray):
+        pyramid.append(da.asarray(img.data))
+        if "c" in img.coords:
+            channel_names = [str(c) for c in img.coords["c"].values]
+    else:
+        pyramid.append(da.asarray(img))
+
+    if not channel_names and pyramid:
+        n = pyramid[0].shape[0] if pyramid[0].ndim >= 3 else 1
+        channel_names = [f"C{i}" for i in range(n)]
+
+    return pyramid, channel_names
+
+
+# ── Patch overlay persistence ───────────────────────────────────────────────
+
+def save_patch_overlay_to_sdata(
+    ctx,
+    element_name: str,
+    coords_xy,
+    patch_size: int,
+    cluster_columns: dict,
+    confidence=None,
+) -> None:
+    """Store a patch-grid overlay as a Point GeoDataFrame in ``sdata.shapes``.
+
+    Columns: ``radius`` (= patch_size/2) plus one integer column per cluster
+    labelling in ``cluster_columns``. Optional ``confidence`` is included if
+    provided. Top-left patch (x, y) coordinates are encoded as shapely Points.
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    try:
+        from shapely.geometry import Point
+        import geopandas as gpd
+        from spatialdata.models import ShapesModel
+
+        if element_name in ctx.sdata:
+            ctx.sdata.delete_element_from_disk(element_name)
+
+        coords = np.asarray(coords_xy, dtype=np.float64)
+        if coords.size == 0:
+            return
+
+        data = {
+            "geometry": [Point(float(x), float(y)) for x, y in coords],
+            "radius": float(patch_size) / 2.0,
+            "patch_size": np.full(len(coords), int(patch_size), dtype=np.int32),
+        }
+        for col, vals in cluster_columns.items():
+            data[col] = np.asarray(vals, dtype=np.int64)
+        if confidence is not None:
+            data["confidence"] = np.asarray(confidence, dtype=np.float32)
+
+        gdf = ShapesModel.parse(gpd.GeoDataFrame(data))
+        ctx.sdata[element_name] = gdf
+        ctx.sdata.write_element(element_name)
+    except Exception as e:
+        print(f"Warning: could not save patch overlay {element_name} to sdata: {e}")
+
+
+def load_patch_overlays_from_sdata(sdata, prefix: str = "patch_") -> list:
+    """Return entries for every ``sdata.shapes`` element whose name starts with ``prefix``.
+
+    Each entry is a dict::
+
+        {
+          "element_name": str,
+          "coords_xy": np.ndarray (N, 2),
+          "patch_size": int,
+          "cluster_columns": {col: np.ndarray},
+          "confidence": np.ndarray | None,
+        }
+    """
+    out = []
+    if sdata is None:
+        return out
+    try:
+        shape_names = list(sdata.shapes.keys())
+    except Exception:
+        return out
+    for name in shape_names:
+        if not name.startswith(prefix):
+            continue
+        try:
+            gdf = sdata.shapes[name]
+            coords = np.array(
+                [[float(p.x), float(p.y)] for p in gdf.geometry],
+                dtype=np.float64,
+            )
+            # Patch size is stored per-point; all rows share the same value.
+            if "patch_size" in gdf.columns and len(gdf) > 0:
+                patch_size = int(gdf["patch_size"].iloc[0])
+            elif "radius" in gdf.columns and len(gdf) > 0:
+                patch_size = int(round(float(gdf["radius"].iloc[0]) * 2))
+            else:
+                patch_size = 0
+
+            reserved = {"geometry", "radius", "patch_size", "confidence"}
+            cluster_columns = {
+                col: np.asarray(gdf[col].values, dtype=np.int64)
+                for col in gdf.columns if col not in reserved
+            }
+            confidence = None
+            if "confidence" in gdf.columns:
+                confidence = np.asarray(gdf["confidence"].values, dtype=np.float32)
+
+            out.append({
+                "element_name": name,
+                "coords_xy": coords,
+                "patch_size": patch_size,
+                "cluster_columns": cluster_columns,
+                "confidence": confidence,
+            })
+        except Exception as e:
+            print(f"Warning: could not load patch overlay {name}: {e}")
+    return out

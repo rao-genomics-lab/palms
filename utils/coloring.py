@@ -44,6 +44,27 @@ TRANSCRIPT_PALETTE = np.array([
 AVAILABLE_COLORMAPS = ["viridis", "magma", "plasma", "RdBu_r", "YlOrRd"]
 
 
+# ── Categorical palettes for patch overlays ─────────────────────────────────
+def _mpl_palette(name: str, n: int) -> np.ndarray:
+    cmap = plt.get_cmap(name)
+    return np.array(
+        [list(cmap(i)[:3]) + [1.0] for i in range(n)],
+        dtype=np.float32,
+    )
+
+
+TAB20_PALETTE = _mpl_palette("tab20", 20)
+SET1_PALETTE = _mpl_palette("Set1", 9)
+SET3_PALETTE = _mpl_palette("Set3", 12)
+
+PATCH_PALETTES = {
+    "tab20": TAB20_PALETTE,
+    "glasbey_dark": CLUSTER_PALETTE,
+    "Set1": SET1_PALETTE,
+    "Set3": SET3_PALETTE,
+}
+
+
 class CellColorManager:
     """
     Manages RGBA color arrays for the cell_labels layer.

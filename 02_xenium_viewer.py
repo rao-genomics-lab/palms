@@ -68,7 +68,7 @@ from utils.coloring import CellColorManager
 from utils.transcript_index import TranscriptLoader
 from utils.umap_widget import UMAPViewer
 from utils.viewer_context import ViewerContext
-from tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu
+from tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu, create_view_menu
 
 # ─── Channel metadata ───────────────────────────────────────────────────────
 CHANNEL_NAMES = [
@@ -327,6 +327,7 @@ def _build_control_panel(ctx: ViewerContext):
     from tabs.tab_roi import build_tab as build_roi_tab
     from tabs.tab_he_registration import build_tab as build_he_registration_tab
     from tabs.tab_gene_analysis import build_tab as build_gene_analysis_tab
+    from tabs.tab_marker_genes import build_tab as build_marker_genes_tab
     from tabs.tab_ligrec import build_tab as build_ligrec_tab
     from tabs.tab_nhood import build_tab as build_nhood_tab
     from tabs.tab_co_occurrence import build_tab as build_co_occurrence_tab
@@ -334,6 +335,12 @@ def _build_control_panel(ctx: ViewerContext):
     from tabs.tab_gene_correlation import build_tab as build_gene_correlation_tab
     from tabs.tab_novae import build_tab as build_novae_tab
     from tabs.tab_notebook import build_tab as build_notebook_tab
+    from tabs.tab_annotations import build_tab as build_annotations_tab
+    from tabs.tab_annot_nhood import build_tab as build_annot_nhood_tab
+    from tabs.tab_annot_distance import build_tab as build_annot_distance_tab
+    from tabs.tab_segmentation import build_tab as build_segmentation_tab
+    from tabs.tab_external_images import build_tab as build_external_images_tab
+    from tabs.tab_patch_overlays import build_tab as build_patch_overlays_tab
 
     # ── Build Cell Coloring first (creates cross-tab widgets) ────────────
     coloring_widget, coloring_exports = build_cell_coloring_tab(ctx)
@@ -341,6 +348,7 @@ def _build_control_panel(ctx: ViewerContext):
 
     # ── Build analysis tabs (they register their clustering widgets on ctx) ─
     ga_widget, ga_exports = build_gene_analysis_tab(ctx)
+    mg_widget, mg_exports = build_marker_genes_tab(ctx)
     lr_widget, lr_exports = build_ligrec_tab(ctx)
     nhood_widget, nhood_exports = build_nhood_tab(ctx)
     co_widget, co_exports = build_co_occurrence_tab(ctx)
@@ -364,6 +372,12 @@ def _build_control_panel(ctx: ViewerContext):
     arms_widget, arms_exports = build_arms_tab(ctx)
     corr_widget, corr_exports = build_gene_correlation_tab(ctx)
     notebook_widget, notebook_exports = build_notebook_tab(ctx)
+    annot_widget, annot_exports = build_annotations_tab(ctx)
+    annot_nhood_widget, annot_nhood_exports = build_annot_nhood_tab(ctx)
+    annot_dist_widget, annot_dist_exports = build_annot_distance_tab(ctx)
+    seg_widget, seg_exports = build_segmentation_tab(ctx)
+    ext_img_widget, ext_img_exports = build_external_images_tab(ctx)
+    patch_widget, patch_exports = build_patch_overlays_tab(ctx)
 
     # ── Mouse hover: show cluster ID in status bar ───────────────────────
     if ctx.cell_labels_layer is not None:
@@ -419,6 +433,7 @@ def _build_control_panel(ctx: ViewerContext):
     tab_widget.addTab(roi_widget, "ROI Analysis")
     tab_widget.addTab(he_widget, "H&E Registration")
     tab_widget.addTab(ga_widget, "Gene Analysis")
+    tab_widget.addTab(mg_widget, "Marker Genes")
     tab_widget.addTab(lr_widget, "Ligand-Receptor")
     tab_widget.addTab(nhood_widget, "Nhood Enrichment")
     tab_widget.addTab(co_widget, "Co-occurrence")
@@ -426,13 +441,20 @@ def _build_control_panel(ctx: ViewerContext):
     tab_widget.addTab(arms_widget, "ARMS Overlay")
     tab_widget.addTab(corr_widget, "Gene Correlation")
     tab_widget.addTab(notebook_widget, "Notebook")
+    tab_widget.addTab(annot_widget, "Annotations")
+    tab_widget.addTab(annot_nhood_widget, "Annot. Nhood")
+    tab_widget.addTab(annot_dist_widget, "Annot. Distance")
+    tab_widget.addTab(seg_widget, "Segmentation")
+    tab_widget.addTab(ext_img_widget, "External Images")
+    tab_widget.addTab(patch_widget, "Patch Overlays")
 
     # ── Compose session restore from per-tab restorers ───────────────────
     all_exports = [
         clustering_exports, coloring_exports, transcripts_exports,
-        umap_exports, roi_exports, he_exports, ga_exports,
+        umap_exports, roi_exports, he_exports, ga_exports, mg_exports,
         lr_exports, nhood_exports, co_exports, novae_exports, arms_exports, corr_exports,
-        notebook_exports,
+        notebook_exports, annot_exports, annot_nhood_exports, annot_dist_exports,
+        seg_exports, ext_img_exports, patch_exports,
     ]
 
     def restore_session(session):
@@ -618,6 +640,20 @@ def _populate_viewer(viewer, data: dict) -> dict:
         edge_color="white", face_color=[1, 1, 1, 0.1], edge_width=2,
     )
 
+    # ── Annotation shapes layer ───────────────────────────────────────────────
+    annotation_layer = viewer.add_shapes(
+        data=[], name="Annotations",
+        properties={"annotation_type": []},
+        text={
+            "string": "{annotation_type}",
+            "size": 10,
+            "color": "white",
+            "anchor": "upper_left",
+        },
+        shape_type="polygon",
+        edge_color="yellow", face_color=[1, 1, 0, 0.08], edge_width=2,
+    )
+
     # ── Transcript points layer ───────────────────────────────────────────────
     transcript_layer = viewer.add_points(
         np.empty((0, 2), dtype=np.float32),
@@ -643,6 +679,7 @@ def _populate_viewer(viewer, data: dict) -> dict:
         "transcript_layer": transcript_layer,
         "transcript_bins_layer": transcript_bins_layer,
         "roi_layer": roi_layer,
+        "annotation_layer": annotation_layer,
         "morph_thumb": morph_thumb,
         "morph_full_shape_yx": morph_full_shape_yx,
         "centroids_yx": centroids_yx,
@@ -691,6 +728,39 @@ def _snapshot_layers(ctx: ViewerContext) -> dict:
         k: v for k, v in arms_state.items()
         if k not in ("he_layer", "he_tif", "xenium_lm_layer", "he_lm_layer", "shapes_layer")
     }
+
+    # External images — UI-only residuals (pixels + affine live in sdata.images)
+    ext_ui = []
+    for entry in (ctx.external_images_state or []):
+        ext_ui.append({
+            "element_name": entry.get("element_name"),
+            "path": entry.get("path"),
+            "affine_source_name": entry.get("affine_source_name"),
+            "opacity": float(entry.get("opacity", 1.0)),
+        })
+    snapshot["external_images_ui"] = ext_ui
+
+    # Patch overlays — UI-only residuals (geometry + clusters live in sdata.shapes)
+    patch_ui = []
+    for entry in (ctx.patch_overlays_state or []):
+        patch_ui.append({
+            "element_name": entry.get("element_name"),
+            "source_path": entry.get("source_path"),
+            "source_kind": entry.get("source_kind"),
+            "active_cluster_column": entry.get("active_cluster_column"),
+            "palette_name": entry.get("palette_name"),
+            "patch_size_px": int(entry.get("patch_size_px", 0)),
+            "affine_source_name": entry.get("affine_source_name"),
+            "outline_only": bool(entry.get("outline_only", False)),
+            "edge_width": int(entry.get("edge_width", 2)),
+            "opacity": float(entry.get("opacity", 0.8)),
+            "confidence_threshold": float(entry.get("confidence_threshold", 0.0)),
+            "hidden_cluster_ids": [
+                int(cid) for cid, cb in entry.get("cluster_checkboxes", {}).items()
+                if not cb.isChecked()
+            ],
+        })
+    snapshot["patch_overlays_ui"] = patch_ui
 
     return snapshot
 
@@ -797,6 +867,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         transcript_layer=layers["transcript_layer"],
         transcript_bins_layer=layers["transcript_bins_layer"],
         roi_layer=layers["roi_layer"],
+        annotation_layer=layers["annotation_layer"],
         morph_thumb=layers["morph_thumb"],
         morph_full_shape_yx=layers["morph_full_shape_yx"],
     )
@@ -807,7 +878,13 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     # Remove old dock widget if present
     if _app["dock_widget"] is not None:
         try:
-            viewer.window.remove_dock_widget(_app["dock_widget"])
+            _old_dw = _app["dock_widget"]
+            if hasattr(_old_dw, "visibilityChanged"):
+                try:
+                    _old_dw.visibilityChanged.disconnect()
+                except Exception:
+                    pass
+            viewer.window.remove_dock_widget(_old_dw)
         except Exception:
             pass
         _app["dock_widget"] = None
@@ -818,6 +895,15 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     )
     _app["restore_fn"] = restore_fn
 
+    # Sync the View menu checkbox when the dock is closed via its own close button
+    _dw = _app["dock_widget"]
+    if hasattr(_dw, "visibilityChanged"):
+        def _on_dock_visibility(visible):
+            action = _app.get("controls_action")
+            if action is not None and action.isChecked() != visible:
+                action.setChecked(visible)
+        _dw.visibilityChanged.connect(_on_dock_visibility)
+
     # Load analysis results from adata.uns (nhood, co-occ, ligrec, rank genes)
     # Must run BEFORE restore_fn so tab _restore_session handlers find
     # the results in ctx.state and can enable their Show/Export buttons.
@@ -825,6 +911,9 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         load_analysis_results_from_adata,
         load_rank_genes_from_adata,
         load_rois_from_sdata,
+        load_landmarks_from_sdata,
+        load_arms_tiles_from_sdata,
+        migrate_landmarks_to_sdata,
     )
     analysis = load_analysis_results_from_adata(adata)
     for key in ("nhood_result", "co_result", "ligrec_result"):
@@ -841,19 +930,73 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     # load_session() serve as fallback for datasets not yet saved with new code.
     sdata_rois = load_rois_from_sdata(data["sdata"]) if not no_cache else []
 
+    # Load DEG results from sdata sidecar parquets
+    from utils.adata_persistence import (
+        load_roi_deg_from_sdata, load_arms_tile_deg_from_sdata,
+        load_cluster_labels_from_sdata,
+    )
+    sdata_roi_deg = load_roi_deg_from_sdata(data["sdata"]) if not no_cache else None
+    sdata_arms_tile_deg = load_arms_tile_deg_from_sdata(data["sdata"]) if not no_cache else None
+    sdata_cluster_labels = load_cluster_labels_from_sdata(data["sdata"]) if not no_cache else {}
+
     # Restore session if available
     if not no_cache and zarr_path.exists():
         session = load_session(zarr_path)
         if session is not None:
-            # sdata ROIs take priority over old zarr arrays in session dict
+            # One-time migration: copy zarr landmark arrays and GeoJSON/CSV tile
+            # data into sdata.shapes so they are portable without external files.
+            migrate_landmarks_to_sdata(zarr_path, data["sdata"], session)
+            # Load landmarks/tiles from sdata (captures newly migrated data too)
+            _sdata = data["sdata"]
+            he_xen_lm   = load_landmarks_from_sdata(_sdata, 'he_xenium_landmarks')
+            he_he_lm    = load_landmarks_from_sdata(_sdata, 'he_he_landmarks')
+            arms_xen_lm = load_landmarks_from_sdata(_sdata, 'arms_xenium_landmarks')
+            arms_he_lm  = load_landmarks_from_sdata(_sdata, 'arms_he_landmarks')
+            arms_tiles  = load_arms_tiles_from_sdata(_sdata)
+            # sdata values take priority over zarr array fallbacks
             if sdata_rois:
                 session['rois'] = sdata_rois
+            if he_xen_lm is not None:
+                session['xenium_landmarks'] = he_xen_lm
+            if he_he_lm is not None:
+                session['he_landmarks'] = he_he_lm
+            if arms_xen_lm is not None:
+                session['arms_xenium_landmarks'] = arms_xen_lm
+            if arms_he_lm is not None:
+                session['arms_he_landmarks'] = arms_he_lm
+            if arms_tiles[0]:
+                session['arms_tiles_sdata'] = arms_tiles
+            # Inject DEG results from sdata (override None values from load_session)
+            if sdata_roi_deg is not None and session.get('roi_deg_df') is None:
+                session['roi_deg_df'] = sdata_roi_deg
+            if sdata_arms_tile_deg is not None and session.get('arms_tile_deg_df') is None:
+                session['arms_tile_deg_df'] = sdata_arms_tile_deg
+            # Migrate cluster labels from session attrs → sdata obs columns (one-time)
+            if not sdata_cluster_labels and session.get('cluster_labels'):
+                from utils.adata_persistence import save_cluster_labels_to_sdata
+                for _ck, _ld in session['cluster_labels'].items():
+                    if isinstance(_ld, dict):
+                        save_cluster_labels_to_sdata(ctx, _ck, _ld)
+                sdata_cluster_labels = load_cluster_labels_from_sdata(data["sdata"])
+                if sdata_cluster_labels:
+                    print(f"  Migrated cluster labels for: {list(sdata_cluster_labels)}")
+            # Inject cluster labels from sdata (sdata obs columns are authoritative)
+            if sdata_cluster_labels:
+                merged = dict(session.get('cluster_labels') or {})
+                merged.update(sdata_cluster_labels)  # sdata wins on conflict
+                session['cluster_labels'] = merged
             print("Restoring session from zarr cache...")
             restore_fn(session)
             print("Session restored.")
-    elif sdata_rois:
-        # No zarr session file but sdata has ROIs — restore them alone
-        restore_fn({'rois': sdata_rois})
+    elif sdata_rois or sdata_roi_deg is not None or sdata_arms_tile_deg is not None or sdata_cluster_labels:
+        partial_session = {'rois': sdata_rois}
+        if sdata_roi_deg is not None:
+            partial_session['roi_deg_df'] = sdata_roi_deg
+        if sdata_arms_tile_deg is not None:
+            partial_session['arms_tile_deg_df'] = sdata_arms_tile_deg
+        if sdata_cluster_labels:
+            partial_session['cluster_labels'] = sdata_cluster_labels
+        restore_fn(partial_session)
 
     viewer.title = f"Xenium Viewer — {data_path.name}"
 
@@ -867,8 +1010,16 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
             )
             minimap.show()
             _app["minimap"] = minimap
+            act = _app.get("minimap_action")
+            if act is not None:
+                act.setEnabled(True)
+                act.setChecked(True)
         except Exception as exc:
             print(f"  Warning: minimap could not be created: {exc}")
+            act = _app.get("minimap_action")
+            if act is not None:
+                act.setEnabled(False)
+                act.setChecked(False)
 
     return ctx
 
@@ -979,6 +1130,7 @@ def main(data_path=None, no_cache: bool = False):
                 if not ctx.no_cache and zarr_path_old.exists():
                     from utils.adata_persistence import _persist_table
                     _persist_table(ctx)
+                    ctx.state["segmentation_source"] = ctx.segmentation_source
                     from utils.session import save_session
                     save_session(zarr_path_old, ctx.state, ctx.he_state, _app["snapshot"])
                     print("Session saved for previous dataset.")
@@ -995,6 +1147,31 @@ def main(data_path=None, no_cache: bool = False):
                 ctx.dataset_generation += 1
 
                 # 5. Release old dataset objects before loading new one
+                # Close any open external-image TiffFile handles and disconnect
+                # mirrored affine callbacks so stale refs don't linger.
+                for _entry in (ctx.external_images_state or []):
+                    try:
+                        cb = _entry.get("affine_disconnect")
+                        if cb is not None:
+                            cb()
+                    except Exception:
+                        pass
+                    try:
+                        tif = _entry.get("tif")
+                        if tif is not None:
+                            tif.close()
+                    except Exception:
+                        pass
+                ctx.external_images_state = []
+                for _entry in (ctx.patch_overlays_state or []):
+                    try:
+                        cb = _entry.get("affine_disconnect")
+                        if cb is not None:
+                            cb()
+                    except Exception:
+                        pass
+                ctx.patch_overlays_state = []
+
                 ctx.sdata = None
                 ctx.adata = None
                 ctx.clusterings = None
@@ -1007,6 +1184,7 @@ def main(data_path=None, no_cache: bool = False):
                 ctx.cell_labels_layer = None
                 ctx.transcript_layer = None
                 ctx.roi_layer = None
+                ctx.annotation_layer = None
                 ctx.morph_thumb = None
                 gc.collect()
 
@@ -1019,6 +1197,10 @@ def main(data_path=None, no_cache: bool = False):
                 except Exception:
                     pass
                 _app["minimap"] = None
+            act = _app.get("minimap_action")
+            if act is not None:
+                act.setEnabled(False)
+                act.setChecked(False)
 
             # 6. Clear all layers
             viewer.layers.clear()
@@ -1089,7 +1271,7 @@ def main(data_path=None, no_cache: bool = False):
             ctx.label_to_obs = None;  ctx.gene_names = None
             ctx.clustering_names = None;  ctx.centroids_yx = None
             ctx.cell_labels_layer = None;  ctx.transcript_layer = None
-            ctx.roi_layer = None;  ctx.morph_thumb = None
+            ctx.roi_layer = None;  ctx.annotation_layer = None;  ctx.morph_thumb = None
         gc.collect()
 
         dlg, bar, lbl = _make_progress_dialog("Preprocessing Datasets")
@@ -1114,8 +1296,9 @@ def main(data_path=None, no_cache: bool = False):
         worker.start()
         dlg.exec_()  # blocks Qt event loop until dlg.accept() is called
 
-    # ── File menu — added once to napari's native File menu ──────────────────
+    # ── File / View menus — added once to napari's native menus ─────────────
     create_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset)
+    create_view_menu(viewer, _app)
 
     # ── Snapshot layer data before Qt teardown, then save on exit ────────────
     if not no_cache:
@@ -1144,6 +1327,7 @@ def main(data_path=None, no_cache: bool = False):
             _persist_table(ctx)
             roi_data = _app["snapshot"].get("roi_data", [])
             save_rois_to_sdata(ctx, roi_data)
+            ctx.state["segmentation_source"] = ctx.segmentation_source
             from utils.session import save_session
             save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
             print("Session saved to zarr cache.")

@@ -10,17 +10,19 @@ UMAP coordinates are now persisted in adata.obs/obsm/uns via
 utils/adata_persistence.py (Phase 1 SpatialData refactoring).
 
 Storage layout inside sdata_cached.zarr/viewer_session/:
-  rois/0, rois/1, ...         — zarr arrays (Nx2 float64) for each ROI polygon
   he/affine_3x3               — zarr array 3x3
   he/coarse_affine             — zarr array 3x3
-  he/xenium_landmarks          — zarr array Nx2
-  he/he_landmarks              — zarr array Nx2
   arms/affine_3x3              — zarr array 3x3
-  arms/xenium_landmarks        — zarr array Nx2
-  arms/he_landmarks            — zarr array Nx2
-  rank_genes.parquet           — DataFrame
   roi_deg.parquet              — DataFrame
   (group attrs contain JSON metadata)
+
+Items now stored directly in sdata (via adata_persistence.py):
+  sdata.shapes['rois']                — ROI polygons (Phase 2)
+  sdata.shapes['he_xenium_landmarks'] — H&E Xenium landmark points (Phase 3)
+  sdata.shapes['he_he_landmarks']     — H&E image landmark points (Phase 3)
+  sdata.shapes['arms_xenium_landmarks'] — ARMS Xenium landmark points (Phase 3)
+  sdata.shapes['arms_he_landmarks']   — ARMS image landmark points (Phase 3)
+  sdata.shapes['arms_tiles']          — ARMS tile polygons + metadata (Phase 3)
 """
 
 from __future__ import annotations
@@ -78,6 +80,8 @@ def save_session(
 
         # Preserve real-time-saved ARMS attrs before overwrite wipes them
         _prev_arms_attrs = {}
+        _prev_ext_ui = None
+        _prev_patch_ui = None
         if "viewer_session" in store:
             prev = store["viewer_session"].attrs
             for key in ("arms_he_filename", "arms_he_path", "arms_he_shape_yx",
@@ -85,6 +89,10 @@ def save_session(
                         "arms_geojson_path", "arms_csv_path"):
                 if key in prev and prev[key] is not None:
                     _prev_arms_attrs[key] = prev[key]
+            if "external_images_ui" in prev:
+                _prev_ext_ui = prev["external_images_ui"]
+            if "patch_overlays_ui" in prev:
+                _prev_patch_ui = prev["patch_overlays_ui"]
 
         session = store.create_group("viewer_session", overwrite=True)
         attrs = {}
@@ -105,13 +113,9 @@ def save_session(
         if he_state.get("coarse_affine") is not None:
             _write_array(he_group, "coarse_affine", he_state["coarse_affine"])
 
-        # Landmarks from snapshot (captured before Qt teardown)
-        xen_lm = snapshot.get("xenium_landmarks")
-        he_lm = snapshot.get("he_landmarks")
-        if xen_lm is not None:
-            _write_array(he_group, "xenium_landmarks", xen_lm)
-        if he_lm is not None:
-            _write_array(he_group, "he_landmarks", he_lm)
+        # Landmarks are now saved to sdata.shapes via save_landmarks_to_sdata()
+        # (called from tab_he_registration on register/clear events).
+        # No longer written as zarr arrays here.
 
         attrs["he_filename"] = he_state.get("he_filename")
         attrs["he_path"] = he_state.get("he_path")
@@ -128,12 +132,9 @@ def save_session(
         if arms_state.get("affine_3x3") is not None:
             _write_array(arms_group, "affine_3x3", arms_state["affine_3x3"])
 
-        arms_xen_lm = snapshot.get("arms_xenium_landmarks")
-        arms_he_lm = snapshot.get("arms_he_landmarks")
-        if arms_xen_lm is not None:
-            _write_array(arms_group, "xenium_landmarks", arms_xen_lm)
-        if arms_he_lm is not None:
-            _write_array(arms_group, "he_landmarks", arms_he_lm)
+        # ARMS landmarks are now saved to sdata.shapes via save_landmarks_to_sdata()
+        # (called from tab_arms on register/clear events).
+        # No longer written as zarr arrays here.
 
         attrs["arms_he_filename"] = arms_state.get("he_filename") or _prev_arms_attrs.get("arms_he_filename")
         attrs["arms_he_path"] = arms_state.get("he_path") or _prev_arms_attrs.get("arms_he_path")
@@ -172,23 +173,29 @@ def save_session(
         attrs["has_rank_genes"] = state.get("rank_genes_df") is not None
         attrs["rank_genes_groupby"] = state.get("rank_genes_groupby")
 
-        # roi_deg_df
-        roi_deg_df = state.get("roi_deg_df")
-        if roi_deg_df is not None and not roi_deg_df.empty:
-            roi_deg_df.to_parquet(session_dir / "roi_deg.parquet")
-            attrs["has_roi_deg"] = True
-        else:
-            attrs["has_roi_deg"] = False
-
-        # arms_tile_deg_df
-        arms_tile_deg_df = state.get("arms_tile_deg_df")
-        if arms_tile_deg_df is not None and not arms_tile_deg_df.empty:
-            arms_tile_deg_df.to_parquet(session_dir / "arms_tile_deg.parquet")
-            attrs["has_arms_tile_deg"] = True
-        else:
-            attrs["has_arms_tile_deg"] = False
+        # roi_deg and arms_tile_deg are now saved immediately to sdata
+        # via save_roi_deg_to_sdata / save_arms_tile_deg_to_sdata (called from tabs).
+        attrs["has_roi_deg"] = False
+        attrs["has_arms_tile_deg"] = False
 
         # (ligrec, nhood, co-occurrence are now saved to adata.uns via adata_persistence)
+
+        # ── Marker genes dict ─────────────────────────────────────────────
+        attrs["marker_genes_json"] = state.get("marker_genes_json")
+
+        # ── Segmentation source ───────────────────────────────────────────
+        attrs["segmentation_source"] = state.get("segmentation_source", "xenium")
+
+        # ── External images / patch overlays UI residuals ─────────────────
+        ext_ui = snapshot.get("external_images_ui")
+        if ext_ui is None:
+            ext_ui = _prev_ext_ui
+        attrs["external_images_ui"] = ext_ui or []
+
+        patch_ui = snapshot.get("patch_overlays_ui")
+        if patch_ui is None:
+            patch_ui = _prev_patch_ui
+        attrs["patch_overlays_ui"] = patch_ui or []
 
         # Write all attrs at once
         session.attrs.update(attrs)
@@ -285,6 +292,10 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "arms_flip_h": attrs.get("arms_flip_h", False),
         "arms_geojson_path": attrs.get("arms_geojson_path"),
         "arms_csv_path": attrs.get("arms_csv_path"),
+        "marker_genes_json": attrs.get("marker_genes_json"),
+        "segmentation_source": attrs.get("segmentation_source", "xenium"),
+        "external_images_ui": attrs.get("external_images_ui") or [],
+        "patch_overlays_ui": attrs.get("patch_overlays_ui") or [],
     }
 
     # ── ROIs ──────────────────────────────────────────────────────────
@@ -339,7 +350,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
 
     # (Custom clusterings are now loaded from adata.obs via adata_persistence)
 
-    # ── Analysis DataFrames (rank genes, ROI DEG, ARMS tile DEG remain here) ──
+    # ── Analysis DataFrames ───────────────────────────────────────────────
     session_dir = Path(zarr_path) / "viewer_session"
 
     result["rank_genes_groupby"] = attrs.get("rank_genes_groupby")
@@ -352,15 +363,8 @@ def load_session(zarr_path: Path) -> Optional[dict]:
             import scanpy as sc
             result["rank_genes_adata_norm"] = sc.read_h5ad(p)
 
-    if attrs.get("has_roi_deg"):
-        p = session_dir / "roi_deg.parquet"
-        if p.exists():
-            result["roi_deg_df"] = pd.read_parquet(p)
-
-    if attrs.get("has_arms_tile_deg"):
-        p = session_dir / "arms_tile_deg.parquet"
-        if p.exists():
-            result["arms_tile_deg_df"] = pd.read_parquet(p)
+    # roi_deg and arms_tile_deg are now loaded from sdata via
+    # load_roi_deg_from_sdata / load_arms_tile_deg_from_sdata (called in 02_xenium_viewer.py).
 
     # (ligrec, nhood, co-occurrence are now loaded from adata.uns via adata_persistence)
 

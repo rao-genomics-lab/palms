@@ -47,6 +47,8 @@ class ViewerContext:
     state: dict = field(default_factory=dict)
     he_state: dict = field(default_factory=dict)
     arms_state: dict = field(default_factory=dict)
+    external_images_state: list = field(default_factory=list)
+    patch_overlays_state: list = field(default_factory=list)
 
     # ── Cross-tab widget references (set by tabs that create them) ───────────
     clustering_widget: Any = None    # ComboBox — created by cell coloring tab
@@ -60,6 +62,7 @@ class ViewerContext:
     co_clustering_widget: Any = None
     annot_nhood_clustering_widget: Any = None
     annot_dist_clustering_widget: Any = None
+    mg_clustering_widget: Any = None      # marker genes tab
 
     # ── Shared helper callables (attached by create_shared_helpers) ──────────
     record_code: Any = None

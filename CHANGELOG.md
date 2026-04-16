@@ -1,5 +1,65 @@
 # Changelog
 
+## [Unreleased] — 2026-04-16
+
+### Added
+- **External Images tab** — load arbitrary multichannel OME-TIFF/TIFF/SVS files (e.g. PhenoCycler)
+  as lazy-loaded napari layers. Channel axis is detected from `tif.series[0].axes` / OME-XML so
+  IF images are never misinterpreted as RGB. Each channel gets its own napari sub-layer with
+  native contrast / colormap / visibility controls; the tab adds group opacity, show/hide-all,
+  and an "Apply transform from…" selector that live-mirrors another layer's affine (updates when
+  the source is re-registered). Pixels and affine are written to `sdata.images["ext_<slug>"]`;
+  only per-entry UI state (opacity, affine source) lives in zarr attrs.
+- **Patch Overlays tab** — load phikon patch-cluster outputs (folder with `patches/coordinates.npy`
+  + `clustering/cluster_labels.npy`) and subclone-prediction CSVs (`x_coord`, `y_coord`,
+  `predicted_genomic_cluster`, `morphology_cluster`, `prediction_confidence`). Patches render as a
+  single napari Points layer with `symbol="square"` (scales to 10k+ patches). Controls for cluster
+  column, palette (tab20 / glasbey_dark / Set1 / Set3), outline-only, edge width, opacity,
+  confidence threshold, and per-cluster visibility. Patch size is inferred from folder / file name
+  with a stride-based sanity check and confirmation dialog. Geometry, cluster columns, and
+  confidence are stored in `sdata.shapes["patch_<slug>"]`; UI settings persist in zarr attrs.
+- **Affine mirroring helper** — `utils/affine_linking.py` lists layers with non-identity affine
+  and wires up `events.affine` subscriptions so external overlays stay aligned when the source
+  image is re-registered.
+
+## [Unreleased] — 2026-04-13
+
+### Added
+- **Cluster labels persisted to SpatialData** — user-assigned cluster names (from the label editor,
+  reference atlas annotation, and LLM annotation) are now saved as `adata.obs["cluster_labels_<key>"]`
+  columns (e.g. `cluster_labels_leiden_r1.0`) inside `sdata.tables["table"]` immediately on
+  assignment. Labels are loaded back on the next launch and merged with the session-attrs fallback
+  (sdata wins on conflict). The obs columns are readable in any standalone Python session.
+
+## [Unreleased] — 2026-04-12
+
+### Changed
+- **ROI DEG and ARMS tile DEG persistence migrated to SpatialData** — results are now saved as
+  sidecar parquets inside the zarr cache (`roi_deg_cache.parquet`, `arms_tile_deg_cache.parquet`)
+  immediately on computation rather than at session close. Restores automatically on relaunch.
+  One-time migration copies old `viewer_session/*.parquet` files to the new location.
+- **ARMS tile DEG code recording fixed** — generated code snippet in `code.py` is now fully
+  executable: loads tile polygons from `sdata` via `load_arms_tiles_from_sdata`, reconstructs the
+  ARMS registration affine (fine × flip), applies it to the tiles, filters by selected tile
+  clusters, and optionally applies a Xenium cell cluster mask before calling `compute_arms_tile_deg`.
+
+## [Unreleased] — 2026-04-10
+
+### Added
+- **Custom segmentation SpatialData persistence** — custom segmentations are now cached inside the
+  SpatialData zarr store (`sdata.labels["custom_cell_labels"]` + `sdata.tables["custom_table"]`)
+  after first load, so subsequent opens do not require re-selecting the h5ad file.
+  - On "Load Custom Segmentation...": if a cached version is detected in sdata, a dialog offers to
+    load from cache (fast) or select a new h5ad file.
+  - Auto-restore on launch: if custom segmentation was active when the dataset was closed,
+    `_restore_session` reloads it from sdata automatically.
+  - All per-action saves (clustering, rank genes, nhood enrichment, etc.) now route to
+    `sdata.tables["custom_table"]` when custom segmentation is active, so analysis results are
+    preserved across sessions.
+  - `session.py` now persists `segmentation_source` ("xenium" | "custom") in the viewer session attrs.
+  - **"Update SpatialData on disk"** button in the Segmentation tab force-syncs current in-memory
+    state to sdata (custom table + labels in custom mode; xenium table in xenium mode).
+
 ## [Unreleased] — 2026-03-26 (2)
 
 ### Added
@@ -24,6 +84,29 @@
 ## [Unreleased] — 2026-04-01
 
 ### Added
+- **UMAP save** (`tabs/tab_umap.py`) — "Save UMAP Plot..." button saves a scanpy-native `sc.pl.umap`
+  figure in PNG or SVG. Uses the current cell-coloring clustering; cluster labels (if set) are
+  applied as category names so they appear in the legend and on-data annotation.
+- **Marker Genes tab** (`tabs/tab_marker_genes.py`) — new tab accepting a JSON marker-genes dict
+  (`{"Cell type": ["Gene1", "Gene2"]}`). Generates dotplot, heatmap, matrixplot, tracksplot, and
+  correlation matrix using scanpy's native plotting functions with the chosen clustering. Format
+  (PNG/SVG) is selectable. The marker dict is persisted to the zarr session and restored on startup.
+- **Volcano plot (revised)** — `make_volcano_plot()` redesigned with EnhancedVolcano aesthetics:
+  only genes passing **both** thresholds are coloured (up-regulated red `#DC0000`,
+  down-regulated blue `#4DBBD5`); everything else is grey. x-axis is symmetric around zero with
+  auto-computed 99th-percentile limits. Points outside the display range are shown as directional
+  triangle markers (`>`, `<`, `^`) pinned to the axis edges. Default labelled genes increased from
+  10 to 20. Uses seaborn `despine` for theme_classic look and `adjustText` for label repulsion
+  (requires `pip install adjusttext`; falls back to plain text if not installed).
+- **ROI DEG: volcano plots** — "Save Volcano Plot(s)..." button in the ROI tab generates pairwise
+  volcano plots after running ROI differential expression. With 2 ROIs, 1 plot is saved; with N ROIs,
+  all C(N, 2) pairwise plots are saved as `roi_volcano_Region_X_vs_Region_Y.png` (300 dpi).
+  Thresholds: adjusted p-value < 0.01 and |log2FC| > 1. Significantly up-regulated genes are red,
+  down-regulated are blue, with dashed threshold lines. Progress shown in status bar.
+  - `compute_roi_deg()` now returns `(df, adata_norm)` tuple so the normalized subset AnnData is
+    available for pairwise comparisons (matching the existing `compute_arms_tile_deg()` signature).
+
+
 - **ARMS tiles: "Outline only" checkbox** — when checked, tiles are rendered as colored outlines
   (edge = cluster color, fill = transparent) instead of filled polygons. The checkbox is enabled
   once tiles are loaded and toggles the existing layer in place without reloading.

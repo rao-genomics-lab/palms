@@ -71,6 +71,121 @@ def load_he_pyramid(path):
     return pyramid, tif
 
 
+def load_multichannel_pyramid(path):
+    """Load a possibly-multichannel OME-TIFF as a dask pyramid with explicit channel axis.
+
+    Unlike ``load_he_pyramid`` (which lets napari infer RGB), this probes
+    ``tif.series[0].axes`` and OME-XML to locate the channel axis. Works for
+    single-channel, RGB, and N-channel IF images.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to the OME-TIFF (or plain TIFF / SVS).
+
+    Returns
+    -------
+    pyramid : list of dask.array
+        Levels sorted from highest to lowest resolution. Dimensions match the
+        source axes layout (e.g. (C, Y, X) or (Y, X, C) or (Y, X)).
+    tif : tifffile.TiffFile
+        Open file handle — keep alive for lazy reads.
+    channel_axis : int | None
+        Index of the channel axis within each pyramid level, or None if the
+        image has no channel dimension (single-channel 2-D).
+    channel_names : list[str]
+        Human-readable channel labels. Parsed from OME-XML when possible,
+        otherwise ``["C0", "C1", ...]``.
+    """
+    import re
+    import xml.etree.ElementTree as ET
+
+    tif = tifffile.TiffFile(str(path))
+    series = tif.series[0]
+    axes = (series.axes or "").upper()
+
+    # Build pyramid (same as load_he_pyramid) — no rgb= flag so layout is preserved.
+    n_levels = len(series.levels)
+    if n_levels > 1:
+        pyramid = [da.from_zarr(tif.aszarr(level=i)) for i in range(n_levels)]
+    else:
+        base = da.from_zarr(tif.aszarr())
+        pyramid = [base]
+
+    base_shape = pyramid[0].shape
+    ndim = len(base_shape)
+
+    # Locate channel axis from axes string ('C' for channels, 'S' for samples/RGB)
+    channel_axis = None
+    for marker in ("C", "S"):
+        idx = axes.find(marker)
+        if idx != -1 and idx < ndim:
+            channel_axis = idx
+            break
+
+    # Fallback heuristics if axes string missing or ambiguous
+    if channel_axis is None and ndim >= 3:
+        # Trailing small dim ∈ {3,4} → treat as YXC RGB(A)
+        if base_shape[-1] in (3, 4):
+            channel_axis = ndim - 1
+        else:
+            # Assume leading axis is channels (CYX layout, typical for IF)
+            channel_axis = 0
+
+    n_channels = base_shape[channel_axis] if channel_axis is not None else 1
+
+    # Parse channel names from OME-XML if present
+    channel_names = [f"C{i}" for i in range(n_channels)]
+    ome_xml = getattr(tif, "ome_metadata", None)
+    if ome_xml:
+        try:
+            root = ET.fromstring(ome_xml)
+            ns = re.match(r"\{.*\}", root.tag)
+            ns = ns.group(0) if ns else ""
+            pixels = root.find(f".//{ns}Pixels")
+            if pixels is not None:
+                parsed = []
+                for ch in pixels.findall(f"{ns}Channel"):
+                    nm = ch.get("Name") or ch.get("Fluor") or ch.get("ID")
+                    if nm:
+                        parsed.append(nm)
+                if parsed and len(parsed) == n_channels:
+                    channel_names = parsed
+        except Exception:
+            pass
+
+    # If single-channel, drop channel_axis to None (napari handles as mono image)
+    if n_channels == 1:
+        channel_axis = None
+
+    # Build extra pyramid levels when none are present (multichannel-safe coarsen)
+    if n_levels == 1 and pyramid[0].ndim >= 2:
+        current = pyramid[0]
+        for _ in range(4):
+            # Determine which axes are spatial (all non-channel axes of size > 1)
+            axes_to_coarsen = {
+                ax: 2 for ax in range(current.ndim)
+                if ax != channel_axis and current.shape[ax] > 1
+            }
+            if not axes_to_coarsen:
+                break
+            # Trim to even along coarsened axes
+            slicer = [slice(None)] * current.ndim
+            for ax in axes_to_coarsen:
+                s = current.shape[ax]
+                slicer[ax] = slice(0, s - s % 2)
+            trimmed = current[tuple(slicer)]
+            try:
+                current = da.coarsen(
+                    np.mean, trimmed, axes_to_coarsen, trim_excess=True,
+                ).astype(pyramid[0].dtype)
+            except Exception:
+                break
+            pyramid.append(current)
+
+    return pyramid, tif, channel_axis, channel_names
+
+
 def compute_landmark_affine(xenium_pts_yx, he_pts_yx):
     """Estimate a similarity affine from paired landmark points.
 
