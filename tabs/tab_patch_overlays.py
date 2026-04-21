@@ -1,7 +1,7 @@
 """
 Patch Overlays tab — loads phikon patch-cluster outputs and subclone
-prediction CSVs. Patches render as a single napari Points layer with
-``symbol="square"`` sized to match the patch in pixels.
+prediction CSVs. Patches render as a napari Shapes layer of coloured
+rectangles (one polygon per patch) so fills and outlines follow zoom.
 """
 
 from __future__ import annotations
@@ -25,7 +25,8 @@ from utils.affine_linking import (
     link_affine, list_transformable_layers, find_layer_by_name,
 )
 from utils.adata_persistence import (
-    save_patch_overlay_to_sdata, load_patch_overlays_from_sdata, _slugify,
+    save_patch_overlay_to_sdata, load_patch_overlays_from_sdata,
+    save_overlay_affine_to_sdata, _slugify,
 )
 from utils.patch_overlay_io import (
     PatchOverlayData, estimate_stride, infer_patch_size_from_path,
@@ -34,9 +35,6 @@ from utils.patch_overlay_io import (
 
 if TYPE_CHECKING:
     from utils.viewer_context import ViewerContext
-
-
-_RESERVED_COLS = {"geometry", "radius", "patch_size", "confidence"}
 
 
 def _confirm_patch_size(parent, inferred: Optional[int], stride: Optional[int]) -> Optional[int]:
@@ -51,8 +49,7 @@ def _confirm_patch_size(parent, inferred: Optional[int], stride: Optional[int]) 
         "Override patch size in pixels if needed:",
     ]
     for line in info:
-        lbl = QLabel(line)
-        layout.addWidget(lbl)
+        layout.addWidget(QLabel(line))
     spin = QSpinBox()
     spin.setRange(1, 8192)
     spin.setValue(inferred or stride or 128)
@@ -67,13 +64,68 @@ def _confirm_patch_size(parent, inferred: Optional[int], stride: Optional[int]) 
     return None
 
 
-def _build_face_colors(cluster_ids: np.ndarray, palette: np.ndarray) -> np.ndarray:
-    """Map cluster ids (int64) → RGBA rows via palette[id % len(palette)]."""
+def _build_rectangles_yx(coords_xy: np.ndarray, patch_size: int) -> list:
+    """Build a list of Nx(4,2) rectangle polygon arrays in napari (y, x) order.
+
+    Each rectangle has corners TL → TR → BR → BL.
+    """
+    xs = coords_xy[:, 0].astype(np.float64)
+    ys = coords_xy[:, 1].astype(np.float64)
+    s = float(patch_size)
+    # (N, 4, 2) stacked
+    corners = np.empty((len(coords_xy), 4, 2), dtype=np.float64)
+    corners[:, 0, 0] = ys
+    corners[:, 0, 1] = xs
+    corners[:, 1, 0] = ys
+    corners[:, 1, 1] = xs + s
+    corners[:, 2, 0] = ys + s
+    corners[:, 2, 1] = xs + s
+    corners[:, 3, 0] = ys + s
+    corners[:, 3, 1] = xs
+    return [corners[i] for i in range(len(coords_xy))]
+
+
+def _base_face_colors(cluster_ids: np.ndarray, palette: np.ndarray) -> np.ndarray:
+    """Map cluster ids (int64) → RGBA rows via palette, 0-normalised so the
+    smallest cluster ID always maps to palette[0]."""
     ids = np.asarray(cluster_ids, dtype=np.int64)
     out = np.zeros((ids.size, 4), dtype=np.float32)
     valid = ids >= 0
-    out[valid] = palette[ids[valid] % len(palette)]
+    if valid.any():
+        normed = ids[valid] - ids[valid].min()
+        out[valid] = palette[normed % len(palette)]
     return out
+
+
+def _compute_display_colors(entry: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Return (face, edge) RGBA arrays given entry state (hidden ids, confidence,
+    outline-only, palette, active cluster column).
+    """
+    palette = PATCH_PALETTES.get(entry["palette_name"], PATCH_PALETTES["tab20"])
+    vals = entry["cluster_columns"][entry["active_cluster_column"]]
+    base = _base_face_colors(vals, palette)
+    face = base.copy()
+    edge = base.copy()
+    # visibility mask (True = visible)
+    visible = np.ones(len(vals), dtype=bool)
+    hidden = entry.get("hidden_cluster_ids") or set()
+    if hidden:
+        for cid in hidden:
+            visible &= vals != cid
+    thr = entry.get("confidence_threshold", 0.0)
+    conf = entry.get("confidence")
+    if conf is not None and thr > 0:
+        visible &= conf >= thr
+
+    if entry.get("outline_only", False):
+        face[:, 3] = 0.0
+        edge[:, 3] = 1.0
+    else:
+        edge[:, 3] = 0.0
+
+    face[~visible, 3] = 0.0
+    edge[~visible, 3] = 0.0
+    return face, edge
 
 
 def build_tab(ctx: "ViewerContext"):
@@ -102,29 +154,25 @@ def build_tab(ctx: "ViewerContext"):
     status_label.setWordWrap(True)
     panel_layout.addWidget(status_label)
 
-    # Cluster-column selector (subclone only)
     col_row = QHBoxLayout()
     col_row.addWidget(QLabel("Cluster column:"))
     cluster_col_combo = QComboBox()
     col_row.addWidget(cluster_col_combo, 1)
     panel_layout.addLayout(col_row)
 
-    # Palette selector
     pal_row = QHBoxLayout()
     pal_row.addWidget(QLabel("Palette:"))
     palette_combo = QComboBox()
-    palette_combo.addItems(["tab20", "glasbey_dark", "Set1", "Set3"])
+    palette_combo.addItems(["tab20", "glasbey_dark", "Set1", "Set3", "ARMS (Set1+Set2+Dark2)"])
     pal_row.addWidget(palette_combo, 1)
     panel_layout.addLayout(pal_row)
 
-    # Affine mirror selector
     aff_row = QHBoxLayout()
     aff_row.addWidget(QLabel("Apply transform from:"))
     affine_combo = QComboBox()
     aff_row.addWidget(affine_combo, 1)
     panel_layout.addLayout(aff_row)
 
-    # Outline-only toggle + edge width
     outline_chk = QCheckBox("Outline only")
     panel_layout.addWidget(outline_chk)
 
@@ -138,7 +186,6 @@ def build_tab(ctx: "ViewerContext"):
     edge_row.addWidget(edge_value_label)
     panel_layout.addLayout(edge_row)
 
-    # Opacity slider
     op_row = QHBoxLayout()
     op_row.addWidget(QLabel("Opacity:"))
     opacity_slider = QSlider(Qt.Horizontal)
@@ -147,7 +194,6 @@ def build_tab(ctx: "ViewerContext"):
     op_row.addWidget(opacity_slider)
     panel_layout.addLayout(op_row)
 
-    # Confidence threshold (subclone only)
     conf_row = QHBoxLayout()
     conf_label = QLabel("Confidence ≥ 0.00:")
     conf_row.addWidget(conf_label)
@@ -157,7 +203,6 @@ def build_tab(ctx: "ViewerContext"):
     conf_row.addWidget(conf_slider)
     panel_layout.addLayout(conf_row)
 
-    # Cluster-id filter grid
     panel_layout.addWidget(QLabel("Visible clusters:"))
     filter_scroll = QScrollArea()
     filter_scroll.setWidgetResizable(True)
@@ -193,8 +238,26 @@ def build_tab(ctx: "ViewerContext"):
             return None
         return ctx.patch_overlays_state[row]
 
+    def _apply_colors(entry):
+        """Recompute face + edge colour arrays and push them to the shapes layer."""
+        face, edge = _compute_display_colors(entry)
+        lyr = entry["shapes_layer"]
+        try:
+            lyr.face_color = face
+            lyr.edge_color = edge
+            lyr.edge_width = int(entry.get("edge_width", 2))
+        except Exception as e:
+            print(f"  Warning: could not update patch colors: {e}")
+
+    def _on_cluster_cb_toggled(entry, cid, checked):
+        hidden = entry.setdefault("hidden_cluster_ids", set())
+        if checked:
+            hidden.discard(int(cid))
+        else:
+            hidden.add(int(cid))
+        _apply_colors(entry)
+
     def _rebuild_cluster_filter_grid(entry):
-        # Clear existing checkboxes
         while filter_grid.count():
             item = filter_grid.takeAt(0)
             w = item.widget()
@@ -209,52 +272,15 @@ def build_tab(ctx: "ViewerContext"):
         for i, cid in enumerate(uniq):
             cb = QCheckBox(str(cid))
             cb.setChecked(cid not in hidden)
-            cb.toggled.connect(lambda _chk, _e=entry: _apply_filters(_e))
+            cb.toggled.connect(
+                lambda chk, _e=entry, _c=cid: _on_cluster_cb_toggled(_e, _c, chk)
+            )
             filter_grid.addWidget(cb, i // cols, i % cols)
             entry["cluster_checkboxes"][cid] = cb
 
-    def _apply_filters(entry):
-        vals = entry["cluster_columns"][entry["active_cluster_column"]]
-        shown = np.ones(len(vals), dtype=bool)
-        # Cluster filter
-        for cid, cb in entry["cluster_checkboxes"].items():
-            if not cb.isChecked():
-                shown &= vals != cid
-        # Confidence threshold
-        thr = entry.get("confidence_threshold", 0.0)
-        if entry.get("confidence") is not None and thr > 0:
-            shown &= entry["confidence"] >= thr
-        try:
-            entry["points_layer"].shown = shown
-        except Exception:
-            # Older napari may not support shown — fall back to face alpha
-            face = entry["face_color_full"].copy()
-            face[~shown, 3] = 0.0
-            entry["points_layer"].face_color = face
-
-    def _rebuild_face_edge(entry):
-        palette = PATCH_PALETTES.get(entry["palette_name"], PATCH_PALETTES["tab20"])
-        vals = entry["cluster_columns"][entry["active_cluster_column"]]
-        face = _build_face_colors(vals, palette)
-        edge = face.copy()
-        if entry.get("outline_only", False):
-            face[:, 3] = 0.0
-            edge[:, 3] = 1.0
-        else:
-            edge[:, 3] = 0.0
-        entry["face_color_full"] = face
-        entry["edge_color_full"] = edge
-        lyr = entry["points_layer"]
-        try:
-            lyr.face_color = face
-            lyr.edge_color = edge
-            lyr.edge_width = int(entry.get("edge_width", 2))
-        except Exception as e:
-            print(f"  Warning: could not update patch colors: {e}")
-
     def _refresh_affine_choices():
         entry = _current_entry()
-        excluded = [entry["points_layer"]] if entry and entry.get("points_layer") else ()
+        excluded = [entry["shapes_layer"]] if entry and entry.get("shapes_layer") else ()
         layers = list_transformable_layers(viewer, exclude=excluded)
         affine_combo.blockSignals(True)
         affine_combo.clear()
@@ -278,7 +304,6 @@ def build_tab(ctx: "ViewerContext"):
             status_label.setText("—")
             return
 
-        # Status
         n = len(entry["coords_xy"])
         src = entry.get("source_path", "?")
         kind = entry.get("source_kind", "?")
@@ -286,7 +311,6 @@ def build_tab(ctx: "ViewerContext"):
             f"{Path(src).name} ({kind}) — {n} patches, size {entry['patch_size_px']}px"
         )
 
-        # Cluster-column combo
         cluster_col_combo.blockSignals(True)
         cluster_col_combo.clear()
         for col in entry["cluster_columns"].keys():
@@ -297,14 +321,12 @@ def build_tab(ctx: "ViewerContext"):
         cluster_col_combo.blockSignals(False)
         cluster_col_combo.setEnabled(len(entry["cluster_columns"]) > 1)
 
-        # Palette
         palette_combo.blockSignals(True)
         idx = palette_combo.findText(entry.get("palette_name", "tab20"))
         if idx >= 0:
             palette_combo.setCurrentIndex(idx)
         palette_combo.blockSignals(False)
 
-        # Outline + edge width
         outline_chk.blockSignals(True)
         outline_chk.setChecked(entry.get("outline_only", False))
         outline_chk.blockSignals(False)
@@ -313,12 +335,10 @@ def build_tab(ctx: "ViewerContext"):
         edge_slider.blockSignals(False)
         edge_value_label.setText(str(int(entry.get("edge_width", 2))))
 
-        # Opacity
         opacity_slider.blockSignals(True)
         opacity_slider.setValue(int(entry.get("opacity", 0.8) * 100))
         opacity_slider.blockSignals(False)
 
-        # Confidence
         has_conf = entry.get("confidence") is not None
         conf_slider.setEnabled(has_conf)
         conf_label.setEnabled(has_conf)
@@ -331,44 +351,31 @@ def build_tab(ctx: "ViewerContext"):
         _rebuild_cluster_filter_grid(entry)
         _refresh_affine_choices()
 
+    def _create_shapes_layer(coords_xy, patch_size, face, edge, edge_width,
+                             layer_name, opacity):
+        rects = _build_rectangles_yx(coords_xy, patch_size)
+        return viewer.add_shapes(
+            rects,
+            shape_type="polygon",
+            face_color=face,
+            edge_color=edge,
+            edge_width=int(edge_width),
+            name=layer_name,
+            opacity=float(opacity),
+        )
+
     def _add_overlay_from_data(data: PatchOverlayData):
         patch_size = data.patch_size or 0
         stride = estimate_stride(data.coords_xy)
         if not patch_size:
             patch_size = stride or 128
-        # Always confirm
         confirmed = _confirm_patch_size(root, patch_size, stride)
         if confirmed is None:
             return
         patch_size = confirmed
 
-        # Top-left (x, y) → centre (y, x) for napari
-        centres_yx = data.coords_xy[:, ::-1] + patch_size / 2.0
-
-        palette_name = "tab20"
-        palette = PATCH_PALETTES[palette_name]
-        face = _build_face_colors(
-            data.cluster_columns[data.active_cluster_column], palette,
-        )
-        edge = face.copy()
-        edge[:, 3] = 0.0
-
-        layer_name = f"patches :: {Path(data.source_path).stem}"
-        points_layer = viewer.add_points(
-            centres_yx,
-            symbol="square",
-            size=float(patch_size),
-            face_color=face,
-            border_color=edge,
-            border_width=2,
-            border_width_is_relative=False,
-            name=layer_name,
-            opacity=0.8,
-        )
-
-        element_name = f"patch_{_slugify(Path(data.source_path).stem)}"
         entry = {
-            "element_name": element_name,
+            "element_name": f"patch_{_slugify(Path(data.source_path).stem)}",
             "source_path": data.source_path,
             "source_kind": data.source_kind,
             "coords_xy": data.coords_xy,
@@ -377,7 +384,7 @@ def build_tab(ctx: "ViewerContext"):
             "confidence": data.confidence,
             "confidence_threshold": 0.0,
             "patch_size_px": int(patch_size),
-            "palette_name": palette_name,
+            "palette_name": "ARMS (Set1+Set2+Dark2)" if data.source_kind == "subclone" else "tab20",
             "affine_source_name": None,
             "affine_disconnect": None,
             "outline_only": False,
@@ -385,19 +392,30 @@ def build_tab(ctx: "ViewerContext"):
             "opacity": 0.8,
             "hidden_cluster_ids": set(),
             "cluster_checkboxes": {},
-            "points_layer": points_layer,
-            "face_color_full": face,
-            "edge_color_full": edge,
+            "shapes_layer": None,
         }
+        face, edge = _compute_display_colors(entry)
+        layer_name = f"patches :: {Path(data.source_path).stem}"
+        ctx.set_status(f"Creating {len(data.coords_xy)} patch shapes…")
+        try:
+            shapes_layer = _create_shapes_layer(
+                data.coords_xy, patch_size, face, edge,
+                entry["edge_width"], layer_name, entry["opacity"],
+            )
+        except Exception as e:
+            QMessageBox.critical(None, "Layer creation failed", str(e))
+            return
+        entry["shapes_layer"] = shapes_layer
+
         ctx.patch_overlays_state.append(entry)
-        item = QListWidgetItem(
-            f"{data.source_kind}: {Path(data.source_path).name} ({len(centres_yx)}×{patch_size}px)"
-        )
-        list_widget.addItem(item)
+        list_widget.addItem(QListWidgetItem(
+            f"{data.source_kind}: {Path(data.source_path).name} "
+            f"({len(data.coords_xy)}×{patch_size}px)"
+        ))
         list_widget.setCurrentRow(list_widget.count() - 1)
 
         save_patch_overlay_to_sdata(
-            ctx, element_name, data.coords_xy, patch_size,
+            ctx, entry["element_name"], data.coords_xy, patch_size,
             data.cluster_columns, data.confidence,
         )
         ctx.record_code(
@@ -405,7 +423,9 @@ def build_tab(ctx: "ViewerContext"):
             f"# source: {data.source_path}\n"
             f"# patch_size: {patch_size} px, N={len(data.coords_xy)}"
         )
-        ctx.set_status(f"Loaded {len(centres_yx)} patches from {Path(data.source_path).name}")
+        ctx.set_status(
+            f"Loaded {len(data.coords_xy)} patches from {Path(data.source_path).name}"
+        )
 
     def on_add_phikon():
         default_dir = str(ctx.data_path) if ctx.data_path else ""
@@ -445,25 +465,22 @@ def build_tab(ctx: "ViewerContext"):
             return
         entry["active_cluster_column"] = col
         entry["hidden_cluster_ids"] = set()
-        _rebuild_face_edge(entry)
         _rebuild_cluster_filter_grid(entry)
-        _apply_filters(entry)
+        _apply_colors(entry)
 
     def on_palette_changed(_ix):
         entry = _current_entry()
         if entry is None:
             return
         entry["palette_name"] = palette_combo.currentText()
-        _rebuild_face_edge(entry)
-        _apply_filters(entry)
+        _apply_colors(entry)
 
     def on_outline_changed(chk):
         entry = _current_entry()
         if entry is None:
             return
         entry["outline_only"] = bool(chk)
-        _rebuild_face_edge(entry)
-        _apply_filters(entry)
+        _apply_colors(entry)
 
     def on_edge_width(value):
         entry = _current_entry()
@@ -472,12 +489,9 @@ def build_tab(ctx: "ViewerContext"):
             return
         entry["edge_width"] = int(value)
         try:
-            entry["points_layer"].border_width = int(value)
+            entry["shapes_layer"].edge_width = int(value)
         except Exception:
-            try:
-                entry["points_layer"].edge_width = int(value)
-            except Exception:
-                pass
+            pass
 
     def on_opacity(value):
         entry = _current_entry()
@@ -485,7 +499,7 @@ def build_tab(ctx: "ViewerContext"):
             return
         entry["opacity"] = value / 100.0
         try:
-            entry["points_layer"].opacity = value / 100.0
+            entry["shapes_layer"].opacity = value / 100.0
         except Exception:
             pass
 
@@ -496,7 +510,7 @@ def build_tab(ctx: "ViewerContext"):
         thr = value / 100.0
         entry["confidence_threshold"] = thr
         conf_label.setText(f"Confidence ≥ {thr:.2f}:")
-        _apply_filters(entry)
+        _apply_colors(entry)
 
     def on_affine_changed(_ix):
         entry = _current_entry()
@@ -518,7 +532,12 @@ def build_tab(ctx: "ViewerContext"):
             return
         try:
             entry["affine_disconnect"] = link_affine(
-                entry["points_layer"], source, viewer=viewer,
+                entry["shapes_layer"], source, viewer=viewer,
+            )
+            # Persist to sdata
+            save_overlay_affine_to_sdata(
+                ctx, entry["element_name"],
+                entry["shapes_layer"].affine.affine_matrix,
             )
         except Exception as e:
             print(f"  Warning: could not link patch affine: {e}")
@@ -527,21 +546,23 @@ def build_tab(ctx: "ViewerContext"):
         entry = _current_entry()
         if entry is None:
             return
+        entry["hidden_cluster_ids"] = set()
         for cb in entry["cluster_checkboxes"].values():
             cb.blockSignals(True)
             cb.setChecked(True)
             cb.blockSignals(False)
-        _apply_filters(entry)
+        _apply_colors(entry)
 
     def on_deselect_all():
         entry = _current_entry()
         if entry is None:
             return
+        entry["hidden_cluster_ids"] = set(entry["cluster_checkboxes"].keys())
         for cb in entry["cluster_checkboxes"].values():
             cb.blockSignals(True)
             cb.setChecked(False)
             cb.blockSignals(False)
-        _apply_filters(entry)
+        _apply_colors(entry)
 
     def on_remove():
         row = list_widget.currentRow()
@@ -555,7 +576,7 @@ def build_tab(ctx: "ViewerContext"):
             except Exception:
                 pass
         try:
-            viewer.layers.remove(entry["points_layer"])
+            viewer.layers.remove(entry["shapes_layer"])
         except Exception:
             pass
         try:
@@ -607,91 +628,108 @@ def build_tab(ctx: "ViewerContext"):
                 "phikon" if "phikon_cluster" in meta["cluster_columns"]
                 else "subclone"
             )
-            data = PatchOverlayData(
-                coords_xy=meta["coords_xy"],
-                patch_size=meta["patch_size"],
-                cluster_columns=meta["cluster_columns"],
-                active_cluster_column=active,
-                source_path=ui.get("source_path") or element_name,
-                source_kind=source_kind,
-                confidence=meta.get("confidence"),
-            )
-            # Bypass dialog on restore — use stored patch_size directly
-            patch_size = int(ui.get("patch_size_px") or data.patch_size or 0)
+            patch_size = int(ui.get("patch_size_px") or meta.get("patch_size") or 0)
             if patch_size <= 0:
                 patch_size = 128
-            centres_yx = data.coords_xy[:, ::-1] + patch_size / 2.0
-            palette_name = ui.get("palette_name", "tab20")
-            palette = PATCH_PALETTES.get(palette_name, PATCH_PALETTES["tab20"])
-            face = _build_face_colors(data.cluster_columns[active], palette)
-            edge = face.copy()
-            outline = bool(ui.get("outline_only", False))
-            if outline:
-                face[:, 3] = 0.0
-                edge[:, 3] = 1.0
-            else:
-                edge[:, 3] = 0.0
-            layer_name = f"patches :: {Path(data.source_path).stem}"
-            points_layer = viewer.add_points(
-                centres_yx,
-                symbol="square",
-                size=float(patch_size),
-                face_color=face,
-                border_color=edge,
-                border_width=int(ui.get("edge_width", 2)),
-                border_width_is_relative=False,
-                name=layer_name,
-                opacity=float(ui.get("opacity", 0.8)),
-            )
+
             entry = {
                 "element_name": element_name,
-                "source_path": data.source_path,
-                "source_kind": data.source_kind,
-                "coords_xy": data.coords_xy,
-                "cluster_columns": data.cluster_columns,
+                "source_path": ui.get("source_path") or element_name,
+                "source_kind": source_kind,
+                "coords_xy": meta["coords_xy"],
+                "cluster_columns": meta["cluster_columns"],
                 "active_cluster_column": active,
-                "confidence": data.confidence,
+                "confidence": meta.get("confidence"),
                 "confidence_threshold": float(ui.get("confidence_threshold", 0.0)),
                 "patch_size_px": patch_size,
-                "palette_name": palette_name,
+                "palette_name": ui.get("palette_name", "tab20"),
                 "affine_source_name": ui.get("affine_source_name"),
                 "affine_disconnect": None,
-                "outline_only": outline,
+                "outline_only": bool(ui.get("outline_only", False)),
                 "edge_width": int(ui.get("edge_width", 2)),
                 "opacity": float(ui.get("opacity", 0.8)),
                 "hidden_cluster_ids": set(ui.get("hidden_cluster_ids", []) or []),
                 "cluster_checkboxes": {},
-                "points_layer": points_layer,
-                "face_color_full": face,
-                "edge_color_full": edge,
+                "shapes_layer": None,
             }
+            face, edge = _compute_display_colors(entry)
+            layer_name = f"patches :: {Path(entry['source_path']).stem}"
+            try:
+                shapes_layer = _create_shapes_layer(
+                    entry["coords_xy"], patch_size, face, edge,
+                    entry["edge_width"], layer_name, entry["opacity"],
+                )
+            except Exception as e:
+                print(f"  Warning: could not restore patch overlay {element_name}: {e}")
+                continue
+            entry["shapes_layer"] = shapes_layer
+
+            # Apply affine from sdata (authoritative), fall back to session attrs
+            saved_affine = meta.get("affine_matrix")  # from sdata transformations
+            if saved_affine is None:
+                saved_affine = ui.get("affine_matrix")  # fallback: session attrs
+            if saved_affine is not None:
+                try:
+                    shapes_layer.affine = np.array(saved_affine, dtype=np.float64)
+                except Exception:
+                    pass
+
             ctx.patch_overlays_state.append(entry)
             list_widget.addItem(QListWidgetItem(
-                f"{data.source_kind}: {Path(data.source_path).name} "
-                f"({len(centres_yx)}×{patch_size}px)"
+                f"{source_kind}: {Path(entry['source_path']).name} "
+                f"({len(entry['coords_xy'])}×{patch_size}px)"
             ))
-            # Re-link affine if possible
             if entry["affine_source_name"]:
                 src = find_layer_by_name(viewer, entry["affine_source_name"])
                 if src is not None:
                     try:
                         entry["affine_disconnect"] = link_affine(
-                            points_layer, src, viewer=viewer,
+                            shapes_layer, src, viewer=viewer,
                         )
                     except Exception:
                         pass
-            # Apply confidence filter if set
-            if entry["confidence_threshold"] > 0 or entry["hidden_cluster_ids"]:
-                vals = data.cluster_columns[active]
-                shown = np.ones(len(vals), dtype=bool)
-                for cid in entry["hidden_cluster_ids"]:
-                    shown &= vals != cid
-                if data.confidence is not None and entry["confidence_threshold"] > 0:
-                    shown &= data.confidence >= entry["confidence_threshold"]
+
+        # Deferred affine linking: source layers (e.g. H&E) may not exist
+        # yet because they load asynchronously. Watch for layer insertions
+        # and link once the named source appears.
+        _pending = [
+            e for e in ctx.patch_overlays_state
+            if e.get("affine_source_name") and e.get("affine_disconnect") is None
+        ]
+
+        def _on_layer_inserted_for_pending(event=None):
+            still_pending = []
+            for e in _pending:
+                if e.get("affine_disconnect") is not None:
+                    continue  # already linked
+                src = find_layer_by_name(viewer, e["affine_source_name"])
+                lyr = e.get("shapes_layer")
+                if src is not None and lyr is not None:
+                    try:
+                        e["affine_disconnect"] = link_affine(lyr, src, viewer=viewer)
+                        save_overlay_affine_to_sdata(
+                            ctx, e["element_name"], lyr.affine.affine_matrix,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    still_pending.append(e)
+            _pending[:] = still_pending
+            if not _pending:
                 try:
-                    points_layer.shown = shown
+                    viewer.layers.events.inserted.disconnect(
+                        _on_layer_inserted_for_pending
+                    )
                 except Exception:
                     pass
+
+        if _pending:
+            try:
+                viewer.layers.events.inserted.connect(
+                    _on_layer_inserted_for_pending
+                )
+            except Exception:
+                pass
 
         if ctx.patch_overlays_state:
             list_widget.setCurrentRow(0)

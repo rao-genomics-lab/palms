@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased] — 2026-04-17
+
+### Fixed
+- **Overlay affine persistence** — affine transforms for patch overlays and external images are now
+  saved to the SpatialData object via `set_transformation()` / `write_transformations()` (same
+  pattern as H&E registration). On restore, the affine is read back from sdata directly, so
+  overlays are correctly positioned even before the source layer (e.g. H&E) finishes loading.
+  A deferred-linking listener also re-establishes live affine mirroring once the source layer
+  appears.
+- **QCheckBox crash on close** — `_snapshot_layers` now reads `entry["hidden_cluster_ids"]` (a
+  plain set maintained by the tab) instead of iterating Qt checkbox widgets that may already be
+  destroyed during shutdown.
+
+### Changed
+- **ARMS palette for subclone predictions** — subclone prediction overlays now default to the
+  ARMS palette (RColorBrewer Set1+Set2+Dark2, 24 colours) to match the R-based ARMS visualisation
+  pipeline. Cluster-to-colour mapping is 0-normalised so 1-based genomic cluster IDs (1,2,3) map
+  to Set1 red, blue, green — matching the R package exactly.
+
 ## [Unreleased] — 2026-04-16
 
 ### Added
@@ -12,12 +31,14 @@
   only per-entry UI state (opacity, affine source) lives in zarr attrs.
 - **Patch Overlays tab** — load phikon patch-cluster outputs (folder with `patches/coordinates.npy`
   + `clustering/cluster_labels.npy`) and subclone-prediction CSVs (`x_coord`, `y_coord`,
-  `predicted_genomic_cluster`, `morphology_cluster`, `prediction_confidence`). Patches render as a
-  single napari Points layer with `symbol="square"` (scales to 10k+ patches). Controls for cluster
-  column, palette (tab20 / glasbey_dark / Set1 / Set3), outline-only, edge width, opacity,
+  `predicted_genomic_cluster`, `morphology_cluster`, `prediction_confidence`). Patches render as
+  polygon rectangles in a napari Shapes layer (scales to 10k+ patches). Controls for cluster
+  column, palette (tab20 / glasbey_dark / Set1 / Set3 / ARMS), outline-only, edge width, opacity,
   confidence threshold, and per-cluster visibility. Patch size is inferred from folder / file name
   with a stride-based sanity check and confirmation dialog. Geometry, cluster columns, and
   confidence are stored in `sdata.shapes["patch_<slug>"]`; UI settings persist in zarr attrs.
+  Subclone prediction overlays default to the ARMS palette (RColorBrewer Set1+Set2+Dark2) to
+  match the R-based ARMS visualisation pipeline.
 - **Affine mirroring helper** — `utils/affine_linking.py` lists layers with non-identity affine
   and wires up `events.affine` subscriptions so external overlays stay aligned when the source
   image is re-registered.

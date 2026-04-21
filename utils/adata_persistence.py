@@ -1138,6 +1138,7 @@ def load_external_images_from_sdata(sdata, prefix: str = "ext_") -> list:
                     "element_name": name,
                     "pyramid": pyramid,
                     "channel_names": channel_names,
+                    "affine_matrix": _load_affine_from_sdata_element(sdata, name),
                 })
             except Exception as e:
                 print(f"Warning: could not read external image {name}: {e}")
@@ -1227,6 +1228,53 @@ def save_patch_overlay_to_sdata(
         print(f"Warning: could not save patch overlay {element_name} to sdata: {e}")
 
 
+def save_overlay_affine_to_sdata(ctx, element_name: str, affine_matrix) -> None:
+    """Write an affine transformation to an sdata element (image or shape).
+
+    Uses ``spatialdata.transformations.set_transformation`` +
+    ``sdata.write_transformations`` — the same pattern as
+    ``_save_he_affine_to_sdata`` in ``tab_he_registration.py``.
+    """
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    if element_name not in ctx.sdata:
+        return
+    try:
+        from spatialdata.transformations import (
+            Affine as SdAffine, set_transformation,
+        )
+        m = np.asarray(affine_matrix, dtype=np.float64)
+        # SpatialData expects a 3×3 matrix with input/output axes (y, x).
+        if m.shape == (3, 3):
+            sd_affine = SdAffine(m, input_axes=("y", "x"), output_axes=("y", "x"))
+        else:
+            return  # unexpected shape — skip
+        elem = ctx.sdata[element_name]
+        set_transformation(elem, sd_affine, "global")
+        ctx.sdata.write_transformations(element_name)
+    except Exception as e:
+        print(f"Warning: could not save affine for {element_name}: {e}")
+
+
+def _load_affine_from_sdata_element(sdata, element_name: str):
+    """Return the 3×3 affine matrix stored on an sdata element, or None."""
+    if sdata is None or element_name not in sdata:
+        return None
+    try:
+        from spatialdata.transformations import get_transformation, Affine as SdAffine
+        elem = sdata[element_name]
+        t = get_transformation(elem, "global")
+        if isinstance(t, SdAffine):
+            m = np.asarray(t.to_affine_matrix(input_axes=("y", "x"),
+                                               output_axes=("y", "x")),
+                           dtype=np.float64)
+            if not np.allclose(m, np.eye(3), atol=1e-6):
+                return m
+    except Exception:
+        pass
+    return None
+
+
 def load_patch_overlays_from_sdata(sdata, prefix: str = "patch_") -> list:
     """Return entries for every ``sdata.shapes`` element whose name starts with ``prefix``.
 
@@ -1279,6 +1327,7 @@ def load_patch_overlays_from_sdata(sdata, prefix: str = "patch_") -> list:
                 "patch_size": patch_size,
                 "cluster_columns": cluster_columns,
                 "confidence": confidence,
+                "affine_matrix": _load_affine_from_sdata_element(sdata, name),
             })
         except Exception as e:
             print(f"Warning: could not load patch overlay {name}: {e}")

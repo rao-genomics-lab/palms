@@ -26,7 +26,8 @@ from utils.affine_linking import (
     link_affine, list_transformable_layers, find_layer_by_name,
 )
 from utils.adata_persistence import (
-    save_external_image_to_sdata, load_external_images_from_sdata, _slugify,
+    save_external_image_to_sdata, load_external_images_from_sdata,
+    save_overlay_affine_to_sdata, _slugify,
 )
 
 if TYPE_CHECKING:
@@ -192,6 +193,16 @@ def build_tab(ctx: "ViewerContext"):
                     pass
 
         entry["affine_disconnect"] = _disconnect_all
+
+        # Persist affine to sdata
+        if entry["sub_layer_refs"]:
+            try:
+                save_overlay_affine_to_sdata(
+                    ctx, entry["element_name"],
+                    entry["sub_layer_refs"][0].affine.affine_matrix,
+                )
+            except Exception:
+                pass
 
     def _build_layers(pyramid, channel_axis, channel_names, display_name,
                       opacity=1.0):
@@ -369,15 +380,89 @@ def build_tab(ctx: "ViewerContext"):
                 "affine_disconnect": None,
                 "opacity": float(ui.get("opacity", 1.0)),
             }
+            # Apply affine from sdata (authoritative), fall back to session attrs
+            saved_affine = meta.get("affine_matrix")  # from sdata transformations
+            if saved_affine is None:
+                saved_affine = ui.get("affine_matrix")  # fallback: session attrs
+            if saved_affine is not None:
+                for lyr in layers:
+                    try:
+                        lyr.affine = np.array(saved_affine, dtype=np.float64)
+                    except Exception:
+                        pass
+
             _register_entry(entry)
             # Re-link affine if named source is present
             if entry["affine_source_name"]:
                 src = find_layer_by_name(viewer, entry["affine_source_name"])
                 if src is not None:
-                    list_widget.setCurrentRow(list_widget.count() - 1)
-                    # Select in combo; selection triggers _apply_affine_source
-                    idx = affine_combo.findData(entry["affine_source_name"])
-                    if idx >= 0:
-                        affine_combo.setCurrentIndex(idx)
+                    disconnects = []
+                    for lyr in entry["sub_layer_refs"]:
+                        try:
+                            disconnects.append(link_affine(lyr, src, viewer=viewer))
+                        except Exception:
+                            pass
+                    if disconnects:
+                        def _disc_all(dd=disconnects):
+                            for d in dd:
+                                try: d()
+                                except Exception: pass
+                        entry["affine_disconnect"] = _disc_all
+
+        # Deferred affine linking: source layers (e.g. H&E) may not exist
+        # yet because they load asynchronously. Watch for layer insertions
+        # and link once the named source appears.
+        _pending = [
+            e for e in ctx.external_images_state
+            if e.get("affine_source_name") and e.get("affine_disconnect") is None
+        ]
+
+        def _on_layer_inserted_for_pending(event=None):
+            still_pending = []
+            for e in _pending:
+                if e.get("affine_disconnect") is not None:
+                    continue
+                src = find_layer_by_name(viewer, e["affine_source_name"])
+                if src is None:
+                    still_pending.append(e)
+                    continue
+                disconnects = []
+                for lyr in e.get("sub_layer_refs", []):
+                    try:
+                        disconnects.append(link_affine(lyr, src, viewer=viewer))
+                    except Exception:
+                        pass
+                if disconnects:
+                    def _disc_all(dd=disconnects):
+                        for d in dd:
+                            try: d()
+                            except Exception: pass
+                    e["affine_disconnect"] = _disc_all
+                    # Persist to sdata
+                    refs = e.get("sub_layer_refs", [])
+                    if refs:
+                        try:
+                            save_overlay_affine_to_sdata(
+                                ctx, e["element_name"],
+                                refs[0].affine.affine_matrix,
+                            )
+                        except Exception:
+                            pass
+            _pending[:] = still_pending
+            if not _pending:
+                try:
+                    viewer.layers.events.inserted.disconnect(
+                        _on_layer_inserted_for_pending
+                    )
+                except Exception:
+                    pass
+
+        if _pending:
+            try:
+                viewer.layers.events.inserted.connect(
+                    _on_layer_inserted_for_pending
+                )
+            except Exception:
+                pass
 
     return tab_widget, {"restore_session": restore_session}

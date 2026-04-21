@@ -57,11 +57,32 @@ TAB20_PALETTE = _mpl_palette("tab20", 20)
 SET1_PALETTE = _mpl_palette("Set1", 9)
 SET3_PALETTE = _mpl_palette("Set3", 12)
 
+# ARMS palette: RColorBrewer Set1(8) + Set2(8) + Dark2(8) — matches the
+# cluster colours from the ARMS R package (create_cluster_colors()).
+# 1-based indexing: cluster 1 → position 0, etc.
+_ARMS_HEX = [
+    # Set1 (8)
+    "#E41A1C", "#377EB8", "#4DAF4A", "#984EA3",
+    "#FF7F00", "#FFFF33", "#A65628", "#F781BF",
+    # Set2 (8)
+    "#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3",
+    "#A6D854", "#FFD92F", "#E5C494", "#B3B3B3",
+    # Dark2 (8)
+    "#1B9E77", "#D95F02", "#7570B3", "#E7298A",
+    "#66A61E", "#E6AB02", "#A6761D", "#666666",
+]
+ARMS_PALETTE = np.array(
+    [[int(h[i:i+2], 16) / 255.0 for i in (1, 3, 5)] + [1.0]
+     for h in _ARMS_HEX],
+    dtype=np.float32,
+)
+
 PATCH_PALETTES = {
     "tab20": TAB20_PALETTE,
     "glasbey_dark": CLUSTER_PALETTE,
     "Set1": SET1_PALETTE,
     "Set3": SET3_PALETTE,
+    "ARMS (Set1+Set2+Dark2)": ARMS_PALETTE,
 }
 
 

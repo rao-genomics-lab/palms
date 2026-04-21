@@ -732,10 +732,20 @@ def _snapshot_layers(ctx: ViewerContext) -> dict:
     # External images — UI-only residuals (pixels + affine live in sdata.images)
     ext_ui = []
     for entry in (ctx.external_images_state or []):
+        affine_matrix = None
+        refs = entry.get("sub_layer_refs") or []
+        if refs:
+            try:
+                m = np.asarray(refs[0].affine.affine_matrix, dtype=np.float64)
+                if not np.allclose(m, np.eye(m.shape[0]), atol=1e-6):
+                    affine_matrix = m.tolist()
+            except Exception:
+                pass
         ext_ui.append({
             "element_name": entry.get("element_name"),
             "path": entry.get("path"),
             "affine_source_name": entry.get("affine_source_name"),
+            "affine_matrix": affine_matrix,
             "opacity": float(entry.get("opacity", 1.0)),
         })
     snapshot["external_images_ui"] = ext_ui
@@ -743,6 +753,17 @@ def _snapshot_layers(ctx: ViewerContext) -> dict:
     # Patch overlays — UI-only residuals (geometry + clusters live in sdata.shapes)
     patch_ui = []
     for entry in (ctx.patch_overlays_state or []):
+        # Capture current affine matrix so it can be restored immediately,
+        # even before the source layer (e.g. H&E) finishes loading.
+        affine_matrix = None
+        lyr = entry.get("shapes_layer")
+        if lyr is not None:
+            try:
+                m = np.asarray(lyr.affine.affine_matrix, dtype=np.float64)
+                if not np.allclose(m, np.eye(m.shape[0]), atol=1e-6):
+                    affine_matrix = m.tolist()
+            except Exception:
+                pass
         patch_ui.append({
             "element_name": entry.get("element_name"),
             "source_path": entry.get("source_path"),
@@ -751,14 +772,14 @@ def _snapshot_layers(ctx: ViewerContext) -> dict:
             "palette_name": entry.get("palette_name"),
             "patch_size_px": int(entry.get("patch_size_px", 0)),
             "affine_source_name": entry.get("affine_source_name"),
+            "affine_matrix": affine_matrix,
             "outline_only": bool(entry.get("outline_only", False)),
             "edge_width": int(entry.get("edge_width", 2)),
             "opacity": float(entry.get("opacity", 0.8)),
             "confidence_threshold": float(entry.get("confidence_threshold", 0.0)),
-            "hidden_cluster_ids": [
-                int(cid) for cid, cb in entry.get("cluster_checkboxes", {}).items()
-                if not cb.isChecked()
-            ],
+            "hidden_cluster_ids": sorted(
+                int(cid) for cid in (entry.get("hidden_cluster_ids") or set())
+            ),
         })
     snapshot["patch_overlays_ui"] = patch_ui
 
