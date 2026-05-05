@@ -194,6 +194,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     roi_deg_text.setFontFamily("monospace")
     roi_deg_text.setMaximumHeight(250)
     roi_deg_export_button = PushButton(label="Export DEG CSV...", enabled=False)
+    roi_volcano_button = PushButton(label="Save Volcano Plot(s)...", enabled=False)
 
     from utils.gene_analysis import compute_roi_deg
 
@@ -237,30 +238,53 @@ def build_tab(ctx: ViewerContext) -> tuple:
         worker.returned.connect(lambda df: _on_roi_deg_ready(df, gen, _use_filter, _selected_ids))
         worker.start()
 
-    def _on_roi_deg_ready(df, _gen, _use_filter, _selected_ids):
+    def _on_roi_deg_ready(result, _gen, _use_filter, _selected_ids):
         if ctx.dataset_generation != _gen:
             return  # dataset reloaded while worker ran
+        df, adata_norm = result
         state["roi_deg_df"] = df
+        state["roi_deg_adata_norm"] = adata_norm
         roi_deg_button.enabled = True
         if not df.empty:
-            n_regions = len(ctx.roi_layer.data) if ctx.roi_layer is not None else 0
-            filter_desc = ""
+            filter_line = ""
             if _use_filter:
-                filter_desc = f", cluster_filter=active, clusters={sorted(_selected_ids)}"
+                clustering_key = ctx.clustering_widget.value
+                filter_line = (
+                    f"\n# cluster filter (clustering='{clustering_key}', "
+                    f"clusters={sorted(_selected_ids)})\n"
+                    f"# cells must be inside an ROI AND in the selected clusters\n"
+                    f"cluster_series = adata.obs[{clustering_key!r}]\n"
+                    f"clusters_aligned = cluster_series.reindex(adata.obs['cell_id'].values)\n"
+                    f"cluster_mask = np.isin(clusters_aligned.values, {sorted(_selected_ids)})\n"
+                )
             ctx.record_code(
                 f"\n# ROI differential expression\n"
+                f"import json, numpy as np\n"
+                f"from utils.adata_persistence import load_rois_from_sdata\n"
                 f"from utils.gene_analysis import compute_roi_deg\n"
-                f"# {n_regions} ROI regions, method={roi_deg_method_widget.value}{filter_desc}"
+                f"pixel_size = float(json.load(open(data_path / 'experiment.xenium'))['pixel_size'])\n"
+                f"centroids_yx = adata.obsm['spatial'][:, ::-1] / pixel_size  # µm→px, xy→yx\n"
+                f"roi_polygons = load_rois_from_sdata(sdata)  # Nx2 yx arrays\n"
+                f"{filter_line}"
+                f"roi_deg_df, roi_adata_norm = compute_roi_deg(\n"
+                f"    adata, centroids_yx, roi_polygons, pixel_size,\n"
+                f"    method={roi_deg_method_widget.value!r},\n"
+                f"    cluster_mask={'cluster_mask' if _use_filter else 'None'},\n"
+                f")"
             )
         if df.empty:
             roi_deg_text.setPlainText("No significant results or insufficient cells in ROIs.")
             roi_deg_status.value = "DEG: no results"
             roi_deg_export_button.enabled = False
+            roi_volcano_button.enabled = False
             return
         preview = df.head(50).to_string(index=False)
         roi_deg_text.setPlainText(preview)
         roi_deg_status.value = f"DEG complete: {len(df)} gene-group results"
         roi_deg_export_button.enabled = True
+        roi_volcano_button.enabled = adata_norm is not None
+        from utils.adata_persistence import save_roi_deg_to_sdata
+        save_roi_deg_to_sdata(ctx, df)
 
     def on_export_roi_deg():
         df = state.get("roi_deg_df")
@@ -278,8 +302,61 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"# roi_deg_results.csv -> \"{path}\""
         )
 
+    def on_roi_generate_volcanos():
+        adata_norm = state.get("roi_deg_adata_norm")
+        if adata_norm is None:
+            roi_deg_status.value = "Run ROI DEG first"
+            return
+        output_dir = QFileDialog.getExistingDirectory(None, "Select output directory for ROI volcano plots")
+        if not output_dir:
+            return
+        roi_volcano_button.enabled = False
+        roi_deg_status.value = "Generating ROI volcano plots..."
+        method = roi_deg_method_widget.value
+        gen = ctx.dataset_generation
+        ctx.record_code(
+            f"\n# Generate ROI pairwise volcano plots\n"
+            f"from utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
+            f"import itertools\n"
+            f"roi_volcano_dir = \"{output_dir}\"\n"
+            f"# Uses roi_adata_norm from DEG step, method=\"{method}\""
+        )
+
+        @thread_worker
+        def _run():
+            from pathlib import Path
+            import itertools as _it
+            from utils.gene_analysis import run_pairwise_deg, make_volcano_plot
+            import matplotlib.pyplot as _plt
+
+            out = Path(output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            groups = sorted(adata_norm.obs['roi_region'].cat.categories.tolist())
+            pairs = list(_it.combinations(groups, 2))
+            total = len(pairs)
+            for i, (a, b) in enumerate(pairs):
+                yield f"Volcano plot {i + 1}/{total}: {a} vs {b}"
+                df = run_pairwise_deg(adata_norm, 'roi_region', str(a), str(b), method=method)
+                fig = make_volcano_plot(df, str(a), str(b), lfc_thresh=1.0, pval_thresh=0.01)
+                safe_a = str(a).replace(' ', '_')
+                safe_b = str(b).replace(' ', '_')
+                fig.savefig(out / f'roi_volcano_{safe_a}_vs_{safe_b}.png', dpi=300)
+                _plt.close(fig)
+            return total, output_dir
+
+        worker = _run()
+        worker.yielded.connect(lambda msg: setattr(roi_deg_status, 'value', msg) if ctx.dataset_generation == gen else None)
+        worker.returned.connect(lambda result: _on_roi_volcanos_done(result) if ctx.dataset_generation == gen else None)
+        worker.start()
+
+    def _on_roi_volcanos_done(result):
+        count, out_dir = result
+        roi_volcano_button.enabled = True
+        roi_deg_status.value = f"{count} ROI volcano plot(s) saved to {out_dir}"
+
     roi_deg_button.clicked.connect(on_roi_deg)
     roi_deg_export_button.clicked.connect(on_export_roi_deg)
+    roi_volcano_button.clicked.connect(on_roi_generate_volcanos)
 
     # ── Layout ───────────────────────────────────────────────────────────
     roi_deg_header = QtLabel("── Differential Expression Between ROIs ──")
@@ -295,6 +372,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         roi_deg_button,
         roi_deg_text,
         roi_deg_export_button,
+        roi_volcano_button,
     )
 
     def _restore_session(session):

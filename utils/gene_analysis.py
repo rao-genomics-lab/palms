@@ -365,21 +365,22 @@ def compute_roi_deg(
     # Keep only cells inside at least one ROI
     mask = region_labels != ''
     if mask.sum() == 0:
-        return pd.DataFrame(columns=['group', 'names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj'])
+        return pd.DataFrame(columns=['group', 'names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj']), None
 
     subset = adata[mask].copy()
     subset.obs['roi_region'] = pd.Categorical(region_labels[mask])
 
     unique_regions = subset.obs['roi_region'].cat.categories
     if len(unique_regions) < 2:
-        return pd.DataFrame(columns=['group', 'names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj'])
+        return pd.DataFrame(columns=['group', 'names', 'scores', 'logfoldchanges', 'pvals', 'pvals_adj']), None
 
     # Normalize the subset
     sc.pp.normalize_total(subset, target_sum=1e4)
     sc.pp.log1p(subset)
 
-    sc.tl.rank_genes_groups(subset, 'roi_region', method=method, reference='rest')
-    return sc.get.rank_genes_groups_df(subset, group=None)
+    sc.tl.rank_genes_groups(subset, 'roi_region', method=method, reference='rest', key_added=method)
+    deg_df = sc.get.rank_genes_groups_df(subset, group=None)
+    return deg_df, subset
 
 
 def compute_arms_tile_deg(
@@ -474,51 +475,125 @@ def make_volcano_plot(
     group_b: str,
     lfc_thresh: float = 0.5,
     pval_thresh: float = 0.05,
-    n_label: int = 10,
+    n_label: int = 20,
 ) -> plt.Figure:
-    """Create a volcano plot from DEG results. Returns matplotlib Figure."""
-    lfc = df['logfoldchanges'].values.astype(float)
-    padj = df['pvals_adj'].values.astype(float)
+    """Create an EnhancedVolcano-style volcano plot from DEG results.
+
+    Genes passing both thresholds are coloured (red = up, blue = down);
+    all others are grey.  The x-axis is symmetric around zero.  Points
+    outside the auto-computed display range are shown as directional
+    triangle markers pinned to the axis edges.
+    """
+    try:
+        from adjustText import adjust_text
+        _has_adjusttext = True
+    except ImportError:
+        _has_adjusttext = False
+
+    import seaborn as sns
+
+    lfc   = df['logfoldchanges'].values.astype(float)
+    padj  = df['pvals_adj'].values.astype(float)
     names = df['names'].values
 
-    # Clip tiny p-values to avoid -log10(0)
     padj_clipped = np.clip(padj, 1e-300, 1.0)
-    neg_log10 = -np.log10(padj_clipped)
+    neg_log10    = -np.log10(padj_clipped)
 
-    # Classify genes
-    sig = padj < pval_thresh
-    up = sig & (lfc > lfc_thresh)
-    down = sig & (lfc < -lfc_thresh)
-    ns = ~(up | down)
+    # 3-category: only genes passing BOTH thresholds get colour
+    sig_p   = padj < pval_thresh
+    up_mask = sig_p & (lfc >  lfc_thresh)
+    dn_mask = sig_p & (lfc < -lfc_thresh)
+    ns_mask = ~(up_mask | dn_mask)
 
-    fig, ax = plt.subplots(figsize=(7, 5))
+    # Auto-compute symmetric display limits
+    finite_lfc = lfc[np.isfinite(lfc)]
+    finite_y   = neg_log10[np.isfinite(neg_log10)]
+    xlim_val = max(
+        float(np.nanpercentile(np.abs(finite_lfc), 99)) * 1.1 if len(finite_lfc) else lfc_thresh * 3,
+        lfc_thresh * 2.5,
+    )
+    ylim_val = max(
+        float(np.nanpercentile(finite_y, 99)) * 1.1 if len(finite_y) else 5.0,
+        -np.log10(pval_thresh) * 2.5,
+    )
 
-    ax.scatter(lfc[ns], neg_log10[ns], s=4, alpha=0.5, c='#aaaaaa', edgecolors='none', label='NS')
-    ax.scatter(lfc[up], neg_log10[up], s=4, alpha=0.5, c='#d62728', edgecolors='none', label='Up')
-    ax.scatter(lfc[down], neg_log10[down], s=4, alpha=0.5, c='#1f77b4', edgecolors='none', label='Down')
+    in_range = (
+        (np.abs(lfc) <= xlim_val) & (neg_log10 <= ylim_val)
+        & np.isfinite(lfc) & np.isfinite(neg_log10)
+    )
 
-    # Threshold lines
-    ax.axhline(-np.log10(pval_thresh), linestyle='--', color='gray', alpha=0.5)
-    ax.axvline(lfc_thresh, linestyle='--', color='gray', alpha=0.5)
-    ax.axvline(-lfc_thresh, linestyle='--', color='gray', alpha=0.5)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
 
-    # Label top significant genes
-    sig_mask = up | down
-    if sig_mask.any():
-        sig_idx = np.where(sig_mask)[0]
-        # Sort by padj (smallest first)
-        order = sig_idx[np.argsort(padj[sig_idx])]
-        for idx in order[:n_label]:
-            ax.annotate(
-                names[idx],
-                (lfc[idx], neg_log10[idx]),
-                fontsize=7, textcoords='offset points', xytext=(4, 4),
-            )
+    # ── In-range scatter ──────────────────────────────────────────────────
+    for mask, color, label in [
+        (ns_mask & in_range, '#B3B3B3', f'NS (n={ns_mask.sum()})'),
+        (up_mask & in_range, '#DC0000', f'Up-regulated (n={up_mask.sum()})'),
+        (dn_mask & in_range, '#4DBBD5', f'Down-regulated (n={dn_mask.sum()})'),
+    ]:
+        if mask.any():
+            ax.scatter(lfc[mask], neg_log10[mask], s=15, alpha=0.7, c=color,
+                       edgecolors='none', label=label, zorder=2, rasterized=True)
 
-    ax.set_xlabel('log2 fold change')
-    ax.set_ylabel('-log10(adjusted p-value)')
-    ax.set_title(f'{group_a} vs {group_b}')
-    ax.legend(markerscale=3, framealpha=0.8)
+    # ── Outlier triangle markers pinned to axis edges ─────────────────────
+    _edge_x = xlim_val * 0.97
+    _edge_y = ylim_val * 0.97
+    for mask, color in [
+        (ns_mask & ~in_range, '#B3B3B3'),
+        (up_mask & ~in_range, '#DC0000'),
+        (dn_mask & ~in_range, '#4DBBD5'),
+    ]:
+        if not mask.any():
+            continue
+        lfc_m   = lfc[mask]
+        neg_m   = np.clip(neg_log10[mask], 0, _edge_y)
+        right   = lfc_m >  xlim_val
+        left    = lfc_m < -xlim_val
+        top_only = (neg_log10[mask] > ylim_val) & ~right & ~left
+        if right.any():
+            ax.scatter(np.full(right.sum(), _edge_x), neg_m[right],
+                       marker='>', s=30, c=color, edgecolors='none', alpha=0.9, zorder=3)
+        if left.any():
+            ax.scatter(np.full(left.sum(), -_edge_x), neg_m[left],
+                       marker='<', s=30, c=color, edgecolors='none', alpha=0.9, zorder=3)
+        if top_only.any():
+            ox = np.clip(lfc_m[top_only], -_edge_x, _edge_x)
+            ax.scatter(ox, np.full(top_only.sum(), _edge_y),
+                       marker='^', s=30, c=color, edgecolors='none', alpha=0.9, zorder=3)
+
+    # ── Threshold dashed lines ────────────────────────────────────────────
+    ax.axhline(-np.log10(pval_thresh), linestyle='--', color='#333333', linewidth=0.8, alpha=0.8)
+    ax.axvline( lfc_thresh,            linestyle='--', color='#333333', linewidth=0.8, alpha=0.8)
+    ax.axvline(-lfc_thresh,            linestyle='--', color='#333333', linewidth=0.8, alpha=0.8)
+
+    # ── Gene labels (within display range, sorted by padj) ───────────────
+    sig_in_range = (up_mask | dn_mask) & in_range
+    texts = []
+    if sig_in_range.any():
+        idx = np.where(sig_in_range)[0]
+        for i in idx[np.argsort(padj[idx])][:n_label]:
+            texts.append(ax.text(lfc[i], neg_log10[i], names[i],
+                                 fontsize=8, ha='center', va='bottom'))
+    if texts and _has_adjusttext:
+        adjust_text(texts, ax=ax,
+                    arrowprops=dict(arrowstyle='-', color='#777777', lw=0.6),
+                    expand=(1.2, 1.5))
+
+    # ── Axes, title, theme ────────────────────────────────────────────────
+    ax.set_xlim(-xlim_val, xlim_val)
+    ax.set_ylim(0, ylim_val)
+    ax.set_xlabel(r'$\log_2$ fold change', fontsize=12)
+    ax.set_ylabel(r'$-\log_{10}$(adjusted p-value)', fontsize=12)
+    fig.suptitle(f'{group_a}  vs  {group_b}', fontsize=14, fontweight='bold')
+    ax.set_title(
+        f'$p_{{adj}}$ cutoff: {pval_thresh}   |   $|log_2FC|$ cutoff: {lfc_thresh}',
+        fontsize=9, color='#555555', pad=6,
+    )
+    sns.despine(ax=ax, top=True, right=True)
+    ax.tick_params(labelsize=10)
+    ax.legend(loc='upper right', markerscale=2, fontsize=9,
+              framealpha=0.8, edgecolor='#cccccc')
     fig.tight_layout()
     return fig
 
