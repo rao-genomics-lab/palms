@@ -409,6 +409,8 @@ def create_shared_helpers(ctx: ViewerContext):
             if "cluster_labels" not in state or not isinstance(state["cluster_labels"], dict):
                 state["cluster_labels"] = {}
             state["cluster_labels"][clustering_key] = new_labels
+            from utils.adata_persistence import save_cluster_labels_to_sdata
+            save_cluster_labels_to_sdata(ctx, clustering_key, new_labels)
             safe_key = clustering_key.replace(" ", "_").replace("-", "_")
             ctx.record_code(
                 f"\n# Cluster label mapping for '{clustering_key}'\n"

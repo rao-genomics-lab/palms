@@ -402,6 +402,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             if "cluster_labels" not in state:
                 state["cluster_labels"] = {}
             state["cluster_labels"][clust_key] = labels
+            from utils.adata_persistence import save_cluster_labels_to_sdata
+            save_cluster_labels_to_sdata(ctx, clust_key, labels)
 
             # Summary
             label_counts = {}
@@ -472,6 +474,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             if "cluster_labels" not in state:
                 state["cluster_labels"] = {}
             state["cluster_labels"][clustering_key] = labels
+            from utils.adata_persistence import save_cluster_labels_to_sdata
+            save_cluster_labels_to_sdata(ctx, clustering_key, labels)
 
             label_counts = {}
             for lbl in labels.values():
@@ -649,6 +653,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             if "cluster_labels" not in state:
                 state["cluster_labels"] = {}
             state["cluster_labels"][clust_key] = labels
+            from utils.adata_persistence import save_cluster_labels_to_sdata
+            save_cluster_labels_to_sdata(ctx, clust_key, labels)
 
             # Summary
             label_counts = {}
@@ -747,7 +753,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     def _restore_session(session):
         # Check state first (populated from adata.uns at startup), fall back to session
-        rg = state.get("rank_genes_df") or session.get("rank_genes_df")
+        rg = state.get("rank_genes_df") if state.get("rank_genes_df") is not None else session.get("rank_genes_df")
         if rg is not None:
             state["rank_genes_df"] = rg
             rg_norm = state.get("rank_genes_adata_norm") or session.get("rank_genes_adata_norm")

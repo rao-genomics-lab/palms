@@ -326,6 +326,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         register_button.enabled = False
         save_lm_button.enabled = False
         save_affine_button.enabled = False
+        from utils.adata_persistence import save_landmarks_to_sdata
+        save_landmarks_to_sdata(ctx, 'he_xenium_landmarks', None)
+        save_landmarks_to_sdata(ctx, 'he_he_landmarks', None)
 
     def on_register():
         xen_pts = he_state["xenium_lm_layer"].data
@@ -357,6 +360,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"he_affine, he_residuals = compute_landmark_affine(he_xen_pts, he_he_pts)"
         )
         _save_he_affine_to_sdata()
+        from utils.adata_persistence import save_landmarks_to_sdata
+        save_landmarks_to_sdata(ctx, 'he_xenium_landmarks', np.asarray(xen_pts))
+        save_landmarks_to_sdata(ctx, 'he_he_landmarks', np.asarray(he_pts))
         save_affine_button.enabled = True
 
     def on_save_landmarks():
