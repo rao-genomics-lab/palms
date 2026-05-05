@@ -10,6 +10,10 @@ The user selects the resulting `custom_segmentation.h5ad` file; the companion
 `custom_labels.zarr` is found automatically from the metadata JSON in the same
 directory.  All downstream analysis (coloring, ROI, clustering, spatial) then
 operates on the custom cells.
+
+Once loaded, the custom segmentation is cached inside the SpatialData zarr store
+(sdata.labels["custom_cell_labels"] + sdata.tables["custom_table"]) so it can
+be restored automatically on the next launch without selecting the h5ad again.
 """
 
 from __future__ import annotations
@@ -35,7 +39,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     status = StatusProxy(ctx.viewer)
 
     # ── Status display ────────────────────────────────────────────────────────
-    active_label = QLabel(f"Active segmentation: Xenium (native)")
+    active_label = QLabel("Active segmentation: Xenium (native)")
     active_label.setWordWrap(True)
 
     info_label = QLabel(
@@ -49,10 +53,52 @@ def build_tab(ctx: ViewerContext) -> tuple:
     # ── Buttons ───────────────────────────────────────────────────────────────
     load_btn = PushButton(label="Load Custom Segmentation...", enabled=True)
     revert_btn = PushButton(label="Revert to Xenium Segmentation", enabled=False)
+    update_sdata_btn = PushButton(label="Update SpatialData on disk", enabled=True)
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _on_load():
+        from utils.adata_persistence import (
+            load_custom_seg_from_sdata,
+            CUSTOM_LABELS_KEY,
+            CUSTOM_TABLE_KEY,
+        )
+
+        # Pre-check: if custom seg is already cached in sdata, offer to load it
+        if (
+            ctx.sdata is not None
+            and CUSTOM_LABELS_KEY in ctx.sdata.labels
+            and CUSTOM_TABLE_KEY in ctx.sdata.tables
+        ):
+            from qtpy.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                None,
+                "Cached segmentation available",
+                "A custom segmentation is cached in SpatialData.\n"
+                "Load from cache (fast) or select a new h5ad file?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                adata, scales = load_custom_seg_from_sdata(ctx.sdata)
+                if adata is not None:
+                    try:
+                        _apply_custom_segmentation(ctx, adata, scales)
+                        active_label.setText(
+                            f"Active segmentation: Custom (from cache)\n"
+                            f"  {adata.n_obs:,} cells × {adata.n_vars} genes"
+                        )
+                        revert_btn.enabled = True
+                        status.value = (
+                            f"Custom segmentation loaded from cache: {adata.n_obs:,} cells"
+                        )
+                    except Exception as exc:
+                        status.value = f"ERROR loading from cache: {exc}"
+                        import traceback
+                        traceback.print_exc()
+                    return
+                # Cache load failed — fall through to file dialog
+
         h5ad_path_str, _ = QFileDialog.getOpenFileName(
             None,
             "Select custom_segmentation.h5ad",
@@ -100,21 +146,51 @@ def build_tab(ctx: ViewerContext) -> tuple:
         @thread_worker
         def _run():
             import anndata
+            import zarr
             new_adata = anndata.read_h5ad(str(h5ad_path))
-            return new_adata, zarr_path
+            z = zarr.open(str(zarr_path), mode="r")
+            scale_keys = sorted(
+                [k for k in z.keys() if k.isdigit()],
+                key=lambda s: int(s),
+            )
+            if not scale_keys:
+                raise RuntimeError(f"No numeric scale keys found in {zarr_path}")
+            scales = [np.asarray(z[k]) for k in scale_keys]
+            return new_adata, scales
 
         def _on_done(result):
-            new_adata, zarr_path = result
+            new_adata, scales = result
             try:
-                _apply_custom_segmentation(ctx, new_adata, zarr_path)
+                _apply_custom_segmentation(ctx, new_adata, scales)
                 active_label.setText(
                     f"Active segmentation: Custom ({h5ad_path.name})\n"
                     f"  {new_adata.n_obs:,} cells × {new_adata.n_vars} genes"
                 )
                 revert_btn.enabled = True
-                status.value = (
-                    f"Custom segmentation loaded: {new_adata.n_obs:,} cells"
-                )
+                status.value = "Caching custom segmentation to SpatialData..."
+
+                # Asynchronously cache to sdata
+                from utils.adata_persistence import save_custom_seg_to_sdata
+
+                @thread_worker
+                def _save():
+                    save_custom_seg_to_sdata(ctx, new_adata, scales)
+
+                def _save_done(_):
+                    status.value = (
+                        f"Custom segmentation loaded and cached: {new_adata.n_obs:,} cells"
+                    )
+
+                def _save_error(exc_info):
+                    status.value = f"Custom segmentation loaded (cache failed: {exc_info[1]})"
+                    print(f"Warning: async sdata save failed: {exc_info[1]}")
+
+                save_worker = _save()
+                save_worker.returned.connect(_save_done)
+                save_worker.errored.connect(_save_error)
+                ctx.state["_active_save_worker"] = save_worker  # prevent GC
+                save_worker.start()
+
             except Exception as exc:
                 status.value = f"ERROR swapping segmentation: {exc}"
                 import traceback
@@ -141,13 +217,60 @@ def build_tab(ctx: ViewerContext) -> tuple:
         finally:
             load_btn.enabled = True
 
+    def _on_update_sdata():
+        update_sdata_btn.enabled = False
+        status.value = "Saving to SpatialData..."
+
+        @thread_worker
+        def _run():
+            if ctx.segmentation_source == "custom":
+                from utils.adata_persistence import save_custom_seg_to_sdata
+                scales = list(ctx.cell_labels_layer.data)
+                save_custom_seg_to_sdata(ctx, ctx.adata, scales)
+            else:
+                from utils.adata_persistence import _persist_table
+                _persist_table(ctx)
+
+        def _done(_):
+            update_sdata_btn.enabled = True
+            status.value = "SpatialData updated on disk."
+
+        def _error(exc_info):
+            update_sdata_btn.enabled = True
+            status.value = f"ERROR updating SpatialData: {exc_info[1]}"
+
+        w = _run()
+        w.returned.connect(_done)
+        w.errored.connect(_error)
+        w.start()
+
     # ── Connect ───────────────────────────────────────────────────────────────
     load_btn.changed.connect(_on_load)
     revert_btn.changed.connect(_on_revert)
+    update_sdata_btn.changed.connect(_on_update_sdata)
 
     # ── Session restore ────────────────────────────────────────────────────────
     def _restore_session(session):
-        pass
+        if session.get("segmentation_source") != "custom":
+            return
+        from utils.adata_persistence import load_custom_seg_from_sdata
+        adata, scales = load_custom_seg_from_sdata(ctx.sdata)
+        if adata is None:
+            active_label.setText(
+                "Active segmentation: Custom (cache not found — please reload)"
+            )
+            return
+        try:
+            _apply_custom_segmentation(ctx, adata, scales)
+            active_label.setText(
+                f"Active segmentation: Custom (restored from cache)\n"
+                f"  {adata.n_obs:,} cells × {adata.n_vars} genes"
+            )
+            revert_btn.enabled = True
+        except Exception as exc:
+            active_label.setText(f"Active segmentation: Restore failed — {exc}")
+            import traceback
+            traceback.print_exc()
 
     # ── Layout ────────────────────────────────────────────────────────────────
     container = QWidget()
@@ -157,6 +280,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     layout.addWidget(info_label)
     layout.addWidget(load_btn.native)
     layout.addWidget(revert_btn.native)
+    layout.addWidget(update_sdata_btn.native)
     layout.addStretch()
     container.setLayout(layout)
 
@@ -188,22 +312,13 @@ def _build_label_to_obs(adata) -> np.ndarray:
     return lto
 
 
-def _apply_custom_segmentation(ctx: ViewerContext, new_adata, zarr_path: Path):
-    """Replace the cell labels layer and all derived state with custom data."""
-    import zarr
+def _apply_custom_segmentation(ctx: ViewerContext, new_adata, scales: list):
+    """Replace the cell labels layer and all derived state with custom data.
+
+    scales: list of arrays (highest→lowest resolution), either numpy arrays
+    (from source zarr) or dask arrays (from sdata DataTree on restore).
+    """
     from utils.coloring import CellColorManager
-
-    # ── Load zarr label raster ────────────────────────────────────────────────
-    z = zarr.open(str(zarr_path), mode="r")
-    # Custom zarr keys are '0','1','2','3' (simple numeric pyramid)
-    scale_keys = sorted(
-        [k for k in z.keys() if k.isdigit()],
-        key=lambda s: int(s),
-    )
-    if not scale_keys:
-        raise RuntimeError(f"No numeric scale keys found in {zarr_path}")
-
-    scales = [np.asarray(z[k]) for k in scale_keys]
 
     # ── Replace labels layer in napari viewer ─────────────────────────────────
     old_layer = ctx.cell_labels_layer
@@ -231,6 +346,7 @@ def _apply_custom_segmentation(ctx: ViewerContext, new_adata, zarr_path: Path):
     ctx.color_manager = new_cm
     ctx.centroids_yx = new_centroids_yx
     ctx.segmentation_source = "custom"
+    ctx.state["segmentation_source"] = "custom"
 
     # ── Reload clusterings from new adata ─────────────────────────────────────
     from utils.adata_persistence import load_custom_clusterings_from_adata
@@ -243,7 +359,7 @@ def _apply_custom_segmentation(ctx: ViewerContext, new_adata, zarr_path: Path):
         new_adata.obs["cell_id"].values if "cell_id" in new_adata.obs.columns else None
     )
     for col in new_adata.obs.columns:
-        if col in ("cell_id",):
+        if col in ("cell_id", "region"):
             continue
         s = new_adata.obs[col]
         if s.dtype.kind in ("O", "U") or isinstance(s.dtype, pd.CategoricalDtype):
@@ -336,6 +452,7 @@ def _revert_xenium_segmentation(ctx: ViewerContext):
     ctx.color_manager = new_cm
     ctx.centroids_yx = new_centroids_yx
     ctx.segmentation_source = "xenium"
+    ctx.state["segmentation_source"] = "xenium"
 
     # ── Reload original clusterings ───────────────────────────────────────────
     from utils.adata_persistence import load_custom_clusterings_from_adata
