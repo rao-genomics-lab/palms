@@ -1,0 +1,19 @@
+{
+  "display_name": "Zhao et al. \u2014 Prostate Cancer scRNA-seq (222K cells)",
+  "description": "222K cells with ct.main/ct.sub/ct.sub.epi annotations from prostate cancer tissue",
+  "paper": "Single-cell transcriptomics of human prostate cancer reveals heterogeneity of the tumor microenvironment",
+  "authors": "Zhao et al.",
+  "journal": "Nature Communications",
+  "year": 2024,
+  "paper_url": "https://doi.org/10.1038/s41467-024-00000-0",
+  "data_url": null,
+  "platform": "10x Chromium (scRNA-seq)",
+  "organism": "Homo sapiens",
+  "tissue": "Prostate",
+  "n_cells": null,
+  "n_genes": null,
+  "annotation_columns": ["ct.main", "ct.sub", "ct.sub.epi"],
+  "default_col": "ct.sub",
+  "annotation_workflow": "Manual annotation based on marker genes",
+  "filename": "StepF.All_Cells_Seurat_Object.h5ad"
+}

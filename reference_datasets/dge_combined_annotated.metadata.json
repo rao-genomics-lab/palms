@@ -1,0 +1,19 @@
+{
+  "display_name": "eBioMedicine \u2014 Prostate scRNA-seq (21K cells)",
+  "description": "21K cells with ID/ID_coarse/refinedID annotations from prostate tissue",
+  "paper": "Single-cell RNA sequencing of prostate tissue",
+  "authors": "eBioMedicine authors",
+  "journal": "eBioMedicine",
+  "year": 2023,
+  "paper_url": null,
+  "data_url": null,
+  "platform": "10x Chromium (scRNA-seq)",
+  "organism": "Homo sapiens",
+  "tissue": "Prostate",
+  "n_cells": null,
+  "n_genes": null,
+  "annotation_columns": ["ID", "ID_coarse", "refinedID"],
+  "default_col": "refinedID",
+  "annotation_workflow": "Manual annotation based on marker genes",
+  "filename": "dge_combined_annotated.h5ad"
+}

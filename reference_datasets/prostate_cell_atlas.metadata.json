@@ -1,0 +1,21 @@
+{
+  "display_name": "Prostate Cell Atlas \u2014 Clatworthy/Tuong 2021",
+  "description": "14 cell types from 17 prostate tissue samples",
+  "paper": "Resolving the immune landscape of human prostate at a single-cell level in health and cancer",
+  "authors": "Tuong / Clatworthy et al.",
+  "journal": "Cell Reports",
+  "year": 2021,
+  "paper_url": "https://doi.org/10.1016/j.celrep.2021.110132",
+  "data_url": "https://cellgeni.cog.sanger.ac.uk/prostatecellatlas/prostate_portal_300921.h5ad",
+  "platform": "10x Chromium (scRNA-seq)",
+  "organism": "Homo sapiens",
+  "tissue": "Prostate",
+  "n_cells": 17108,
+  "n_genes": 33538,
+  "annotation_columns": [
+    "cell_type"
+  ],
+  "default_col": "cell_type",
+  "annotation_workflow": "Manual annotation based on marker genes + reference mapping",
+  "filename": "prostate_cell_atlas.h5ad"
+}
