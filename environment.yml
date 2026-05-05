@@ -1,0 +1,66 @@
+name: xenium_viewer
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+
+  # Core scientific stack — install via conda for binary compatibility
+  - numpy>=1.26
+  - pandas>=2.0
+  - pyarrow>=15
+  - scipy
+  - scikit-learn
+  - scikit-image
+  - matplotlib
+  - colorcet
+  - pillow
+  - xarray
+
+  # Spatial / single-cell
+  - anndata>=0.12
+  - scanpy>=1.12
+  - squidpy>=1.8
+  - spatialdata>=0.7
+  - dask>=2024.0
+  - dask-image
+  - zarr>=3.0
+  - tifffile
+  - shapely>=2
+  - umap-learn
+  - python-igraph
+  - networkx
+
+  # GUI / Qt stack
+  - napari
+  - pyqt=5
+  - qtpy
+  - magicgui
+  - superqt
+
+  # Image processing
+  - py-opencv
+
+  # Pip + pypi-only deps + the package itself
+  - pip
+  - pip:
+      # pypi-only runtime deps
+      - spatialdata-io>=0.6
+      - adjustText
+      - omnipath
+      # the package itself, editable
+      - -e .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Quick start:
+#     conda env create -f environment.yml
+#     conda activate xenium_viewer
+#     xenium-viewer /path/to/xenium/output
+#
+# Optional extras (install on top of the above env):
+#     pip install -e ".[celltypist]"   # CellTypist label transfer
+#     pip install -e ".[r]"            # rpy2-based reference fetcher (needs system R)
+#     pip install -e ".[gpu]"          # torch / torch-geometric / xgboost
+#     pip install -e ".[references]"   # rasterio + readfcs
+#     pip install -e ".[full]"         # all of the above
+# ─────────────────────────────────────────────────────────────────────────────

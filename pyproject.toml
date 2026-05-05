@@ -1,0 +1,90 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xenium-viewer"
+version = "0.1.0"
+description = "napari-based spatial transcriptomics viewer for Xenium 3.x output (Linux equivalent of Xenium Explorer)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Srinivasa Rao Rao" }]
+keywords = ["xenium", "spatial-transcriptomics", "napari", "single-cell", "10x"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = [
+    "napari>=0.5",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "pyarrow>=15",
+    "scanpy>=1.12",
+    "squidpy>=1.8",
+    "anndata>=0.12",
+    "spatialdata>=0.7",
+    "spatialdata-io>=0.6",
+    "zarr>=3.0",
+    "dask>=2024.0",
+    "dask-image",
+    "tifffile",
+    "scikit-image",
+    "opencv-python",
+    "shapely>=2",
+    "qtpy",
+    "PyQt5",
+    "magicgui",
+    "superqt",
+    "matplotlib",
+    "colorcet",
+    "adjustText",
+    "scipy",
+    "scikit-learn",
+    "umap-learn",
+    "networkx",
+    "igraph",
+    "pillow",
+    "xarray",
+    "omnipath",
+]
+
+[project.optional-dependencies]
+celltypist = ["celltypist"]
+r = ["rpy2", "anndata2ri"]
+gpu = ["torch", "torch-geometric", "pytorch-lightning", "xgboost"]
+references = ["readfcs", "rasterio"]
+full = ["xenium-viewer[celltypist,r,gpu,references]"]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+xenium-viewer = "xenium_viewer.app:main"
+xenium-preprocess = "xenium_viewer.preprocess:main"
+xenium-fetch-references = "xenium_viewer.scripts.fetch_reference_datasets:main"
+xenium-build-custom-segmentation = "xenium_viewer.scripts.build_custom_segmentation:main"
+
+[project.urls]
+Homepage = "https://github.com/sraorao/xenium_viewer"
+Repository = "https://github.com/sraorao/xenium_viewer"
+Issues = "https://github.com/sraorao/xenium_viewer/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/xenium_viewer"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/xenium_viewer",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "environment.yml",
+]
