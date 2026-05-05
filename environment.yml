@@ -29,6 +29,7 @@ dependencies:
   - shapely>=2
   - umap-learn
   - python-igraph
+  - leidenalg
   - networkx
 
   # GUI / Qt stack

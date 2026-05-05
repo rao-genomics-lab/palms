@@ -53,6 +53,7 @@ dependencies = [
     "umap-learn",
     "networkx",
     "igraph",
+    "leidenalg",
     "pillow",
     "xarray",
     "omnipath",
