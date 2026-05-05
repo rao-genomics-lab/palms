@@ -611,16 +611,60 @@ def build_tab(ctx: ViewerContext) -> tuple:
             cluster_mask = ctx.make_cluster_mask(clusters_aligned.values, selected_ids)
 
         selected_clusters = sorted(cid for cid, cb in arms_state["cluster_checkboxes"].items() if cb.isChecked()) if arms_state["cluster_checkboxes"] else "all"
-        _filter_desc = ""
+
+        # Build code snippet for recorder
+        _fine = arms_state.get("affine_3x3")
+        _flip_v = arms_flip_v.value
+        _flip_h = arms_flip_h.value
+        _shape = arms_state.get("he_shape_yx")  # (h, w) or None
+        _fine_repr = f"np.array({np.asarray(_fine, dtype=np.float64).tolist()!r})" if _fine is not None else "np.eye(3)"
+        _shape_repr = f"({int(_shape[0])}, {int(_shape[1])})" if _shape else "(0, 0)"
+        _sel_clusters_repr = repr(list(selected_clusters)) if selected_clusters != "all" else repr([])
+
+        _xenium_filter_line = ""
         if arms_deg_filter_check.value:
-            _filter_desc = f", xenium_cluster_filter=active, clusters={sorted(selected_ids)}"
+            _ck = clustering_key
+            _si = sorted(selected_ids)
+            _xenium_filter_line = (
+                f"# Xenium cluster filter (clustering={_ck!r}, clusters={_si})\n"
+                f"cluster_series = adata.obs[{_ck!r}]\n"
+                f"clusters_aligned = cluster_series.reindex(adata.obs['cell_id'].values)\n"
+                f"cluster_mask = np.isin(clusters_aligned.values, {_si})\n"
+            )
+
         ctx.record_code(
             f"\n# ARMS Tile DEG analysis\n"
+            f"import json, numpy as np\n"
+            f"from utils.adata_persistence import load_arms_tiles_from_sdata\n"
             f"from utils.gene_analysis import compute_arms_tile_deg\n"
-            f"# method={method}, selected_clusters={selected_clusters}{_filter_desc}\n"
+            f"pixel_size = float(json.load(open(data_path / 'experiment.xenium'))['pixel_size'])\n"
+            f"centroids_yx = adata.obsm['spatial'][:, ::-1] / pixel_size  # µm→px, xy→yx\n"
+            f"arms_polys_yx, arms_tile_names, arms_cluster_ids = load_arms_tiles_from_sdata(sdata)\n"
+            f"# Apply ARMS registration affine (fine @ flip)\n"
+            f"h, w = {_shape_repr}\n"
+            f"M = np.eye(3)\n"
+            f"if {_flip_v}:  # flip_v\n"
+            f"    M = np.array([[-1, 0, h-1], [0, 1, 0], [0, 0, 1]], dtype=float) @ M\n"
+            f"if {_flip_h}:  # flip_h\n"
+            f"    M = np.array([[1, 0, 0], [0, -1, w-1], [0, 0, 1]], dtype=float) @ M\n"
+            f"affine_3x3 = {_fine_repr}\n"
+            f"combined = affine_3x3 @ M\n"
+            f"transformed_polys = []\n"
+            f"for poly_yx in arms_polys_yx:\n"
+            f"    ones = np.ones((len(poly_yx), 1))\n"
+            f"    transformed_polys.append((combined @ np.hstack([poly_yx, ones]).T).T[:, :2])\n"
+            f"# Select tile clusters: {list(selected_clusters) if selected_clusters != 'all' else 'all'}\n"
+            f"_sel = {_sel_clusters_repr}\n"
+            f"if _sel:\n"
+            f"    _keep = np.isin(arms_cluster_ids, _sel)\n"
+            f"    transformed_polys = [transformed_polys[i] for i in range(len(transformed_polys)) if _keep[i]]\n"
+            f"    arms_cluster_ids = arms_cluster_ids[_keep]\n"
+            f"{_xenium_filter_line}"
             f"arms_deg_df, arms_summary, arms_adata_norm = compute_arms_tile_deg(\n"
-            f"    adata, centroids_yx, transformed_polys, cluster_ids,\n"
-            f"    method=\"{method}\")"
+            f"    adata, centroids_yx, transformed_polys, arms_cluster_ids,\n"
+            f"    method={method!r},\n"
+            f"    cluster_mask={'cluster_mask' if arms_deg_filter_check.value else 'None'},\n"
+            f")"
         )
 
         @thread_worker
@@ -655,6 +699,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_status_label.value = f"ARMS DEG complete: {len(deg_df)} gene-group results"
         arms_deg_export_button.enabled = True
         arms_volcano_button.enabled = True
+        from utils.adata_persistence import save_arms_tile_deg_to_sdata
+        save_arms_tile_deg_to_sdata(ctx, deg_df)
 
     def on_export_arms_deg():
         df = state.get("arms_tile_deg_df")

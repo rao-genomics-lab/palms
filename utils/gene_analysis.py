@@ -448,8 +448,8 @@ def compute_arms_tile_deg(
     sc.pp.normalize_total(subset, target_sum=1e4)
     sc.pp.log1p(subset)
 
-    sc.tl.rank_genes_groups(subset, 'arms_cluster', method=method, reference='rest')
-    deg_df = sc.get.rank_genes_groups_df(subset, group=None)
+    sc.tl.rank_genes_groups(subset, 'arms_cluster', method=method, reference='rest', key_added=method)
+    deg_df = sc.get.rank_genes_groups_df(subset, group=None, key=method)
     return (deg_df, summary, subset)
 
 

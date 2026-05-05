@@ -142,13 +142,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
     density_status = QLabel("")
 
     def _compute_density_worker(gene, bin_size_um, filter_data, normalise):
-        pts = ctx.transcript_loader.get_points_array(gene)  # (N, 2) [y, x] pixels
+        df = ctx.transcript_loader.load_gene(gene)  # full DataFrame, incl. cell_id if cached
         H, W = ctx.morph_full_shape_yx
         bin_px = bin_size_um / ctx.pixel_size
         n_bins_y = max(1, int(H / bin_px))
         n_bins_x = max(1, int(W / bin_px))
 
+        # Convert microns → pixels, (y, x) order for napari
+        pts_y = df["y_location"].values.astype(np.float32) / ctx.pixel_size
+        pts_x = df["x_location"].values.astype(np.float32) / ctx.pixel_size
+
         active_centroids = None
+        needs_cache_rebuild = False
+
         if filter_data is not None:
             label_to_cluster, selected_ids = filter_data
             if selected_ids:
@@ -157,15 +163,29 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 selected_labels = all_labels[np.isin(label_to_cluster, list(selected_set))]
                 obs_indices = ctx.label_to_obs[selected_labels]
                 valid = obs_indices >= 0
-                active_centroids = ctx.centroids_yx[obs_indices[valid]]  # (K, 2) [y, x]
-                cy_bin = np.clip((active_centroids[:, 0] / bin_px).astype(int), 0, n_bins_y - 1)
-                cx_bin = np.clip((active_centroids[:, 1] / bin_px).astype(int), 0, n_bins_x - 1)
-                coverage = np.zeros((n_bins_y, n_bins_x), dtype=bool)
-                coverage[cy_bin, cx_bin] = True
-                ty_bin = np.clip((pts[:, 0] / bin_px).astype(int), 0, n_bins_y - 1)
-                tx_bin = np.clip((pts[:, 1] / bin_px).astype(int), 0, n_bins_x - 1)
-                mask = coverage[ty_bin, tx_bin]
-                pts = pts[mask]
+                selected_obs = obs_indices[valid]
+                active_centroids = ctx.centroids_yx[selected_obs]  # (K, 2) [y, x]
+
+                if "cell_id" in df.columns and "cell_id" in ctx.adata.obs.columns:
+                    # Cell-level filter: keep only transcripts belonging to selected-cluster cells
+                    valid_cell_ids = set(ctx.adata.obs["cell_id"].values[selected_obs].tolist())
+                    mask = np.isin(df["cell_id"].values, list(valid_cell_ids))
+                    pts_y = pts_y[mask]
+                    pts_x = pts_x[mask]
+                else:
+                    # Fallback: bin-level filter (old behaviour). Feather cache needs rebuild.
+                    needs_cache_rebuild = True
+                    cy_bin = np.clip((active_centroids[:, 0] / bin_px).astype(int), 0, n_bins_y - 1)
+                    cx_bin = np.clip((active_centroids[:, 1] / bin_px).astype(int), 0, n_bins_x - 1)
+                    coverage = np.zeros((n_bins_y, n_bins_x), dtype=bool)
+                    coverage[cy_bin, cx_bin] = True
+                    ty_bin = np.clip((pts_y / bin_px).astype(int), 0, n_bins_y - 1)
+                    tx_bin = np.clip((pts_x / bin_px).astype(int), 0, n_bins_x - 1)
+                    in_coverage = coverage[ty_bin, tx_bin]
+                    pts_y = pts_y[in_coverage]
+                    pts_x = pts_x[in_coverage]
+
+        pts = np.column_stack([pts_y, pts_x]) if len(pts_y) > 0 else np.empty((0, 2), dtype=np.float32)
 
         hist, _, _ = np.histogram2d(
             pts[:, 0], pts[:, 1],
@@ -182,10 +202,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             )
             hist = np.where(cell_count > 0, hist / cell_count, 0).astype(np.float32)
 
-        return hist.astype(np.float32), bin_px, normalise, gene, bin_size_um, filter_data is not None
+        return hist.astype(np.float32), bin_px, normalise, gene, bin_size_um, \
+               filter_data is not None, needs_cache_rebuild
 
     def _on_density_ready(result):
-        hist, bin_px, normalised, _gene, _bin_um, _had_filter = result
+        hist, bin_px, normalised, _gene, _bin_um, _had_filter, _needs_rebuild = result
         ctx.transcript_bins_layer.data = hist
         ctx.transcript_bins_layer.scale = [bin_px, bin_px]
         nonzero = hist[hist > 0]
@@ -198,6 +219,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             density_status.setText(f"Done — {int(hist[hist > 0].size):,} non-zero bins, normalised by cells")
         else:
             density_status.setText(f"Done — {int(hist.sum()):,} transcripts binned")
+        if _needs_rebuild:
+            density_status.setText(
+                density_status.text() +
+                " [WARNING: rebuild transcript cache for cell-level filtering]"
+            )
         ctx.record_code(
             f"\n# Transcript density heatmap\n"
             f"# gene={_gene}, bin_size={_bin_um}\u00b5m, normalise_by_cells={normalised}"

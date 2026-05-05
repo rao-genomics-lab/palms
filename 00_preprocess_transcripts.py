@@ -31,7 +31,7 @@ CACHE_DIR = DATA_PATH / "transcript_cache"
 # Columns to keep in the feather files
 # Xenium 3.x uses "feature_name" for the gene name column
 GENE_COL = "feature_name"
-KEEP_COLS = ["x_location", "y_location", "qv", GENE_COL]
+KEEP_COLS = ["x_location", "y_location", "qv", GENE_COL, "cell_id"]
 
 # Minimum quality value threshold
 MIN_QV = 20
