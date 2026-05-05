@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased] — 2026-04-18
+
+### Changed
+- **External Images tab: single composite layer** — multichannel images (e.g. 25-channel PhenoCycler)
+  now display as a single RGB composite napari layer instead of one layer per channel. Per-channel
+  visibility checkboxes, color buttons, and contrast range sliders are in the tab widget.
+  Composite is built lazily via dask so large images render efficiently.
+- **External Images tab: landmark registration** — external images can now be independently aligned
+  to the Xenium image via landmark-based registration (same `compute_landmark_affine` as H&E tab).
+  Includes flip V/H checkboxes. The "Apply transform from" dropdown remains as an alternative.
+  Landmarks are persisted to sdata.shapes; affine to sdata transformations.
+
 ## [Unreleased] — 2026-04-17
 
 ### Fixed

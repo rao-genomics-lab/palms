@@ -1090,19 +1090,28 @@ def save_external_image_to_sdata(
     try:
         from spatialdata.models import Image2DModel
 
+        # Remove existing element if possible (may fail if backed by active files)
         if element_name in ctx.sdata:
-            ctx.sdata.delete_element_from_disk(element_name)
+            try:
+                del ctx.sdata[element_name]
+            except Exception:
+                pass
+
+        import dask.array as da
 
         base = pyramid[0]
+        # Wrap via map_blocks to detach from ZarrTiffStore backing.
+        # ZarrTiffStore (tifffile) lacks the .root attribute that zarr v3 /
+        # spatialdata expects; map_blocks creates a new graph without exposing
+        # the store to spatialdata's introspection.
+        if hasattr(base, "dask"):
+            base = da.map_blocks(lambda x: x, base, dtype=base.dtype)
         # Build axes string — Image2DModel wants ('c', 'y', 'x') or ('y', 'x', 'c').
         if channel_axis is None:
-            # Single-channel — add leading channel dim.
             base = base[None, ...]
             dims = ("c", "y", "x")
         else:
-            # Move channel axis to leading position for canonical (c, y, x).
             if channel_axis != 0:
-                import dask.array as da
                 base = da.moveaxis(base, channel_axis, 0)
             dims = ("c", "y", "x")
 
@@ -1113,8 +1122,14 @@ def save_external_image_to_sdata(
             base, dims=dims, scale_factors=scale_factors,
             c_coords=list(channel_names) if channel_names else None,
         )
+        # Remove in-memory ref to avoid conflicts, then write with overwrite
+        if element_name in ctx.sdata:
+            try:
+                del ctx.sdata[element_name]
+            except Exception:
+                pass
         ctx.sdata[element_name] = parsed
-        ctx.sdata.write_element(element_name)
+        ctx.sdata.write_element(element_name, overwrite=True)
     except Exception as e:
         print(f"Warning: could not save external image {element_name} to sdata: {e}")
 

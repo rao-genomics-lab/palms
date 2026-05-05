@@ -733,20 +733,37 @@ def _snapshot_layers(ctx: ViewerContext) -> dict:
     ext_ui = []
     for entry in (ctx.external_images_state or []):
         affine_matrix = None
-        refs = entry.get("sub_layer_refs") or []
-        if refs:
+        lyr = entry.get("layer_ref")
+        if lyr is not None:
             try:
-                m = np.asarray(refs[0].affine.affine_matrix, dtype=np.float64)
+                m = np.asarray(lyr.affine.affine_matrix, dtype=np.float64)
                 if not np.allclose(m, np.eye(m.shape[0]), atol=1e-6):
                     affine_matrix = m.tolist()
             except Exception:
                 pass
+        # Serialize channel states (strip non-JSON-safe types)
+        ch_states = None
+        raw_ch = entry.get("channel_states")
+        if raw_ch:
+            ch_states = [
+                {
+                    "visible": bool(cs.get("visible", True)),
+                    "color": [float(c) for c in cs["color"][:3]],
+                    "clim": [float(cs["clim"][0]), float(cs["clim"][1])],
+                    "data_min": float(cs.get("data_min", 0)),
+                    "data_max": float(cs.get("data_max", 65535)),
+                }
+                for cs in raw_ch
+            ]
         ext_ui.append({
             "element_name": entry.get("element_name"),
             "path": entry.get("path"),
             "affine_source_name": entry.get("affine_source_name"),
             "affine_matrix": affine_matrix,
             "opacity": float(entry.get("opacity", 1.0)),
+            "channel_states": ch_states,
+            "flip_v": bool(entry.get("flip_v", False)),
+            "flip_h": bool(entry.get("flip_h", False)),
         })
     snapshot["external_images_ui"] = ext_ui
 
