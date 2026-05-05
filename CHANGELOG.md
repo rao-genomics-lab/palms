@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased] — 2026-05-05
+
+### Changed
+- **Installable Python package** — the repo is now packaged with `pyproject.toml`
+  (hatchling build backend) and shipped under `src/xenium_viewer/`. The three
+  numbered entry-point scripts have been renamed:
+  `00_preprocess_transcripts.py` → `xenium_viewer/preprocess.py`,
+  `01_load_sdata.py` → `xenium_viewer/loader.py`,
+  `02_xenium_viewer.py` → `xenium_viewer/app.py`. Cross-imports were rewritten
+  from `from utils.X` / `from tabs.X` to `from xenium_viewer.utils.X` /
+  `from xenium_viewer.tabs.X`.
+- **Console-script entry points** — `xenium-viewer`, `xenium-preprocess`,
+  `xenium-fetch-references`, and `xenium-build-custom-segmentation` are
+  installed on `PATH`.
+- **Conda environment file** — `environment.yml` reproduces a working env in
+  one step (`conda env create -f environment.yml`); pypi-only deps and the
+  package itself (`-e .`) are listed in the embedded `pip:` block. Optional
+  extras (`celltypist`, `r`, `gpu`, `references`, `full`) are exposed via
+  `[project.optional-dependencies]`.
+- **Removed importlib hacks** — `app.py` no longer loads its sibling modules
+  via `importlib.util.spec_from_file_location`; they are normal package
+  imports. The `sys.path.insert` at module top is gone.
+
 ## [Unreleased] — 2026-04-18
 
 ### Changed
