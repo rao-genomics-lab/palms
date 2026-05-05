@@ -504,11 +504,36 @@ def create_file_menu(viewer, on_open_dataset, on_preprocess_dataset=None):
 # ── View menu ─────────────────────────────────────────────────────────────────
 
 def create_view_menu(viewer, _app):
-    """Add a 'Show Minimap' toggle to napari's native View menu (call once at startup)."""
+    """Add View menu items to napari's native View menu (call once at startup)."""
     from qtpy.QtGui import QAction
 
     view_menu = viewer.window.view_menu
     view_menu.addSeparator()
+
+    # Show/hide the Xenium Controls dock panel
+    controls_action = QAction("Show Xenium Controls", view_menu, checkable=True)
+    controls_action.setObjectName("xenium_controls_toggle")
+    controls_action.setChecked(True)
+    controls_action.setShortcut("Ctrl+Shift+X")
+
+    def _on_controls_toggled(checked):
+        dw = _app.get("dock_widget")
+        if dw is None:
+            return
+        try:
+            if checked:
+                from qtpy.QtCore import Qt
+                viewer.window._qt_window.addDockWidget(Qt.RightDockWidgetArea, dw)
+                dw.show()
+            else:
+                dw.hide()
+        except RuntimeError:
+            # C++ object deleted (e.g. during dataset reload) — ignore
+            pass
+
+    controls_action.toggled.connect(_on_controls_toggled)
+    view_menu.addAction(controls_action)
+    _app["controls_action"] = controls_action
 
     minimap_action = QAction("Show Minimap", view_menu, checkable=True)
     minimap_action.setObjectName("xenium_minimap_toggle")
