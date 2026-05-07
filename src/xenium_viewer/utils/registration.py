@@ -18,6 +18,17 @@ import tifffile
 import cv2
 
 
+def _aszarr_dask(store):
+    """Wrap a tifffile ZarrTiffStore as a dask array, working around the
+    fact that dask.array.from_zarr uses RegularChunkGrid, which was
+    removed in zarr 3. Open the store with zarr first, then wrap with
+    da.from_array — same end result, no internals access."""
+    import zarr
+    z = zarr.open(store, mode="r")
+    chunks = getattr(z, "chunks", None) or "auto"
+    return da.from_array(z, chunks=chunks)
+
+
 def load_he_pyramid(path):
     """Load an H&E OME-TIFF/SVS as a list of dask arrays (one per pyramid level).
 
@@ -46,11 +57,11 @@ def load_he_pyramid(path):
         pyramid = []
         for level_idx in range(n_levels):
             level_store = tif.aszarr(level=level_idx)
-            arr = da.from_zarr(level_store)
+            arr = _aszarr_dask(level_store)
             pyramid.append(arr)
     else:
         # No internal pyramid — build one via 2x mean-pooling
-        base = da.from_zarr(store)
+        base = _aszarr_dask(store)
         pyramid = [base]
         current = base
         for _ in range(4):  # build 4 additional levels
@@ -107,9 +118,9 @@ def load_multichannel_pyramid(path):
     # Build pyramid (same as load_he_pyramid) — no rgb= flag so layout is preserved.
     n_levels = len(series.levels)
     if n_levels > 1:
-        pyramid = [da.from_zarr(tif.aszarr(level=i)) for i in range(n_levels)]
+        pyramid = [_aszarr_dask(tif.aszarr(level=i)) for i in range(n_levels)]
     else:
-        base = da.from_zarr(tif.aszarr())
+        base = _aszarr_dask(tif.aszarr())
         pyramid = [base]
 
     base_shape = pyramid[0].shape
