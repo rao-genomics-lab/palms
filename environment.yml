@@ -24,7 +24,7 @@ dependencies:
   - spatialdata>=0.7
   - dask>=2024.0
   - dask-image
-  - zarr>=3.0
+  - zarr>=3.0,<3.2     # tifffile.aszarr imports zarr.core.chunk_grids.RegularChunkGrid, removed in zarr 3.2
   - tifffile
   - shapely>=2
   - umap-learn

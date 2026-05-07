@@ -34,7 +34,7 @@ dependencies = [
     "anndata>=0.12",
     "spatialdata>=0.7",
     "spatialdata-io>=0.6",
-    "zarr>=3.0",
+    "zarr>=3.0,<3.2",
     "dask>=2024.0",
     "dask-image",
     "tifffile",
