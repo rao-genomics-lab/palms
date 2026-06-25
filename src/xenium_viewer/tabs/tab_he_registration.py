@@ -44,7 +44,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     save_lm_button = PushButton(label="Save Landmarks...", enabled=False)
     load_lm_button = PushButton(label="Load Landmarks...", enabled=True)
-    save_affine_button = PushButton(label="Save Affine...", enabled=False)
 
     he_status_label = StatusProxy(ctx.viewer)
     reg_status_label = StatusProxy(ctx.viewer)
@@ -325,7 +324,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         reg_status_label.value = "Landmarks cleared"
         register_button.enabled = False
         save_lm_button.enabled = False
-        save_affine_button.enabled = False
         from xenium_viewer.utils.adata_persistence import save_landmarks_to_sdata
         save_landmarks_to_sdata(ctx, 'he_xenium_landmarks', None)
         save_landmarks_to_sdata(ctx, 'he_he_landmarks', None)
@@ -363,7 +361,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         from xenium_viewer.utils.adata_persistence import save_landmarks_to_sdata
         save_landmarks_to_sdata(ctx, 'he_xenium_landmarks', np.asarray(xen_pts))
         save_landmarks_to_sdata(ctx, 'he_he_landmarks', np.asarray(he_pts))
-        save_affine_button.enabled = True
 
     def on_save_landmarks():
         default_dir = str(data_path) if data_path else ""
@@ -396,7 +393,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
             affine = data["affine_3x3_yx"]
             he_state["affine_3x3"] = affine
             _apply_he_affine()
-            save_affine_button.enabled = True
             scale = np.sqrt(affine[0, 0]**2 + affine[0, 1]**2)
             reg_residuals_qt.setPlainText(f"Loaded affine (scale={scale:.4f})")
         if "he_filename" in data:
@@ -409,21 +405,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"landmarks = load_landmarks(\"{path}\")"
         )
 
-    def on_save_affine():
-        default_dir = str(data_path) if data_path else ""
-        path, _ = QFileDialog.getSaveFileName(
-            None, "Save Affine", default_dir + "/he_affine.json", "JSON Files (*.json)",
-        )
-        if not path:
-            return
-        affine = he_state["affine_3x3"]
-        if affine is None:
-            return
-        with open(path, "w") as f:
-            json.dump({"affine_3x3_yx": affine.tolist()}, f, indent=2)
-        reg_status_label.value = f"Affine saved to {Path(path).name}"
-        ctx.record_code(f"\n# Save affine transform\n# affine -> \"{path}\"")
-
     # Wire events
     he_load_button.clicked.connect(on_load_he)
     he_opacity_slider.changed.connect(on_he_opacity)
@@ -434,7 +415,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     register_button.clicked.connect(on_register)
     save_lm_button.clicked.connect(on_save_landmarks)
     load_lm_button.clicked.connect(on_load_landmarks)
-    save_affine_button.clicked.connect(on_save_affine)
 
     # Rows
     lm_btn_row = QWidget()
@@ -450,7 +430,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     io_btn_layout.setContentsMargins(0, 0, 0, 0)
     io_btn_layout.addWidget(save_lm_button.native)
     io_btn_layout.addWidget(load_lm_button.native)
-    io_btn_layout.addWidget(save_affine_button.native)
     io_btn_row.setLayout(io_btn_layout)
 
     flip_row = QWidget()
@@ -503,7 +482,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_opacity_slider.enabled = True
         he_load_button.enabled = True
         coarse_align_button.enabled = morph_thumb is not None
-        save_affine_button.enabled = he_state["affine_3x3"] is not None
         has_affine = he_state["affine_3x3"] is not None or he_state["coarse_affine"] is not None
         he_status_label.value = f"H&E restored: {he_filename}" + (" (with registration)" if has_affine else "")
         print(f"  Restored H&E from cache: {he_filename}" + (" with registration" if has_affine else ""))
@@ -554,7 +532,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         "he_flip_v": he_flip_v,
         "he_flip_h": he_flip_h,
         "he_opacity_slider": he_opacity_slider,
-        "save_affine_button": save_affine_button,
         "coarse_align_button": coarse_align_button,
         "create_landmark_layers": _create_landmark_layers,
         "apply_he_affine": _apply_he_affine,

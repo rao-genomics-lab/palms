@@ -17,7 +17,9 @@ from xenium_viewer.tabs._helpers import make_tab, StatusProxy
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
-from xenium_viewer.utils.registration import load_he_pyramid, compute_landmark_affine
+from xenium_viewer.utils.registration import (
+    load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
+)
 from xenium_viewer.utils.gene_analysis import compute_arms_tile_deg
 
 import matplotlib.pyplot as _plt
@@ -53,6 +55,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     arms_add_he_lm_button = PushButton(label="Add ARMS H&E Landmark", enabled=False)
     arms_clear_lm_button = PushButton(label="Clear All", enabled=False)
     arms_register_button = PushButton(label="Compute Registration", enabled=False)
+    arms_save_lm_button = PushButton(label="Save Landmarks...", enabled=False)
+    arms_load_lm_button = PushButton(label="Load Landmarks...", enabled=True)
 
     arms_residuals_qt = QTextEdit()
     arms_residuals_qt.setReadOnly(True)
@@ -143,6 +147,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if xen is not None and he is not None:
             n = min(len(xen.data), len(he.data))
             arms_register_button.enabled = n >= 3
+            arms_save_lm_button.enabled = n >= 1
 
     def _create_arms_landmark_layers():
         if arms_state["xenium_lm_layer"] is not None:
@@ -252,6 +257,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_residuals_qt.clear()
         arms_status_label.value = "ARMS landmarks cleared"
         arms_register_button.enabled = False
+        arms_save_lm_button.enabled = False
         from xenium_viewer.utils.adata_persistence import save_landmarks_to_sdata
         save_landmarks_to_sdata(ctx, 'arms_xenium_landmarks', None)
         save_landmarks_to_sdata(ctx, 'arms_he_landmarks', None)
@@ -288,6 +294,49 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"arms_xen_pts = np.array({xen_pts.tolist()})\n"
             f"arms_he_pts = np.array({he_pts.tolist()})\n"
             f"arms_affine, arms_residuals = compute_landmark_affine(arms_xen_pts, arms_he_pts)"
+        )
+
+    def on_arms_save_landmarks():
+        default_dir = str(data_path) if data_path else ""
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Save ARMS Landmarks", default_dir + "/arms_landmarks.json", "JSON Files (*.json)",
+        )
+        if not path:
+            return
+        xen_pts = np.asarray(arms_state["xenium_lm_layer"].data, dtype=np.float64)
+        he_pts = np.asarray(arms_state["he_lm_layer"].data, dtype=np.float64)
+        save_landmarks(
+            path, xen_pts, he_pts,
+            affine=arms_state["affine_3x3"], he_filename=arms_state.get("he_filename"),
+        )
+        arms_status_label.value = f"Landmarks saved to {Path(path).name}"
+        ctx.record_code(f"\n# Save ARMS landmarks\n# landmarks -> \"{path}\"")
+
+    def on_arms_load_landmarks():
+        default_dir = str(data_path) if data_path else ""
+        path, _ = QFileDialog.getOpenFileName(
+            None, "Load ARMS Landmarks", default_dir, "JSON Files (*.json);;All Files (*)",
+        )
+        if not path:
+            return
+        lm_data = load_landmarks(path)
+        _create_arms_landmark_layers()
+        arms_state["xenium_lm_layer"].data = lm_data["xenium_landmarks_yx"]
+        arms_state["he_lm_layer"].data = lm_data["he_landmarks_yx"]
+        if "affine_3x3_yx" in lm_data:
+            affine = lm_data["affine_3x3_yx"]
+            arms_state["affine_3x3"] = affine
+            _apply_arms_affine()
+            scale = np.sqrt(affine[0, 0]**2 + affine[0, 1]**2)
+            arms_residuals_qt.setPlainText(f"Loaded affine (scale={scale:.4f})")
+        if "he_filename" in lm_data:
+            arms_state["he_filename"] = lm_data["he_filename"]
+        n = min(len(lm_data["xenium_landmarks_yx"]), len(lm_data["he_landmarks_yx"]))
+        arms_status_label.value = f"Loaded {n} landmarks from {Path(path).name}"
+        ctx.record_code(
+            f"\n# Load ARMS landmarks from file\n"
+            f"from xenium_viewer.utils.registration import load_landmarks\n"
+            f"landmarks = load_landmarks(\"{path}\")"
         )
 
     # ── Save H&E / affine to sdata ──────────────────────────────────────
@@ -786,6 +835,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     arms_add_he_lm_button.clicked.connect(on_arms_add_he_lm)
     arms_clear_lm_button.clicked.connect(on_arms_clear_lm)
     arms_register_button.clicked.connect(on_arms_register)
+    arms_save_lm_button.clicked.connect(on_arms_save_landmarks)
+    arms_load_lm_button.clicked.connect(on_arms_load_landmarks)
     arms_load_geojson_button.clicked.connect(on_arms_load_geojson)
 
     # Layout rows
@@ -804,6 +855,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
     arms_lm_layout.addWidget(arms_clear_lm_button.native)
     arms_lm_btn_row.setLayout(arms_lm_layout)
 
+    arms_io_btn_row = QWidget()
+    arms_io_btn_layout = QHBoxLayout()
+    arms_io_btn_layout.setContentsMargins(0, 0, 0, 0)
+    arms_io_btn_layout.addWidget(arms_save_lm_button.native)
+    arms_io_btn_layout.addWidget(arms_load_lm_button.native)
+    arms_io_btn_row.setLayout(arms_io_btn_layout)
+
     arms_cluster_btn_row = QWidget()
     arms_cluster_btn_layout = QHBoxLayout()
     arms_cluster_btn_layout.setContentsMargins(0, 0, 0, 0)
@@ -817,6 +875,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_opacity_slider,
         arms_lm_btn_row,
         arms_register_button,
+        arms_io_btn_row,
         arms_residuals_qt,
         arms_load_geojson_button,
         arms_tile_opacity_slider,
