@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased] — 2026-06-25
+
+### Fixed
+- **ROI DEG region grouping** — `compute_roi_deg` was reading `uns['rank_genes_groups']`
+  (the scanpy default key) instead of the key it had just written (`uns['wilcoxon']` /
+  `uns['t-test']`). Because the subset AnnData is a copy of `ctx.adata`, it could
+  inherit stale cell-type DEG results from a previous analysis, causing "Run ROI DEG"
+  to display cluster-level rather than region-level results. Fixed by passing `key=method`
+  to `sc.get.rank_genes_groups_df`.
+- **Permission errors on read-only datasets** — write failures (clustering import, H&E
+  registration, session save, etc.) previously silenced to the console only. A
+  `QMessageBox` warning dialog now fires on the first `PermissionError` / read-only
+  `OSError` of a session, telling the user to copy the dataset to a writable location
+  or launch with `--no-cache`.
+
+### Added
+- **ARMS Overlay: save/load landmarks** — "Save Landmarks..." and "Load Landmarks..."
+  buttons added to the ARMS Overlay tab (below "Compute Registration"), mirroring the
+  H&E Registration tab. Landmarks and the computed affine are saved to a portable JSON
+  file via the existing `save_landmarks` / `load_landmarks` API. The save button
+  enables when ≥1 landmark pair is placed and disables on "Clear All".
+
+### Changed
+- **H&E Registration: removed Save Affine button** — the "Save Affine..." button has
+  been removed. There was no corresponding "Load Affine..." button, making it a dead end.
+  The affine is already auto-persisted to the sdata zarr cache on every registration.
+
 ## [Unreleased] — 2026-05-05
 
 ### Changed
