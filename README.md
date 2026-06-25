@@ -34,6 +34,17 @@ pip install -e ".[references]"   # rasterio + readfcs
 pip install -e ".[full]"         # all of the above
 ```
 
+### Reinstalling
+
+To wipe the environment and start fresh (e.g. after a dependency conflict or a
+major update):
+
+```bash
+conda env remove -n xenium_viewer
+conda env create -f environment.yml
+conda activate xenium_viewer
+```
+
 ## Usage
 
 ```bash
