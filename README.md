@@ -37,10 +37,13 @@ pip install -e ".[full]"         # all of the above
 ### Reinstalling
 
 To wipe the environment and start fresh (e.g. after a dependency conflict or a
-major update):
+major update), remove the old environment, re-clone the repo, and reinstall:
 
 ```bash
 conda env remove -n xenium_viewer
+
+git clone https://github.com/sraorao/xenium_viewer.git
+cd xenium_viewer
 conda env create -f environment.yml
 conda activate xenium_viewer
 ```
