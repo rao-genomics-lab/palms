@@ -379,7 +379,7 @@ def compute_roi_deg(
     sc.pp.log1p(subset)
 
     sc.tl.rank_genes_groups(subset, 'roi_region', method=method, reference='rest', key_added=method)
-    deg_df = sc.get.rank_genes_groups_df(subset, group=None)
+    deg_df = sc.get.rank_genes_groups_df(subset, group=None, key=method)
     return deg_df, subset
 
 
