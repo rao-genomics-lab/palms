@@ -30,6 +30,39 @@ CLUSTERING_PREFIX = "clustering_"
 CUSTOM_LABELS_KEY = "custom_cell_labels"
 CUSTOM_TABLE_KEY = "custom_table"
 
+_permission_dialog_shown = False
+
+
+def _maybe_show_permission_dialog(e: Exception, operation: str = "data") -> None:
+    """Show a QMessageBox if e is a read-only / permission-denied error."""
+    global _permission_dialog_shown
+    is_perm = (
+        isinstance(e, PermissionError)
+        or (isinstance(e, OSError) and getattr(e, "errno", None) in (13, 30))
+        or "Permission denied" in str(e)
+        or "read-only" in str(e).lower()
+        or "Read-only" in str(e)
+    )
+    if not is_perm or _permission_dialog_shown:
+        return
+    _permission_dialog_shown = True
+    try:
+        from qtpy.QtWidgets import QApplication, QMessageBox
+        if QApplication.instance() is None:
+            return
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Write Permission Error")
+        msg.setText(f"Could not save {operation} — permission denied.")
+        msg.setInformativeText(
+            "The dataset folder may be read-only (e.g. a shared or mounted drive).\n\n"
+            "To enable saving, copy the dataset to a writable location and reopen it, "
+            "or launch with --no-cache to skip zarr persistence entirely."
+        )
+        msg.exec_()
+    except Exception:
+        pass
+
 
 def _convert_adata_arrow_strings(adata) -> None:
     """Convert ArrowStringArray columns in an AnnData object to object dtype.
@@ -84,6 +117,7 @@ def _persist_custom_table(ctx: ViewerContext) -> None:
         sdata.tables[CUSTOM_TABLE_KEY] = adata_copy
         sdata.write_element(CUSTOM_TABLE_KEY)
     except Exception as e:
+        _maybe_show_permission_dialog(e, "clustering data")
         print(f"Warning: could not persist custom table to sdata: {e}")
 
 
@@ -113,6 +147,7 @@ def _persist_table(ctx: ViewerContext) -> None:
             sdata.delete_element_from_disk("table")
             sdata.write_element("table")
         except Exception as e:
+            _maybe_show_permission_dialog(e, "clustering/analysis data")
             print(f"Warning: could not persist adata table: {e}")
 
 
@@ -151,6 +186,7 @@ def save_cluster_labels_to_sdata(ctx: "ViewerContext", clustering_key: str, labe
         )
         _persist_table(ctx)
     except Exception as e:
+        _maybe_show_permission_dialog(e, "cluster labels")
         print(f"Warning: could not save cluster labels to sdata: {e}")
 
 
@@ -271,6 +307,7 @@ def _persist_adata_norm(ctx: ViewerContext, adata_norm) -> None:
         _convert_adata_arrow_strings(adata_norm)
         adata_norm.write_h5ad(norm_path)
     except Exception as e:
+        _maybe_show_permission_dialog(e, "normalized expression cache")
         print(f"Warning: could not persist adata_norm: {e}")
 
 
@@ -305,6 +342,7 @@ def save_custom_seg_to_sdata(ctx: ViewerContext, new_adata, scales: list) -> Non
             sdata.write_element(CUSTOM_LABELS_KEY)
             print(f"Custom labels saved to sdata.labels['{CUSTOM_LABELS_KEY}']")
         except Exception as e:
+            _maybe_show_permission_dialog(e, "custom segmentation labels")
             print(f"Warning: could not save custom labels to sdata: {e}")
         # ── Save AnnData as sdata.tables["custom_table"] ─────────────────
         _persist_custom_table(ctx)
@@ -409,6 +447,7 @@ def save_roi_deg_to_sdata(ctx: "ViewerContext", df) -> None:
         cache_path = Path(ctx.sdata.path) / ROI_DEG_CACHE
         df.to_parquet(cache_path, index=False)
     except Exception as e:
+        _maybe_show_permission_dialog(e, "ROI DEG results")
         print(f"Warning: could not save ROI DEG to sdata: {e}")
 
 
@@ -436,6 +475,7 @@ def save_arms_tile_deg_to_sdata(ctx: "ViewerContext", df) -> None:
         cache_path = Path(ctx.sdata.path) / ARMS_DEG_CACHE
         df.to_parquet(cache_path, index=False)
     except Exception as e:
+        _maybe_show_permission_dialog(e, "ARMS tile DEG results")
         print(f"Warning: could not save ARMS tile DEG to sdata: {e}")
 
 
@@ -479,6 +519,7 @@ def save_rois_to_sdata(ctx: ViewerContext, roi_data: list) -> None:
         ctx.sdata['rois'] = gdf
         ctx.sdata.write_element('rois')
     except Exception as e:
+        _maybe_show_permission_dialog(e, "ROI shapes")
         print(f"Warning: could not save ROIs to sdata: {e}")
 
 
@@ -549,6 +590,7 @@ def save_annotations_to_sdata(ctx: "ViewerContext") -> None:
         ctx.sdata['annotations'] = gdf
         ctx.sdata.write_element('annotations')
     except Exception as e:
+        _maybe_show_permission_dialog(e, "annotations")
         print(f"Warning: could not save annotations to sdata: {e}")
 
 
@@ -610,6 +652,7 @@ def save_landmarks_to_sdata(ctx, element_name: str, points_yx) -> None:
         ctx.sdata[element_name] = _make_landmark_gdf(points_yx)
         ctx.sdata.write_element(element_name)
     except Exception as e:
+        _maybe_show_permission_dialog(e, "registration landmarks")
         print(f"Warning: could not save {element_name} to sdata: {e}")
 
 
@@ -655,6 +698,7 @@ def save_arms_tiles_to_sdata(ctx, tile_polygons_yx, tile_names, cluster_ids) -> 
         ctx.sdata['arms_tiles'] = gdf
         ctx.sdata.write_element('arms_tiles')
     except Exception as e:
+        _maybe_show_permission_dialog(e, "ARMS tiles")
         print(f"Warning: could not save ARMS tiles to sdata: {e}")
 
 
@@ -1131,6 +1175,7 @@ def save_external_image_to_sdata(
         ctx.sdata[element_name] = parsed
         ctx.sdata.write_element(element_name, overwrite=True)
     except Exception as e:
+        _maybe_show_permission_dialog(e, f"external image '{element_name}'")
         print(f"Warning: could not save external image {element_name} to sdata: {e}")
 
 
@@ -1240,6 +1285,7 @@ def save_patch_overlay_to_sdata(
         ctx.sdata[element_name] = gdf
         ctx.sdata.write_element(element_name)
     except Exception as e:
+        _maybe_show_permission_dialog(e, f"patch overlay '{element_name}'")
         print(f"Warning: could not save patch overlay {element_name} to sdata: {e}")
 
 
@@ -1268,6 +1314,7 @@ def save_overlay_affine_to_sdata(ctx, element_name: str, affine_matrix) -> None:
         set_transformation(elem, sd_affine, "global")
         ctx.sdata.write_transformations(element_name)
     except Exception as e:
+        _maybe_show_permission_dialog(e, f"affine transform for '{element_name}'")
         print(f"Warning: could not save affine for {element_name}: {e}")
 
 

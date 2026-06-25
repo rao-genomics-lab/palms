@@ -220,6 +220,8 @@ def save_session(
         print(f"Session saved: {summary}")
 
     except Exception as e:
+        from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog
+        _maybe_show_permission_dialog(e, "session state")
         print(f"Warning: could not save session: {e}")
 
 
