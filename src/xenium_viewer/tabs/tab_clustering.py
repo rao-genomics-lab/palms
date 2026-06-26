@@ -123,8 +123,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
             yield "Computing neighbors..."
             sc.pp.neighbors(adata_work, n_neighbors=n_neighbors, n_pcs=n_pcs)
             yield "Running Leiden algorithm..."
-            sc.tl.leiden(adata_work, resolution=resolution, key_added="leiden")
+            import concurrent.futures, multiprocessing
+            from xenium_viewer.utils.leiden_worker import run_leiden
+            conn = adata_work.obsp['connectivities'].tocsr()
+            spawn_ctx = multiprocessing.get_context('spawn')
+            with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=1, mp_context=spawn_ctx) as ex:
+                membership = ex.submit(
+                    run_leiden,
+                    conn.data, conn.indices, conn.indptr,
+                    conn.shape[0], resolution,
+                ).result()
             import pandas as pd
+            adata_work.obs['leiden'] = pd.Categorical(
+                [str(m) for m in membership]
+            )
             cell_ids = _adata.obs['cell_id'].values if 'cell_id' in _adata.obs.columns else _adata.obs_names
             series = pd.Series(
                 adata_work.obs['leiden'].astype(int).values,

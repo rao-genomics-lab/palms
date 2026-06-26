@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased] — 2026-06-26 (d)
+
+### Fixed
+- **Leiden clustering UI freeze** — `sc.tl.leiden` held the Python GIL during graph
+  construction and partition, causing the progress bar and status-bar spinner to freeze.
+  The Leiden step now runs in a subprocess via `ProcessPoolExecutor` (spawn context),
+  giving it its own GIL so the main process's Qt event loop stays responsive throughout.
+  New module: `src/xenium_viewer/utils/leiden_worker.py`.
+
 ## [Unreleased] — 2026-06-26 (c)
 
 ### Added
