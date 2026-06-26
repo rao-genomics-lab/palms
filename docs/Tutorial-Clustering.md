@@ -1,0 +1,97 @@
+# Clustering and Differential Gene Expression
+
+**Prerequisites:** Viewer loaded with a dataset
+
+**Time required:** ~20 minutes
+
+---
+
+## Steps
+
+### 1. Run Leiden clustering
+
+1. In the control panel, open the **Cells** group and click the **Clustering** tab.
+2. Set **Resolution** to `1.0` (higher values produce more clusters; lower values produce fewer).
+3. Leave **n_neighbors** and **n_pcs** at their defaults unless you have a reason to change them.
+4. Click **Run Leiden Clustering**.
+
+The viewer runs PCA, constructs a neighbourhood graph, and runs the Leiden algorithm. When it finishes, a new clustering key `leiden_r1.0` appears in the clustering dropdowns throughout the interface.
+
+<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step1.png -->
+
+### 2. Colour cells by cluster
+
+1. Open the **Coloring** tab (Cells group).
+2. Set **Colour by** to **Cluster**.
+3. Select `leiden_r1.0` from the **Clustering** dropdown.
+4. Click **Apply Cell Coloring**.
+
+Each cluster is assigned a distinct colour. The cell label layer updates immediately.
+
+<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step2.png -->
+
+### 3. View the cluster UMAP
+
+1. Open the **UMAP** tab (Cells group).
+2. Click **Show UMAP Window** (or bring the existing UMAP window to the front if it is already open).
+
+The UMAP scatter plot updates to match the cluster colouring. Each point represents one cell; colours correspond to clusters.
+
+<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step3.png -->
+
+### 4. Run rank genes (differential expression)
+
+1. Open the **Genes** group and click the **Rank Genes** tab.
+2. Select `leiden_r1.0` from the **Clustering** dropdown.
+3. Set **Method** to `wilcoxon` (recommended for count data).
+4. Set **Top N genes** to `25`.
+5. Click **Run Rank Genes**.
+
+The viewer calls `scanpy.tl.rank_genes_groups` comparing each cluster against all others. Results appear in the results table.
+
+<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step4.png -->
+
+### 5. View the dotplot
+
+Click **Show Dotplot**. A scanpy dotplot opens in a new window, showing expression and detection fraction for the top marker genes across all clusters. The plot is automatically saved as a PNG in your output directory.
+
+<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step5.png -->
+
+### 6. Edit cluster labels
+
+Click **Edit Cluster Labels...** to open the label editor. For each cluster you can type a descriptive name (for example, rename cluster `0` to `Epithelial`). Click **Apply** when done.
+
+Renamed labels propagate to:
+- The colour legend in the UMAP window
+- The **Colour by Cluster** colouring on the canvas
+- All exported CSV and plot files
+
+### 7. Export the full DEG results
+
+Click **Export Full Results CSV...** and choose a save location. The file contains scores, log-fold changes, adjusted p-values, and gene names for every cluster, suitable for downstream analysis in R or Python.
+
+### 8. Save a UMAP plot
+
+1. In the **UMAP** tab, select `leiden_r1.0` from the **Clustering** dropdown.
+2. Set the output format to `PNG`.
+3. Click **Save UMAP Plot...** and choose a save location.
+
+The saved figure uses the same cluster colours as the canvas and includes a legend, making it suitable for publication.
+
+<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step8.png -->
+
+---
+
+## Notes
+
+- Clustering results are saved automatically to `sdata_cached.zarr` and restored on the next launch; you do not need to re-run clustering each session.
+- You can run clustering at multiple resolutions (e.g. `0.5`, `1.0`, `2.0`) and switch between them using the dropdowns throughout the interface.
+- To compare two specific clusters rather than one-vs-all, use the ROI DEG workflow described in [Tutorial-ROI-Analysis](Tutorial-ROI-Analysis).
+
+---
+
+## Next steps
+
+- [Tutorial-ROI-Analysis](Tutorial-ROI-Analysis) — spatially defined differential expression
+- [Tab-Rank-Genes](Tab-Rank-Genes) — full reference for the Rank Genes tab
+- [Tab-Clustering](Tab-Clustering) — full reference for the Clustering tab

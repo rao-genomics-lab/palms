@@ -1,0 +1,48 @@
+site_name: Xenium Viewer Documentation
+site_description: napari-based spatial transcriptomics viewer for Xenium 3.x output
+site_url: https://xenium-viewer.readthedocs.io
+repo_url: https://github.com/sraorao/xenium_viewer
+repo_name: sraorao/xenium_viewer
+
+docs_dir: docs
+theme:
+  name: readthedocs
+
+nav:
+  - Home: Home.md
+  - Installation: Installation.md
+  - Interface Overview: Interface-Overview.md
+  - Reference:
+    - Cells:
+      - Clustering: Tab-Clustering.md
+      - Cell Coloring: Tab-Cell-Coloring.md
+      - Transcripts: Tab-Transcripts.md
+      - UMAP: Tab-UMAP.md
+    - Genes:
+      - Rank Genes: Tab-Rank-Genes.md
+      - Markers: Tab-Markers.md
+      - Gene Correlation: Tab-Gene-Correlation.md
+    - Spatial:
+      - ROI Analysis: Tab-ROI-Analysis.md
+      - Ligand-Receptor: Tab-Ligand-Receptor.md
+      - Neighborhood Enrichment: Tab-Neighborhood-Enrichment.md
+      - Co-occurrence: Tab-Co-occurrence.md
+      - Spatial Domains: Tab-Domains.md
+      - Annotation Neighborhood: Tab-Annot-Nhood.md
+      - Annotation Distance: Tab-Annot-Distance.md
+    - Images:
+      - H&E Registration: Tab-HE-Registration.md
+      - ARMS Overlay: Tab-ARMS-Overlay.md
+      - External Images: Tab-External-Images.md
+      - Patches: Tab-Patches.md
+    - Tools:
+      - Annotations: Tab-Annotations.md
+      - Segmentation: Tab-Segmentation.md
+      - Notebook: Tab-Notebook.md
+  - Tutorials:
+    - Getting Started: Tutorial-Getting-Started.md
+    - Clustering and DEG: Tutorial-Clustering.md
+    - H&E Registration: Tutorial-HE-Registration.md
+    - ARMS Overlay: Tutorial-ARMS-Overlay.md
+    - ROI Analysis: Tutorial-ROI-Analysis.md
+    - Annotations: Tutorial-Annotations.md
