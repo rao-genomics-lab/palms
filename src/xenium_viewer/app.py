@@ -401,29 +401,47 @@ def _build_control_panel(ctx: ViewerContext):
 
         ctx.viewer.cursor.events.position.connect(_on_cursor_move)
 
-    # ── Assemble tabbed control panel ────────────────────────────────────
+    # ── Assemble tabbed control panel (grouped) ──────────────────────────
+    cells_tabs = QTabWidget()
+    cells_tabs.addTab(clustering_widget,  "Clustering")
+    cells_tabs.addTab(coloring_widget,    "Coloring")
+    cells_tabs.addTab(transcripts_widget, "Transcripts")
+    cells_tabs.addTab(umap_widget,        "UMAP")
+
+    genes_tabs = QTabWidget()
+    genes_tabs.addTab(ga_widget,   "Rank Genes")
+    genes_tabs.addTab(mg_widget,   "Markers")
+    genes_tabs.addTab(corr_widget, "Correlation")
+
+    spatial_tabs = QTabWidget()
+    spatial_tabs.addTab(roi_widget,        "ROI DEG")
+    spatial_tabs.addTab(lr_widget,         "Lig-Rec")
+    spatial_tabs.addTab(nhood_widget,      "Nhood Enrich")
+    spatial_tabs.addTab(co_widget,         "Co-occur")
+    spatial_tabs.addTab(novae_widget,      "Domains")
+    spatial_tabs.addTab(annot_nhood_widget,"Annot Nhood")
+    spatial_tabs.addTab(annot_dist_widget, "Annot Dist")
+
+    images_tabs = QTabWidget()
+    images_tabs.addTab(he_widget,      "H&E")
+    images_tabs.addTab(arms_widget,    "ARMS")
+    images_tabs.addTab(ext_img_widget, "Ext Images")
+    images_tabs.addTab(patch_widget,   "Patches")
+
+    tools_tabs = QTabWidget()
+    tools_tabs.addTab(annot_widget,    "Annotations")
+    tools_tabs.addTab(seg_widget,      "Segmentation")
+    tools_tabs.addTab(notebook_widget, "Notebook")
+
+    for _group in (cells_tabs, genes_tabs, spatial_tabs, images_tabs, tools_tabs):
+        _group.setTabPosition(QTabWidget.South)
+
     tab_widget = QTabWidget()
-    tab_widget.addTab(clustering_widget, "Clustering")
-    tab_widget.addTab(coloring_widget, "Cell Coloring")
-    tab_widget.addTab(transcripts_widget, "Transcripts")
-    tab_widget.addTab(umap_widget, "UMAP")
-    tab_widget.addTab(roi_widget, "ROI Analysis")
-    tab_widget.addTab(he_widget, "H&E Registration")
-    tab_widget.addTab(ga_widget, "Gene Analysis")
-    tab_widget.addTab(mg_widget, "Marker Genes")
-    tab_widget.addTab(lr_widget, "Ligand-Receptor")
-    tab_widget.addTab(nhood_widget, "Nhood Enrichment")
-    tab_widget.addTab(co_widget, "Co-occurrence")
-    tab_widget.addTab(novae_widget, "Spatial Domains")
-    tab_widget.addTab(arms_widget, "ARMS Overlay")
-    tab_widget.addTab(corr_widget, "Gene Correlation")
-    tab_widget.addTab(notebook_widget, "Notebook")
-    tab_widget.addTab(annot_widget, "Annotations")
-    tab_widget.addTab(annot_nhood_widget, "Annot. Nhood")
-    tab_widget.addTab(annot_dist_widget, "Annot. Distance")
-    tab_widget.addTab(seg_widget, "Segmentation")
-    tab_widget.addTab(ext_img_widget, "External Images")
-    tab_widget.addTab(patch_widget, "Patch Overlays")
+    tab_widget.addTab(cells_tabs,   "Cells")
+    tab_widget.addTab(genes_tabs,   "Genes")
+    tab_widget.addTab(spatial_tabs, "Spatial")
+    tab_widget.addTab(images_tabs,  "Images")
+    tab_widget.addTab(tools_tabs,   "Tools")
 
     # ── Compose session restore from per-tab restorers ───────────────────
     all_exports = [
