@@ -2,7 +2,7 @@
 
 The Co-occur tab analyses how frequently pairs of cell clusters appear together across a range of spatial distances, producing a co-occurrence score as a function of distance that reveals at what scales clusters are associated or mutually exclusive.
 
-<!-- SCREENSHOT: docs/screenshots/tab-co-occurrence.png -->
+![Co Occurrence](screenshots/tab-co-occurrence.png)
 
 ## Controls
 

@@ -2,7 +2,7 @@
 
 The Clustering tab lets you run Leiden clustering on the cell expression matrix with adjustable graph and resolution parameters, import pre-computed cluster assignments from an external file, and export the current result for downstream use. Clusters produced here are immediately available to all other tabs that accept a clustering input.
 
-<!-- SCREENSHOT: docs/screenshots/tab-clustering.png -->
+![Clustering](screenshots/tab-clustering.png)
 
 ## Controls
 

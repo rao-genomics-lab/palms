@@ -2,7 +2,7 @@
 
 The Domains tab infers spatial tissue domains using the Novae deep learning model, applying zero-shot inference from pretrained human or mouse weights to assign each cell to a spatially coherent domain without requiring manual annotation or clustering parameters.
 
-<!-- SCREENSHOT: docs/screenshots/tab-domains.png -->
+![Domains](screenshots/tab-domains.png)
 
 ## Controls
 

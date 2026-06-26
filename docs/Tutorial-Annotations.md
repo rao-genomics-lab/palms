@@ -24,7 +24,7 @@ Select the **polygon tool** in the napari toolbar (or press `P`). Click to place
 
 Repeat for each tissue region you want to annotate. You can draw multiple polygons before assigning types — the type assignment step is done separately.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-annotations-step2.png -->
+![Tutorial Annotations Step2](screenshots/tutorial-annotations-step2.png)
 
 **Tips:**
 - Use the rectangle tool (`R`) for quick rectangular regions.
@@ -43,7 +43,7 @@ c. Click **Assign to selected shapes**.
 
 The type table below updates to show each defined type with a count of how many shapes carry that label.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-annotations-step4.png -->
+![Tutorial Annotations Step4](screenshots/tutorial-annotations-step4.png)
 
 ### 5. Customise annotation colours
 
@@ -53,7 +53,7 @@ In the type table, click the colour cell next to a type name to open a colour pi
 
 Repeat steps 2–5 for each tissue region type you need. Work through the tissue systematically — for example, annotate all tumour regions first, then all stroma regions.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-annotations-step6.png -->
+![Tutorial Annotations Step6](screenshots/tutorial-annotations-step6.png)
 
 ### 7. Export as GeoJSON
 
@@ -64,7 +64,7 @@ Click **Export GeoJSON...** and choose a save path. The exported file contains:
 
 The coordinates are in the Xenium pixel coordinate system. To convert to physical micrometres, multiply by the pixel size (typically 0.2125 µm/pixel, found in `experiment.xenium`).
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-annotations-step7.png -->
+![Tutorial Annotations Step7](screenshots/tutorial-annotations-step7.png)
 
 ---
 

@@ -17,7 +17,7 @@
 
 The viewer runs PCA, constructs a neighbourhood graph, and runs the Leiden algorithm. When it finishes, a new clustering key `leiden_r1.0` appears in the clustering dropdowns throughout the interface.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step1.png -->
+![Tutorial Clustering Step1](screenshots/tutorial-clustering-step1.png)
 
 ### 2. Colour cells by cluster
 
@@ -28,7 +28,7 @@ The viewer runs PCA, constructs a neighbourhood graph, and runs the Leiden algor
 
 Each cluster is assigned a distinct colour. The cell label layer updates immediately.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step2.png -->
+![Tutorial Clustering Step2](screenshots/tutorial-clustering-step2.png)
 
 ### 3. View the cluster UMAP
 
@@ -37,7 +37,7 @@ Each cluster is assigned a distinct colour. The cell label layer updates immedia
 
 The UMAP scatter plot updates to match the cluster colouring. Each point represents one cell; colours correspond to clusters.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step3.png -->
+![Tutorial Clustering Step3](screenshots/tutorial-clustering-step3.png)
 
 ### 4. Run rank genes (differential expression)
 
@@ -49,7 +49,7 @@ The UMAP scatter plot updates to match the cluster colouring. Each point represe
 
 The viewer calls `scanpy.tl.rank_genes_groups` comparing each cluster against all others. Results appear in the results table.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step4.png -->
+![Tutorial Clustering Step4](screenshots/tutorial-clustering-step4.png)
 
 ### 5. View the dotplot
 
@@ -78,7 +78,7 @@ Click **Export Full Results CSV...** and choose a save location. The file contai
 
 The saved figure uses the same cluster colours as the canvas and includes a legend, making it suitable for publication.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step8.png -->
+![Tutorial Clustering Step8](screenshots/tutorial-clustering-step8.png)
 
 ---
 

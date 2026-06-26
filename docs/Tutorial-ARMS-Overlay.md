@@ -22,7 +22,7 @@ In the control panel, open the **Images** group and click the **ARMS Overlay** t
 
 Click **Load ARMS H&E Image...** and select your image file. The image appears as a new layer in the napari canvas.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-arms-overlay-step2.png -->
+![Tutorial Arms Overlay Step2](screenshots/tutorial-arms-overlay-step2.png)
 
 ### Step 3. Apply flips if needed
 
@@ -36,7 +36,7 @@ a. Click **Add Xenium Landmark**, then click a recognisable feature in the Xeniu
 b. Click **Add ARMS H&E Landmark**, then click the same feature in the ARMS image.
 c. Repeat for at least 3 features (5–10 recommended), distributed across the tissue.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-arms-overlay-step4.png -->
+![Tutorial Arms Overlay Step4](screenshots/tutorial-arms-overlay-step4.png)
 
 ### Step 5. Compute the registration
 
@@ -46,7 +46,7 @@ Click **Compute Registration**. Inspect the residuals display. Values under ~20 
 
 Click **Save Landmarks...** and choose a save location. The JSON file records the landmark coordinates and computed transform.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-arms-overlay-step6.png -->
+![Tutorial Arms Overlay Step6](screenshots/tutorial-arms-overlay-step6.png)
 
 ---
 
@@ -63,7 +63,7 @@ Click **Load GeoJSON + CSV...**. A two-step file dialog opens:
 
 The tiles appear on the canvas as coloured polygons, one colour per unique `cluster_id` value.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-arms-overlay-step7.png -->
+![Tutorial Arms Overlay Step7](screenshots/tutorial-arms-overlay-step7.png)
 
 ### Step 8. Adjust tile appearance
 
@@ -91,14 +91,14 @@ Select a method from the **DEG Method** dropdown. `wilcoxon` is recommended for 
 
 Click **Run ARMS Tile DEG**. The viewer identifies Xenium cells within each tile polygon, then runs pairwise differential expression between the selected cluster groups. Top differentially expressed genes appear in the results text area.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-arms-overlay-step11.png -->
+![Tutorial Arms Overlay Step11](screenshots/tutorial-arms-overlay-step11.png)
 
 ### Step 12. Export results
 
 - Click **Export ARMS DEG CSV...** to save the full ranked gene list for all cluster comparisons to a CSV file.
 - Click **Generate ARMS Volcano Plots...** and choose a directory. One PNG volcano plot is saved for each pairwise cluster comparison.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-arms-overlay-step12.png -->
+![Tutorial Arms Overlay Step12](screenshots/tutorial-arms-overlay-step12.png)
 
 ---
 

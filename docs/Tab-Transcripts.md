@@ -2,7 +2,7 @@
 
 The Transcripts tab lets you overlay raw transcript locations as colour-coded point clouds (up to 10 genes at once) and compute 2D spatial density heatmaps for any single gene, with optional quality filtering and cell-level subsetting. The overlay and density layers are independent and can be displayed simultaneously.
 
-<!-- SCREENSHOT: docs/screenshots/tab-transcripts.png -->
+![Transcripts](screenshots/tab-transcripts.png)
 
 ## Controls
 

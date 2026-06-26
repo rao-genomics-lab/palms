@@ -2,7 +2,7 @@
 
 Draw and manage labelled tissue annotation polygons on the Annotations layer, assign annotation types, customise colours per type, and import or export annotations as GeoJSON. This tab is in the "Tools" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-annotations.png -->
+![Annotations](screenshots/tab-annotations.png)
 
 ## Controls
 

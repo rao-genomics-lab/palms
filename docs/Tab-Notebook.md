@@ -2,7 +2,7 @@
 
 An interactive Python code editor embedded in the viewer, with per-cell execution, inline output display (print output, return values, and figures), and automatic synchronisation with the code journal that other tabs write to. This tab is in the "Tools" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-notebook.png -->
+![Notebook](screenshots/tab-notebook.png)
 
 ## Controls
 

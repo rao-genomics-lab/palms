@@ -2,7 +2,7 @@
 
 The Annot Dist tab computes the minimum distance from each cell to the boundary of a selected annotation type, displays per-cluster distance distributions as violin, box, or strip plots, and can colour cells in the viewer by their distance value.
 
-<!-- SCREENSHOT: docs/screenshots/tab-annot-distance.png -->
+![Annot Distance](screenshots/tab-annot-distance.png)
 
 ## Controls
 

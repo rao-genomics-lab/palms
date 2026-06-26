@@ -2,7 +2,7 @@
 
 Load an ARMS (or other fluorescence/brightfield) image, register it to the Xenium coordinate system using landmark-based affine registration, overlay spatial tile polygons coloured by cluster assignment, and run differential expression analysis between tile clusters. This tab is in the "Images" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-arms-overlay.png -->
+![Arms Overlay](screenshots/tab-arms-overlay.png)
 
 ## Controls
 

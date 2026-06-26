@@ -2,7 +2,7 @@
 
 The Annot Nhood tab runs neighbourhood enrichment analysis between real cell clusters and virtual cells sampled from user-drawn annotation polygons, revealing spatial associations between tissue structures and cell types.
 
-<!-- SCREENSHOT: docs/screenshots/tab-annot-nhood.png -->
+![Annot Nhood](screenshots/tab-annot-nhood.png)
 
 ## Controls
 

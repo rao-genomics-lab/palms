@@ -25,7 +25,7 @@ Before drawing ROIs, set the active gene so the viewer knows which gene to use f
 
 The cell layer now reflects per-cell expression of that gene, making it easier to draw ROIs around high- or low-expression regions.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-roi-analysis-step1.png -->
+![Tutorial Roi Analysis Step1](screenshots/tutorial-roi-analysis-step1.png)
 
 ### 2. Activate the ROI layer
 
@@ -39,7 +39,7 @@ Select the **polygon tool** in the napari toolbar (or press `P`). Click to place
 - You can draw as many ROIs as needed; the viewer labels them Region 1, Region 2, etc. in order of creation.
 - To delete a polygon, select it with the selection tool and press Delete.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-roi-analysis-step3.png -->
+![Tutorial Roi Analysis Step3](screenshots/tutorial-roi-analysis-step3.png)
 
 **Tip:** Zoom into the region of interest first, then draw the polygon. For large regions, zoom out so the entire boundary is visible before closing the polygon.
 
@@ -59,7 +59,7 @@ The results text shows per-region statistics for the active gene:
 
 Pairwise t-test results between all region pairs are shown below the per-region table.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-roi-analysis-step4.png -->
+![Tutorial Roi Analysis Step4](screenshots/tutorial-roi-analysis-step4.png)
 
 ### 5. Export per-cell expression data (optional)
 
@@ -76,7 +76,7 @@ Click **Run ROI DEG**. The viewer runs the Wilcoxon rank-sum test comparing all 
 
 Only cells matching that cluster label are included in the DEG analysis.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-roi-analysis-step6.png -->
+![Tutorial Roi Analysis Step6](screenshots/tutorial-roi-analysis-step6.png)
 
 ### 7. Export DEG results
 
@@ -86,7 +86,7 @@ Click **Export DEG CSV...** and choose a save location. The file contains the fu
 
 Click **Save Volcano Plot(s)...** and choose a directory. One PNG volcano plot is generated per region pair (e.g. `Region1_vs_Region2.png`). Genes above the significance threshold are labelled with their names.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-roi-analysis-step8.png -->
+![Tutorial Roi Analysis Step8](screenshots/tutorial-roi-analysis-step8.png)
 
 ---
 

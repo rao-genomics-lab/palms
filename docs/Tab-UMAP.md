@@ -2,7 +2,7 @@
 
 The UMAP tab opens a linked scatter plot window showing cells projected into two-dimensional UMAP space and lets you export a publication-ready UMAP figure coloured by the active cluster assignment. The scatter plot updates automatically whenever you apply a new colouring in the [Coloring](Tab-Cell-Coloring) tab.
 
-<!-- SCREENSHOT: docs/screenshots/tab-umap.png -->
+![Umap](screenshots/tab-umap.png)
 
 ## Controls
 

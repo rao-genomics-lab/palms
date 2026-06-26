@@ -2,7 +2,7 @@
 
 Load one or more multichannel OME-TIFF images as RGB composites with per-channel colour and contrast controls, and optionally register each image to the Xenium coordinate system using landmark-based affine registration or by linking to another registered layer's affine. This tab is in the "Images" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-external-images.png -->
+![External Images](screenshots/tab-external-images.png)
 
 ## Controls
 

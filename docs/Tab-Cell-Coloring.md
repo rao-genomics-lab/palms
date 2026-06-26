@@ -2,7 +2,7 @@
 
 The Coloring tab controls how cells in the segmentation layer are rendered: you can colour them by continuous gene expression or by discrete cluster assignment, and optionally hide clusters that are too small or not of interest. Changes take effect only when you click **Apply Cell Coloring**, which also updates the linked [UMAP](Tab-UMAP) window.
 
-<!-- SCREENSHOT: docs/screenshots/tab-cell-coloring.png -->
+![Cell Coloring](screenshots/tab-cell-coloring.png)
 
 ## Controls
 

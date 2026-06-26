@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased] — 2026-06-26 (b)
+
+### Added
+- **Wiki screenshots** — all 52 documentation screenshot placeholders are now filled with
+  actual PNGs captured from a running viewer instance. A new script
+  `scripts/capture_screenshots.py` automates future recapture by programmatically
+  navigating each tab and grabbing the control-panel and full-window views.
+  One placeholder (`tutorial-clustering-step5.png`, the matplotlib dotplot window)
+  remains a comment for manual capture.
+
 ## [Unreleased] — 2026-06-26
 
 ### Fixed

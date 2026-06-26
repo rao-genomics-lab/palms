@@ -2,9 +2,20 @@
 
 A napari-based spatial transcriptomics viewer for 10x Genomics Xenium 3.x output —
 the Linux equivalent of the commercial Xenium Explorer. Visualises high-resolution
-spatial gene expression at cell-level resolution, with cell coloring, transcript
-density, ROI / DEG / spatial-stats analysis, H&E and external-image registration,
-ARMS / patch overlays, and more.
+spatial gene expression at cell-level resolution with:
+
+- **Cell visualisation** — colour by gene expression, cluster, or metadata; load
+  per-gene transcript point clouds and density heatmaps; linked UMAP window
+- **Clustering & DEG** — Leiden clustering, rank-genes, dotplots, import/export of
+  cluster assignments; ROI-based differential expression
+- **Spatial analysis** — neighbourhood enrichment, co-occurrence, ligand-receptor
+  (via squidpy/omnipath), spatial domain inference (Novae)
+- **Image registration** — landmark-based affine registration for H&E and ARMS
+  fluorescence images; external OME-TIFF/SVS loader
+- **Annotation tools** — draw/label/export annotation shapes (GeoJSON); annotate
+  cells by neighbourhood composition or distance to a reference population
+- **Session persistence** — all analyses auto-saved to a zarr cache and restored on
+  relaunch; reproducible Python code journal exported to `code.py`
 
 ## Install
 
@@ -76,15 +87,34 @@ You can also invoke the package directly: `python -m xenium_viewer ...`.
 ## Repo layout
 
 ```
-src/xenium_viewer/      # the installable package
-├── app.py              # main GUI entry point
-├── loader.py           # SpatialData loader with zarr cache
-├── preprocess.py       # transcript feather cache builder
-├── tabs/               # 22 napari control-panel tabs
-├── utils/              # shared utilities (coloring, persistence, registration, ...)
-└── scripts/            # standalone CLI utilities
-scripts/extract_seurat_segmentation.R   # stage-1 R script (run via Rscript)
-reference_datasets/                     # fetched references + metadata sidecars
+src/xenium_viewer/          # the installable package
+├── app.py                  # main GUI entry point (~1300 lines)
+├── loader.py               # SpatialData loader with zarr cache
+├── preprocess.py           # transcript feather cache builder
+├── tabs/                   # 21 control-panel tab modules in 5 groups
+│   │                       #   Cells: Clustering, Coloring, Transcripts, UMAP
+│   │                       #   Genes: Rank Genes, Markers, Correlation
+│   │                       #   Spatial: ROI DEG, Lig-Rec, Nhood Enrich,
+│   │                       #            Co-occur, Domains, Annot Nhood, Annot Dist
+│   │                       #   Images: H&E, ARMS, Ext Images, Patches
+│   │                       #   Tools: Annotations, Segmentation, Notebook
+│   └── _helpers.py         # shared tab utilities (StatusProxy, make_tab, …)
+└── utils/
+    ├── viewer_context.py   # ViewerContext dataclass — shared state for all tabs
+    ├── coloring.py         # CellColorManager with DirectLabelColormap
+    ├── gene_analysis.py    # rank genes, normalization, Leiden clustering
+    ├── spatial_analysis.py # squidpy spatial analysis wrappers
+    ├── registration.py     # landmark-based affine registration
+    ├── transcript_index.py # per-gene feather loader
+    ├── session.py          # zarr-based session persistence
+    ├── adata_persistence.py# AnnData / SpatialData result persistence
+    ├── umap_widget.py      # linked UMAP scatter window
+    └── …                   # annotation utils, notebook engine, patch I/O, …
+scripts/
+├── extract_seurat_segmentation.R   # stage-1 R script for custom segmentation
+├── capture_screenshots.py          # automated wiki screenshot capture
+└── push_to_wiki.sh                 # sync docs/ to GitHub Wiki
+reference_datasets/                 # fetched scRNA-seq references + metadata
 ```
 
 ## Documentation

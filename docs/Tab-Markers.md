@@ -2,7 +2,7 @@
 
 The Markers tab lets you visualise expression of a user-defined set of genes across cell clusters by providing a JSON dictionary that maps cluster names to gene lists, then generating dotplots, heatmaps, matrix plots, tracks plots, or correlation matrices with a single button press.
 
-<!-- SCREENSHOT: docs/screenshots/tab-markers.png -->
+![Markers](screenshots/tab-markers.png)
 
 ## Controls
 

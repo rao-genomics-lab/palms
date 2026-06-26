@@ -1,6 +1,6 @@
 # Interface Overview
 
-<!-- SCREENSHOT: docs/screenshots/interface-overview.png -->
+![Interface Overview](screenshots/interface-overview.png)
 
 The viewer consists of a **napari canvas** occupying the left portion of the window and a **control panel** docked on the right. The canvas provides interactive pan, zoom, and layer toggle controls using napari's standard mouse and keyboard bindings. The control panel is organised into five top-level tab groups, each with further sub-tabs along the bottom edge.
 

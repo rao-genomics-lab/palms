@@ -2,7 +2,7 @@
 
 Overlay phikon patch-clustering results or subclone predictions as coloured rectangular patches on the Xenium canvas, with controls for cluster visibility, colour palette, edge styling, confidence filtering, and spatial alignment to a registered image. This tab is in the "Images" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-patches.png -->
+![Patches](screenshots/tab-patches.png)
 
 ## Controls
 

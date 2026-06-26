@@ -2,7 +2,7 @@
 
 The Correlation tab computes Pearson and Spearman correlation between the expression of two selected genes across cells, with optional normalisation and cluster filtering, and displays a scatter plot alongside the computed statistics.
 
-<!-- SCREENSHOT: docs/screenshots/tab-gene-correlation.png -->
+![Gene Correlation](screenshots/tab-gene-correlation.png)
 
 ## Controls
 

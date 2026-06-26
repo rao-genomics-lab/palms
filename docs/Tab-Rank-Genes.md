@@ -2,7 +2,7 @@
 
 The Rank Genes tab lets you compute per-cluster marker genes using differential expression testing, visualise results as dotplots, rank-gene plots, and volcano plots, and annotate clusters automatically using CellTypist, a language model, or label transfer from a reference dataset.
 
-<!-- SCREENSHOT: docs/screenshots/tab-rank-genes.png -->
+![Rank Genes](screenshots/tab-rank-genes.png)
 
 ## Controls
 

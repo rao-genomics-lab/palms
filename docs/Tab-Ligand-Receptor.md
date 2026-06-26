@@ -2,7 +2,7 @@
 
 The Lig-Rec tab tests for significant ligand-receptor interactions between spatially adjacent cell clusters using squidpy and the OmniPath database, producing mean interaction strengths and permutation-based p-values.
 
-<!-- SCREENSHOT: docs/screenshots/tab-ligand-receptor.png -->
+![Ligand Receptor](screenshots/tab-ligand-receptor.png)
 
 ## Controls
 

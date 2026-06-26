@@ -2,7 +2,7 @@
 
 The ROI DEG tab analyses gene expression within hand-drawn ROI polygons on the napari canvas, computes per-region summary statistics, and runs differential expression analysis between regions with volcano plot export.
 
-<!-- SCREENSHOT: docs/screenshots/tab-roi-analysis.png -->
+![Roi Analysis](screenshots/tab-roi-analysis.png)
 
 ## Controls
 

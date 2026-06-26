@@ -2,7 +2,7 @@
 
 Load an H&E (or other brightfield) TIFF image, align it to the Xenium coordinate system using optional coarse tissue-outline alignment followed by manual landmark-based registration, and persist the affine transform. This tab is in the "Images" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-he-registration.png -->
+![He Registration](screenshots/tab-he-registration.png)
 
 ## Controls
 

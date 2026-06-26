@@ -24,7 +24,7 @@ Click **Load H&E Image...** and select your image file. Supported formats includ
 
 The image appears as a new layer (`H&E`) in the napari layer list. It may be positioned incorrectly relative to the Xenium image at this stage; that is expected.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-he-registration-step2.png -->
+![Tutorial He Registration Step2](screenshots/tutorial-he-registration-step2.png)
 
 ### 3. Apply flips if needed
 
@@ -39,7 +39,7 @@ You can toggle both independently. The canvas updates immediately.
 
 Click **Coarse Align**. The viewer uses tissue outline detection to bring the images into rough alignment automatically. This step is optional but saves time during manual landmark placement.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-he-registration-step4.png -->
+![Tutorial He Registration Step4](screenshots/tutorial-he-registration-step4.png)
 
 ### 5. Place landmark pairs
 
@@ -59,7 +59,7 @@ d. Repeat steps a–c for each additional feature.
 
 The landmark points appear as coloured dots on the canvas. Matching pairs share the same index number.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-he-registration-step5.png -->
+![Tutorial He Registration Step5](screenshots/tutorial-he-registration-step5.png)
 
 **Tip:** Switch the active layer in the layer list between `morphology_focus` and `H&E` to compare both images at the same canvas position while placing landmarks.
 
@@ -77,7 +77,7 @@ The **residuals display** shows per-landmark registration error in micrometres. 
 
 If a specific landmark has a high residual, it may be misplaced. Delete it using the **Remove** button next to its row, re-place it, and recompute.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-he-registration-step6.png -->
+![Tutorial He Registration Step6](screenshots/tutorial-he-registration-step6.png)
 
 ### 7. Inspect the overlay
 
@@ -87,7 +87,7 @@ Use the **H&E opacity** slider in the tab to blend the H&E image against the mor
 
 Click **Save Landmarks...** and choose a save location. The file is saved as JSON and can be shared with collaborators or used to reproduce the registration on a reinstalled viewer.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-he-registration-step8.png -->
+![Tutorial He Registration Step8](screenshots/tutorial-he-registration-step8.png)
 
 ---
 

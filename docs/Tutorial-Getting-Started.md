@@ -22,7 +22,7 @@ If you omit the path, a file dialog opens so you can select the directory intera
 xenium-viewer
 ```
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-getting-started-step1.png -->
+![Tutorial Getting Started Step1](screenshots/tutorial-getting-started-step1.png)
 
 ### 2. Wait for the initial load
 
@@ -41,7 +41,7 @@ Once loaded, use the following controls to move around:
 | Fit image to window | Press Space |
 | Reset zoom | Press Ctrl+Shift+H |
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-getting-started-step3.png -->
+![Tutorial Getting Started Step3](screenshots/tutorial-getting-started-step3.png)
 
 ### 4. Understand the morphology image
 
@@ -66,7 +66,7 @@ You can toggle individual channels on and off by clicking their eye icons in the
 
 The cell label layer updates to reflect per-cell expression levels.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-getting-started-step5.png -->
+![Tutorial Getting Started Step5](screenshots/tutorial-getting-started-step5.png)
 
 ### 6. View transcripts for a gene
 
@@ -77,7 +77,7 @@ The cell label layer updates to reflect per-cell expression levels.
 
 Individual transcript dots appear on the canvas. Use the **Min QV** slider to filter out low-quality transcripts (quality value below the threshold).
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-getting-started-step6.png -->
+![Tutorial Getting Started Step6](screenshots/tutorial-getting-started-step6.png)
 
 ### 7. Open the UMAP window
 
@@ -86,7 +86,7 @@ Individual transcript dots appear on the canvas. Use the **Min QV** slider to fi
 
 A separate window opens showing a scatter plot of the cells in UMAP space, linked to the main canvas. Lassoing cells in the UMAP highlights them on the spatial canvas, and vice versa.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-getting-started-step7.png -->
+![Tutorial Getting Started Step7](screenshots/tutorial-getting-started-step7.png)
 
 ### 8. Close the viewer
 

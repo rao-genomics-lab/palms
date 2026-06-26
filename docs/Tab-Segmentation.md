@@ -2,7 +2,7 @@
 
 Replace the native Xenium cell segmentation with a custom segmentation produced by a separate preprocessing pipeline, enabling re-analysis with alternative cell boundaries. This tab is in the "Tools" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-segmentation.png -->
+![Segmentation](screenshots/tab-segmentation.png)
 
 ## Controls
 

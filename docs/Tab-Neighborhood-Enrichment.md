@@ -2,7 +2,7 @@
 
 The Nhood Enrich tab tests whether cell clusters tend to be spatially co-located or segregated using permutation-based neighbourhood enrichment (squidpy), producing a Z-score matrix that summarises spatial associations between all cluster pairs.
 
-<!-- SCREENSHOT: docs/screenshots/tab-neighborhood-enrichment.png -->
+![Neighborhood Enrichment](screenshots/tab-neighborhood-enrichment.png)
 
 ## Controls
 
