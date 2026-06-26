@@ -89,6 +89,8 @@ reference_datasets/                     # fetched references + metadata sidecars
 
 ## Documentation
 
+Full documentation with screenshots is available on the [GitHub Wiki](https://github.com/sraorao/xenium_viewer/wiki).
+
 - `CLAUDE.md` — architecture overview and developer notes
 - `CHANGELOG.md` — release history
 
