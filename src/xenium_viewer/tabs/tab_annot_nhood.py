@@ -17,7 +17,7 @@ from qtpy.QtWidgets import (
     QCheckBox, QGroupBox, QScrollArea,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import StatusProxy, attach_tqdm_progress, qt_tqdm_context
+from xenium_viewer.tabs._helpers import StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -80,6 +80,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     plot_btn = PushButton(label="Show Heatmap", enabled=False)
     export_btn = PushButton(label="Export Z-scores CSV...", enabled=False)
     status = StatusProxy(ctx.viewer)
+    annot_nhood_progress = make_progress_bar()
 
     from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
     from xenium_viewer.utils.spatial_analysis import (
@@ -185,6 +186,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             worker,
             lambda m: setattr(status, 'value', m),
             "Enrichment permutations: ",
+            progress_bar=annot_nhood_progress,
         )
         worker.returned.connect(_on_done)
         worker.start()
@@ -289,6 +291,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     layout.addWidget(perms_slider.native)
     layout.addWidget(neighs_slider.native)
     layout.addWidget(run_btn.native)
+    layout.addWidget(annot_nhood_progress)
     layout.addWidget(mode_widget.native)
     layout.addWidget(results_text)
     layout.addWidget(plot_btn.native)

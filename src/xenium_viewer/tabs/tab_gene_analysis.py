@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -116,6 +116,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             pass
 
     ga_status = StatusProxy(ctx.viewer)
+    ga_progress = make_progress_bar()
 
     def on_run_rank_genes():
         ga_status.value = "Running rank genes (normalizing + computing)..."
@@ -143,7 +144,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return df, adata_norm, clustering_key
 
         worker = _run()
-        timer, _ = attach_spinner(worker, lambda m: setattr(ga_status, 'value', m), "Running rank genes...")
+        timer, _ = attach_spinner(
+            worker,
+            lambda m: setattr(ga_status, 'value', m),
+            "Running rank genes...",
+            progress_bar=ga_progress,
+        )
         state['_spinner_timer'] = timer  # prevent GC
         worker.returned.connect(_on_rank_genes_ready)
         worker.start()
@@ -732,6 +738,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_method_widget,
         ga_n_genes_slider,
         ga_run_button,
+        ga_progress,
         ga_dotplot_n_slider,
         ga_dendro_check,
         ga_dotplot_btn_row,

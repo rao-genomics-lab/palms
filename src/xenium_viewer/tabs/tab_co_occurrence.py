@@ -10,7 +10,7 @@ from qtpy.QtWidgets import (
     QLabel, QScrollArea, QGridLayout, QCheckBox,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -103,6 +103,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         return sorted(selected, key=lambda x: (int(x) if x.isdigit() else x))
 
     co_status = StatusProxy(ctx.viewer)
+    co_progress = make_progress_bar()
 
     from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
     from xenium_viewer.utils.spatial_analysis import run_co_occurrence, make_co_occurrence_plot
@@ -134,6 +135,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             worker,
             lambda m: setattr(co_status, 'value', m),
             "Co-occurrence: ",
+            progress_bar=co_progress,
         )
         worker.returned.connect(_on_co_occurrence_ready)
         worker.start()
@@ -279,6 +281,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         co_cluster_scroll,
         co_interval_slider,
         co_run_button,
+        co_progress,
         co_results_text,
         co_filter_targets,
         co_plot_button,

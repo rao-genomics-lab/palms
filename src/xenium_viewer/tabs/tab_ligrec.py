@@ -8,7 +8,7 @@ from qtpy.QtWidgets import (
     QTextEdit, QHBoxLayout, QWidget, QFileDialog, QCheckBox, QGridLayout, QGroupBox,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -46,6 +46,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     lr_cpdb_only.setChecked(False)
 
     lr_status = StatusProxy(ctx.viewer)
+    lr_progress = make_progress_bar()
 
     lr_results_text = QTextEdit()
     lr_results_text.setReadOnly(True)
@@ -117,6 +118,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             worker,
             lambda m: setattr(lr_status, 'value', m),
             "L-R permutations: ",
+            progress_bar=lr_progress,
         )
         worker.returned.connect(_on_ligrec_ready)
         worker.start()
@@ -261,6 +263,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         lr_ds_group,
         lr_cpdb_only,
         lr_run_button,
+        lr_progress,
         lr_pval_widget,
         lr_plot_button,
         lr_export_btn_row,

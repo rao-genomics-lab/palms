@@ -67,11 +67,12 @@ class ProgressMailbox:
         return msg
 
 
-def attach_spinner(worker, set_status_fn, initial_msg: str):
+def attach_spinner(worker, set_status_fn, initial_msg: str, progress_bar=None):
     """Animate a spinner in the status bar while *worker* runs.
 
     Returns ``(timer, update_msg_fn)`` where ``update_msg_fn(msg)`` changes the
     animated text (connect to ``worker.yielded`` for stage messages).
+    If *progress_bar* is given it is shown immediately and hidden on finish.
     """
     from qtpy.QtCore import QTimer
     _FRAMES = ["|", "/", "-", "\\"]
@@ -90,14 +91,18 @@ def attach_spinner(worker, set_status_fn, initial_msg: str):
     timer.timeout.connect(_tick)
     timer.start(150)
     worker.finished.connect(timer.stop)
+    if progress_bar is not None:
+        progress_bar.setVisible(True)
+        worker.finished.connect(lambda: progress_bar.setVisible(False))
     return timer, update_msg
 
 
-def attach_tqdm_progress(worker, set_status_fn, base_msg: str = ""):
+def attach_tqdm_progress(worker, set_status_fn, base_msg: str = "", progress_bar=None):
     """Wire a ProgressMailbox + QTimer to relay tqdm updates to the status bar.
 
     Returns a ``post_fn`` callable safe to call from the background thread;
     pass it into :func:`qt_tqdm_context` inside the worker.
+    If *progress_bar* is given it is shown immediately and hidden on finish.
     """
     from qtpy.QtCore import QTimer
     mailbox = ProgressMailbox()
@@ -112,7 +117,20 @@ def attach_tqdm_progress(worker, set_status_fn, base_msg: str = ""):
     timer.timeout.connect(_poll)
     timer.start(100)
     worker.finished.connect(timer.stop)
+    if progress_bar is not None:
+        progress_bar.setVisible(True)
+        worker.finished.connect(lambda: progress_bar.setVisible(False))
     return mailbox.post, timer   # caller must hold timer reference to prevent GC
+
+
+def make_progress_bar():
+    """Return a hidden indeterminate QProgressBar for embedding in tab layouts."""
+    from qtpy.QtWidgets import QProgressBar
+    bar = QProgressBar()
+    bar.setRange(0, 0)       # indeterminate / marquee animation
+    bar.setMaximumHeight(16)
+    bar.setVisible(False)
+    return bar
 
 
 from contextlib import contextmanager

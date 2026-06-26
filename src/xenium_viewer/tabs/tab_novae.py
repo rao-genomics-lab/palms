@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from magicgui.widgets import ComboBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -33,6 +33,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     results_text.setMaximumHeight(200)
 
     novae_status = StatusProxy(ctx.viewer)
+    novae_progress = make_progress_bar()
 
     def on_run_novae():
         if ctx.adata is None:
@@ -84,6 +85,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             worker,
             lambda m: setattr(novae_status, "value", m),
             "Running Novae...",
+            progress_bar=novae_progress,
         )
         state["_novae_spinner_timer"] = _timer  # keep reference to prevent GC
 
@@ -177,6 +179,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         n_domains_slider,
         level_slider,
         run_button,
+        novae_progress,
         results_text,
     )
 

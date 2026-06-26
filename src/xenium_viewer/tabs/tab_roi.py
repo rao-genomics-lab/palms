@@ -7,7 +7,7 @@ import numpy as np
 from magicgui.widgets import ComboBox, CheckBox, PushButton
 from qtpy.QtWidgets import QTextEdit, QFileDialog, QLabel as QtLabel
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, make_progress_bar
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -25,6 +25,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     status_label = StatusProxy(ctx.viewer)
     roi_deg_status = StatusProxy(ctx.viewer)
+    roi_deg_progress = make_progress_bar()
 
     def on_calculate_roi():
         from shapely.geometry import Polygon as ShapelyPolygon
@@ -236,6 +237,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         worker = _run()
         worker.returned.connect(lambda df: _on_roi_deg_ready(df, gen, _use_filter, _selected_ids))
+        roi_deg_progress.setVisible(True)
+        worker.finished.connect(lambda: roi_deg_progress.setVisible(False))
         worker.start()
 
     def _on_roi_deg_ready(result, _gen, _use_filter, _selected_ids):
@@ -370,6 +373,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         roi_deg_method_widget,
         roi_deg_filter_check,
         roi_deg_button,
+        roi_deg_progress,
         roi_deg_text,
         roi_deg_export_button,
         roi_volcano_button,

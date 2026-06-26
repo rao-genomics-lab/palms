@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased] — 2026-06-26 (c)
+
+### Added
+- **Progress bar for long-running analyses** — an indeterminate `QProgressBar` now
+  appears inside the control panel directly below the run button while an analysis is
+  in progress (Leiden clustering, rank genes, L-R, neighbourhood enrichment,
+  co-occurrence, ROI DEG, annotation nhood enrichment, Novae domains). The bar
+  disappears automatically when the analysis finishes or errors out. The existing
+  napari status-bar spinner/tqdm text is retained unchanged.
+
 ## [Unreleased] — 2026-06-26 (b)
 
 ### Added

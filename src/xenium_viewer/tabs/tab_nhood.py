@@ -7,7 +7,7 @@ import numpy as np
 from magicgui.widgets import ComboBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QFileDialog
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -36,6 +36,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ne_plot_button = PushButton(label="Show Heatmap", enabled=False)
     ne_export_button = PushButton(label="Export Z-scores CSV...", enabled=False)
     ne_status = StatusProxy(ctx.viewer)
+    ne_progress = make_progress_bar()
 
     from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
     from xenium_viewer.utils.spatial_analysis import (
@@ -71,6 +72,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             worker,
             lambda m: setattr(ne_status, 'value', m),
             "Enrichment permutations: ",
+            progress_bar=ne_progress,
         )
         worker.returned.connect(_on_nhood_ready)
         worker.start()
@@ -214,6 +216,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ne_perms_slider,
         ne_neighs_slider,
         ne_run_button,
+        ne_progress,
         ne_mode_widget,
         ne_results_text,
         ne_plot_button,

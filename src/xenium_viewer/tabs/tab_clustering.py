@@ -7,7 +7,7 @@ from pathlib import Path
 from magicgui.widgets import CheckBox, PushButton, Slider, FloatSpinBox
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -39,6 +39,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     leiden_status_text.setMaximumHeight(150)
 
     leiden_status = StatusProxy(ctx.viewer)
+    leiden_progress = make_progress_bar()
 
     def _on_leiden_ready(result, _gen):
         if ctx.dataset_generation != _gen:
@@ -139,6 +140,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             worker,
             lambda m: setattr(leiden_status, 'value', m),
             "Preparing data...",
+            progress_bar=leiden_progress,
         )
         state['_spinner_timer'] = timer  # prevent GC
         worker.yielded.connect(update_msg)
@@ -222,6 +224,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         leiden_n_hvgs,
         leiden_scale_check,
         leiden_run_button,
+        leiden_progress,
         leiden_status_text,
         leiden_io_row,
     )
