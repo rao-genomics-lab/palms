@@ -26,6 +26,224 @@ CHANNEL_NAMES = [
     "AlphaSMA-Vimentin",
 ]
 
+# ─── User-generated element keys ────────────────────────────────────────────
+_USER_SHAPE_KEYS = [
+    "rois", "he_xenium_landmarks", "he_he_landmarks",
+    "arms_xenium_landmarks", "arms_he_landmarks", "arms_tiles", "annotations",
+]
+_USER_IMAGE_KEYS = ["he_image", "arms_he_image"]
+_USER_UNS_KEYS = ["nhood_enrichment", "co_occurrence", "ligrec", "rank_genes_groups"]
+_SIDECAR_FILES = ["roi_deg_cache.parquet", "arms_tile_deg_cache.parquet", "adata_norm_cache.h5ad"]
+
+_SHAPE_LABELS = {
+    "rois": "ROIs",
+    "he_xenium_landmarks": "H&E landmarks (Xenium side)",
+    "he_he_landmarks": "H&E landmarks (H&E image side)",
+    "arms_xenium_landmarks": "ARMS landmarks (Xenium side)",
+    "arms_he_landmarks": "ARMS landmarks (ARMS image side)",
+    "arms_tiles": "ARMS tiles",
+    "annotations": "Annotations",
+}
+_IMAGE_LABELS = {"he_image": "H&E image", "arms_he_image": "ARMS image"}
+
+
+def _detect_user_data(cache_path: Path) -> dict:
+    """Fast filesystem scan for user-added elements without loading sdata.
+
+    Returns a dict with keys: shapes, images, clusterings, uns_keys,
+    has_obsm_umap, sidecars, has_viewer_session.
+    """
+    found: dict = {
+        "shapes": [],
+        "images": [],
+        "clusterings": [],
+        "uns_keys": [],
+        "has_obsm_umap": False,
+        "sidecars": [],
+        "has_viewer_session": False,
+    }
+    for key in _USER_SHAPE_KEYS:
+        if (cache_path / "shapes" / key).exists():
+            found["shapes"].append(key)
+    for key in _USER_IMAGE_KEYS:
+        if (cache_path / "images" / key).exists():
+            found["images"].append(key)
+    obs_dir = cache_path / "tables" / "table" / "obs"
+    if obs_dir.exists():
+        for item in obs_dir.iterdir():
+            if item.name.startswith("clustering_"):
+                found["clusterings"].append(item.name)
+    uns_dir = cache_path / "tables" / "table" / "uns"
+    if uns_dir.exists():
+        for key in _USER_UNS_KEYS:
+            if (uns_dir / key).exists():
+                found["uns_keys"].append(key)
+    obsm_dir = cache_path / "tables" / "table" / "obsm"
+    if obsm_dir.exists() and (obsm_dir / "X_umap").exists():
+        found["has_obsm_umap"] = True
+    for fname in _SIDECAR_FILES:
+        if (cache_path / fname).exists():
+            found["sidecars"].append(fname)
+    if (cache_path / "viewer_session").exists():
+        found["has_viewer_session"] = True
+    return found
+
+
+def _has_any_user_data(user_data: dict) -> bool:
+    return bool(
+        user_data["shapes"] or user_data["images"] or
+        user_data["clusterings"] or user_data["uns_keys"] or
+        user_data["sidecars"] or user_data["has_viewer_session"]
+    )
+
+
+def _format_user_data_message(user_data: dict) -> str:
+    lines = []
+    for key in user_data["shapes"]:
+        lines.append(f"  • {_SHAPE_LABELS.get(key, key)}")
+    for key in user_data["images"]:
+        lines.append(f"  • {_IMAGE_LABELS.get(key, key)}")
+    if user_data["clusterings"]:
+        n = len(user_data["clusterings"])
+        lines.append(f"  • {n} custom clustering{'s' if n > 1 else ''}")
+    if user_data["uns_keys"]:
+        labels = {
+            "nhood_enrichment": "Neighborhood enrichment results",
+            "co_occurrence": "Co-occurrence results",
+            "ligrec": "Ligand-receptor results",
+            "rank_genes_groups": "Rank genes results",
+        }
+        for key in user_data["uns_keys"]:
+            lines.append(f"  • {labels.get(key, key)}")
+    _sidecar_labels = {
+        "roi_deg_cache.parquet": "ROI DEG results",
+        "arms_tile_deg_cache.parquet": "ARMS tile DEG results",
+        "adata_norm_cache.h5ad": "Normalized expression cache",
+    }
+    for fname in user_data["sidecars"]:
+        lines.append(f"  • {_sidecar_labels.get(fname, fname)}")
+    return "\n".join(lines)
+
+
+def _ask_rebuild_preference(user_data: dict) -> str:
+    """Show a Qt dialog asking what to do when a stale cache has user data.
+
+    Returns 'restore', 'rebuild', or 'keep'.
+    Falls back to 'rebuild' if called from a non-main thread or if Qt is absent.
+    """
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        print(
+            "Warning: zarr cache is stale and contains user data, but running in a "
+            "background thread — rebuilding without restoring."
+        )
+        return "rebuild"
+    try:
+        from qtpy.QtWidgets import QApplication, QMessageBox
+    except Exception:
+        print("Warning: zarr cache is stale and contains user data (no Qt for dialog). Rebuilding.")
+        return "rebuild"
+    app = QApplication.instance()
+    if app is None:
+        print("Warning: zarr cache is stale and contains user data (no Qt app). Rebuilding.")
+        return "rebuild"
+
+    summary = _format_user_data_message(user_data)
+    msg = QMessageBox()
+    msg.setWindowTitle("Zarr Cache Needs Rebuilding")
+    msg.setText(
+        "experiment.xenium has been modified since the cache was last built.\n\n"
+        "Your cache contains user-generated data:\n"
+        f"{summary}\n\n"
+        "What would you like to do?"
+    )
+    msg.setIcon(QMessageBox.Warning)
+    restore_btn = msg.addButton("Rebuild and restore my data", QMessageBox.AcceptRole)
+    msg.addButton("Rebuild without restoring", QMessageBox.DestructiveRole)
+    keep_btn = msg.addButton("Keep existing cache", QMessageBox.RejectRole)
+    msg.setDefaultButton(restore_btn)
+    msg.exec_()
+
+    clicked = msg.clickedButton()
+    if clicked is restore_btn:
+        return "restore"
+    elif clicked is keep_btn:
+        return "keep"
+    else:
+        return "rebuild"
+
+
+def _restore_user_elements(old_sdata, sdata, user_data: dict) -> list[str]:
+    """Merge user-added elements from old_sdata into sdata in memory.
+
+    Returns a list of successfully restored element names.
+    """
+    restored = []
+    for key in user_data["shapes"]:
+        try:
+            if key in old_sdata.shapes:
+                sdata[key] = old_sdata.shapes[key]
+                restored.append(_SHAPE_LABELS.get(key, key))
+        except Exception as e:
+            print(f"  Warning: could not restore shape '{key}': {e}")
+    for key in user_data["images"]:
+        try:
+            if key in old_sdata.images:
+                sdata[key] = old_sdata.images[key]
+                restored.append(_IMAGE_LABELS.get(key, key))
+        except Exception as e:
+            print(f"  Warning: could not restore image '{key}': {e}")
+    if "table" in old_sdata.tables and "table" in sdata.tables:
+        old_adata = old_sdata["table"]
+        new_adata = sdata["table"]
+        user_obs_cols = [
+            c for c in old_adata.obs.columns
+            if c.startswith("clustering_") or c.startswith("cluster_labels_")
+        ]
+        for col in user_obs_cols:
+            try:
+                new_adata.obs[col] = old_adata.obs[col].reindex(new_adata.obs.index)
+                if col.startswith("clustering_"):
+                    restored.append(col)
+            except Exception as e:
+                print(f"  Warning: could not restore obs column '{col}': {e}")
+        for key in user_data["uns_keys"]:
+            if key in old_adata.uns:
+                try:
+                    new_adata.uns[key] = old_adata.uns[key]
+                    restored.append(f"uns/{key}")
+                except Exception as e:
+                    print(f"  Warning: could not restore uns['{key}']: {e}")
+        if user_data["has_obsm_umap"] and "X_umap" in old_adata.obsm:
+            try:
+                if len(old_adata.obsm["X_umap"]) == len(new_adata.obs):
+                    new_adata.obsm["X_umap"] = old_adata.obsm["X_umap"]
+                    restored.append("UMAP coordinates")
+            except Exception as e:
+                print(f"  Warning: could not restore UMAP coordinates: {e}")
+    return restored
+
+
+def _copy_sidecars_and_session(backup_path: Path, cache_path: Path, user_data: dict) -> None:
+    """Copy sidecar files and viewer_session zarr group from backup to new cache."""
+    import shutil
+    for fname in user_data.get("sidecars", []):
+        src = backup_path / fname
+        dst = cache_path / fname
+        if src.exists() and not dst.exists():
+            try:
+                shutil.copy2(str(src), str(dst))
+            except Exception as e:
+                print(f"  Warning: could not restore {fname}: {e}")
+    if user_data.get("has_viewer_session"):
+        src = backup_path / "viewer_session"
+        dst = cache_path / "viewer_session"
+        if src.exists() and not dst.exists():
+            try:
+                shutil.copytree(str(src), str(dst))
+            except Exception as e:
+                print(f"  Warning: could not restore viewer_session: {e}")
+
 
 def _convert_arrow_strings(sdata):
     """
@@ -86,8 +304,13 @@ def load_sdata(
     -------
     spatialdata.SpatialData
     """
+    import shutil
+    from datetime import datetime
+
     cache_path = path / "sdata_cached.zarr"
     experiment_path = path / "experiment.xenium"
+    backup_path = None   # set when we move the old cache for a user-restore
+    user_data = None     # populated when we detect user data in the old cache
 
     # Try loading from zarr cache if it exists and is fresh
     if use_cache and cache_path.exists():
@@ -96,8 +319,8 @@ def load_sdata(
             cache_mtime = cache_path.stat().st_mtime
             exp_mtime = experiment_path.stat().st_mtime
             if exp_mtime > cache_mtime:
-                print("Zarr cache is stale (experiment.xenium is newer). Rebuilding...")
                 cache_fresh = False
+
         if cache_fresh:
             import spatialdata
             print(f"Loading SpatialData from zarr cache: {cache_path}")
@@ -107,9 +330,44 @@ def load_sdata(
                 print(sdata)
                 return sdata
             except Exception as e:
-                import shutil
-                print(f"Warning: zarr cache is corrupt ({e}). Deleting and rebuilding...")
-                shutil.rmtree(cache_path, ignore_errors=True)
+                # Cache is unreadable — preserve it so the user can recover data,
+                # then rebuild from raw Xenium files.
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                corrupt_dest = cache_path.with_name(f"sdata_cached_corrupt_{timestamp}.zarr")
+                try:
+                    shutil.move(str(cache_path), str(corrupt_dest))
+                    print(
+                        f"Warning: zarr cache is corrupt ({e}).\n"
+                        f"Corrupt cache preserved at:\n  {corrupt_dest}\n"
+                        "You may be able to recover data from it manually.\n"
+                        "Rebuilding cache from raw Xenium files..."
+                    )
+                except Exception:
+                    shutil.rmtree(cache_path, ignore_errors=True)
+                    print(f"Warning: zarr cache is corrupt ({e}). Deleted, rebuilding...")
+        else:
+            # Stale cache: check whether it contains user-generated data.
+            user_data = _detect_user_data(cache_path)
+            if _has_any_user_data(user_data):
+                preference = _ask_rebuild_preference(user_data)
+                if preference == "keep":
+                    import spatialdata
+                    print("Using existing cache (stale, kept at user request).")
+                    sdata = spatialdata.read_zarr(str(cache_path))
+                    print(sdata)
+                    return sdata
+                elif preference == "restore":
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_path = cache_path.with_name(f"sdata_cached_backup_{timestamp}.zarr")
+                    shutil.move(str(cache_path), str(backup_path))
+                    print(
+                        f"Old cache backed up to:\n  {backup_path}\n"
+                        "Rebuilding cache and restoring user data..."
+                    )
+                else:
+                    print("Rebuilding cache without restoring user data...")
+            else:
+                print("Zarr cache is stale (experiment.xenium is newer). Rebuilding...")
 
     from spatialdata_io import xenium
 
@@ -134,6 +392,24 @@ def load_sdata(
     print("SpatialData loaded successfully.")
     print(sdata)
 
+    # Restore user elements from backup into the fresh sdata (before writing).
+    if backup_path is not None:
+        import spatialdata as _sd
+        try:
+            print("Reading user data from backup...")
+            old_sdata = _sd.read_zarr(str(backup_path))
+            restored = _restore_user_elements(old_sdata, sdata, user_data)
+            if restored:
+                print(f"  Restored: {', '.join(restored)}")
+            else:
+                print("  Nothing to restore.")
+        except Exception as e:
+            print(
+                f"Warning: could not read backup for restoration ({e}).\n"
+                f"Backup preserved at:\n  {backup_path}"
+            )
+            backup_path = None  # keep backup; don't delete later
+
     # Write zarr cache for next time
     if use_cache:
         try:
@@ -141,10 +417,16 @@ def load_sdata(
             print(f"Writing zarr cache to {cache_path} ...")
             sdata.write(str(cache_path), overwrite=True)
             print("Zarr cache written.")
+            # Copy sidecar files and viewer_session from backup into the new cache.
+            if backup_path is not None:
+                _copy_sidecars_and_session(backup_path, cache_path, user_data)
+                shutil.rmtree(str(backup_path), ignore_errors=True)
+                print("Cache rebuild and data restoration complete.")
         except Exception as e:
-            import shutil
             shutil.rmtree(cache_path, ignore_errors=True)
             print(f"Warning: could not write zarr cache: {e}")
+            if backup_path is not None:
+                print(f"Backup preserved at:\n  {backup_path}")
 
     return sdata
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased] — 2026-06-26
+
+### Fixed
+- **Zarr cache rebuild no longer silently destroys user data** — when `experiment.xenium`
+  is newer than `sdata_cached.zarr` (e.g. after Xenium Explorer opens the dataset, or a
+  backup/rsync resets timestamps), a Qt dialog now appears listing all user-generated data
+  found in the cache (ROIs, H&E/ARMS landmarks and images, clusterings, analysis results,
+  etc.) and offers three choices: *Rebuild and restore my data* (backs up the old cache,
+  rebuilds from raw files, merges user elements back, then deletes the backup),
+  *Rebuild without restoring* (previous behaviour), or *Keep existing cache* (skip
+  rebuild and load from the stale cache as-is — safe when only metadata changed).
+  When the cache is unreadable (corrupt), it is now preserved as
+  `sdata_cached_corrupt_<timestamp>.zarr` instead of being silently deleted, so data can
+  be recovered manually.
+
 ## [Unreleased] — 2026-06-25
 
 ### Fixed
