@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased] — 2026-06-30
+
+### Added
+- **tab10 palette in Patches tab** — `tab10` (matplotlib's 10-colour categorical
+  palette) is now available in the Patches tab palette dropdown alongside tab20,
+  glasbey_dark, Set1, Set3, and ARMS.
+
 ## [Unreleased] — 2026-06-26 (d)
 
 ### Fixed

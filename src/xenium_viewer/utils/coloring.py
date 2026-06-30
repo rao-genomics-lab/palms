@@ -53,6 +53,7 @@ def _mpl_palette(name: str, n: int) -> np.ndarray:
     )
 
 
+TAB10_PALETTE = _mpl_palette("tab10", 10)
 TAB20_PALETTE = _mpl_palette("tab20", 20)
 SET1_PALETTE = _mpl_palette("Set1", 9)
 SET3_PALETTE = _mpl_palette("Set3", 12)
@@ -78,6 +79,7 @@ ARMS_PALETTE = np.array(
 )
 
 PATCH_PALETTES = {
+    "tab10": TAB10_PALETTE,
     "tab20": TAB20_PALETTE,
     "glasbey_dark": CLUSTER_PALETTE,
     "Set1": SET1_PALETTE,

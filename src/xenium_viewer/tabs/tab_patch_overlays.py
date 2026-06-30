@@ -163,7 +163,7 @@ def build_tab(ctx: "ViewerContext"):
     pal_row = QHBoxLayout()
     pal_row.addWidget(QLabel("Palette:"))
     palette_combo = QComboBox()
-    palette_combo.addItems(["tab20", "glasbey_dark", "Set1", "Set3", "ARMS (Set1+Set2+Dark2)"])
+    palette_combo.addItems(["tab10", "tab20", "glasbey_dark", "Set1", "Set3", "ARMS (Set1+Set2+Dark2)"])
     pal_row.addWidget(palette_combo, 1)
     panel_layout.addLayout(pal_row)
 
