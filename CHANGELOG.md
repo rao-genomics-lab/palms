@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased] — 2026-07-01
+
+### Fixed
+- **Permission-denied dialog gaps** — two write paths were missing coverage from the
+  read-only zarr dialog: (1) `delete_element_from_disk` in the Patches tab only printed
+  to console on failure; (2) `record_code` in `_helpers.py` had no exception handling at
+  all when writing `code.py`. Both now call `_maybe_show_permission_dialog` on
+  `PermissionError`/`OSError`.
+
 ## [Unreleased] — 2026-06-30
 
 ### Added

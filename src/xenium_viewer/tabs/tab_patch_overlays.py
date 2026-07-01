@@ -584,6 +584,8 @@ def build_tab(ctx: "ViewerContext"):
             if element and ctx.sdata is not None and element in ctx.sdata:
                 ctx.sdata.delete_element_from_disk(element)
         except Exception as e:
+            from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog
+            _maybe_show_permission_dialog(e, f"delete '{element}' from zarr cache")
             print(f"  Warning: could not delete {element} from sdata: {e}")
         list_widget.takeItem(row)
         _update_panel()

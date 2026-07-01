@@ -211,8 +211,12 @@ def create_shared_helpers(ctx: ViewerContext):
         if sync_fn:
             sync_fn()
         code_path = ctx.data_path / state.get("code_file", "code.py")
-        with open(code_path, 'w') as f:
-            f.write("\n".join(state["code_journal"]) + "\n")
+        try:
+            with open(code_path, 'w') as f:
+                f.write("\n".join(state["code_journal"]) + "\n")
+        except (PermissionError, OSError) as e:
+            from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog
+            _maybe_show_permission_dialog(e, "code journal")
 
     ctx.record_code = _record_code
 
