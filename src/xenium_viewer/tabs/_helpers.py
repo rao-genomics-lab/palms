@@ -53,6 +53,24 @@ class StatusProxy:
 
 # ── Progress helpers ──────────────────────────────────────────────────────────
 
+def make_progress_dialog(title: str, parent=None):
+    """Return (dialog, progress_bar, label) — caller shows and manages them."""
+    from qtpy.QtWidgets import QDialog, QVBoxLayout as _QVBoxLayout, QLabel, QProgressBar
+    from qtpy.QtCore import Qt
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowCloseButtonHint)
+    dlg.setMinimumWidth(500)
+    layout = _QVBoxLayout(dlg)
+    lbl = QLabel("Starting…")
+    lbl.setWordWrap(True)
+    bar = QProgressBar()
+    bar.setRange(0, 100)
+    layout.addWidget(lbl)
+    layout.addWidget(bar)
+    return dlg, bar, lbl
+
+
 class ProgressMailbox:
     """Thread-safe single-slot message passing (background → main thread)."""
     def __init__(self):

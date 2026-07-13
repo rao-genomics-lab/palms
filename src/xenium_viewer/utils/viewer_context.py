@@ -38,6 +38,7 @@ class ViewerContext:
     transcript_bins_layer: Any = None   # Image layer for transcript density heatmap
     roi_layer: Any = None
     annotation_layer: Any = None        # Named tissue annotation shapes
+    crop_layer: Any = None              # Crop Dataset polygons (not session-persisted)
 
     # ── Morphology data (for coarse align) ──────────────────────────────────
     morph_thumb: Any = None

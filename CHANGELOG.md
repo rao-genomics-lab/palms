@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased] — 2026-07-13
+
+### Added
+- **Crop Dataset (Tools tab)** — draw one or more polygons in a new "Crop Regions"
+  napari layer and export each as its own standalone, independently-openable
+  xenium-viewer data directory (cropped morphology image, cell/nucleus labels,
+  transcripts, and AnnData table). Images/labels are cropped to each polygon's pixel
+  bounding box; cells and transcripts are filtered to the exact drawn polygon via
+  true point-in-polygon tests. Output/name for each region is chosen via sequential
+  folder-picker + name-prompt dialogs, run in a background thread with a progress
+  dialog. New module `src/xenium_viewer/utils/crop_export.py`; new tab
+  `src/xenium_viewer/tabs/tab_crop_dataset.py`.
+
 ## [Unreleased] — 2026-07-01
 
 ### Fixed

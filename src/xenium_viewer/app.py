@@ -141,22 +141,7 @@ def _find_xenium_datasets(folder: Path) -> list:
     )
 
 
-def _make_progress_dialog(title: str, parent=None):
-    """Return (dialog, progress_bar, label) — caller shows and manages them."""
-    from qtpy.QtWidgets import QDialog, QVBoxLayout, QLabel, QProgressBar
-    from qtpy.QtCore import Qt
-    dlg = QDialog(parent)
-    dlg.setWindowTitle(title)
-    dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowCloseButtonHint)
-    dlg.setMinimumWidth(500)
-    layout = QVBoxLayout(dlg)
-    lbl = QLabel("Starting…")
-    lbl.setWordWrap(True)
-    bar = QProgressBar()
-    bar.setRange(0, 100)
-    layout.addWidget(lbl)
-    layout.addWidget(bar)
-    return dlg, bar, lbl
+from xenium_viewer.tabs._helpers import make_progress_dialog as _make_progress_dialog
 
 
 from qtpy.QtCore import QThread, Signal as QtSignal
@@ -318,6 +303,7 @@ def _build_control_panel(ctx: ViewerContext):
     from xenium_viewer.tabs.tab_segmentation import build_tab as build_segmentation_tab
     from xenium_viewer.tabs.tab_external_images import build_tab as build_external_images_tab
     from xenium_viewer.tabs.tab_patch_overlays import build_tab as build_patch_overlays_tab
+    from xenium_viewer.tabs.tab_crop_dataset import build_tab as build_crop_dataset_tab
 
     # ── Build Cell Coloring first (creates cross-tab widgets) ────────────
     coloring_widget, coloring_exports = build_cell_coloring_tab(ctx)
@@ -355,6 +341,7 @@ def _build_control_panel(ctx: ViewerContext):
     seg_widget, seg_exports = build_segmentation_tab(ctx)
     ext_img_widget, ext_img_exports = build_external_images_tab(ctx)
     patch_widget, patch_exports = build_patch_overlays_tab(ctx)
+    crop_widget, crop_exports = build_crop_dataset_tab(ctx)
 
     # ── Mouse hover: show cluster ID in status bar ───────────────────────
     if ctx.cell_labels_layer is not None:
@@ -431,6 +418,7 @@ def _build_control_panel(ctx: ViewerContext):
     tools_tabs = QTabWidget()
     tools_tabs.addTab(annot_widget,    "Annotations")
     tools_tabs.addTab(seg_widget,      "Segmentation")
+    tools_tabs.addTab(crop_widget,     "Crop Dataset")
     tools_tabs.addTab(notebook_widget, "Notebook")
 
     for _group in (cells_tabs, genes_tabs, spatial_tabs, images_tabs, tools_tabs):
@@ -449,7 +437,7 @@ def _build_control_panel(ctx: ViewerContext):
         umap_exports, roi_exports, he_exports, ga_exports, mg_exports,
         lr_exports, nhood_exports, co_exports, novae_exports, arms_exports, corr_exports,
         notebook_exports, annot_exports, annot_nhood_exports, annot_dist_exports,
-        seg_exports, ext_img_exports, patch_exports,
+        seg_exports, ext_img_exports, patch_exports, crop_exports,
     ]
 
     def restore_session(session):
@@ -649,6 +637,12 @@ def _populate_viewer(viewer, data: dict) -> dict:
         edge_color="yellow", face_color=[1, 1, 0, 0.08], edge_width=2,
     )
 
+    # ── Crop Dataset shapes layer ─────────────────────────────────────────────
+    crop_layer = viewer.add_shapes(
+        data=[], name="Crop Regions", shape_type="polygon",
+        edge_color="orange", face_color=[1, 0.6, 0, 0.08], edge_width=2,
+    )
+
     # ── Transcript points layer ───────────────────────────────────────────────
     transcript_layer = viewer.add_points(
         np.empty((0, 2), dtype=np.float32),
@@ -675,6 +669,7 @@ def _populate_viewer(viewer, data: dict) -> dict:
         "transcript_bins_layer": transcript_bins_layer,
         "roi_layer": roi_layer,
         "annotation_layer": annotation_layer,
+        "crop_layer": crop_layer,
         "morph_thumb": morph_thumb,
         "morph_full_shape_yx": morph_full_shape_yx,
         "centroids_yx": centroids_yx,
@@ -901,6 +896,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         transcript_bins_layer=layers["transcript_bins_layer"],
         roi_layer=layers["roi_layer"],
         annotation_layer=layers["annotation_layer"],
+        crop_layer=layers["crop_layer"],
         morph_thumb=layers["morph_thumb"],
         morph_full_shape_yx=layers["morph_full_shape_yx"],
     )
@@ -1218,6 +1214,7 @@ def run_viewer(data_path=None, no_cache: bool = False):
                 ctx.transcript_layer = None
                 ctx.roi_layer = None
                 ctx.annotation_layer = None
+                ctx.crop_layer = None
                 ctx.morph_thumb = None
                 gc.collect()
 
@@ -1304,7 +1301,8 @@ def run_viewer(data_path=None, no_cache: bool = False):
             ctx.label_to_obs = None;  ctx.gene_names = None
             ctx.clustering_names = None;  ctx.centroids_yx = None
             ctx.cell_labels_layer = None;  ctx.transcript_layer = None
-            ctx.roi_layer = None;  ctx.annotation_layer = None;  ctx.morph_thumb = None
+            ctx.roi_layer = None;  ctx.annotation_layer = None;  ctx.crop_layer = None
+            ctx.morph_thumb = None
         gc.collect()
 
         dlg, bar, lbl = _make_progress_dialog("Preprocessing Datasets")
