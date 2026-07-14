@@ -201,21 +201,19 @@ def crop_and_export(
         scale_factors=scale_factors,
     )
 
-    # ── Crop nucleus_labels (mask only if its ID space matches cell_id) ──────
+    # ── Crop nucleus_labels (bbox only, left unmasked) ────────────────────────
+    # nucleus_labels pixel values are their own independent numbering, not the
+    # same per-cell IDs as cell_labels/cell_id (verified: their value ranges
+    # overlap numerically by coincidence — cell_labels densely fills 1..n_obs
+    # with no gaps, so nearly any small integer trivially looks "valid" — but
+    # sampling both rasters at the same spatial location gives different,
+    # unrelated numbers). There's no reliable way to filter nucleus_labels to
+    # just the kept cells by ID, so it's cropped to the bounding box only,
+    # same as the morphology image, and may include nuclei belonging to cells
+    # outside the drawn polygon.
     _progress(45, "Cropping nucleus labels...")
     nl_scales = _extract_dt_scales(ctx.sdata.labels["nucleus_labels"])
     cropped_nl = np.asarray(nl_scales[0][row_min:row_max, col_min:col_max].compute())
-    cropped_nl = cropped_nl.copy()
-    unique_nl = np.unique(cropped_nl)
-    unique_nl = unique_nl[unique_nl > 0]
-    overlap = np.isin(unique_nl, kept_cell_ids).mean() if len(unique_nl) else 1.0
-    if overlap > 0.5:
-        cropped_nl[~np.isin(cropped_nl, kept_cell_ids)] = 0
-    else:
-        print(
-            f"Warning: nucleus_labels values do not appear to share cell_id's ID space "
-            f"({overlap:.0%} overlap) — leaving nucleus_labels crop unmasked."
-        )
     nl_element = Labels2DModel.parse(
         cropped_nl, dims=("y", "x"),
         transformations={"global": Identity()},
