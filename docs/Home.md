@@ -17,6 +17,7 @@ Xenium Viewer is an open-source, napari-based viewer for 10x Genomics Xenium spa
 - ARMS fluorescence image overlay with landmark registration
 - Custom segmentation pipeline support
 - Annotation tools for labelling cells and regions
+- Crop Dataset tool for exporting drawn regions as standalone, independently-openable datasets
 - Interactive Notebook tab for running code against the loaded dataset
 - Reproducible code journal: every user action generates a Python snippet saved to `code.py`
 
@@ -68,6 +69,7 @@ For full installation instructions, optional extras, and troubleshooting, see th
 | [Tab-Patches](Tab-Patches) | Tile/patch-based image export |
 | [Tab-Annotations](Tab-Annotations) | Draw and label annotation shapes |
 | [Tab-Segmentation](Tab-Segmentation) | Custom cell segmentation pipeline |
+| [Tab-Crop-Dataset](Tab-Crop-Dataset) | Export drawn regions as standalone datasets |
 | [Tab-Notebook](Tab-Notebook) | Interactive notebook and code journal |
 
 ### Tutorials

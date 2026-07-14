@@ -73,7 +73,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     draw_btn = PushButton(label="Activate Draw Polygon Tool")
     clear_btn = PushButton(label="Clear All Regions")
-    export_btn = PushButton(label="Crop & Export")
+    export_btn = PushButton(label="Crop && Export")   # "&&" escapes to a literal "&" (Qt mnemonic syntax)
 
     def _on_draw():
         if ctx.crop_layer is None:

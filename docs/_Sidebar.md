@@ -37,6 +37,7 @@
 *Tools*
 - [Annotations](Tab-Annotations)
 - [Segmentation](Tab-Segmentation)
+- [Crop Dataset](Tab-Crop-Dataset)
 - [Notebook](Tab-Notebook)
 
 ---

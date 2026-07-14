@@ -52,6 +52,7 @@ Each top-level tab contains sub-tabs positioned along the bottom of the panel.
 |---------|---------|
 | Annotations | Draw, label, and export annotation shapes |
 | Segmentation | Run the custom cell segmentation pipeline |
+| Crop Dataset | Export drawn regions as standalone, independently-openable datasets |
 | Notebook | Interactive code notebook and code journal viewer |
 
 ## Layer List
@@ -66,6 +67,7 @@ The napari layer panel (top-left of the canvas) contains the following layers, c
 | `transcripts` | Points | Transcript coordinates; populated when a gene is loaded |
 | `ROIs` | Shapes | Region-of-interest shapes drawn in the ROI Analysis tab |
 | `annotations` | Shapes | Annotation shapes drawn in the Annotations tab |
+| `Crop Regions` | Shapes | Polygons drawn in the Crop Dataset tab, marking regions to export |
 
 Additional layers are added dynamically as you load genes, images, or run analyses.
 
