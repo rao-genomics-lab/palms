@@ -312,6 +312,18 @@ def load_sdata(
     backup_path = None   # set when we move the old cache for a user-restore
     user_data = None     # populated when we detect user data in the old cache
 
+    # A directory with no raw Xenium files (e.g. one exported by the Crop
+    # Dataset tool — just experiment.xenium + sdata_cached.zarr + transcripts)
+    # can only ever be loaded from its zarr cache; there's nothing to rebuild
+    # from. Use the cache even if the caller asked for use_cache=False (e.g.
+    # launched with --no-cache), rather than failing on a missing cells.zarr.zip.
+    if not use_cache and cache_path.exists() and not (path / "cells.zarr.zip").exists():
+        print(
+            "No raw Xenium files found in this directory (likely a Crop Dataset "
+            "export) — loading from the zarr cache regardless of --no-cache."
+        )
+        use_cache = True
+
     # Try loading from zarr cache if it exists and is fresh
     if use_cache and cache_path.exists():
         cache_fresh = True

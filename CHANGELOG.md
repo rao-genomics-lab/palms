@@ -1,6 +1,20 @@
 # Changelog
 
-## [Unreleased] — 2026-07-14
+## [Unreleased] — 2026-07-14 (b)
+
+### Fixed
+- **Crop Dataset: exported datasets failed to open with `--no-cache`** —
+  `load_sdata()` unconditionally rebuilt from raw Xenium files whenever
+  `use_cache=False`, but a Crop Dataset export has no raw files (by design —
+  it's a lightweight, self-contained zarr package), so this crashed with
+  `FileNotFoundError: ... cells.zarr.zip`. Now `load_sdata()` falls back to
+  the zarr cache whenever raw Xenium files aren't present, regardless of the
+  `use_cache`/`--no-cache` flag, since that's the only way such a directory
+  can ever be loaded. Fixes already-exported crop datasets too, not just new
+  ones, since the check is based on file presence rather than anything
+  written at export time.
+
+## [Unreleased] — 2026-07-14 (a)
 
 ### Fixed
 - **Crop Dataset: orphan nuclei in `nucleus_labels`** — nucleus IDs are their own
