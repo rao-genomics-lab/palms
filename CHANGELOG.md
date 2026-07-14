@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased] — 2026-07-14 (c)
+
+### Fixed
+- **Crop Dataset: exported datasets failed to open with `FileNotFoundError:
+  ... projection.csv`** — `load_umap()`/`load_clusterings()` unconditionally
+  read `analysis/umap/.../projection.csv` and `analysis/clustering/`, which a
+  Crop Dataset export never has (no raw Xenium `analysis/` folder). Both now
+  tolerate a missing `analysis/` folder (return `None`/`{}` instead of
+  raising). `app.py`'s dataset loader also now reconstructs the UMAP tab's
+  coordinates from `adata.obsm['X_umap']` when the raw CSV is absent but the
+  table already carries embedded UMAP coordinates from the source dataset —
+  so a cropped dataset's UMAP view still works if the source had one computed
+  at crop time. Verified against a real cropped dataset via the full
+  `app._load_dataset()` reload path.
+
 ## [Unreleased] — 2026-07-14 (b)
 
 ### Fixed

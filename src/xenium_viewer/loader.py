@@ -447,13 +447,17 @@ def load_umap(path: Path):
     """
     Load precomputed UMAP coordinates.
 
-    Returns a DataFrame with columns ['UMAP_1', 'UMAP_2'] indexed by cell barcode.
+    Returns a DataFrame with columns ['UMAP_1', 'UMAP_2'] indexed by cell barcode,
+    or None if no 'analysis/' folder exists (e.g. a Crop Dataset export, which
+    has no raw Xenium analysis outputs — the UMAP tab falls back to whatever
+    coordinates are already embedded in adata.obsm['X_umap'], if any).
     Note: the UMAP has 91 fewer cells than the AnnData — handled with reindex.
     """
     analysis_path = path / "analysis"
     umap_path = analysis_path / "umap" / "gene_expression_2_components" / "projection.csv"
     if not umap_path.exists():
-        raise FileNotFoundError(f"UMAP projection not found at {umap_path}")
+        print(f"No UMAP projection found at {umap_path} (no 'analysis/' folder in this dataset).")
+        return None
     umap_df = pd.read_csv(umap_path, index_col=0)
     umap_df.columns = ["UMAP_1", "UMAP_2"]
     print(f"Loaded UMAP: {umap_df.shape[0]} cells")
@@ -464,11 +468,15 @@ def load_clusterings(path: Path):
     """
     Load all cluster assignments from analysis/clustering/.
 
-    Returns a dict: {clustering_name -> pd.Series(cluster_id, index=cell_barcode)}
+    Returns a dict: {clustering_name -> pd.Series(cluster_id, index=cell_barcode)}.
+    Returns {} if no 'analysis/' folder exists (e.g. a Crop Dataset export).
     """
     analysis_path = path / "analysis"
     clustering_root = analysis_path / "clustering"
     clusterings = {}
+    if not clustering_root.exists():
+        print(f"No clustering results found at {clustering_root} (no 'analysis/' folder in this dataset).")
+        return clusterings
     for subdir in sorted(clustering_root.iterdir()):
         if not subdir.is_dir():
             continue

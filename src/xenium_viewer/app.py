@@ -532,6 +532,22 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
             else:
                 umap_reindexed = umap_df[umap_cols[:2]].reindex(adata.obs.index)
             adata.obsm["X_umap"] = umap_reindexed.values.astype(np.float32)
+    elif "X_umap" in adata.obsm:
+        # No raw analysis/umap/.../projection.csv (e.g. a Crop Dataset export
+        # has no 'analysis/' folder at all), but the table already carries
+        # UMAP coordinates embedded from a previous load of the source
+        # dataset — rebuild umap_df from that instead of leaving the UMAP
+        # tab empty.
+        import pandas as _pd
+        index = adata.obs["cell_id"].values if "cell_id" in adata.obs.columns else adata.obs_names
+        umap_df = _pd.DataFrame(
+            adata.obsm["X_umap"][:, :2], columns=["UMAP_1", "UMAP_2"], index=index,
+        )
+        print(f"  Reconstructed UMAP from adata.obsm['X_umap']: {len(umap_df)} cells")
+
+    if umap_df is None:
+        import pandas as _pd
+        umap_df = _pd.DataFrame(columns=["UMAP_1", "UMAP_2"])
 
     # Load custom clusterings previously saved into adata.obs
     from xenium_viewer.utils.adata_persistence import load_custom_clusterings_from_adata
