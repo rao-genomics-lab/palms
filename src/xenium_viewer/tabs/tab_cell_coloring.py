@@ -9,7 +9,7 @@ from qtpy.QtWidgets import (
     QWidget, QHBoxLayout, QScrollArea, QGridLayout,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -41,8 +41,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     clustering_widget = ComboBox(
         label="Clustering",
         choices=ctx.clustering_names,
-        value=ctx.clustering_names[0] if ctx.clustering_names else None,
         enabled=False,
+        **combo_value_kwargs(ctx.clustering_names),
     )
 
     filter_check = CheckBox(label="Filter by cluster", value=False, enabled=True)

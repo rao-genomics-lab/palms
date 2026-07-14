@@ -12,6 +12,25 @@ if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
 
+# ── magicgui ComboBox default helper ─────────────────────────────────────────
+
+def combo_value_kwargs(choices, index: int = 0) -> dict:
+    """Return kwargs for a magicgui ComboBox 'value' that won't crash on empty/short choices.
+
+    magicgui raises ``ValueError: None is not a valid choice`` if you pass
+    ``value=None`` (or any non-member) against its ``choices`` list, which
+    happens for datasets that legitimately have no clusterings (e.g. a Crop
+    Dataset export, which has no ``analysis/`` folder). Returns
+    ``{"value": choices[index]}`` only when that element exists, else ``{}`` —
+    with no ``value`` kwarg, magicgui defaults to the first choice, or ``None``
+    when choices is empty, neither of which raises.
+    """
+    seq = list(choices)
+    if len(seq) > index:
+        return {"value": seq[index]}
+    return {}
+
+
 # ── Tab layout helper ────────────────────────────────────────────────────────
 
 def make_tab(*widgets_and_natives) -> QWidget:

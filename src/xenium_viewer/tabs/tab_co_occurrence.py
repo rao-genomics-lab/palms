@@ -10,7 +10,7 @@ from qtpy.QtWidgets import (
     QLabel, QScrollArea, QGridLayout, QCheckBox,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -21,7 +21,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     co_clustering_widget = ComboBox(
         label="Clustering", choices=ctx.clustering_names,
-        value=ctx.clustering_names[0] if ctx.clustering_names else None,
+        **combo_value_kwargs(ctx.clustering_names),
     )
     ctx.co_clustering_widget = co_clustering_widget
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased] — 2026-07-14 (d)
+
+### Fixed
+- **Datasets with no clusterings crashed at startup** — a dataset with an empty
+  clustering list (e.g. a Crop Dataset export, which has no raw Xenium
+  `analysis/clustering/` folder) crashed while building the control panel:
+  `ValueError: None is not a valid choice. must be in ()`, raised by every
+  "Clustering" magicgui `ComboBox` when handed `value=None` against empty
+  choices. Added a shared `combo_value_kwargs()` helper
+  (`tabs/_helpers.py`) that omits the `value` kwarg when the choice list can't
+  supply the requested index (magicgui then safely defaults to the first
+  choice, or `None` when empty), and applied it to every clustering selector
+  (Cell Coloring, Rank Genes, Markers, Lig-Rec, Nhood Enrich, Co-occur, Annot
+  Nhood, Annot Dist) plus the Gene Correlation gene selectors. Such datasets
+  now open normally, with the clustering dropdowns simply empty until a
+  clustering is computed.
+
 ## [Unreleased] — 2026-07-14 (c)
 
 ### Fixed

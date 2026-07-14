@@ -9,7 +9,7 @@ import json
 from magicgui.widgets import ComboBox, PushButton
 from qtpy.QtWidgets import QTextEdit, QFileDialog, QLabel as QtLabel
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -26,8 +26,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # ── Clustering selector (registered on ctx for refresh_clustering_choices) ──
     mg_clustering_widget = ComboBox(
-        label="Clustering", choices=ctx.clustering_names or [""],
-        value=ctx.clustering_names[0] if ctx.clustering_names else "",
+        label="Clustering", choices=ctx.clustering_names,
+        **combo_value_kwargs(ctx.clustering_names),
     )
     ctx.mg_clustering_widget = mg_clustering_widget
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import numpy as np
 from magicgui.widgets import ComboBox, PushButton, CheckBox
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -12,9 +12,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
     state = ctx.state
 
     gene_a_widget = ComboBox(label="Gene A", choices=ctx.gene_names,
-                             value=ctx.gene_names[0] if ctx.gene_names else None)
+                             **combo_value_kwargs(ctx.gene_names, index=0))
     gene_b_widget = ComboBox(label="Gene B", choices=ctx.gene_names,
-                             value=ctx.gene_names[1] if len(ctx.gene_names) > 1 else None)
+                             **combo_value_kwargs(ctx.gene_names, index=1))
     norm_widget    = ComboBox(
         label="Normalisation",
         choices=["Raw counts", "Fraction of total", "Log1p(CPM)"],

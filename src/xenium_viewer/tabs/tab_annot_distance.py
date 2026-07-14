@@ -17,7 +17,7 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTextEdit, QFileDialog, QScrollArea,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import StatusProxy
+from xenium_viewer.tabs._helpers import StatusProxy, combo_value_kwargs
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -29,7 +29,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     # ── Selectors ─────────────────────────────────────────────────────────────
     clustering_widget = ComboBox(
         label="Clustering", choices=ctx.clustering_names,
-        value=ctx.clustering_names[0] if ctx.clustering_names else None,
+        **combo_value_kwargs(ctx.clustering_names),
     )
     ctx.annot_dist_clustering_widget = clustering_widget
 

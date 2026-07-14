@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
+from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -63,7 +63,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     ga_clustering_widget = ComboBox(
         label="Clustering", choices=ctx.clustering_names,
-        value=ctx.clustering_names[0] if ctx.clustering_names else None,
+        **combo_value_kwargs(ctx.clustering_names),
     )
     ctx.ga_clustering_widget = ga_clustering_widget
 
