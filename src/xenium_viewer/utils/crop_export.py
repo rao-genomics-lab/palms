@@ -239,7 +239,11 @@ def crop_and_export(
         return pdf[mask]
 
     filtered_df = transcripts_ddf.map_partitions(_filter_partition).compute()
-    filtered_df = filtered_df.copy()
+    # Each source partition keeps its own index (e.g. restarting at 0), so the
+    # concatenated result has duplicate index labels — spatialdata's parquet
+    # writer (dask-expr `assign`) fails on that with "cannot reindex on an
+    # axis with duplicate labels". Reset to a clean unique RangeIndex.
+    filtered_df = filtered_df.reset_index(drop=True)
     filtered_df["x"] = filtered_df["x"] - origin_x_um
     filtered_df["y"] = filtered_df["y"] - origin_y_um
 
