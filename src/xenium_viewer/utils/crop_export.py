@@ -76,6 +76,44 @@ def _extract_dt_scales(dt) -> list:
     return scales
 
 
+def _carry_over_clusterings(ctx: "ViewerContext", adata_cropped) -> None:
+    """Write ctx.clusterings (subset to adata_cropped's cells) into adata_cropped.obs.
+
+    Uses the same 'clustering_<name>' / 'cluster_labels_<name>' column
+    convention as save_clustering_to_adata / save_cluster_labels_to_sdata
+    (utils/adata_persistence.py), so load_custom_clusterings_from_adata picks
+    them up automatically the next time this exported dataset is opened — no
+    analysis/clustering/ folder needed. Covers both built-in Xenium
+    clusterings (graphclust, kmeans_*) and custom ones (e.g. Leiden), since
+    neither is guaranteed to already be written into ctx.adata.obs.
+    """
+    from xenium_viewer.utils.adata_persistence import CLUSTERING_PREFIX, CLUSTER_LABELS_PREFIX
+
+    if not ctx.clusterings:
+        return
+
+    has_cell_id = "cell_id" in adata_cropped.obs.columns
+    if has_cell_id:
+        cell_id_to_idx = pd.Series(adata_cropped.obs.index, index=adata_cropped.obs["cell_id"].values)
+
+    cluster_labels = ctx.state.get("cluster_labels", {}) if ctx.state else {}
+
+    for name, series in ctx.clusterings.items():
+        col = f"{CLUSTERING_PREFIX}{name}"
+        if has_cell_id:
+            aligned = series.rename(cell_id_to_idx).reindex(adata_cropped.obs.index)
+        else:
+            aligned = series.reindex(adata_cropped.obs.index)
+        adata_cropped.obs[col] = pd.Categorical(aligned)
+
+        label_dict = cluster_labels.get(name)
+        if label_dict:
+            str_map = {str(k): str(v) for k, v in label_dict.items()}
+            adata_cropped.obs[f"{CLUSTER_LABELS_PREFIX}{name}"] = (
+                adata_cropped.obs[col].astype(str).map(str_map).fillna("").astype(object)
+            )
+
+
 def _polygon_pixel_bbox(polygon_yx: np.ndarray, shape_yx: tuple) -> tuple:
     """Return (row_min, row_max, col_min, col_max), clipped to shape_yx (exclusive upper bounds)."""
     row_min = max(0, int(np.floor(polygon_yx[:, 0].min())))
@@ -268,6 +306,10 @@ def crop_and_export(
     # dataset is reopened.
     adata_cropped.obs["cell_labels"] = kept_cell_ids
     adata_cropped.obs["region"] = pd.Categorical(["cell_labels"] * adata_cropped.n_obs)
+
+    _progress(70, "Carrying over clusterings...")
+    _carry_over_clusterings(ctx, adata_cropped)
+
     table_element = TableModel.parse(
         adata_cropped, region="cell_labels", region_key="region", instance_key="cell_labels",
         overwrite_metadata=True,

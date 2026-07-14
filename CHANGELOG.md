@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased] — 2026-07-14 (e)
+
+### Added
+- **Crop Dataset now carries over clusterings** — every clustering in
+  `ctx.clusterings` (built-in Xenium ones like `graphclust`/`kmeans_*` and
+  any custom/Leiden ones), subset to the exported cells, is written into the
+  cropped dataset's `adata.obs` using the same `clustering_<name>` /
+  `cluster_labels_<name>` column convention already used elsewhere in the app
+  (`save_clustering_to_adata`/`save_cluster_labels_to_sdata`), so
+  `load_custom_clusterings_from_adata` picks them up automatically on reopen
+  — no `analysis/clustering/` folder needed, and no need to recompute
+  clustering after cropping. New `_carry_over_clusterings()` helper in
+  `utils/crop_export.py`. Verified against a real dataset (10 built-in
+  clusterings + 1 synthetic custom one + cluster labels, all round-tripped
+  with zero mismatches for the kept cells).
+
 ## [Unreleased] — 2026-07-14 (d)
 
 ### Fixed
