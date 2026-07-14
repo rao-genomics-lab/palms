@@ -201,19 +201,23 @@ def crop_and_export(
         scale_factors=scale_factors,
     )
 
-    # ── Crop nucleus_labels (bbox only, left unmasked) ────────────────────────
+    # ── Crop nucleus_labels (bbox, then zero out nuclei outside kept cells) ───
     # nucleus_labels pixel values are their own independent numbering, not the
-    # same per-cell IDs as cell_labels/cell_id (verified: their value ranges
-    # overlap numerically by coincidence — cell_labels densely fills 1..n_obs
-    # with no gaps, so nearly any small integer trivially looks "valid" — but
-    # sampling both rasters at the same spatial location gives different,
-    # unrelated numbers). There's no reliable way to filter nucleus_labels to
-    # just the kept cells by ID, so it's cropped to the bounding box only,
-    # same as the morphology image, and may include nuclei belonging to cells
-    # outside the drawn polygon.
+    # same per-cell IDs as cell_labels/cell_id (verified: sampling both
+    # rasters at the same spatial location gives different, unrelated
+    # numbers, even though both value ranges span roughly 1..n_obs). So
+    # instead of matching ID numbers, find which nucleus IDs spatially
+    # overlap a kept cell's footprint in the already-masked cropped_cl (any
+    # overlapping pixel counts — a nucleus straddling a kept/non-kept cell
+    # boundary is conservatively kept rather than silently dropped) and zero
+    # out the rest, mirroring the cell_labels masking above.
     _progress(45, "Cropping nucleus labels...")
     nl_scales = _extract_dt_scales(ctx.sdata.labels["nucleus_labels"])
     cropped_nl = np.asarray(nl_scales[0][row_min:row_max, col_min:col_max].compute())
+    cropped_nl = cropped_nl.copy()
+    kept_nucleus_ids = np.unique(cropped_nl[cropped_cl > 0])
+    kept_nucleus_ids = kept_nucleus_ids[kept_nucleus_ids > 0]
+    cropped_nl[~np.isin(cropped_nl, kept_nucleus_ids)] = 0
     nl_element = Labels2DModel.parse(
         cropped_nl, dims=("y", "x"),
         transformations={"global": Identity()},

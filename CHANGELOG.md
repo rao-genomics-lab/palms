@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased] — 2026-07-14
+
+### Fixed
+- **Crop Dataset: orphan nuclei in `nucleus_labels`** — nucleus IDs are their own
+  independent numbering, unrelated to `cell_id`/`cell_labels`, so an ID-based overlap
+  check (added, then removed, in the previous fix) couldn't reliably mask them and
+  the fallback left `nucleus_labels` completely unmasked. Now masked correctly via
+  spatial overlap with the already-masked `cell_labels` crop: a nucleus is kept only
+  if it occupies at least one pixel within a kept cell's footprint.
+
 ## [Unreleased] — 2026-07-13
 
 ### Added
