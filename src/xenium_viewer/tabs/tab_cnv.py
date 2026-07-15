@@ -92,7 +92,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     cnv_resolution = FloatSpinBox(label="CNV cluster resolution", min=0.05, max=2.0, step=0.05, value=0.2)
 
     run_button = PushButton(label="Run CNV Inference", enabled=True)
-    heatmap_button = PushButton(label="Show Chromosome Heatmap", enabled=False)
+    heatmap_button = PushButton(label="Save Chromosome Heatmap (PDF/PNG)", enabled=False)
     score_color_button = PushButton(label="Color Cells by CNV Score", enabled=False)
 
     results_text = QTextEdit()
@@ -274,21 +274,30 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         @thread_worker
         def _build():
+            import os
             from xenium_viewer.utils.cnv_analysis import make_cnv_heatmap
             ctx.apply_plot_font_size()
-            return make_cnv_heatmap(adata_cnv, cluster_key)
-
-        def _on_ready(fig):
-            heatmap_button.enabled = True
+            fig = make_cnv_heatmap(adata_cnv, cluster_key)
+            plots_dir = os.path.join(ctx.data_path, "plots")
+            os.makedirs(plots_dir, exist_ok=True)
+            png_path = os.path.join(plots_dir, "cnv_heatmap.png")
+            pdf_path = os.path.join(plots_dir, "cnv_heatmap.pdf")
+            fig.savefig(png_path, dpi=300, bbox_inches="tight")
+            fig.savefig(pdf_path, bbox_inches="tight")
             import matplotlib.pyplot as _plt
-            state["cnv_heatmap_fig"] = fig
-            _plt.show(block=False)
-            path = ctx.auto_save_plot(fig, "cnv_heatmap")
-            cnv_status.value = f"CNV chromosome heatmap displayed — saved to {path}"
+            _plt.close(fig)
+            return png_path, pdf_path
+
+        def _on_ready(paths):
+            heatmap_button.enabled = True
+            png_path, pdf_path = paths
+            cnv_status.value = f"CNV chromosome heatmap saved to {png_path} and {pdf_path}"
             ctx.record_code(
                 f"\n# CNV chromosome heatmap\n"
                 f"import infercnvpy as cnv\n"
-                f"cnv.pl.chromosome_heatmap(adata, groupby='{cluster_key}')"
+                f"cnv.pl.chromosome_heatmap(adata, groupby='{cluster_key}', show=False)\n"
+                f"plt.savefig('cnv_heatmap.png', dpi=300, bbox_inches='tight')\n"
+                f"plt.savefig('cnv_heatmap.pdf', bbox_inches='tight')"
             )
 
         def _on_error(exc):

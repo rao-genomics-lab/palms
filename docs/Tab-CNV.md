@@ -31,7 +31,7 @@ Requires the `cnv` optional extra — see [Installation](Installation).
 |---|---|
 | Run CNV Inference | Runs the pipeline: normalize/PCA/neighbors → smoothing → genomic-position mapping → inferCNV → CNV-profile clustering |
 | Results area | Reports reference clustering/categories, genes mapped to the genome, windows produced, CNV clusters found, and CNV score range |
-| Show Chromosome Heatmap | Displays and saves an infercnvpy chromosome heatmap for the CNV clusters; enabled after a run |
+| Save Chromosome Heatmap (PDF/PNG) | Saves an infercnvpy chromosome heatmap for the CNV clusters to `plots/cnv_heatmap.png` and `plots/cnv_heatmap.pdf` in the dataset directory; enabled after a run |
 | Color Cells by CNV Score | Recolours the labels layer by the continuous per-cell CNV score (viridis); enabled after a run |
 
 ## Workflow
@@ -41,7 +41,7 @@ Requires the `cnv` optional extra — see [Installation](Installation).
 3. Adjust **Window size**/**Window step** if needed — the defaults are tuned lower than infercnvpy's own bulk-RNA-seq defaults (60/10) because Xenium gene panels are much smaller; the results panel reports how many genes mapped to the genome and how many windows were produced so you can judge whether to widen or narrow further.
 4. Click **Run CNV Inference**. On the first run, infercnvpy's human (GRCh38) gene-position reference is downloaded and cached automatically (requires internet access).
 5. Once complete, the result is registered as a new clustering (`cnv_leiden_<resolution>`) and automatically applied as the active coloring — it's also usable everywhere clusterings are, e.g. as the groupby in Rank Genes or the cluster source in ROI DEG.
-6. Click **Show Chromosome Heatmap** to inspect gain/loss patterns across chromosomes per CNV cluster.
+6. Click **Save Chromosome Heatmap (PDF/PNG)** to export gain/loss patterns across chromosomes per CNV cluster as `plots/cnv_heatmap.png` and `plots/cnv_heatmap.pdf` (the heatmap is not displayed in a window — building it can be slow, so it's saved directly instead).
 7. Click **Color Cells by CNV Score** to switch the spatial view to a continuous CNV-burden overlay instead of discrete clusters.
 
 ## Notes
