@@ -65,6 +65,7 @@ from xenium_viewer.utils.transcript_index import TranscriptLoader
 from xenium_viewer.utils.umap_widget import UMAPViewer
 from xenium_viewer.utils.viewer_context import ViewerContext
 from xenium_viewer.tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu, create_view_menu
+from xenium_viewer.utils.prov_graph import ProvGraph
 from xenium_viewer import loader as _loader_mod
 from xenium_viewer import preprocess as _preprocess_mod
 
@@ -321,6 +322,13 @@ def _build_control_panel(ctx: ViewerContext):
 
     # ── Create shared helpers (needs all widgets registered) ─────────────
     create_shared_helpers(ctx)
+
+    # ── Seed the code preamble so data_path/imports are always cell #1 ────
+    # Emitted up front (when recording is on) so every recorded step has a
+    # correct, self-contained preamble to depend on, even if the first action
+    # a user takes doesn't chain through normalize/clustering.
+    if ctx.state.get("record_code"):
+        ctx.record_preamble()
 
     # ── Populate initial cluster checkboxes ──────────────────────────────
     ctx.repopulate_cluster_checkboxes()
@@ -834,6 +842,8 @@ def _make_initial_state(gene_names: list, clustering_names: list) -> dict:
         "record_code": True,
         "code_journal": [],
         "code_journal_tags": set(),
+        "prov_graph": ProvGraph(),
+        "_legacy_counter": 0,
         "code_file": f"code_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py",
         "custom_clusterings": {},
     }

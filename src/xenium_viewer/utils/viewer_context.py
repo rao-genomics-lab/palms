@@ -68,6 +68,7 @@ class ViewerContext:
 
     # ── Shared helper callables (attached by create_shared_helpers) ──────────
     record_code: Any = None
+    record_node: Any = None
     record_preamble: Any = None
     record_normalize: Any = None
     record_clustering: Any = None
