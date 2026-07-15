@@ -35,15 +35,38 @@ in editable mode, so source edits in this checkout are picked up immediately.
 
 ### Optional extras
 
-Add on top of the core install:
+Several features depend on heavier or more niche packages that aren't installed
+by default. Add them on top of the core install, after `conda activate
+xenium_viewer`:
 
 ```bash
-pip install -e ".[celltypist]"   # CellTypist label transfer
+pip install -e ".[celltypist]"   # CellTypist label transfer (Rank Genes tab)
 pip install -e ".[r]"            # rpy2-based reference fetcher (needs system R)
 pip install -e ".[gpu]"          # torch / torch-geometric / xgboost
 pip install -e ".[references]"   # rasterio + readfcs
+pip install -e ".[cnv]"          # InSituCNV/infercnvpy CNV inference (CNV tab)
 pip install -e ".[full]"         # all of the above
 ```
+
+Each extra is independent — install only the ones you need. A tab whose
+optional dependency isn't installed still appears in the UI; it just reports
+a clear "not installed" error (with the `pip install` command to run) the
+first time you try to use it, instead of failing at startup.
+
+**CNV extra note**: `insitucnv`'s published package metadata pins
+`anndata<0.12`/`pandas<3`, which conflicts with this app's own `anndata`/
+`pandas` requirements and can make `pip install -e ".[cnv]"` fail to
+resolve. If that happens, install its real dependencies directly instead,
+then add `insitucnv` itself without letting pip re-resolve its stale pin:
+
+```bash
+pip install infercnvpy scvelo
+pip install --no-deps insitucnv
+```
+
+The pin is stale — `insitucnv` only uses stable AnnData APIs and runs fine
+against newer `anndata`/`pandas` in practice (verified against `anndata`
+0.13 / `pandas` 3.0).
 
 ### Reinstalling
 
@@ -93,7 +116,7 @@ src/xenium_viewer/          # the installable package
 ├── preprocess.py           # transcript feather cache builder
 ├── tabs/                   # 21 control-panel tab modules in 5 groups
 │   │                       #   Cells: Clustering, Coloring, Transcripts, UMAP
-│   │                       #   Genes: Rank Genes, Markers, Correlation
+│   │                       #   Genes: Rank Genes, Markers, Correlation, CNV
 │   │                       #   Spatial: ROI DEG, Lig-Rec, Nhood Enrich,
 │   │                       #            Co-occur, Domains, Annot Nhood, Annot Dist
 │   │                       #   Images: H&E, ARMS, Ext Images, Patches
