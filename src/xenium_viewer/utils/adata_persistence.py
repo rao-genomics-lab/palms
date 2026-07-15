@@ -431,6 +431,95 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
     return df, adata_norm, groupby
 
 
+def save_cnv_results_to_adata(ctx: ViewerContext, result: dict) -> None:
+    """Write CNV inference results to adata.obs/uns and cache adata_cnv as h5ad.
+
+    Mirrors save_rank_genes_to_adata's shape: the derived per-cell score and
+    run metadata go into the main adata (so they round-trip on reopen), and
+    the full CNV-profile AnnData (with obsm['X_cnv'], gene positions, etc.)
+    is cached alongside the zarr store so the chromosome heatmap can be
+    regenerated without recomputation.
+    """
+    adata = ctx.adata
+    score = result["cnv_score"]
+    if "cell_id" in adata.obs.columns:
+        cell_id_to_idx = pd.Series(adata.obs.index, index=adata.obs["cell_id"].values)
+        aligned = score.rename(cell_id_to_idx).reindex(adata.obs.index)
+    else:
+        aligned = score.reindex(adata.obs.index)
+    adata.obs["cnv_score"] = aligned.astype(np.float64)
+
+    adata.uns["cnv_run_info"] = {
+        "reference_obs_key": result["reference_obs_key"],
+        "reference_clustering_name": result.get("reference_clustering_name", ""),
+        "reference_categories": list(result["reference_categories"]),
+        "cluster_key": result["cluster_key"],
+        "n_genes_total": int(result["n_genes_total"]),
+        "n_genes_mapped": int(result["n_genes_mapped"]),
+        "n_windows": int(result["n_windows"]),
+        "params": dict(result["params"]),
+    }
+    _persist_table(ctx)
+    _persist_cnv_adata(ctx, result["adata_cnv"])
+
+
+def _persist_cnv_adata(ctx: ViewerContext, adata_cnv) -> None:
+    """Write adata_cnv as h5ad alongside the zarr cache (see _persist_adata_norm)."""
+    if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
+        return
+    try:
+        cnv_path = Path(ctx.sdata.path) / "adata_cnv_cache.h5ad"
+        _convert_adata_arrow_strings(adata_cnv)
+        adata_cnv.write_h5ad(cnv_path)
+    except Exception as e:
+        _maybe_show_permission_dialog(e, "CNV profile cache")
+        print(f"Warning: could not persist adata_cnv: {e}")
+
+
+def load_cnv_results_from_adata(adata: AnnData, sdata) -> "dict | None":
+    """Read CNV run info from adata.uns/obs and adata_cnv from the h5ad cache.
+
+    Returns None if no CNV run has been saved.
+    """
+    info = adata.uns.get("cnv_run_info")
+    if info is None:
+        return None
+
+    score = None
+    if "cnv_score" in adata.obs.columns:
+        if "cell_id" in adata.obs.columns:
+            score = pd.Series(
+                adata.obs["cnv_score"].values,
+                index=adata.obs["cell_id"].values,
+                name="cnv_score",
+            )
+        else:
+            score = adata.obs["cnv_score"].rename("cnv_score")
+
+    adata_cnv = None
+    if sdata is not None and sdata.path is not None:
+        cnv_path = Path(sdata.path) / "adata_cnv_cache.h5ad"
+        if cnv_path.exists():
+            try:
+                import scanpy as sc
+                adata_cnv = sc.read_h5ad(cnv_path)
+            except Exception as e:
+                print(f"Warning: could not load adata_cnv cache: {e}")
+
+    return {
+        "reference_obs_key": info.get("reference_obs_key"),
+        "reference_clustering_name": info.get("reference_clustering_name", ""),
+        "reference_categories": list(info.get("reference_categories", [])),
+        "cluster_key": info.get("cluster_key"),
+        "n_genes_total": info.get("n_genes_total"),
+        "n_genes_mapped": info.get("n_genes_mapped"),
+        "n_windows": info.get("n_windows"),
+        "params": dict(info.get("params", {})),
+        "cnv_score": score,
+        "adata_cnv": adata_cnv,
+    }
+
+
 # ── DEG result caches (sidecar parquets at zarr root) ─────────────────────────
 
 ROI_DEG_CACHE = "roi_deg_cache.parquet"

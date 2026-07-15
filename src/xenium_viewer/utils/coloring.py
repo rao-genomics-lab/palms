@@ -109,6 +109,7 @@ class CellColorManager:
         self.label_to_obs = label_to_obs
         self._gene_cache: dict[tuple, np.ndarray] = {}
         self._cluster_cache: dict[str, np.ndarray] = {}
+        self._continuous_cache: dict[str, np.ndarray] = {}
         self._max_label = len(label_to_obs) - 1
 
     def _empty_color_array(self) -> np.ndarray:
@@ -185,6 +186,69 @@ class CellColorManager:
         color_arr[valid_labels] = rgba_obs[obs_indices]
 
         self._gene_cache[cache_key] = color_arr
+        return color_arr
+
+    def get_continuous_colors(
+        self,
+        values: np.ndarray,
+        colormap: str = "viridis",
+        cache_key: Optional[str] = None,
+    ) -> np.ndarray:
+        """
+        Build RGBA color array for an arbitrary continuous per-cell score
+        (e.g. a CNV burden score) that isn't a gene in ``adata.var_names``.
+
+        Parameters
+        ----------
+        values : np.ndarray
+            Length adata.n_obs, in adata.obs row order (not gene expression).
+        colormap : str
+            Matplotlib colormap name.
+        cache_key : str, optional
+            If given, cache the result under this key.
+
+        Returns
+        -------
+        np.ndarray, shape (max_label + 1, 4), dtype float32
+        """
+        if cache_key is not None and cache_key in self._continuous_cache:
+            return self._continuous_cache[cache_key]
+
+        expr = np.asarray(values, dtype=np.float32).ravel()
+        if expr.shape[0] != self.adata.n_obs:
+            raise ValueError(
+                f"values length {expr.shape[0]} does not match adata.n_obs {self.adata.n_obs}"
+            )
+
+        # Normalise over all finite values to [0, 1] — unlike gene expression,
+        # a score of 0 is meaningful here, so we don't restrict to nonzero.
+        finite = np.isfinite(expr)
+        expr_norm = np.zeros_like(expr)
+        if finite.any():
+            vmin = expr[finite].min()
+            vmax = expr[finite].max()
+            if vmax > vmin:
+                expr_norm[finite] = (expr[finite] - vmin) / (vmax - vmin)
+            else:
+                expr_norm[finite] = 1.0
+
+        # Map via colormap
+        cmap = plt.get_cmap(colormap)
+        rgba_obs = cmap(expr_norm).astype(np.float32)
+
+        # Alpha: transparent for non-finite (missing) values
+        rgba_obs[:, 3] = 1.0
+        rgba_obs[~finite, 3] = 0.0
+
+        # Build label-indexed array
+        color_arr = self._empty_color_array()
+        valid_mask = self.label_to_obs >= 0
+        valid_labels = np.where(valid_mask)[0]
+        obs_indices = self.label_to_obs[valid_labels]
+        color_arr[valid_labels] = rgba_obs[obs_indices]
+
+        if cache_key is not None:
+            self._continuous_cache[cache_key] = color_arr
         return color_arr
 
     def get_gene_colors_filtered(

@@ -63,5 +63,6 @@ dependencies:
 #     pip install -e ".[r]"            # rpy2-based reference fetcher (needs system R)
 #     pip install -e ".[gpu]"          # torch / torch-geometric / xgboost
 #     pip install -e ".[references]"   # rasterio + readfcs
+#     pip install -e ".[cnv]"          # InSituCNV/infercnvpy CNV inference
 #     pip install -e ".[full]"         # all of the above
 # ─────────────────────────────────────────────────────────────────────────────

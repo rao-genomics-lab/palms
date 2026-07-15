@@ -1,5 +1,44 @@
 # Changelog
 
+## [Unreleased] — 2026-07-15
+
+### Added
+- **CNV inference tab (Genes → CNV)** — infers copy-number variation from
+  expression data using the [InSituCNV](https://github.com/Moldia/InSituCNV)
+  method (`insitucnv` + `infercnvpy`, new optional `cnv` extra:
+  `pip install -e ".[cnv]"`). Pick an existing clustering, mark some of its
+  categories as the "normal" reference population, and run CNV inference to
+  get (a) a new colorable CNV-subclone clustering (`cnv_leiden_<res>`,
+  registered into `ctx.clusterings` exactly like every other clustering —
+  usable app-wide in Rank Genes, ROI DEG, etc.), (b) a continuous per-cell
+  "CNV score" coloring mode, and (c) a chromosome heatmap plot. New
+  `utils/cnv_analysis.py` (pure-logic pipeline wrapper), new
+  `tabs/tab_cnv.py`, new `CellColorManager.get_continuous_colors()` for
+  coloring by arbitrary continuous per-cell scores (not just gene
+  expression), new `save_cnv_results_to_adata`/`load_cnv_results_from_adata`
+  persistence pair in `utils/adata_persistence.py` (results survive session
+  reload, including an `adata_cnv_cache.h5ad` sidecar so the heatmap can be
+  regenerated without recomputation). Human genome reference only for now
+  (infercnvpy's default GRCh38 gene-position table, auto-downloaded/cached).
+  Window/step defaults are set lower than infercnvpy's bulk-RNA-seq defaults
+  since Xenium panels are much smaller; both are user-adjustable, and the
+  results panel reports how many genes mapped to the genome and how many
+  windows were produced so users can judge result quality.
+
+  Installing the `cnv` extra needs two known workarounds, both verified
+  against a live end-to-end run: `insitucnv==0.1.0`'s PyPI metadata pins
+  `anndata<0.12`/`pandas<3`, which conflicts with this app's own
+  `anndata>=0.12` — install it with `pip install --no-deps insitucnv` after
+  `pip install -e ".[cnv]"` fails (the pin is stale; insitucnv only uses
+  stable AnnData APIs and imports/runs fine against `anndata` 0.13 /
+  `pandas` 3.0 in practice). Separately, `run_cnv_pipeline()` now calls
+  `_convert_adata_arrow_strings()` before `run_infercnv()` — infercnvpy does
+  numpy-style fancy indexing on `var_names` that breaks on pandas 3.0's
+  PyArrow-backed string dtype — and patches the removed
+  `matplotlib.cm.get_cmap()` API that `insitucnv`'s own cluster-coloring
+  code still calls (removed in matplotlib 3.9+, `insitucnv` not yet
+  updated).
+
 ## [Unreleased] — 2026-07-14 (e)
 
 ### Added

@@ -295,6 +295,7 @@ def _build_control_panel(ctx: ViewerContext):
     from xenium_viewer.tabs.tab_co_occurrence import build_tab as build_co_occurrence_tab
     from xenium_viewer.tabs.tab_arms import build_tab as build_arms_tab
     from xenium_viewer.tabs.tab_gene_correlation import build_tab as build_gene_correlation_tab
+    from xenium_viewer.tabs.tab_cnv import build_tab as build_cnv_tab
     from xenium_viewer.tabs.tab_novae import build_tab as build_novae_tab
     from xenium_viewer.tabs.tab_notebook import build_tab as build_notebook_tab
     from xenium_viewer.tabs.tab_annotations import build_tab as build_annotations_tab
@@ -315,6 +316,7 @@ def _build_control_panel(ctx: ViewerContext):
     lr_widget, lr_exports = build_ligrec_tab(ctx)
     nhood_widget, nhood_exports = build_nhood_tab(ctx)
     co_widget, co_exports = build_co_occurrence_tab(ctx)
+    cnv_widget, cnv_exports = build_cnv_tab(ctx)
     novae_widget, novae_exports = build_novae_tab(ctx)
 
     # ── Create shared helpers (needs all widgets registered) ─────────────
@@ -399,6 +401,7 @@ def _build_control_panel(ctx: ViewerContext):
     genes_tabs.addTab(ga_widget,   "Rank Genes")
     genes_tabs.addTab(mg_widget,   "Markers")
     genes_tabs.addTab(corr_widget, "Correlation")
+    genes_tabs.addTab(cnv_widget,  "CNV")
 
     spatial_tabs = QTabWidget()
     spatial_tabs.addTab(roi_widget,        "ROI DEG")
@@ -435,7 +438,7 @@ def _build_control_panel(ctx: ViewerContext):
     all_exports = [
         clustering_exports, coloring_exports, transcripts_exports,
         umap_exports, roi_exports, he_exports, ga_exports, mg_exports,
-        lr_exports, nhood_exports, co_exports, novae_exports, arms_exports, corr_exports,
+        lr_exports, nhood_exports, co_exports, cnv_exports, novae_exports, arms_exports, corr_exports,
         notebook_exports, annot_exports, annot_nhood_exports, annot_dist_exports,
         seg_exports, ext_img_exports, patch_exports, crop_exports,
     ]
@@ -955,6 +958,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     from xenium_viewer.utils.adata_persistence import (
         load_analysis_results_from_adata,
         load_rank_genes_from_adata,
+        load_cnv_results_from_adata,
         load_rois_from_sdata,
         load_landmarks_from_sdata,
         load_arms_tiles_from_sdata,
@@ -970,6 +974,10 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         ctx.state['rank_genes_df'] = rg_df
         ctx.state['rank_genes_adata_norm'] = rg_adata_norm
         ctx.state['rank_genes_groupby'] = rg_groupby
+
+    cnv_result = load_cnv_results_from_adata(adata, data["sdata"])
+    if cnv_result is not None and ctx.state.get('cnv_result') is None:
+        ctx.state['cnv_result'] = cnv_result
 
     # Load ROIs from sdata.shapes['rois'] (new format); zarr arrays in
     # load_session() serve as fallback for datasets not yet saved with new code.

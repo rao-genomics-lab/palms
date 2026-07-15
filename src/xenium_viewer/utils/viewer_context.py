@@ -64,6 +64,7 @@ class ViewerContext:
     annot_nhood_clustering_widget: Any = None
     annot_dist_clustering_widget: Any = None
     mg_clustering_widget: Any = None      # marker genes tab
+    cnv_clustering_widget: Any = None     # CNV tab — reference-population picker
 
     # ── Shared helper callables (attached by create_shared_helpers) ──────────
     record_code: Any = None

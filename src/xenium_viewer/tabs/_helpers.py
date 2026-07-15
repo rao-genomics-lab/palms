@@ -337,7 +337,8 @@ def create_shared_helpers(ctx: ViewerContext):
                       ctx.co_clustering_widget,
                       ctx.annot_nhood_clustering_widget,
                       ctx.annot_dist_clustering_widget,
-                      ctx.mg_clustering_widget]:
+                      ctx.mg_clustering_widget,
+                      ctx.cnv_clustering_widget]:
             if combo is None:
                 continue
             old_val = combo.value
