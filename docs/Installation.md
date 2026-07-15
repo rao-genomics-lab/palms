@@ -25,8 +25,18 @@ This installs the `xenium-viewer` package in editable mode along with all requir
 | GPU support | `pip install rapids-singlecell` | GPU-accelerated UMAP and clustering via RAPIDS |
 | R integration | Install R + Seurat (see docs) | Custom segmentation pipeline using Seurat-based workflows |
 | Reference datasets | `xenium-fetch-references` | Download pre-built label transfer reference panels |
+| CNV inference | `pip install -e ".[cnv]"` | Copy-number variation inference using InSituCNV/infercnvpy — see note below |
 
 Install optional extras after activating the `xenium_viewer` conda environment.
+
+**CNV inference note**: `insitucnv`'s published package metadata pins `anndata<0.12`/`pandas<3`, which conflicts with this app's own `anndata`/`pandas` requirements and will make `pip install -e ".[cnv]"` fail to resolve. Install its real dependencies directly instead, then add `insitucnv` itself without letting pip re-resolve its stale pin:
+
+```bash
+pip install infercnvpy scvelo
+pip install --no-deps insitucnv
+```
+
+The pin is stale — `insitucnv` only uses stable AnnData APIs and runs fine against newer `anndata`/`pandas` in practice (verified against `anndata` 0.13 / `pandas` 3.0).
 
 ## Reinstalling
 

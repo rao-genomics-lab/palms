@@ -24,6 +24,7 @@ Each top-level tab contains sub-tabs positioned along the bottom of the panel.
 | Rank Genes | Rank marker genes per cluster using Wilcoxon or t-test |
 | Markers | Score and visualise curated marker gene panels |
 | Correlation | Compute pairwise and module-level gene correlations |
+| CNV | Infer copy-number variation using the InSituCNV method |
 
 ### Spatial
 

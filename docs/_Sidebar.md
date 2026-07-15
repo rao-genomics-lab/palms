@@ -18,6 +18,7 @@
 - [Rank Genes](Tab-Rank-Genes)
 - [Markers](Tab-Markers)
 - [Gene Correlation](Tab-Gene-Correlation)
+- [CNV](Tab-CNV)
 
 *Spatial*
 - [ROI Analysis](Tab-ROI-Analysis)

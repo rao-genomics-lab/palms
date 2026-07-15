@@ -13,6 +13,7 @@ Xenium Viewer is an open-source, napari-based viewer for 10x Genomics Xenium spa
 - Neighbourhood enrichment analysis
 - Co-occurrence analysis
 - Spatial domain inference (Novae integration)
+- Copy-number variation (CNV) inference (InSituCNV/infercnvpy integration)
 - H&E image registration using landmark-based affine alignment
 - ARMS fluorescence image overlay with landmark registration
 - Custom segmentation pipeline support
@@ -56,6 +57,7 @@ For full installation instructions, optional extras, and troubleshooting, see th
 | [Tab-Rank-Genes](Tab-Rank-Genes) | Rank marker genes per cluster |
 | [Tab-Markers](Tab-Markers) | Marker gene panels and scoring |
 | [Tab-Gene-Correlation](Tab-Gene-Correlation) | Pairwise and module gene correlation |
+| [Tab-CNV](Tab-CNV) | Copy-number variation inference (InSituCNV) |
 | [Tab-ROI-Analysis](Tab-ROI-Analysis) | ROI-based differential gene expression |
 | [Tab-Ligand-Receptor](Tab-Ligand-Receptor) | Ligand-receptor interaction analysis |
 | [Tab-Neighborhood-Enrichment](Tab-Neighborhood-Enrichment) | Spatial neighbourhood enrichment |
