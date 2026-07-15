@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased] — 2026-07-15 (b)
+
+### Changed
+- **CNV tab defaults now match InSituCNV's reference notebook** —
+  `smoothing_neighbors` 30→20, `window_size` 10→60, `step` 2→10 in
+  `utils/cnv_analysis.py::run_cnv_pipeline()` and the corresponding
+  `tabs/tab_cnv.py` spin boxes. The original lower window/step defaults
+  were based on a mistaken assumption that a 60-gene window would produce
+  zero CNV windows for chromosomes with fewer genes on a small Xenium
+  panel. Verified against infercnvpy's actual implementation
+  (`_running_mean()`): windowing is computed independently per
+  chromosome, and a chromosome with fewer genes than `window_size` isn't
+  dropped — it falls back to a single window averaging all of that
+  chromosome's genes. So a larger window mainly trades sub-chromosomal
+  resolution for a less noisy per-window estimate, which suits
+  whole-chromosome/arm-level CNV signal; there was no failure mode being
+  avoided by the smaller custom defaults. `n_neighbors`/`lfc_clip` already
+  matched the notebook and are unchanged. Added a tooltip and an inline
+  hint label to the **CNV cluster resolution** field noting that this
+  value (kept at 0.2) may need per-dataset tuning, since InSituCNV's own
+  notebook evaluates multiple resolutions rather than recommending one.
+
 ## [Unreleased] — 2026-07-15
 
 ### Added

@@ -20,10 +20,12 @@ Requires the `cnv` optional extra — see [Installation](Installation).
 | Control | Description |
 |---|---|
 | Neighbors (expression graph) | Spin box (5–100, default 15) — neighbors for the expression PCA graph used for smoothing |
-| Smoothing neighbors | Spin box (5–200, default 30) — neighbors used by InSituCNV's graph-smoothing step |
-| Window size (genes) | Spin box (2–200, default 10) — infercnvpy sliding-window size |
-| Window step | Spin box (1–50, default 2) — infercnvpy sliding-window step |
-| CNV cluster resolution | Float spin box (0.05–2.0, default 0.2) — Leiden clustering resolution for CNV subclones |
+| Smoothing neighbors | Spin box (5–200, default 20) — neighbors used by InSituCNV's graph-smoothing step |
+| Window size (genes) | Spin box (2–200, default 60) — infercnvpy sliding-window size, in genes, computed independently per chromosome |
+| Window step | Spin box (1–50, default 10) — infercnvpy sliding-window step |
+| CNV cluster resolution | Float spin box (0.05–2.0, default 0.2) — Leiden clustering resolution for CNV subclones. Hover for a tooltip, or see the hint text below the field: this default may need tuning per dataset — check the chromosome heatmap and cluster count after running |
+
+Neighbors/Smoothing neighbors/Window size/Window step/LFC clip defaults match InSituCNV's own reference notebook ([`run_insitucnv.ipynb`](https://github.com/Moldia/InSituCNV/blob/main/notebooks/run_insitucnv.ipynb)).
 
 ### Run and Results
 
@@ -38,7 +40,7 @@ Requires the `cnv` optional extra — see [Installation](Installation).
 
 1. Select a **Reference clustering** — an existing clustering or cell-type annotation with a clear normal/non-tumor population (e.g. an immune or stromal cluster from Rank Genes annotation, or a built-in `graphclust`).
 2. Check the categories that represent the **reference (normal)** population in the cluster checkbox grid.
-3. Adjust **Window size**/**Window step** if needed — the defaults are tuned lower than infercnvpy's own bulk-RNA-seq defaults (60/10) because Xenium gene panels are much smaller; the results panel reports how many genes mapped to the genome and how many windows were produced so you can judge whether to widen or narrow further.
+3. Adjust **Window size**/**Window step** if needed — these are gene counts, computed independently per chromosome (a chromosome with fewer genes than **Window size** doesn't get dropped; it falls back to a single window averaging all of that chromosome's genes). A larger window trades sub-chromosomal resolution for a less noisy per-window estimate — the defaults match InSituCNV's own reference notebook. The results panel reports how many genes mapped to the genome and how many windows were produced so you can judge result quality and tune accordingly.
 4. Click **Run CNV Inference**. On the first run, infercnvpy's human (GRCh38) gene-position reference is downloaded and cached automatically (requires internet access).
 5. Once complete, the result is registered as a new clustering (`cnv_leiden_<resolution>`) and automatically applied as the active coloring — it's also usable everywhere clusterings are, e.g. as the groupby in Rank Genes or the cluster source in ROI DEG.
 6. Click **Save Chromosome Heatmap (PDF/PNG)** to export gain/loss patterns across chromosomes per CNV cluster as `plots/cnv_heatmap.png` and `plots/cnv_heatmap.pdf` (the heatmap is not displayed in a window — building it can be slow, so it's saved directly instead).
@@ -50,3 +52,4 @@ Requires the `cnv` optional extra — see [Installation](Installation).
 - The reference population must be explicitly chosen; no cluster is treated as "normal" by default, and at least one reference category is required to run.
 - The full CNV profile (per-window values, gene positions) is cached alongside the zarr store so the chromosome heatmap can be regenerated after reopening the dataset without recomputing the pipeline.
 - Results persist across sessions like any other clustering; reopening the dataset restores the results summary and re-enables the heatmap/score-coloring buttons.
+- The **CNV cluster resolution** default (0.2) is a starting point, not a universal recommendation — InSituCNV's own notebook evaluates several resolutions per dataset before picking one. If clusters look too coarse (few, large clusters mixing distinct CNV profiles) or too fragmented (many tiny clusters), re-run with a different resolution and compare the chromosome heatmap.

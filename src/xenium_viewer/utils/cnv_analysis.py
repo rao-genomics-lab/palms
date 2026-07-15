@@ -8,12 +8,20 @@ data. This module has no Qt/napari imports and never imports insitucnv or
 infercnvpy at module load time — both are optional dependencies
 (``pip install -e ".[cnv]"``).
 
-Xenium gene panels are much smaller than the bulk-RNA-seq-scale panels
-infercnvpy's defaults (window_size=60, step=10) were tuned for. With a
-small panel, a 60-gene sliding window starves most chromosomes of any
-window at all, so this module defaults to a much smaller window/step and
-reports how many genes/windows were actually used so callers can judge
-result quality.
+Default parameters (``smoothing_neighbors``, ``window_size``, ``step``,
+``lfc_clip``) match InSituCNV's own reference notebook
+(``notebooks/run_insitucnv.ipynb``), not a Xenium-specific guess.
+``window_size``/``step`` are gene counts, computed independently per
+chromosome: infercnvpy slides a window of ``window_size`` genes along
+each chromosome's genes (ordered by genomic position), stepping by
+``step``. A chromosome with fewer genes than ``window_size`` doesn't get
+dropped — infercnvpy falls back to a single window averaging all of that
+chromosome's available genes. So a larger window mainly trades away
+sub-chromosomal resolution (most chromosomes on a small panel collapse to
+one whole-chromosome average) for a less noisy per-window estimate, which
+suits CNV signal that's dominated by whole-chromosome/arm-level events.
+This module reports how many genes/windows were actually used so callers
+can judge result quality and retune if needed.
 """
 
 from __future__ import annotations
@@ -46,9 +54,9 @@ def run_cnv_pipeline(
     reference_categories: list[str],
     reference_clustering_name: str = "",
     n_neighbors: int = 15,
-    smoothing_neighbors: int = 30,
-    window_size: int = 10,
-    step: int = 2,
+    smoothing_neighbors: int = 20,
+    window_size: int = 60,
+    step: int = 10,
     lfc_clip: float = 4.0,
     resolution: float = 0.2,
 ) -> dict:
@@ -75,12 +83,16 @@ def run_cnv_pipeline(
     smoothing_neighbors : int
         Neighbors used by InSituCNV's graph-smoothing step.
     window_size, step : int
-        infercnvpy sliding-window parameters (lower than infercnvpy's own
-        defaults — see module docstring).
+        infercnvpy sliding-window parameters, in number of genes (matches
+        InSituCNV's reference notebook defaults — see module docstring for
+        how this behaves on chromosomes with few genes).
     lfc_clip : float
         infercnvpy log-fold-change clipping value.
     resolution : float
-        Leiden clustering resolution for CNV subclones.
+        Leiden clustering resolution for CNV subclones. May need tuning
+        per dataset — InSituCNV's own notebook evaluates several
+        resolutions and picks one after reviewing the results, rather than
+        recommending a single universal default.
 
     Returns
     -------

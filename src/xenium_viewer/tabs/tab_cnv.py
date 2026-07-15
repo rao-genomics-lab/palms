@@ -85,11 +85,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
         return [str(cid) for cid, cb in cbs.items() if cb.isChecked()]
 
     # ── Parameters ──────────────────────────────────────────────────────
+    # Defaults match InSituCNV's own reference notebook (run_insitucnv.ipynb).
     cnv_n_neighbors = SpinBox(label="Neighbors (expression graph)", min=5, max=100, value=15)
-    cnv_smoothing_neighbors = SpinBox(label="Smoothing neighbors", min=5, max=200, value=30)
-    cnv_window_size = SpinBox(label="Window size (genes)", min=2, max=200, value=10)
-    cnv_step = SpinBox(label="Window step", min=1, max=50, value=2)
+    cnv_smoothing_neighbors = SpinBox(label="Smoothing neighbors", min=5, max=200, value=20)
+    cnv_window_size = SpinBox(label="Window size (genes)", min=2, max=200, value=60)
+    cnv_step = SpinBox(label="Window step", min=1, max=50, value=10)
     cnv_resolution = FloatSpinBox(label="CNV cluster resolution", min=0.05, max=2.0, step=0.05, value=0.2)
+    cnv_resolution.tooltip = (
+        "InSituCNV's own notebook evaluates several resolutions (e.g. 0.1, 0.2, 0.3) "
+        "and picks one per dataset after reviewing the results — this default may not "
+        "be right for your data."
+    )
+    cnv_resolution_hint = QLabel(
+        "Default may need tuning per dataset — check the chromosome heatmap and\n"
+        "cluster count after running, and re-run with a different value if clusters\n"
+        "look too coarse or too fragmented."
+    )
 
     run_button = PushButton(label="Run CNV Inference", enabled=True)
     heatmap_button = PushButton(label="Save Chromosome Heatmap (PDF/PNG)", enabled=False)
@@ -366,6 +377,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         cnv_window_size,
         cnv_step,
         cnv_resolution,
+        cnv_resolution_hint,
         run_button,
         cnv_progress,
         results_text,
