@@ -13,6 +13,7 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -132,9 +133,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if arms_flip_h.value: flips.append("H")
         if flips:
             arms_status_label.value = f"ARMS flip applied: {'+'.join(flips)}"
-        ctx.record_code(
-            f"\n# ARMS H&E image flip\n"
-            f"# flip_vertical={arms_flip_v.value}, flip_horizontal={arms_flip_h.value}"
+        ctx.record_node(
+            "arms:flip",
+            f"\n# ARMS H&E image flip (registration): "
+            f"flip_vertical={arms_flip_v.value}, flip_horizontal={arms_flip_h.value}",
+            deps=["preamble"], kind=TERMINAL, label="ARMS H&E flip",
         )
 
     arms_flip_v.changed.connect(on_arms_flip_changed)
@@ -200,10 +203,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_load_geojson_button.enabled = True
         shape_str = "x".join(str(s) for s in pyramid[0].shape)
         arms_status_label.value = f"ARMS H&E loaded: {Path(path).name} ({shape_str}, {len(pyramid)} levels)"
-        ctx.record_code(
+        ctx.record_node(
+            "arms:load",
             f"\n# Load ARMS H&E image\n"
             f"from xenium_viewer.utils.registration import load_he_pyramid\n"
-            f"arms_pyramid, arms_tif = load_he_pyramid(\"{path}\")"
+            f"arms_pyramid, arms_tif = load_he_pyramid(\"{path}\")",
+            deps=["preamble"], kind=TERMINAL, label="Load ARMS H&E",
         )
 
     def on_arms_load_he():
@@ -288,12 +293,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         from xenium_viewer.utils.adata_persistence import save_landmarks_to_sdata
         save_landmarks_to_sdata(ctx, 'arms_xenium_landmarks', xen_pts)
         save_landmarks_to_sdata(ctx, 'arms_he_landmarks', he_pts)
-        ctx.record_code(
+        ctx.record_node(
+            "arms:landmark_register",
             f"\n# ARMS landmark registration\n"
             f"from xenium_viewer.utils.registration import compute_landmark_affine\n"
             f"arms_xen_pts = np.array({xen_pts.tolist()})\n"
             f"arms_he_pts = np.array({he_pts.tolist()})\n"
-            f"arms_affine, arms_residuals = compute_landmark_affine(arms_xen_pts, arms_he_pts)"
+            f"arms_affine, arms_residuals = compute_landmark_affine(arms_xen_pts, arms_he_pts)",
+            deps=["preamble"], kind=TERMINAL, label="ARMS landmark registration",
         )
 
     def on_arms_save_landmarks():
@@ -310,7 +317,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             affine=arms_state["affine_3x3"], he_filename=arms_state.get("he_filename"),
         )
         arms_status_label.value = f"Landmarks saved to {Path(path).name}"
-        ctx.record_code(f"\n# Save ARMS landmarks\n# landmarks -> \"{path}\"")
+        ctx.record_node(
+            "arms:save_landmarks",
+            f"\n# Save ARMS landmarks to {Path(path).name}",
+            deps=["preamble"], kind=TERMINAL, label="Save ARMS landmarks",
+        )
 
     def on_arms_load_landmarks():
         default_dir = str(data_path) if data_path else ""
@@ -333,10 +344,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
             arms_state["he_filename"] = lm_data["he_filename"]
         n = min(len(lm_data["xenium_landmarks_yx"]), len(lm_data["he_landmarks_yx"]))
         arms_status_label.value = f"Loaded {n} landmarks from {Path(path).name}"
-        ctx.record_code(
+        ctx.record_node(
+            "arms:load_landmarks",
             f"\n# Load ARMS landmarks from file\n"
             f"from xenium_viewer.utils.registration import load_landmarks\n"
-            f"landmarks = load_landmarks(\"{path}\")"
+            f"landmarks = load_landmarks(\"{path}\")",
+            deps=["preamble"], kind=TERMINAL, label="Load ARMS landmarks",
         )
 
     # ── Save H&E / affine to sdata ──────────────────────────────────────
@@ -578,11 +591,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
             save_arms_tiles_to_sdata(
                 ctx, polys, arms_state.get("tile_names", []), arms_state.get("cluster_ids", []),
             )
-        ctx.record_code(
+        ctx.record_node(
+            "arms:tiles",
             f"\n# Load ARMS tile boundaries + cluster assignments\n"
-            f"import json\n"
+            f"# Source files (loaded into the viewer / cached in sdata_cached.zarr):\n"
             f"arms_geojson_path = \"{geojson_path}\"\n"
-            f"arms_csv_path = \"{csv_path}\""
+            f"arms_csv_path = \"{csv_path}\"",
+            deps=["preamble"], label="ARMS tiles",
         )
 
     def on_arms_tile_opacity(value):
@@ -681,9 +696,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 f"cluster_mask = np.isin(clusters_aligned.values, {_si})\n"
             )
 
-        ctx.record_code(
+        ctx.record_node(
+            "arms:tile_deg",
             f"\n# ARMS Tile DEG analysis\n"
-            f"import json, numpy as np\n"
+            f"import json\n"
             f"from xenium_viewer.utils.adata_persistence import load_arms_tiles_from_sdata\n"
             f"from xenium_viewer.utils.gene_analysis import compute_arms_tile_deg\n"
             f"pixel_size = float(json.load(open(data_path / 'experiment.xenium'))['pixel_size'])\n"
@@ -713,7 +729,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"    adata, centroids_yx, transformed_polys, arms_cluster_ids,\n"
             f"    method={method!r},\n"
             f"    cluster_mask={'cluster_mask' if arms_deg_filter_check.value else 'None'},\n"
-            f")"
+            f")",
+            deps=["arms:tiles"],
+            label="ARMS tile DEG",
         )
 
         @thread_worker
@@ -762,7 +780,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         df.to_csv(path, index=False)
         arms_status_label.value = f"Exported {len(df)} rows to {path}"
-        ctx.record_code(f"\n# Export ARMS DEG results\narms_deg_df.to_csv(\"{path}\", index=False)")
+        ctx.record_node(
+            "export:arms_deg",
+            f"\n# Export ARMS DEG results\n"
+            f"arms_deg_df.to_csv(\"{Path(path).name}\", index=False)",
+            deps=["arms:tile_deg"], kind=TERMINAL, label="Export ARMS DEG",
+        )
 
     def on_arms_generate_volcanos():
         adata_norm = state.get("arms_deg_adata_norm")
@@ -776,12 +799,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_status_label.value = "Generating ARMS volcano plots..."
         method = arms_deg_method.value
         gen = ctx.dataset_generation
-        ctx.record_code(
-            f"\n# Generate ARMS pairwise volcano plots\n"
-            f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
+        ctx.record_node(
+            "plot:arms_volcano",
+            f"\n# ARMS pairwise volcano plots (method={method})\n"
             f"import itertools\n"
-            f"arms_volcano_dir = \"{output_dir}\"\n"
-            f"# Uses arms_adata_norm from DEG step, method=\"{method}\""
+            f"from pathlib import Path\n"
+            f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
+            f"arms_volcano_dir = Path(\"{Path(output_dir).name}\"); "
+            f"arms_volcano_dir.mkdir(parents=True, exist_ok=True)\n"
+            f"_groups = sorted(arms_adata_norm.obs['arms_cluster'].cat.categories.tolist())\n"
+            f"for _a, _b in itertools.combinations(_groups, 2):\n"
+            f"    _df = run_pairwise_deg(arms_adata_norm, 'arms_cluster', str(_a), str(_b), method=\"{method}\")\n"
+            f"    _vfig = make_volcano_plot(_df, str(_a), str(_b))\n"
+            f"    _name = 'arms_volcano_' + str(_a) + '_vs_' + str(_b) + '.png'\n"
+            f"    _vfig.savefig(arms_volcano_dir / _name, dpi=300)\n"
+            f"    plt.close(_vfig)",
+            deps=["arms:tile_deg"], kind=TERMINAL, label="ARMS pairwise volcano plots",
         )
 
         @thread_worker

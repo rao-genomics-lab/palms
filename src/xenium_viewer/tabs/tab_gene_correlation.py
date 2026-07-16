@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from magicgui.widgets import ComboBox, PushButton, CheckBox
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -149,7 +150,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 )
 
             _gc_fmt = ctx.state.get("plot_format", "svg")
-            ctx.record_code(
+            ctx.record_node(
+                "plot:gene_correlation",
                 f"\n# Gene correlation ({norm_r}): {gene_a_r} vs {gene_b_r}\n"
                 f"from scipy.stats import pearsonr, spearmanr\n"
                 f"import matplotlib.pyplot as plt\n"
@@ -164,7 +166,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 f"print(f'Pearson r={{pr:.3f}}, p={{pp:.3e}}')\n"
                 f"print(f'Spearman rho={{sr:.3f}}, p={{sp:.3e}}')\n"
                 f"plt.tight_layout(); plt.show()\n"
-                f"fig.savefig(\"gene_correlation.{_gc_fmt}\", dpi=300, bbox_inches='tight')"
+                f"fig.savefig(\"gene_correlation.{_gc_fmt}\", dpi=300, bbox_inches='tight')",
+                deps=["preamble"],
+                kind=TERMINAL,
+                label="Gene correlation plot",
             )
             fig.show()
 

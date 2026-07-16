@@ -3,11 +3,14 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import os
+
 import numpy as np
 from magicgui.widgets import ComboBox, CheckBox, PushButton
 from qtpy.QtWidgets import QTextEdit, QFileDialog, QLabel as QtLabel
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, make_progress_bar
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -26,6 +29,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
     status_label = StatusProxy(ctx.viewer)
     roi_deg_status = StatusProxy(ctx.viewer)
     roi_deg_progress = make_progress_bar()
+
+    def _record_rois():
+        """Record the drawn ROI polygons as an inlined `roi_polygons` node so
+        the notebook reproduces them without the viewer's zarr cache."""
+        polygons = ctx.roi_layer.data if ctx.roi_layer is not None else []
+        if len(polygons) == 0:
+            return
+        arrs = ",\n    ".join(
+            f"np.array({np.round(np.asarray(p), 2).tolist()})" for p in polygons
+        )
+        ctx.record_node(
+            "rois",
+            "\n# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)\n"
+            f"roi_polygons = [\n    {arrs},\n]",
+            deps=["preamble"],
+            label=f"ROI polygons ({len(polygons)})",
+        )
 
     def on_calculate_roi():
         from shapely.geometry import Polygon as ShapelyPolygon
@@ -154,9 +174,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["roi_results"] = roi_results
         state["roi_gene"] = gene
         n_regions = len(polygons)
-        ctx.record_code(
-            f"\n# ROI expression analysis\n"
-            f"# gene={gene}, {n_regions} ROI regions{filter_desc}"
+        _record_rois()
+        ctx.record_node(
+            f"roi_expression:{gene}",
+            f"\n# ROI expression analysis: gene '{gene}' across {n_regions} region(s){filter_desc}\n"
+            f"# Per-region mean expression is shown in the viewer; ROI polygons are in roi_polygons.",
+            deps=["rois"],
+            kind=TERMINAL,
+            label=f"ROI expression: {gene}",
         )
         roi_export_button.enabled = len(roi_results) > 0
 
@@ -176,9 +201,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             writer.writeheader()
             writer.writerows(results)
         status_label.value = f"Exported {len(results)} cells to {path}"
-        ctx.record_code(
-            f"\n# Export ROI results\n"
-            f"# roi_{state.get('roi_gene', 'gene')}.csv -> \"{path}\""
+        _record_rois()
+        ctx.record_node(
+            "export:roi_expression",
+            f"\n# Export ROI per-cell expression\n"
+            f"# (region_id, cell_id, centroid, expression for each cell inside an ROI)\n"
+            f"# saved from the viewer to {os.path.basename(path)}",
+            deps=["rois"],
+            kind=TERMINAL,
+            label="Export ROI expression",
         )
 
     roi_calc_button.clicked.connect(on_calculate_roi)
@@ -249,9 +280,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["roi_deg_adata_norm"] = adata_norm
         roi_deg_button.enabled = True
         if not df.empty:
+            _record_rois()
+            _deps = ["rois"]
             filter_line = ""
             if _use_filter:
                 clustering_key = ctx.clustering_widget.value
+                ctx.record_clustering(clustering_key)
+                _deps.append(f"clustering:{clustering_key}")
                 filter_line = (
                     f"\n# cluster filter (clustering='{clustering_key}', "
                     f"clusters={sorted(_selected_ids)})\n"
@@ -260,20 +295,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
                     f"clusters_aligned = cluster_series.reindex(adata.obs['cell_id'].values)\n"
                     f"cluster_mask = np.isin(clusters_aligned.values, {sorted(_selected_ids)})\n"
                 )
-            ctx.record_code(
+            ctx.record_node(
+                "roi_deg",
                 f"\n# ROI differential expression\n"
-                f"import json, numpy as np\n"
-                f"from xenium_viewer.utils.adata_persistence import load_rois_from_sdata\n"
+                f"import json\n"
                 f"from xenium_viewer.utils.gene_analysis import compute_roi_deg\n"
                 f"pixel_size = float(json.load(open(data_path / 'experiment.xenium'))['pixel_size'])\n"
                 f"centroids_yx = adata.obsm['spatial'][:, ::-1] / pixel_size  # µm→px, xy→yx\n"
-                f"roi_polygons = load_rois_from_sdata(sdata)  # Nx2 yx arrays\n"
                 f"{filter_line}"
                 f"roi_deg_df, roi_adata_norm = compute_roi_deg(\n"
                 f"    adata, centroids_yx, roi_polygons, pixel_size,\n"
                 f"    method={roi_deg_method_widget.value!r},\n"
                 f"    cluster_mask={'cluster_mask' if _use_filter else 'None'},\n"
-                f")"
+                f")",
+                deps=_deps,
+                label="ROI differential expression",
             )
         if df.empty:
             roi_deg_text.setPlainText("No significant results or insufficient cells in ROIs.")
@@ -300,9 +336,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         df.to_csv(path, index=False)
         roi_deg_status.value = f"Exported {len(df)} rows to {path}"
-        ctx.record_code(
+        ctx.record_node(
+            "export:roi_deg",
             f"\n# Export ROI DEG results\n"
-            f"# roi_deg_results.csv -> \"{path}\""
+            f"roi_deg_df.to_csv(\"{os.path.basename(path)}\", index=False)",
+            deps=["roi_deg"],
+            kind=TERMINAL,
+            label="Export ROI DEG results",
         )
 
     def on_roi_generate_volcanos():
@@ -317,12 +357,24 @@ def build_tab(ctx: ViewerContext) -> tuple:
         roi_deg_status.value = "Generating ROI volcano plots..."
         method = roi_deg_method_widget.value
         gen = ctx.dataset_generation
-        ctx.record_code(
-            f"\n# Generate ROI pairwise volcano plots\n"
-            f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
+        ctx.record_node(
+            "plot:roi_volcano",
+            f"\n# ROI pairwise volcano plots (method={method})\n"
             f"import itertools\n"
-            f"roi_volcano_dir = \"{output_dir}\"\n"
-            f"# Uses roi_adata_norm from DEG step, method=\"{method}\""
+            f"from pathlib import Path\n"
+            f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
+            f"roi_volcano_dir = Path(\"{os.path.basename(output_dir)}\"); "
+            f"roi_volcano_dir.mkdir(parents=True, exist_ok=True)\n"
+            f"_groups = sorted(roi_adata_norm.obs['roi_region'].cat.categories.tolist())\n"
+            f"for _a, _b in itertools.combinations(_groups, 2):\n"
+            f"    _df = run_pairwise_deg(roi_adata_norm, 'roi_region', str(_a), str(_b), method=\"{method}\")\n"
+            f"    _vfig = make_volcano_plot(_df, str(_a), str(_b), lfc_thresh=1.0, pval_thresh=0.01)\n"
+            f"    _name = 'roi_volcano_' + str(_a).replace(' ', '_') + '_vs_' + str(_b).replace(' ', '_') + '.png'\n"
+            f"    _vfig.savefig(roi_volcano_dir / _name, dpi=300)\n"
+            f"    plt.close(_vfig)",
+            deps=["roi_deg"],
+            kind=TERMINAL,
+            label="ROI pairwise volcano plots",
         )
 
         @thread_worker

@@ -9,6 +9,7 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -232,11 +233,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         params = result["params"]
         ref_obs_key = result["reference_obs_key"]
         ref_repr = repr(result["reference_categories"])
-        ctx.record_code(
+        ctx.record_node(
+            "cnv",
             f"\n# CNV inference (InSituCNV / infercnvpy)\n"
             f"from insitucnv.tl import prepare_cnv_input, run_infercnv, compute_cnv_neighbors, cluster_cnv_resolutions\n"
             f"adata.obs['{ref_obs_key}'] = adata.obs['{reference_clustering_name}']  # reference clustering\n"
-            f"adata.layers['raw_counts'] = adata.X.copy()\n"
+            f"adata.layers['raw_counts'] = sdata['table'].X.copy()  # raw counts (pre-normalization)\n"
             f"sc.pp.normalize_total(adata); sc.pp.log1p(adata); sc.pp.pca(adata)\n"
             f"sc.pp.neighbors(adata, n_neighbors={params['n_neighbors']})\n"
             f"adata = prepare_cnv_input(adata, raw_layer='raw_counts', "
@@ -246,7 +248,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"compute_cnv_neighbors(adata, copy=False)\n"
             f"cluster_cnv_resolutions(adata, [{params['resolution']}], copy=False)\n"
             f"# result: adata.obs['{key}']",
-            tag="cnv_inference",
+            deps=[f"clustering:{reference_clustering_name}"],
+            label="CNV inference",
         )
 
         heatmap_button.enabled = True
@@ -303,12 +306,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
             heatmap_button.enabled = True
             png_path, pdf_path = paths
             cnv_status.value = f"CNV chromosome heatmap saved to {png_path} and {pdf_path}"
-            ctx.record_code(
+            ctx.record_node(
+                "plot:cnv_heatmap",
                 f"\n# CNV chromosome heatmap\n"
                 f"import infercnvpy as cnv\n"
                 f"cnv.pl.chromosome_heatmap(adata, groupby='{cluster_key}', show=False)\n"
                 f"plt.savefig('cnv_heatmap.png', dpi=300, bbox_inches='tight')\n"
-                f"plt.savefig('cnv_heatmap.pdf', bbox_inches='tight')"
+                f"plt.savefig('cnv_heatmap.pdf', bbox_inches='tight')",
+                deps=["cnv"],
+                kind=TERMINAL,
+                label="CNV chromosome heatmap",
             )
 
         def _on_error(exc):

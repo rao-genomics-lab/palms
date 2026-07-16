@@ -146,7 +146,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         n_domains = n_domains_slider.value
         n_dom_arg = n_domains if n_domains > 0 else None
         ctx.record_preamble()
-        ctx.record_code(
+        ctx.record_node(
+            "novae",
             f"\n# Novae spatial domain inference\n"
             f"import novae\n"
             f"novae.spatial_neighbors(adata)\n"
@@ -154,7 +155,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"model.compute_representations(adata, zero_shot=True)\n"
             f"model.assign_domains(adata, n_domains={n_dom_arg!r}, level={level})\n"
             f"# result: adata.obs['novae_domain']",
-            tag="novae_domains",
+            deps=["preamble"],
+            label="Novae spatial domains",
         )
 
         results_text.setPlainText(

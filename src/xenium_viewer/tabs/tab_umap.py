@@ -3,10 +3,13 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import os
+
 from magicgui.widgets import PushButton, Slider, ComboBox
 from qtpy.QtWidgets import QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -21,9 +24,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     def on_show_umap():
         ctx.umap_viewer.show()
-        ctx.record_code(
-            "\n# Show UMAP scatter plot\n"
-            "# UMAP coordinates loaded from Xenium analysis output"
+        ctx.record_node(
+            "viewer:umap_window",
+            "\n# Show UMAP scatter plot (viewer window; coords from Xenium analysis output)",
+            deps=["preamble"],
+            kind=TERMINAL,
+            label="Show UMAP window",
         )
 
     def on_umap_size_change(value):
@@ -109,12 +115,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _on_save_done(path):
         save_umap_button.enabled = True
         status_label.value = f"UMAP plot saved: {path}"
-        ctx.record_code(
-            f"\n# Save scanpy UMAP plot\n"
-            f"# clustering='{ctx.clustering_widget.value}'\n"
-            f"sc.pl.umap(adata, color='{ctx.clustering_widget.value}', "
-            f"legend_loc='on data', show=False)\n"
-            f"plt.gcf().savefig('{path}', bbox_inches='tight')"
+        _ck = ctx.clustering_widget.value
+        _fmt = os.path.splitext(path)[1].lstrip('.') or 'png'
+        ctx.record_clustering(_ck)
+        ctx.record_node(
+            "plot:umap",
+            f"\n# UMAP embedding + plot colored by '{_ck}'\n"
+            f"# (the viewer uses Xenium-provided UMAP coords; here we recompute so it replays)\n"
+            f"sc.pp.neighbors(adata)\n"
+            f"sc.tl.umap(adata, random_state=0)\n"
+            f"sc.pl.umap(adata, color='{_ck}', legend_loc='on data', show=False)\n"
+            f"plt.gcf().savefig('umap.{_fmt}', bbox_inches='tight')",
+            deps=[f"clustering:{_ck}"],
+            kind=TERMINAL,
+            label="UMAP plot",
         )
 
     show_umap_button.clicked.connect(on_show_umap)
