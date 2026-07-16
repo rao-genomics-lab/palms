@@ -1,5 +1,44 @@
 # Changelog
 
+## [Unreleased] — 2026-07-16
+
+### Added
+- **Reproducible analysis as a provenance DAG.** User actions are now recorded
+  as a dependency graph of artifacts (`utils/prov_graph.py`) rather than an
+  append-only script. Each step is a node keyed by the artifact it produces,
+  with its code and dependencies; the notebook is *derived* from the graph by
+  topological sort. Re-running a step revises its node in place and flags
+  descendants **stale** (instead of being silently dropped or appended out of
+  order), and a missing dependency errors at record time rather than as a
+  `NameError` on replay. New recorder API `ctx.record_node(id, code, deps, kind,
+  label, params)`; `ctx.record_code(code, tag)` kept as a compat shim.
+- **Cross-session accumulation.** The graph is serialized into
+  `sdata_cached.zarr/viewer_session/` and restored at startup, so a workflow
+  spanning several sessions builds one coherent notebook. Output filename is a
+  stable `analysis.py` (was a per-launch `code_<timestamp>.py`).
+- **Jupyter export.** `utils/notebook_export.py` (nbformat) writes
+  `analysis_notebook.ipynb` — code-only, dependency-ordered, replayable from the
+  raw Xenium output — on session save and via the Notebook tab's "Export .ipynb"
+  button. Added `nbformat` to `environment.yml`.
+- **Notebook tab overhaul** (`tabs/tab_notebook.py`): cells are derived from the
+  graph with a ⚠ stale badge, re-running a step updates its cell in place, and a
+  **"Show DAG"** button renders the graph (`utils/dag_view.py`, matplotlib +
+  networkx) to `plots/provenance_dag.png`. `graph_to_mermaid` / `graph_to_dot`
+  provide diagram text.
+
+### Fixed
+- Recorded code now actually replays: undefined `fig` in every plot-save snippet
+  (`fig = plt.gcf()`), undefined `data_path` (now defined in the preamble), the
+  preamble is always emitted, and durable comment-only actions became real code —
+  ROI polygons (inlined vertex arrays instead of a cache-only
+  `load_rois_from_sdata`), cell-type annotations (CellTypist/LLM/label-transfer
+  now emit a real `.map()` producing a `<key>_annotated` column), clustering
+  import/export, and the pairwise-volcano loops.
+- Leiden HVG/scale branch now copies labels back onto `adata.obs` (previously
+  left only on `adata_leiden`); CNV takes raw counts from `sdata['table'].X`
+  rather than an already-normalized `adata.X`. `random_state` threaded into
+  recorded Leiden/UMAP for determinism.
+
 ## [Unreleased] — 2026-07-15 (b)
 
 ### Changed
