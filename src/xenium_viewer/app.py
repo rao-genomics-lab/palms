@@ -1223,6 +1223,13 @@ def run_viewer(data_path=None, no_cache: bool = False):
                     ctx.state["segmentation_source"] = ctx.segmentation_source
                     from xenium_viewer.utils.session import save_session
                     save_session(zarr_path_old, ctx.state, ctx.he_state, _app["snapshot"])
+                    try:
+                        from xenium_viewer.utils.notebook_export import write_graph_notebook
+                        _g = ctx.state.get("prov_graph")
+                        if _g is not None and len(_g):
+                            write_graph_notebook(_g, ctx.data_path / "analysis_notebook.ipynb")
+                    except Exception:
+                        pass
                     print("Session saved for previous dataset.")
 
                 # 3. Close UMAP second window if open
@@ -1422,6 +1429,13 @@ def run_viewer(data_path=None, no_cache: bool = False):
             ctx.state["segmentation_source"] = ctx.segmentation_source
             from xenium_viewer.utils.session import save_session
             save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
+            try:
+                from xenium_viewer.utils.notebook_export import write_graph_notebook
+                _g = ctx.state.get("prov_graph")
+                if _g is not None and len(_g):
+                    write_graph_notebook(_g, ctx.data_path / "analysis_notebook.ipynb")
+            except Exception:
+                pass
             print("Session saved to zarr cache.")
 
 

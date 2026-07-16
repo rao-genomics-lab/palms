@@ -31,6 +31,7 @@ dependencies:
   - python-igraph
   - leidenalg
   - networkx
+  - nbformat          # export the reproducible-code graph as a .ipynb notebook
 
   # GUI / Qt stack
   - napari
