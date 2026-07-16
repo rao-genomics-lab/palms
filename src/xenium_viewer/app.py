@@ -844,7 +844,10 @@ def _make_initial_state(gene_names: list, clustering_names: list) -> dict:
         "code_journal_tags": set(),
         "prov_graph": ProvGraph(),
         "_legacy_counter": 0,
-        "code_file": f"code_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py",
+        # Stable filename so the recorded code accumulates into one file across
+        # sessions (was a per-launch code_<timestamp>.py). The .ipynb sidecar is
+        # written by the notebook export.
+        "code_file": "analysis.py",
         "custom_clusterings": {},
     }
 
@@ -1048,6 +1051,30 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
                 merged = dict(session.get('cluster_labels') or {})
                 merged.update(sdata_cluster_labels)  # sdata wins on conflict
                 session['cluster_labels'] = merged
+            # Restore the reproducible-code provenance graph so the analysis
+            # notebook accumulates across sessions (re-derive the flat journal
+            # and rewrite analysis.py from the restored graph).
+            if session.get("prov_graph"):
+                from xenium_viewer.utils.prov_graph import ProvGraph, graph_to_cells
+                _g = ProvGraph.from_list(session["prov_graph"])
+                ctx.state["prov_graph"] = _g
+                # Re-emit the preamble for THIS launch's data_path (upsert; a
+                # no-op when the path is unchanged).
+                if ctx.state.get("record_code"):
+                    ctx.record_preamble()
+                ctx.state["code_journal"] = [
+                    c.source for c in graph_to_cells(_g) if c.cell_type == "code"
+                ]
+                try:
+                    _cp = ctx.data_path / ctx.state.get("code_file", "analysis.py")
+                    with open(_cp, "w") as _f:
+                        _f.write("\n".join(ctx.state["code_journal"]) + "\n")
+                except OSError:
+                    pass
+                _sync = ctx.state.get("_notebook_sync_fn")
+                if _sync:
+                    _sync()
+                print(f"Restored code provenance graph: {len(_g)} node(s)")
             print("Restoring session from zarr cache...")
             restore_fn(session)
             print("Session restored.")

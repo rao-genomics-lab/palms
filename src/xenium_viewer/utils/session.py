@@ -186,6 +186,14 @@ def save_session(
         # ── Segmentation source ───────────────────────────────────────────
         attrs["segmentation_source"] = state.get("segmentation_source", "xenium")
 
+        # ── Reproducible-code provenance graph ────────────────────────────
+        # Persisted so the analysis notebook accumulates across sessions.
+        prov = state.get("prov_graph")
+        try:
+            attrs["prov_graph"] = prov.to_list() if prov is not None and len(prov) else None
+        except Exception:
+            attrs["prov_graph"] = None
+
         # ── External images / patch overlays UI residuals ─────────────────
         ext_ui = snapshot.get("external_images_ui")
         if ext_ui is None:
@@ -298,6 +306,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "segmentation_source": attrs.get("segmentation_source", "xenium"),
         "external_images_ui": attrs.get("external_images_ui") or [],
         "patch_overlays_ui": attrs.get("patch_overlays_ui") or [],
+        "prov_graph": attrs.get("prov_graph"),
     }
 
     # ── ROIs ──────────────────────────────────────────────────────────
