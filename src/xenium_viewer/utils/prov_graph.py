@@ -308,3 +308,62 @@ def graph_to_script(graph: ProvGraph, include_terminals: bool = True) -> str:
         if c.cell_type == "code"
     ]
     return "\n".join(parts) + "\n"
+
+
+# ── Diagram rendering (text, dependency-free) ────────────────────────────────
+def graph_to_mermaid(graph: ProvGraph) -> str:
+    """Render the DAG as a Mermaid flowchart (paste into any Mermaid viewer).
+
+    Nodes are colored by kind (setup / artifact / terminal); stale nodes get a
+    ``⚠`` marker and a highlighted outline.
+    """
+    order = graph.topo_sort()
+    token = {nid: f"n{i}" for i, nid in enumerate(order)}
+    lines = ["flowchart TD"]
+    stale_any = False
+    for nid in order:
+        node = graph.get(nid)
+        text = (node.label or nid).replace('"', "'")
+        if node.stale:
+            text += " ⚠"
+            stale_any = True
+        cls = node.kind if not node.stale else f"{node.kind} stale"
+        lines.append(f'    {token[nid]}["{text}"]:::{node.kind}')
+        if node.stale:
+            lines.append(f"    class {token[nid]} stale")
+    for node in graph.nodes():
+        for d in node.deps:
+            if d in token:
+                lines.append(f"    {token[d]} --> {token[node.id]}")
+    lines += [
+        "    classDef setup fill:#e6f0ff,stroke:#4477cc,color:#003;",
+        "    classDef artifact fill:#e9f9e9,stroke:#3a3,color:#030;",
+        "    classDef terminal fill:#f3f3f3,stroke:#999,color:#333,stroke-dasharray:4 3;",
+    ]
+    if stale_any:
+        lines.append("    classDef stale stroke:#cc6600,stroke-width:3px;")
+    return "\n".join(lines)
+
+
+def graph_to_dot(graph: ProvGraph) -> str:
+    """Render the DAG as Graphviz DOT text."""
+    fill = {SETUP: "#e6f0ff", ARTIFACT: "#e9f9e9", TERMINAL: "#f3f3f3"}
+    lines = [
+        "digraph provenance {",
+        "  rankdir=TB;",
+        '  node [shape=box, style="rounded,filled", fontname="sans-serif"];',
+    ]
+    for nid in graph.topo_sort():
+        node = graph.get(nid)
+        label = (node.label or nid).replace('"', "'")
+        if node.stale:
+            label += " (stale)"
+        pen = ', color="#cc6600", penwidth=2' if node.stale else ""
+        lines.append(
+            f'  "{nid}" [label="{label}", fillcolor="{fill.get(node.kind, "#fff")}"{pen}];'
+        )
+    for node in graph.nodes():
+        for d in node.deps:
+            lines.append(f'  "{d}" -> "{node.id}";')
+    lines.append("}")
+    return "\n".join(lines)

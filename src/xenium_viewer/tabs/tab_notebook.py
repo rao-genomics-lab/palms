@@ -247,8 +247,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
     add_btn = QPushButton("+ Cell")
     run_all_btn = QPushButton("Run All")
     clear_btn = QPushButton("Clear Outputs")
+    dag_btn = QPushButton("Show DAG")
     export_btn = QPushButton("Export .ipynb")
-    for btn in [sync_btn, add_btn, run_all_btn, clear_btn, export_btn]:
+    for btn in [sync_btn, add_btn, run_all_btn, clear_btn, dag_btn, export_btn]:
         toolbar.addWidget(btn)
     outer_layout.addLayout(toolbar)
 
@@ -377,6 +378,24 @@ def build_tab(ctx: ViewerContext) -> tuple:
                     out.append(("code", src))
         return out
 
+    def _on_show_dag():
+        import os
+        import matplotlib.pyplot as plt
+        from xenium_viewer.utils.dag_view import render_dag
+        graph = state.get("prov_graph")
+        if graph is None or len(graph) == 0:
+            ctx.set_status("Provenance graph is empty — record some steps first")
+            return
+        plots_dir = os.path.join(str(ctx.data_path), "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        out = os.path.join(plots_dir, "provenance_dag.png")
+        try:
+            render_dag(graph, out)
+            plt.show(block=False)
+            ctx.set_status(f"Provenance DAG ({len(graph)} nodes) — saved to {out}")
+        except Exception as e:
+            ctx.set_status(f"DAG render failed: {e}")
+
     def _on_export_ipynb():
         from xenium_viewer.utils import notebook_export
         default = str(ctx.data_path / "analysis_notebook.ipynb")
@@ -396,6 +415,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     add_btn.clicked.connect(lambda: _add_cell())
     run_all_btn.clicked.connect(_run_all)
     clear_btn.clicked.connect(_clear_all_outputs)
+    dag_btn.clicked.connect(_on_show_dag)
     export_btn.clicked.connect(_on_export_ipynb)
 
     # ── Register auto-sync callback (called by record_node) ──────────────
