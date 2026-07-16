@@ -3,11 +3,14 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import os
+
 import numpy as np
 from magicgui.widgets import ComboBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -130,10 +133,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _ne_nn = _ne_p.get("n_neighs", 6)
         ctx.record_clustering(_ne_ck)
         ctx.record_spatial_neighbors(_ne_nn)
-        ctx.record_code(
+        ctx.record_node(
+            f"nhood:{_ne_ck}",
             f"\n# Neighborhood enrichment (n_perms={_ne_np})\n"
             f"sq.gr.nhood_enrichment(adata, cluster_key=\"{_ne_ck}\", "
-            f"n_perms={_ne_np}, seed=42)"
+            f"n_perms={_ne_np}, seed=42)",
+            deps=[f"clustering:{_ne_ck}", "spatial_neighbors"],
+            label=f"Neighborhood enrichment: {_ne_ck}",
         )
 
     def on_show_nhood_plot():
@@ -176,11 +182,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
             _ne_mode = ne_mode_widget.value
             _ne_ck = result.get('_cluster_key', '')
             _ne_fmt = ctx.state.get("plot_format", "svg")
-            ctx.record_code(
+            ctx.record_node(
+                f"plot:nhood:{_ne_ck}",
                 f"\n# Nhood enrichment heatmap (mode={_ne_mode})\n"
                 f"sq.pl.nhood_enrichment(adata, cluster_key=\"{_ne_ck}\", "
-                f"mode=\"{_ne_mode}\")\nplt.show()\n"
-                f"fig.savefig(\"nhood_enrichment.{_ne_fmt}\", dpi=300, bbox_inches='tight')"
+                f"mode=\"{_ne_mode}\")\n"
+                f"fig = plt.gcf()\n"
+                f"fig.savefig(\"nhood_enrichment.{_ne_fmt}\", dpi=300, bbox_inches='tight')",
+                deps=[f"nhood:{_ne_ck}"],
+                kind=TERMINAL,
+                label="Nhood enrichment heatmap",
             )
         except Exception as e:
             ne_status.value = f"Plot error: {e}"
@@ -205,7 +216,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         df.to_csv(path)
         ne_status.value = f"Z-scores exported to {path}"
-        ctx.record_code(f"\n# Export nhood z-scores\n# nhood_zscore.csv -> \"{path}\"")
+        _ne_ck = result.get('_cluster_key', '')
+        _fname = os.path.basename(path)
+        ctx.record_node(
+            f"export:nhood_zscore:{_ne_ck}",
+            f"\n# Export nhood z-scores\n"
+            f"_cats = adata.obs[\"{_ne_ck}\"].cat.categories\n"
+            f"pd.DataFrame(adata.uns[\"{_ne_ck}_nhood_enrichment\"][\"zscore\"], "
+            f"index=_cats, columns=_cats).to_csv(\"{_fname}\")",
+            deps=[f"nhood:{_ne_ck}"],
+            kind=TERMINAL,
+            label="Export nhood z-scores",
+        )
 
     ne_run_button.clicked.connect(on_run_nhood)
     ne_plot_button.clicked.connect(on_show_nhood_plot)

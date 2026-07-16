@@ -355,6 +355,12 @@ def create_shared_helpers(ctx: ViewerContext):
 
     # ── record_clustering ────────────────────────────────────────────────
     def _record_clustering(key):
+        # If the true producer already recorded this clustering column (the
+        # Leiden tab, a file import, or a prior session), leave it alone — don't
+        # overwrite real code with a CSV loader (and don't flag dependents stale).
+        graph = state.get("prov_graph")
+        if graph is not None and f"clustering:{key}" in graph:
+            return
         _record_normalize()
         dir_name = f"gene_expression_{key}"
         csv_path = os.path.join(ctx.data_path, "analysis", "clustering", dir_name, "clusters.csv")
@@ -545,11 +551,17 @@ def create_shared_helpers(ctx: ViewerContext):
             state["cluster_labels"][clustering_key] = new_labels
             from xenium_viewer.utils.adata_persistence import save_cluster_labels_to_sdata
             save_cluster_labels_to_sdata(ctx, clustering_key, new_labels)
-            safe_key = clustering_key.replace(" ", "_").replace("-", "_")
-            ctx.record_code(
-                f"\n# Cluster label mapping for '{clustering_key}'\n"
-                f"cluster_labels_{safe_key} = {repr(new_labels)}\n"
-                f"# Pass as cluster_labels=cluster_labels_{safe_key} in plotting calls"
+            _record_clustering(clustering_key)
+            _lbl_map = {str(k): v for k, v in new_labels.items()}
+            _record_node(
+                f"annotation:{clustering_key}",
+                f"\n# Manual cluster labels for '{clustering_key}'\n"
+                f"annotation_map = {_lbl_map!r}\n"
+                f"adata.obs[\"{clustering_key}_annotated\"] = ("
+                f"adata.obs[\"{clustering_key}\"].astype(str).map(annotation_map)"
+                f".astype(\"category\"))",
+                deps=[f"clustering:{clustering_key}"],
+                label=f"Cluster labels: {clustering_key}",
             )
             return True
         return False

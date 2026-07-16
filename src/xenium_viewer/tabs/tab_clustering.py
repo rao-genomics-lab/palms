@@ -4,10 +4,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from pathlib import Path
 
+import os
+
 from magicgui.widgets import CheckBox, PushButton, Slider, FloatSpinBox
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -80,15 +83,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 code_lines.append("sc.pp.scale(adata_leiden, max_value=10)")
             code_lines.append("sc.pp.pca(adata_leiden)")
             code_lines.append(f"sc.pp.neighbors(adata_leiden, n_neighbors={n_neighbors}, n_pcs={n_pcs})")
-            code_lines.append(f'sc.tl.leiden(adata_leiden, resolution={resolution}, key_added="{key}")')
-            ctx.record_code("\n".join(code_lines), tag=f"leiden_{key}")
+            code_lines.append(f'sc.tl.leiden(adata_leiden, resolution={resolution}, key_added="{key}", random_state=0)')
+            # Copy the labels back onto the full adata so downstream steps find the column.
+            code_lines.append(f'adata.obs["{key}"] = adata_leiden.obs["{key}"].values')
+            ctx.record_node(
+                f"clustering:{key}", "\n".join(code_lines),
+                deps=["preamble"], label=f"Clustering: {key}",
+            )
         else:
             ctx.record_normalize()
-            ctx.record_code(
+            ctx.record_node(
+                f"clustering:{key}",
                 f"\n# Leiden clustering (n_neighbors={n_neighbors}, n_pcs={n_pcs}, resolution={resolution})\n"
                 f"sc.pp.neighbors(adata, n_neighbors={n_neighbors}, n_pcs={n_pcs})\n"
-                f"sc.tl.leiden(adata, resolution={resolution}, key_added=\"{key}\")",
-                tag=f"leiden_{key}"
+                f"sc.tl.leiden(adata, resolution={resolution}, key_added=\"{key}\", random_state=0)",
+                deps=["normalize"], label=f"Clustering: {key}",
             )
 
     def on_run_leiden():
@@ -184,10 +193,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         from xenium_viewer.utils.adata_persistence import save_clustering_to_adata
         save_clustering_to_adata(ctx, name, series)
-        ctx.record_code(
-            f"\n# Import clustering from file\n"
-            f"# name={name}, {series.nunique()} groups, {len(series)} cells\n"
-            f"# source: \"{path}\""
+        ctx.record_node(
+            f"clustering:{name}",
+            f"\n# Import clustering '{name}' from file "
+            f"({series.nunique()} groups, {len(series)} cells)\n"
+            f"_imp = pd.read_csv(r\"{path}\", sep=None, engine=\"python\")\n"
+            f"_idx = \"cell_id\" if \"cell_id\" in _imp.columns else _imp.columns[0]\n"
+            f"_col = \"group\" if \"group\" in _imp.columns else _imp.columns[1]\n"
+            f"adata.obs[\"{name}\"] = pd.Categorical("
+            f"_imp.set_index(_idx)[_col].astype(str).reindex(adata.obs_names).values)",
+            deps=["preamble"],
+            label=f"Import clustering: {name}",
         )
 
     def _on_export_clustering():
@@ -213,9 +229,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
         sep = '\t' if path.endswith('.tsv') else ','
         df.to_csv(path, index=False, sep=sep)
         leiden_status.value = f"Exported {len(df)} cells to {path}"
-        ctx.record_code(
-            f"\n# Export clustering\n"
-            f"# {clustering_key} -> \"{path}\""
+        ctx.record_clustering(clustering_key)
+        ctx.record_node(
+            f"export:clustering:{clustering_key}",
+            f"\n# Export clustering '{clustering_key}'\n"
+            f"pd.DataFrame({{\"cell_id\": adata.obs_names, "
+            f"\"group\": adata.obs[\"{clustering_key}\"].values}})"
+            f".to_csv(\"{os.path.basename(path)}\", index=False, sep={sep!r})",
+            deps=[f"clustering:{clustering_key}"],
+            kind=TERMINAL,
+            label=f"Export clustering: {clustering_key}",
         )
 
     leiden_import_button.clicked.connect(_on_import_clustering)

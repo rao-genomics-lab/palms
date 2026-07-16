@@ -3,6 +3,8 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import os
+
 import numpy as np
 from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import (
@@ -11,6 +13,7 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -180,11 +183,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _co_iv = state.get("_co_params", {}).get("interval", 50)
         _co_sel = _get_co_selected_clusters()
         ctx.record_clustering(_co_ck)
-        ctx.record_code(
+        ctx.record_node(
+            f"cooccur:{_co_ck}",
             f"\n# Co-occurrence (interval={_co_iv})\n"
+            "adata.obsm['spatial'] = adata.obsm.get('spatial', "
+            "np.column_stack([adata.obs['x_centroid'], adata.obs['y_centroid']]))\n"
             f"sq.gr.co_occurrence(adata, cluster_key=\"{_co_ck}\", "
             f"interval={_co_iv})"
-            + (f"\n# cluster_subset={_co_sel}" if _co_sel else "")
+            + (f"\n# cluster_subset={_co_sel}" if _co_sel else ""),
+            deps=[f"clustering:{_co_ck}"],
+            label=f"Co-occurrence: {_co_ck}",
         )
 
     def on_show_co_plot():
@@ -216,14 +224,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
             _co_ck = result.get('_cluster_key', '')
             _co_fmt = ctx.state.get("plot_format", "svg")
-            ctx.record_code(
+            ctx.record_node(
+                f"plot:cooccur:{_co_ck}",
                 f"\n# Co-occurrence plot\n"
                 f"sq.pl.co_occurrence(adata, cluster_key=\"{_co_ck}\""
                 + (f", clusters={subplot_clusters}" if subplot_clusters else "")
                 + ")\n"
                 + (f"# filter_targets={target_filter}\n" if target_filter else "")
-                + f"plt.show()\n"
-                + f"fig.savefig(\"co_occurrence.{_co_fmt}\", dpi=300, bbox_inches='tight')"
+                + f"fig = plt.gcf()\n"
+                + f"fig.savefig(\"co_occurrence.{_co_fmt}\", dpi=300, bbox_inches='tight')",
+                deps=[f"cooccur:{_co_ck}"],
+                kind=TERMINAL,
+                label="Co-occurrence plot",
             )
         except Exception as e:
             co_status.value = f"Plot error: {e}"
@@ -261,7 +273,25 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         df.to_csv(path, index=False)
         co_status.value = f"Co-occurrence exported to {path}"
-        ctx.record_code(f"\n# Export co-occurrence data\n# co_occurrence.csv -> \"{path}\"")
+        _co_ck = result.get('_cluster_key', '')
+        _fname = os.path.basename(path)
+        ctx.record_node(
+            f"export:cooccur:{_co_ck}",
+            f"\n# Export co-occurrence data\n"
+            f"_res = adata.uns[\"{_co_ck}_co_occurrence\"]\n"
+            f"_occ, _iv = _res[\"occ\"], _res[\"interval\"]\n"
+            f"_cats = list(adata.obs[\"{_co_ck}\"].cat.categories)\n"
+            f"_rows = [\n"
+            f"    {{\"source_cluster\": s, \"target_cluster\": t, "
+            f"\"distance\": _iv[k + 1], \"co_occurrence\": _occ[i, j, k]}}\n"
+            f"    for i, s in enumerate(_cats) for j, t in enumerate(_cats) "
+            f"for k in range(len(_iv) - 1)\n"
+            f"]\n"
+            f"pd.DataFrame(_rows).to_csv(\"{_fname}\", index=False)",
+            deps=[f"cooccur:{_co_ck}"],
+            kind=TERMINAL,
+            label="Export co-occurrence data",
+        )
 
     co_run_button.clicked.connect(on_run_co_occurrence)
     co_plot_button.clicked.connect(on_show_co_plot)
