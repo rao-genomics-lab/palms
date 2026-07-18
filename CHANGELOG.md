@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased] — 2026-07-18
+
+### Added
+- **Limit CNV analysis to specific cell types.** A new "Cell types to analyze
+  (CNV subclones)" checkbox grid in the CNV tab (drawn from the same
+  clustering/annotation column as the reference selector, so it shows your
+  cell-type labels) lets you restrict inference to chosen cell types. Before
+  running, the AnnData is subset to the selected types **plus** the reference
+  population (inferCNV needs the reference as its baseline), so the CNV profile,
+  score, subclone clustering, and chromosome heatmap only cover the cells of
+  interest — immune/stromal cells you don't care about are excluded entirely.
+  Leaving all boxes checked (the default) analyzes the whole tissue as before.
+  The analyzed cell-type set joins the CNV profile signature (so it interacts
+  correctly with per-resolution heatmap accumulation), persists across sessions
+  (`cnv_run_info["analyze_categories"]`), and the `cnv` provenance node emits the
+  leading `adata = adata[...].copy()` subset step. (`tabs/tab_cnv.py`,
+  `utils/cnv_analysis.py`, `utils/adata_persistence.py`)
+
 ## [Unreleased] — 2026-07-17
 
 ### Added

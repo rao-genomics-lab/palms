@@ -87,6 +87,81 @@ def build_tab(ctx: ViewerContext) -> tuple:
         cbs = state["cnv_reference_checkboxes"]
         return [str(cid) for cid, cb in cbs.items() if cb.isChecked()]
 
+    # ── Cell types to analyze (limit CNV to a subset) ───────────────────
+    cnv_analyze_label = QLabel("Cell types to analyze (CNV subclones):")
+    cnv_analyze_hint = QLabel(
+        "Only these cell types plus the reference are included in the analysis;\n"
+        "leave all checked to analyze the whole tissue."
+    )
+    cnv_analyze_select_all_btn = PushButton(label="Select All")
+    cnv_analyze_deselect_all_btn = PushButton(label="Deselect All")
+
+    cnv_analyze_container = QWidget()
+    cnv_analyze_grid = QGridLayout()
+    cnv_analyze_grid.setContentsMargins(0, 0, 0, 0)
+    cnv_analyze_container.setLayout(cnv_analyze_grid)
+
+    cnv_analyze_scroll = QScrollArea()
+    cnv_analyze_scroll.setWidget(cnv_analyze_container)
+    cnv_analyze_scroll.setWidgetResizable(True)
+    cnv_analyze_scroll.setMaximumHeight(150)
+
+    state["cnv_analyze_checkboxes"] = {}
+
+    def _cnv_analyze_select_all():
+        for cb in state["cnv_analyze_checkboxes"].values():
+            cb.setChecked(True)
+
+    def _cnv_analyze_deselect_all():
+        for cb in state["cnv_analyze_checkboxes"].values():
+            cb.setChecked(False)
+
+    cnv_analyze_select_all_btn.clicked.connect(_cnv_analyze_select_all)
+    cnv_analyze_deselect_all_btn.clicked.connect(_cnv_analyze_deselect_all)
+
+    def _repopulate_cnv_analyze_checkboxes():
+        grid = cnv_analyze_grid
+        while grid.count():
+            item = grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        state["cnv_analyze_checkboxes"].clear()
+
+        key = cnv_clustering_widget.value
+        if not key or key not in ctx.clusterings:
+            return
+        raw_ids = ctx.clusterings[key].dropna().unique().tolist()
+        try:
+            ids = sorted([int(x) for x in raw_ids])
+        except (ValueError, TypeError):
+            ids = sorted(raw_ids, key=lambda x: str(x))
+        labels = ctx.get_labels_for(key) if ctx.get_labels_for else {}
+        cols = 3
+        for i, cid in enumerate(ids):
+            display = str(labels.get(cid, labels.get(str(cid), cid)))
+            cb = QCheckBox(display)
+            cb.setChecked(True)  # analyze all cell types by default
+            grid.addWidget(cb, i // cols, i % cols)
+            state["cnv_analyze_checkboxes"][cid] = cb
+
+    _repopulate_cnv_analyze_checkboxes()
+
+    def _get_cnv_analyze_ids():
+        """Return list of checked analyze cluster IDs (str)."""
+        cbs = state["cnv_analyze_checkboxes"]
+        return [str(cid) for cid, cb in cbs.items() if cb.isChecked()]
+
+    def _all_cluster_ids(key):
+        """All (str) cluster IDs present in clustering ``key``."""
+        if not key or key not in ctx.clusterings:
+            return set()
+        return {str(x) for x in ctx.clusterings[key].dropna().unique().tolist()}
+
+    # The reference grid is already rebuilt on dropdown change (see above);
+    # rebuild the analyze grid on the same signal.
+    cnv_clustering_widget.changed.connect(lambda _: _repopulate_cnv_analyze_checkboxes())
+
     # ── Parameters ──────────────────────────────────────────────────────
     # Defaults match InSituCNV's own reference notebook (run_insitucnv.ipynb).
     cnv_n_neighbors = SpinBox(label="Neighbors (expression graph)", min=5, max=100, value=15)
@@ -136,7 +211,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             heatmap_res_widget.value = keys[-1]
 
     def _cnv_signature(result):
-        """Core CNV parameters the profile depends on (resolution excluded)."""
+        """Core CNV parameters the profile depends on (resolution excluded).
+
+        Must stay term-for-term identical to the signature recomputed in
+        load_cnv_results_from_adata, including the trailing analyzed-type set.
+        """
         p = result["params"]
         return (
             result["reference_clustering_name"],
@@ -146,6 +225,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             p.get("window_size"),
             p.get("step"),
             p.get("lfc_clip"),
+            tuple(sorted(result.get("analyze_categories") or [])),
         )
 
     def _res_from_key(key):
@@ -185,6 +265,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if not reference_ids:
             cnv_status.value = "Select at least one reference (\"normal\") cluster"
             return
+        analyze_ids = _get_cnv_analyze_ids()
+        if not analyze_ids:
+            cnv_status.value = "Select at least one cell type to analyze"
+            return
+        # All cell types selected ⇒ no restriction (keeps default behavior / signature).
+        analyze_categories = (
+            None if set(analyze_ids) >= _all_cluster_ids(reference_key) else list(analyze_ids)
+        )
 
         run_button.enabled = False
         results_text.setPlainText("Running CNV inference...")
@@ -211,6 +299,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 window_size=window_size,
                 step=step,
                 resolution=resolution,
+                analyze_categories=analyze_categories,
             )
 
         worker = _run()
@@ -312,10 +401,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
         params = result["params"]
         ref_obs_key = result["reference_obs_key"]
         ref_repr = repr(result["reference_categories"])
+        analyze_cats = result.get("analyze_categories") or []
+        if analyze_cats:
+            include_repr = repr(sorted(set(analyze_cats) | set(result["reference_categories"])))
+            subset_line = (
+                f"adata = adata[adata.obs['{reference_clustering_name}'].astype(str).isin({include_repr})].copy()"
+                f"  # limit CNV to selected cell types + reference\n"
+            )
+        else:
+            subset_line = ""
         ctx.record_node(
             "cnv",
             f"\n# CNV inference (InSituCNV / infercnvpy)\n"
             f"from insitucnv.tl import prepare_cnv_input, run_infercnv, compute_cnv_neighbors, cluster_cnv_resolutions\n"
+            f"{subset_line}"
             f"adata.obs['{ref_obs_key}'] = adata.obs['{reference_clustering_name}']  # reference clustering\n"
             f"adata.layers['raw_counts'] = sdata['table'].X.copy()  # raw counts (pre-normalization)\n"
             f"sc.pp.normalize_total(adata); sc.pp.log1p(adata); sc.pp.pca(adata)\n"
@@ -335,10 +434,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
         score_color_button.enabled = True
 
         res_line = ", ".join(str(r) for r in result["resolutions"])
+        if analyze_cats:
+            labels = ctx.get_labels_for(reference_clustering_name) if ctx.get_labels_for else {}
+            analyze_line = ", ".join(
+                str(labels.get(c, labels.get(str(c), c))) for c in analyze_cats
+            )
+            cells_line = f"  Cells analyzed: {result.get('n_cells')} (cell types: {analyze_line})\n"
+        else:
+            cells_line = f"  Cells analyzed: {result.get('n_cells')} (all cell types)\n"
         results_text.setPlainText(
             f"CNV inference complete{param_change_note}\n"
             f"  Reference clustering: {reference_clustering_name}\n"
             f"  Reference clusters: {', '.join(result['reference_categories'])}\n"
+            f"{cells_line}"
             f"  Genes: {result['n_genes_mapped']} / {result['n_genes_total']} mapped to genome\n"
             f"  CNV windows: {result['n_windows']}\n"
             f"  CNV clusters found (res {params['resolution']}): {series.nunique()}\n"
@@ -463,11 +571,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
     cnv_sel_btn_layout.addWidget(cnv_deselect_all_btn.native)
     cnv_sel_btn_row.setLayout(cnv_sel_btn_layout)
 
+    cnv_analyze_btn_row = QWidget()
+    cnv_analyze_btn_layout = QHBoxLayout()
+    cnv_analyze_btn_layout.setContentsMargins(0, 0, 0, 0)
+    cnv_analyze_btn_layout.addWidget(cnv_analyze_select_all_btn.native)
+    cnv_analyze_btn_layout.addWidget(cnv_analyze_deselect_all_btn.native)
+    cnv_analyze_btn_row.setLayout(cnv_analyze_btn_layout)
+
     widget = make_tab(
         cnv_clustering_widget,
         cnv_ref_label,
         cnv_sel_btn_row,
         cnv_cluster_scroll,
+        cnv_analyze_label,
+        cnv_analyze_hint,
+        cnv_analyze_btn_row,
+        cnv_analyze_scroll,
         cnv_n_neighbors,
         cnv_smoothing_neighbors,
         cnv_window_size,
@@ -495,10 +614,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 {r for r in (_res_from_key(k) for k in cluster_keys) if r is not None}
             )
         )
+        analyze_cats = result.get("analyze_categories") or []
+        analyze_line = (
+            f"  Analyzed cell types: {', '.join(analyze_cats)}\n" if analyze_cats
+            else "  Analyzed cell types: all\n"
+        )
         results_text.setPlainText(
             f"CNV inference (restored from previous session)\n"
             f"  Reference clustering: {result.get('reference_clustering_name')}\n"
             f"  Reference clusters: {', '.join(result.get('reference_categories', []))}\n"
+            f"{analyze_line}"
             f"  Genes: {result.get('n_genes_mapped')} / {result.get('n_genes_total')} mapped to genome\n"
             f"  CNV windows: {result.get('n_windows')}\n"
             f"  Resolutions available for heatmap: {res_line or '(none)'}\n"

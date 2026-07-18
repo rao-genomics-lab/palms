@@ -453,6 +453,7 @@ def save_cnv_results_to_adata(ctx: ViewerContext, result: dict) -> None:
         "reference_obs_key": result["reference_obs_key"],
         "reference_clustering_name": result.get("reference_clustering_name", ""),
         "reference_categories": list(result["reference_categories"]),
+        "analyze_categories": list(result.get("analyze_categories", [])),
         "cluster_key": result["cluster_key"],
         "cluster_keys": list(result.get("cluster_keys", [result["cluster_key"]])),
         "n_genes_total": int(result["n_genes_total"]),
@@ -509,9 +510,12 @@ def load_cnv_results_from_adata(adata: AnnData, sdata) -> "dict | None":
 
     cluster_key = info.get("cluster_key")
     cluster_keys = list(info.get("cluster_keys") or ([cluster_key] if cluster_key else []))
+    analyze_categories = list(info.get("analyze_categories", []))
     params = dict(info.get("params", {}))
     # Recompute the core-params signature so a subsequent run under the same
     # parameters can keep accumulating resolutions (see _cnv_signature in tab_cnv).
+    # Must stay term-for-term identical to _cnv_signature, including the trailing
+    # analyzed-cell-type set.
     signature = (
         info.get("reference_clustering_name", ""),
         tuple(info.get("reference_categories", [])),
@@ -520,11 +524,13 @@ def load_cnv_results_from_adata(adata: AnnData, sdata) -> "dict | None":
         params.get("window_size"),
         params.get("step"),
         params.get("lfc_clip"),
+        tuple(sorted(analyze_categories)),
     )
     return {
         "reference_obs_key": info.get("reference_obs_key"),
         "reference_clustering_name": info.get("reference_clustering_name", ""),
         "reference_categories": list(info.get("reference_categories", [])),
+        "analyze_categories": analyze_categories,
         "cluster_key": cluster_key,
         "cluster_keys": cluster_keys,
         "signature": signature,

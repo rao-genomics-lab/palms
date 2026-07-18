@@ -59,6 +59,7 @@ def run_cnv_pipeline(
     step: int = 10,
     lfc_clip: float = 4.0,
     resolution: float = 0.2,
+    analyze_categories: list[str] | None = None,
 ) -> dict:
     """Run the InSituCNV pipeline on ``adata`` (raw counts expected in ``.X``).
 
@@ -93,12 +94,19 @@ def run_cnv_pipeline(
         per dataset — InSituCNV's own notebook evaluates several
         resolutions and picks one after reviewing the results, rather than
         recommending a single universal default.
+    analyze_categories : list[str] or None
+        Category values within ``reference_series`` naming the cell types to
+        analyze. When given, the analysis is restricted to these cells plus
+        the reference population (``reference_categories``) — every other cell
+        is dropped before inference so the CNV profile, score, clustering, and
+        heatmap only cover the selected cells. ``None`` (or empty) analyzes all
+        cells (the previous behavior).
 
     Returns
     -------
     dict with keys: adata_cnv, cluster_key, cluster_series, cnv_score,
-    n_genes_total, n_genes_mapped, n_windows, reference_obs_key,
-    reference_clustering_name, reference_categories, params.
+    n_genes_total, n_genes_mapped, n_windows, n_cells, reference_obs_key,
+    reference_clustering_name, reference_categories, analyze_categories, params.
     """
     try:
         from insitucnv.tl import (
@@ -116,6 +124,16 @@ def run_cnv_pipeline(
 
     if not reference_categories:
         raise ValueError("At least one reference category must be selected.")
+
+    # Optionally restrict the whole analysis to the selected cell types plus the
+    # reference population (inferCNV needs the reference cells as its baseline).
+    if analyze_categories:
+        include = {str(c) for c in analyze_categories} | {str(c) for c in reference_categories}
+        idx = adata.obs["cell_id"].values if "cell_id" in adata.obs.columns else adata.obs_names
+        mask = reference_series.reindex(idx).astype(str).isin(include).to_numpy()
+        if not mask.any():
+            raise ValueError("No cells match the selected cell types + reference population.")
+        adata = adata[mask].copy()
 
     n_genes_total = adata.n_vars
 
@@ -177,9 +195,11 @@ def run_cnv_pipeline(
         "n_genes_total": int(n_genes_total),
         "n_genes_mapped": int(n_genes_mapped),
         "n_windows": int(n_windows),
+        "n_cells": int(adata_work.n_obs),
         "reference_obs_key": CNV_REFERENCE_OBS_KEY,
         "reference_clustering_name": reference_clustering_name,
         "reference_categories": [str(c) for c in reference_categories],
+        "analyze_categories": [str(c) for c in analyze_categories] if analyze_categories else [],
         "params": {
             "n_neighbors": n_neighbors,
             "smoothing_neighbors": smoothing_neighbors,
