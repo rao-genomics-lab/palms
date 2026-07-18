@@ -454,6 +454,7 @@ def save_cnv_results_to_adata(ctx: ViewerContext, result: dict) -> None:
         "reference_clustering_name": result.get("reference_clustering_name", ""),
         "reference_categories": list(result["reference_categories"]),
         "cluster_key": result["cluster_key"],
+        "cluster_keys": list(result.get("cluster_keys", [result["cluster_key"]])),
         "n_genes_total": int(result["n_genes_total"]),
         "n_genes_mapped": int(result["n_genes_mapped"]),
         "n_windows": int(result["n_windows"]),
@@ -506,15 +507,31 @@ def load_cnv_results_from_adata(adata: AnnData, sdata) -> "dict | None":
             except Exception as e:
                 print(f"Warning: could not load adata_cnv cache: {e}")
 
+    cluster_key = info.get("cluster_key")
+    cluster_keys = list(info.get("cluster_keys") or ([cluster_key] if cluster_key else []))
+    params = dict(info.get("params", {}))
+    # Recompute the core-params signature so a subsequent run under the same
+    # parameters can keep accumulating resolutions (see _cnv_signature in tab_cnv).
+    signature = (
+        info.get("reference_clustering_name", ""),
+        tuple(info.get("reference_categories", [])),
+        params.get("n_neighbors"),
+        params.get("smoothing_neighbors"),
+        params.get("window_size"),
+        params.get("step"),
+        params.get("lfc_clip"),
+    )
     return {
         "reference_obs_key": info.get("reference_obs_key"),
         "reference_clustering_name": info.get("reference_clustering_name", ""),
         "reference_categories": list(info.get("reference_categories", [])),
-        "cluster_key": info.get("cluster_key"),
+        "cluster_key": cluster_key,
+        "cluster_keys": cluster_keys,
+        "signature": signature,
         "n_genes_total": info.get("n_genes_total"),
         "n_genes_mapped": info.get("n_genes_mapped"),
         "n_windows": info.get("n_windows"),
-        "params": dict(info.get("params", {})),
+        "params": params,
         "cnv_score": score,
         "adata_cnv": adata_cnv,
     }

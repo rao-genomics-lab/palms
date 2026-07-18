@@ -1,8 +1,10 @@
 """Tab: CNV inference (InSituCNV / infercnvpy)."""
 
 from __future__ import annotations
+import re
 from typing import TYPE_CHECKING
 
+import pandas as pd
 from magicgui.widgets import ComboBox, PushButton, SpinBox, FloatSpinBox
 from qtpy.QtWidgets import (
     QTextEdit, QHBoxLayout, QWidget, QLabel, QScrollArea, QGridLayout, QCheckBox,
@@ -104,8 +106,54 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
 
     run_button = PushButton(label="Run CNV Inference", enabled=True)
+    heatmap_res_widget = ComboBox(label="Heatmap resolution", choices=[], **combo_value_kwargs([]))
     heatmap_button = PushButton(label="Save Chromosome Heatmap (PDF/PNG)", enabled=False)
     score_color_button = PushButton(label="Color Cells by CNV Score", enabled=False)
+
+    def _key_to_res_label(key: str) -> str:
+        """'cnv_leiden_res0.2' -> 'res 0.2' (falls back to the raw key)."""
+        m = re.search(r"res([0-9.]+)$", str(key))
+        return f"res {m.group(1)}" if m else str(key)
+
+    def _set_heatmap_choices(keys, select=None):
+        """Populate the heatmap-resolution ComboBox from accumulated cluster keys.
+
+        When a CNV profile is loaded, only keys actually present as columns in it
+        are offered (so a stale/partial restore can't select a missing column).
+        Choices are (label, value) tuples: friendly 'res 0.2' shown, raw key used.
+        """
+        keys = [k for k in (keys or []) if k]
+        result = state.get("cnv_result")
+        adata_cnv = result.get("adata_cnv") if result else None
+        if adata_cnv is not None:
+            cols = set(adata_cnv.obs.columns)
+            keys = [k for k in keys if k in cols]
+        choices = [(_key_to_res_label(k), k) for k in keys]
+        heatmap_res_widget.choices = choices
+        if select in keys:
+            heatmap_res_widget.value = select
+        elif keys:
+            heatmap_res_widget.value = keys[-1]
+
+    def _cnv_signature(result):
+        """Core CNV parameters the profile depends on (resolution excluded)."""
+        p = result["params"]
+        return (
+            result["reference_clustering_name"],
+            tuple(result["reference_categories"]),
+            p.get("n_neighbors"),
+            p.get("smoothing_neighbors"),
+            p.get("window_size"),
+            p.get("step"),
+            p.get("lfc_clip"),
+        )
+
+    def _res_from_key(key):
+        m = re.search(r"res([0-9.]+)$", str(key))
+        try:
+            return float(m.group(1)) if m else None
+        except (TypeError, ValueError):
+            return None
 
     results_text = QTextEdit()
     results_text.setReadOnly(True)
@@ -183,11 +231,41 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if ctx.dataset_generation != gen:
             return  # dataset reloaded while worker ran
 
-        state["cnv_result"] = result
         key = result["cluster_key"]
         series = result["cluster_series"]
 
-        # Store in clusterings (invalidate stale color cache for this key first)
+        # Accumulate resolutions across runs that share the same core CNV params.
+        # The CNV profile (X_cnv, gene positions) is identical for a fixed set of
+        # core params, so we keep ONE retained adata_cnv and grow it by one obs
+        # column per resolution. If core params change, that's a different profile
+        # — reset the accumulated set (its heatmaps need the earlier profile).
+        sig = _cnv_signature(result)
+        prev = state.get("cnv_result")
+        param_change_note = ""
+        if (prev is not None and prev.get("signature") == sig
+                and prev.get("adata_cnv") is not None):
+            shared = prev["adata_cnv"]
+            shared.obs[key] = (
+                pd.Series(result["adata_cnv"].obs[key].values,
+                          index=result["adata_cnv"].obs_names)
+                .reindex(shared.obs_names).values
+            )
+            result["adata_cnv"] = shared
+            result["cluster_keys"] = list(dict.fromkeys(prev.get("cluster_keys", []) + [key]))
+        else:
+            result["cluster_keys"] = [key]
+            if prev is not None and prev.get("signature") is not None and prev.get("signature") != sig:
+                param_change_note = (
+                    " (CNV parameters changed — previous resolutions cleared; "
+                    "their heatmaps need the earlier profile, re-run to restore them)"
+                )
+        result["signature"] = sig
+        result["resolutions"] = sorted(
+            {r for r in (_res_from_key(k) for k in result["cluster_keys"]) if r is not None}
+        )
+        state["cnv_result"] = result
+
+        # Store the new clustering (invalidate stale color cache for this key first)
         ctx.color_manager._cluster_cache.pop(key, None)
         ctx.clusterings[key] = series
         if "custom_clusterings" not in state:
@@ -195,6 +273,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["custom_clusterings"][key] = series
 
         ctx.refresh_clustering_choices()
+        _set_heatmap_choices(result["cluster_keys"], select=key)
 
         # Auto-apply cluster coloring in background thread
         @thread_worker
@@ -246,8 +325,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"run_infercnv(adata, reference_key='{ref_obs_key}', reference_categories={ref_repr}, "
             f"window_size={params['window_size']}, step={params['step']}, calculate_gene_values=True, copy=False)\n"
             f"compute_cnv_neighbors(adata, copy=False)\n"
-            f"cluster_cnv_resolutions(adata, [{params['resolution']}], copy=False)\n"
-            f"# result: adata.obs['{key}']",
+            f"cluster_cnv_resolutions(adata, {result['resolutions']!r}, copy=False)\n"
+            f"# result: adata.obs[{result['cluster_keys']!r}]",
             deps=[f"clustering:{reference_clustering_name}"],
             label="CNV inference",
         )
@@ -255,17 +334,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
         heatmap_button.enabled = True
         score_color_button.enabled = True
 
+        res_line = ", ".join(str(r) for r in result["resolutions"])
         results_text.setPlainText(
-            f"CNV inference complete\n"
+            f"CNV inference complete{param_change_note}\n"
             f"  Reference clustering: {reference_clustering_name}\n"
             f"  Reference clusters: {', '.join(result['reference_categories'])}\n"
             f"  Genes: {result['n_genes_mapped']} / {result['n_genes_total']} mapped to genome\n"
             f"  CNV windows: {result['n_windows']}\n"
-            f"  CNV clusters found: {series.nunique()}\n"
+            f"  CNV clusters found (res {params['resolution']}): {series.nunique()}\n"
             f"  CNV score range: {result['cnv_score'].min():.3f} - {result['cnv_score'].max():.3f}\n"
             f"\nResult stored as: {key}\n"
-            f"Use Cell Coloring tab to re-apply or switch colorings, or the buttons\n"
-            f"below to view the chromosome heatmap / color by CNV score."
+            f"  Resolutions available for heatmap: {res_line}\n"
+            f"Use Cell Coloring tab to re-apply or switch colorings; pick a resolution\n"
+            f"below to save its chromosome heatmap, or color cells by CNV score."
         )
 
     def _on_cnv_error(exc):
@@ -281,10 +362,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if adata_cnv is None:
             cnv_status.value = "No cached CNV profile available — rerun CNV inference to view the heatmap"
             return
-        cnv_status.value = "Building chromosome heatmap..."
-        heatmap_button.enabled = False
 
-        cluster_key = result["cluster_key"]
+        cluster_key = heatmap_res_widget.value or result["cluster_key"]
+        if cluster_key not in adata_cnv.obs.columns:
+            cnv_status.value = (
+                f"Resolution '{_key_to_res_label(cluster_key)}' is not in the current CNV "
+                f"profile — re-run CNV inference at that resolution to save its heatmap"
+            )
+            return
+
+        cnv_status.value = f"Building chromosome heatmap ({_key_to_res_label(cluster_key)})..."
+        heatmap_button.enabled = False
+        safe = re.sub(r"[^0-9A-Za-z._-]", "_", cluster_key)
 
         @thread_worker
         def _build():
@@ -294,8 +383,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             fig = make_cnv_heatmap(adata_cnv, cluster_key)
             plots_dir = os.path.join(ctx.data_path, "plots")
             os.makedirs(plots_dir, exist_ok=True)
-            png_path = os.path.join(plots_dir, "cnv_heatmap.png")
-            pdf_path = os.path.join(plots_dir, "cnv_heatmap.pdf")
+            png_path = os.path.join(plots_dir, f"cnv_heatmap_{safe}.png")
+            pdf_path = os.path.join(plots_dir, f"cnv_heatmap_{safe}.pdf")
             fig.savefig(png_path, dpi=300, bbox_inches="tight")
             fig.savefig(pdf_path, bbox_inches="tight")
             import matplotlib.pyplot as _plt
@@ -307,15 +396,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             png_path, pdf_path = paths
             cnv_status.value = f"CNV chromosome heatmap saved to {png_path} and {pdf_path}"
             ctx.record_node(
-                "plot:cnv_heatmap",
-                f"\n# CNV chromosome heatmap\n"
+                f"plot:cnv_heatmap:{cluster_key}",
+                f"\n# CNV chromosome heatmap ({_key_to_res_label(cluster_key)})\n"
                 f"import infercnvpy as cnv\n"
                 f"cnv.pl.chromosome_heatmap(adata, groupby='{cluster_key}', show=False)\n"
-                f"plt.savefig('cnv_heatmap.png', dpi=300, bbox_inches='tight')\n"
-                f"plt.savefig('cnv_heatmap.pdf', bbox_inches='tight')",
+                f"plt.savefig('cnv_heatmap_{safe}.png', dpi=300, bbox_inches='tight')\n"
+                f"plt.savefig('cnv_heatmap_{safe}.pdf', bbox_inches='tight')",
                 deps=["cnv"],
                 kind=TERMINAL,
-                label="CNV chromosome heatmap",
+                label=f"CNV chromosome heatmap ({_key_to_res_label(cluster_key)})",
             )
 
         def _on_error(exc):
@@ -388,6 +477,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         run_button,
         cnv_progress,
         results_text,
+        heatmap_res_widget,
         heatmap_button,
         score_color_button,
     )
@@ -398,16 +488,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         heatmap_button.enabled = True
         score_color_button.enabled = True
+        cluster_keys = result.get("cluster_keys") or [result.get("cluster_key")]
+        _set_heatmap_choices(cluster_keys, select=result.get("cluster_key"))
+        res_line = ", ".join(
+            str(r) for r in sorted(
+                {r for r in (_res_from_key(k) for k in cluster_keys) if r is not None}
+            )
+        )
         results_text.setPlainText(
             f"CNV inference (restored from previous session)\n"
             f"  Reference clustering: {result.get('reference_clustering_name')}\n"
             f"  Reference clusters: {', '.join(result.get('reference_categories', []))}\n"
             f"  Genes: {result.get('n_genes_mapped')} / {result.get('n_genes_total')} mapped to genome\n"
             f"  CNV windows: {result.get('n_windows')}\n"
-            f"  CNV cluster key: {result.get('cluster_key')}\n"
-            f"\nUse Cell Coloring tab to re-apply the CNV clustering, or the buttons\n"
-            f"below to view the chromosome heatmap / color by CNV score."
+            f"  Resolutions available for heatmap: {res_line or '(none)'}\n"
+            f"\nUse Cell Coloring tab to re-apply the CNV clustering; pick a resolution\n"
+            f"below to save its chromosome heatmap, or color cells by CNV score."
         )
-        print(f"  Restored CNV results (cluster key: {result.get('cluster_key')})")
+        print(f"  Restored CNV results (cluster keys: {cluster_keys})")
 
     return widget, {"cnv_clustering_widget": cnv_clustering_widget, "restore_session": _restore_session}

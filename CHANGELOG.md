@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased] — 2026-07-17
+
+### Added
+- **Per-resolution CNV chromosome heatmaps.** The CNV tab now *remembers* every
+  leiden resolution run under the same core parameters (reference, neighbors,
+  smoothing, window, step) instead of overwriting the previous run. A new
+  **"Heatmap resolution"** selector lets you save the chromosome heatmap for any
+  accumulated resolution; each writes its own `plots/cnv_heatmap_<key>.png/.pdf`
+  and a distinct `plot:cnv_heatmap:<key>` provenance terminal, so comparing
+  resolutions no longer clobbers earlier heatmaps. Accumulation is scoped to a
+  shared CNV profile — changing a core parameter starts a fresh profile (with a
+  status note), since prior resolutions' heatmaps require the earlier profile.
+  The accumulated resolution list persists across sessions
+  (`cnv_run_info["cluster_keys"]`) and the `cnv` provenance node emits the full
+  `cluster_cnv_resolutions(adata, [...])` list. (`tabs/tab_cnv.py`,
+  `utils/adata_persistence.py`)
+
 ## [Unreleased] — 2026-07-16
 
 ### Added
