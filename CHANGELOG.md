@@ -1,6 +1,28 @@
 # Changelog
 
-## [Unreleased] — 2026-07-18
+## [Unreleased] — 2026-07-19
+
+### Added
+- **Global CPU-cores preference wired into CopyKAT.** A new **Preferences → CPU
+  cores** submenu sets `ctx.state["n_cores"]` (default `max(1, os.cpu_count()//2)`,
+  session-only like the other preferences). The CopyKAT path threads it through
+  the launch params → `cnv_copykat_worker` → `run_cnv_pipeline(n_cores=)` →
+  `run_copykat(n_cores=)` (CopyKAT's R `n.cores`, which speeds its `parallelDist`
+  passes); inferCNV is unaffected. The value is echoed into
+  `cnv_copykat_params.json` and the recorded `run_copykat(...)` code cell.
+  (`app.py`, `tabs/_helpers.py`, `tabs/tab_cnv.py`, `cnv_copykat_worker.py`,
+  `utils/cnv_analysis.py`)
+- **Extrapolate CopyKAT calls to the whole dataset.** A new **"Extrapolate CopyKAT
+  calls to all cells"** checkbox on the CNV tab. Because CopyKAT runs on a subsample,
+  only those cells get a call; when enabled, after the run finishes the viewer
+  spreads the per-cell tumor/normal (`cnv_status`) and `copykat_pred` labels to every
+  cell by cluster majority within the reference clustering (the fork's
+  `propagate_cnv_labels(method="cluster")`). Adds two colorable, session-persisted
+  clusterings (`cnv_status_propagated`, `copykat_pred_propagated`) and a
+  `cnv:copykat_propagated` provenance node. These are copied cluster-level calls, not
+  per-cell inferred CNV; groups with no sampled cell are labelled `unknown`. Requires
+  the updated `insituCNV-copykat` fork (force-reinstalled in both envs).
+  (`tabs/tab_cnv.py`, `cnv_copykat_worker.py`)
 
 ### Added
 - **CopyKAT CNV backend (inferCNV / CopyKAT / both).** The CNV tab can now call

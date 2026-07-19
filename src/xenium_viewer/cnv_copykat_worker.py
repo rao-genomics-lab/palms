@@ -77,6 +77,7 @@ def main(argv: list[str]) -> int:
             step=params.get("step", 10),
             lfc_clip=params.get("lfc_clip", 4.0),
             resolution=params.get("resolution", 0.2),
+            n_cores=params.get("n_cores", 1),
             analyze_categories=None,  # cell-type restriction already applied by the parent
             backend="copykat",
             copykat_output_dir=params.get("copykat_workdir"),
@@ -124,6 +125,7 @@ def main(argv: list[str]) -> int:
             "cluster_keys": cluster_keys,
             "resolutions": resolutions,
             "analyze_categories": list(params.get("analyze_categories", [])),
+            "extrapolate": bool(params.get("extrapolate", False)),
             "reference_categories": list(result["reference_categories"]),
             "reference_clustering_name": result.get("reference_clustering_name", ""),
             "reference_obs_key": result.get("reference_obs_key"),

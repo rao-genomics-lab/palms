@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
-from magicgui.widgets import ComboBox, PushButton, SpinBox, FloatSpinBox
+from magicgui.widgets import CheckBox, ComboBox, PushButton, SpinBox, FloatSpinBox
 from qtpy.QtCore import QTimer
 from qtpy.QtWidgets import (
     QTextEdit, QHBoxLayout, QWidget, QLabel, QScrollArea, QGridLayout, QCheckBox,
@@ -228,6 +228,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         "CopyKAT is slow (~2 h/sample) and runs as a detached background job on a random "
         "subsample of at most this many cells (all reference cells are kept). inferCNV uses all cells."
     )
+    cnv_extrapolate = CheckBox(label="Extrapolate CopyKAT calls to all cells", value=False)
+    cnv_extrapolate.tooltip = (
+        "After CopyKAT finishes on the subsample, spread its tumor/normal (cnv_status) and "
+        "copykat_pred calls to every cell by majority vote within each group of the reference "
+        "clustering (cluster-majority). These are copied cluster-level calls, not per-cell inferred "
+        "CNV; groups with no sampled cell are labelled 'unknown'. Adds two colorable clusterings "
+        "(cnv_status_propagated, copykat_pred_propagated)."
+    )
 
     run_button = PushButton(label="Run CNV Inference", enabled=True)
     heatmap_backend_widget = ComboBox(label="Heatmap backend", choices=[], **combo_value_kwargs([]))
@@ -349,8 +357,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"{p['smoothing_neighbors']}, add_gene_positions=True, drop_unmapped_genes=True, copy=False)",
         ]
         if backend == "copykat":
+            n_cores = p.get("n_cores", 1)
             L.append(f"run_copykat({var}, reference_key='{ref_obs}', reference_categories={ref_repr}, "
-                     f"input_layer='M', copy=False)  # fork defaults (genome hg20, win_size 25, ...)")
+                     f"input_layer='M', n_cores={n_cores}, copy=False)  # fork defaults (genome hg20, win_size 25, ...)")
             prefix = "copykat_leiden_res"
         else:
             L.append(f"run_infercnv({var}, reference_key='{ref_obs}', reference_categories={ref_repr}, "
@@ -486,7 +495,84 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "n_cells": sidecar.get("n_cells"), "n_genes_total": sidecar.get("n_genes_total"),
             "n_genes_mapped": sidecar.get("n_genes_mapped"), "n_windows": sidecar.get("n_windows"),
             "max_cells": sidecar.get("max_cells"), "params": dict(sidecar.get("params", {})),
+            "extrapolate": bool(sidecar.get("extrapolate", False)),
         }
+
+    def _record_extrapolation_node(result, label_cols, ref_key):
+        backend = result.get("backend", "copykat")
+        var = f"adata_{backend}"
+        keys_repr = repr(tuple(label_cols))
+        prop_cols = [f"{c}_propagated" for c in label_cols]
+        L = [
+            "\n# Extrapolate CopyKAT calls to all cells (cluster-majority)",
+            "from insitucnv.tl import propagate_cnv_labels",
+            f"# adata = full dataset; {var} = CopyKAT-labeled subsample (from the CNV step above)",
+            f"adata.obs['{ref_key}'] = adata.obs['{ref_key}'].astype(str)",
+            f"propagate_cnv_labels(adata, {var}, label_keys={keys_repr},",
+            f"    method='cluster', cluster_key='{ref_key}', suffix='_propagated', copy=False)",
+            f"# result: adata.obs[{prop_cols!r}] (all cells; empty groups -> 'unknown')",
+        ]
+        ctx.record_node("cnv:copykat_propagated", "\n".join(L), deps=[f"cnv:{backend}"],
+                        label="Extrapolate CopyKAT calls (all cells)")
+
+    def _extrapolate_copykat(result):
+        """Propagate CopyKAT tumor/normal calls from the run subsample to ALL cells.
+
+        Uses the reference clustering as a clone proxy: each cell inherits the
+        majority CopyKAT call among labeled cells in its reference-clustering group
+        (``propagate_cnv_labels(method="cluster")``). Registers the resulting
+        full-coverage ``cnv_status_propagated`` / ``copykat_pred_propagated`` columns
+        as colorable clusterings. These are copied cluster-level calls, not per-cell
+        inferred CNV; groups with no sampled cell are labelled ``unknown``.
+        """
+        ref_key = result.get("reference_clustering_name")
+        adata_cnv = result.get("adata_cnv")
+        if not ref_key or ref_key not in ctx.clusterings or adata_cnv is None:
+            ctx.set_status("Extrapolation skipped: reference clustering unavailable.")
+            return
+        label_cols = [c for c in ("cnv_status", "copykat_pred") if c in adata_cnv.obs.columns]
+        if not label_cols:
+            ctx.set_status("Extrapolation skipped: no CopyKAT call columns found.")
+            return
+        try:
+            from insitucnv.tl import propagate_cnv_labels
+        except Exception as e:  # noqa: BLE001
+            ctx.set_status(f"Extrapolation unavailable (insitucnv import failed): {e}")
+            return
+        import anndata as _ad
+
+        ref_full = ctx.clusterings[ref_key].astype(str)  # indexed by cell_id, all cells
+        sub_idx = [str(c) for c in (adata_cnv.obs["cell_id"].values
+                   if "cell_id" in adata_cnv.obs.columns else adata_cnv.obs_names)]
+        labeled_obs = pd.DataFrame({ref_key: ref_full.reindex(sub_idx).astype(str).values},
+                                   index=sub_idx)
+        for c in label_cols:
+            labeled_obs[c] = [str(v) for v in adata_cnv.obs[c].values]
+        adata_labeled = _ad.AnnData(obs=labeled_obs)
+        full_ids = [str(c) for c in ref_full.index]
+        adata_full = _ad.AnnData(obs=pd.DataFrame({ref_key: ref_full.values}, index=full_ids))
+
+        propagate_cnv_labels(
+            adata_full, adata_labeled, label_keys=tuple(label_cols),
+            method="cluster", cluster_key=ref_key, suffix="_propagated", copy=False,
+        )
+
+        from xenium_viewer.utils.adata_persistence import save_clustering_to_adata
+        for c in label_cols:
+            pkey = f"{c}_propagated"
+            series = adata_full.obs[pkey].astype(str)
+            series.index = full_ids
+            series.name = pkey
+            ctx.color_manager._cluster_cache.pop(pkey, None)
+            ctx.clusterings[pkey] = series
+            state.setdefault("custom_clusterings", {})[pkey] = series
+            save_clustering_to_adata(ctx, pkey, series)
+        ctx.refresh_clustering_choices()
+
+        cov = adata_full.uns.get("insitucnv", {}).get("label_propagation", {}).get("coverage", {})
+        cov_txt = ", ".join(f"{k} {v:.0%}" for k, v in cov.items()) or "n/a"
+        ctx.set_status(f"Extrapolated CopyKAT calls to all cells (coverage: {cov_txt}).")
+        _record_extrapolation_node(result, label_cols, ref_key)
 
     # ── Background-job polling (detached CopyKAT worker) ────────────────
     def _stop_poll_timer():
@@ -529,6 +615,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 adata_cnv = sc.read_h5ad(job["out_h5ad"])
                 result = _result_from_copykat_output(sidecar, adata_cnv)
                 _ingest_cnv_result(result, note=" (background run)")
+                if result.get("extrapolate"):
+                    try:
+                        _extrapolate_copykat(result)
+                    except Exception as e:  # noqa: BLE001 — extrapolation is best-effort
+                        cnv_status.value = f"CopyKAT done; extrapolation failed: {e}"
                 cnv_status.value = f"CopyKAT background analysis complete ({result.get('n_cells')} cells)."
             except Exception as e:
                 cnv_status.value = f"CopyKAT result load error: {e}"
@@ -642,6 +733,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "window_size": cnv_window_size.value,
             "step": cnv_step.value,
             "lfc_clip": 4.0,
+            "n_cores": int(ctx.state.get("n_cores", 1)),
+            "extrapolate": bool(cnv_extrapolate.value),
             "max_cells": int(cnv_max_cells.value),
             "n_input_cells": int(subset.n_obs),
             "output_h5ad": str(out_h5ad),
@@ -853,6 +946,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         cnv_resolution_hint,
         cnv_backend_widget,
         cnv_max_cells,
+        cnv_extrapolate,
         run_button,
         cnv_progress,
         results_text,

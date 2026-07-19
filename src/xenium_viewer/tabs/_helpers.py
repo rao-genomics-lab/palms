@@ -746,6 +746,31 @@ def create_preferences_menu(ctx: ViewerContext):
         state["plot_font_size"] = int(action.text())
     fontsize_group.triggered.connect(_on_fontsize_changed)
 
+    # CPU cores — global budget for parallel analyses (currently CopyKAT).
+    n_cpu = os.cpu_count() or 2
+    current_cores = int(state.get("n_cores", max(1, n_cpu // 2)))
+    # A small, machine-scaled set of choices: powers of two up to the core count,
+    # plus explicit "half" and "all" (as labelled aliases), deduped and sorted.
+    core_choices = sorted({c for c in (1, 2, 4, 8, 16, 32, 64) if c <= n_cpu}
+                          | {max(1, n_cpu // 2), n_cpu})
+    cores_menu = prefs_menu.addMenu("CPU cores")
+    cores_group = QActionGroup(cores_menu)
+    cores_group.setExclusive(True)
+    for c in core_choices:
+        if c == n_cpu:
+            label = f"{c} (all)"
+        elif c == max(1, n_cpu // 2):
+            label = f"{c} (half)"
+        else:
+            label = str(c)
+        act = QAction(label, cores_group, checkable=True, checked=(c == current_cores))
+        act.setData(c)
+        cores_menu.addAction(act)
+
+    def _on_cores_changed(action):
+        state["n_cores"] = int(action.data())
+    cores_group.triggered.connect(_on_cores_changed)
+
     # Record code checkbox
     record_action = QAction("Record reproducible code", prefs_menu, checkable=True, checked=True)
     prefs_menu.addAction(record_action)

@@ -839,6 +839,9 @@ def _make_initial_state(gene_names: list, clustering_names: list) -> dict:
         "co_fig": None,
         "plot_format": "svg",
         "plot_font_size": 10,
+        # Global CPU-core budget for parallel analyses (currently CopyKAT's
+        # parallelDist). Default to half the machine's cores, leaving headroom.
+        "n_cores": max(1, (os.cpu_count() or 2) // 2),
         "record_code": True,
         "code_journal": [],
         "code_journal_tags": set(),

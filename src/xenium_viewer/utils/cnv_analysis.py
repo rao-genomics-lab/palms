@@ -59,6 +59,7 @@ def run_cnv_pipeline(
     step: int = 10,
     lfc_clip: float = 4.0,
     resolution: float = 0.2,
+    n_cores: int = 1,
     analyze_categories: list[str] | None = None,
     backend: str = "infercnv",
     copykat_output_dir: str | None = None,
@@ -96,6 +97,9 @@ def run_cnv_pipeline(
         per dataset — InSituCNV's own notebook evaluates several
         resolutions and picks one after reviewing the results, rather than
         recommending a single universal default.
+    n_cores : int
+        CPU cores handed to CopyKAT's R ``n.cores`` (speeds its ``parallelDist``
+        passes). Ignored by the inferCNV backend (infercnvpy has no cores knob).
     analyze_categories : list[str] or None
         Category values within ``reference_series`` naming the cell types to
         analyze. When given, the analysis is restricted to these cells plus
@@ -195,6 +199,7 @@ def run_cnv_pipeline(
                 reference_key=CNV_REFERENCE_OBS_KEY,
                 reference_categories=[str(c) for c in reference_categories],
                 input_layer="M",
+                n_cores=n_cores,
                 output_dir=copykat_output_dir,
                 copy=False,
             )
@@ -259,6 +264,7 @@ def run_cnv_pipeline(
             "step": step,
             "lfc_clip": lfc_clip,
             "resolution": resolution,
+            "n_cores": n_cores,
         },
     }
 
