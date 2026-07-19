@@ -50,14 +50,24 @@ dependencies:
       - spatialdata-io>=0.6
       - adjustText
       - omnipath
+      # InSituCNV CNV inference (inferCNV backend; the fork also provides run_copykat,
+      # but the CopyKAT R backend runs in the separate xenium_viewer_copykat env).
+      - infercnvpy>=0.6.0
+      - insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git
       # the package itself, editable
       - -e .
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Quick start:
-#     conda env create -f environment.yml
+#     conda env create -f environment.yml    # (mamba env create is much faster)
 #     conda activate xenium_viewer
 #     xenium-viewer /path/to/xenium/output
+#
+# CopyKAT backend (optional): CopyKAT needs an R stack that requires python 3.11,
+# which is incompatible with this env's python 3.12. So it runs in a SECOND env:
+#     conda env create -f environment-copykat.yml   # creates 'xenium_viewer_copykat'
+# The viewer auto-detects that env and runs the (slow, ~2h) CopyKAT analysis there
+# as a detached background job. inferCNV runs in this env; no extra env needed for it.
 #
 # Optional extras (install on top of the above env):
 #     pip install -e ".[celltypist]"   # CellTypist label transfer

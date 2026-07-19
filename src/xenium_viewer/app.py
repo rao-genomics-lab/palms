@@ -988,9 +988,9 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         ctx.state['rank_genes_adata_norm'] = rg_adata_norm
         ctx.state['rank_genes_groupby'] = rg_groupby
 
-    cnv_result = load_cnv_results_from_adata(adata, data["sdata"])
-    if cnv_result is not None and ctx.state.get('cnv_result') is None:
-        ctx.state['cnv_result'] = cnv_result
+    cnv_results = load_cnv_results_from_adata(adata, data["sdata"])
+    if cnv_results is not None and not ctx.state.get('cnv_results'):
+        ctx.state['cnv_results'] = cnv_results
 
     # Load ROIs from sdata.shapes['rois'] (new format); zarr arrays in
     # load_session() serve as fallback for datasets not yet saved with new code.
@@ -1182,6 +1182,55 @@ def run_viewer(data_path=None, no_cache: bool = False):
 
     ctx = None  # set after first dataset load
 
+    # ── Detached CopyKAT background jobs: close/switch guard helpers ──────────
+    def _running_bg_jobs():
+        """Jobs whose done-file hasn't appeared yet (still running / detached)."""
+        if ctx is None:
+            return []
+        jobs = ctx.state.get("_cnv_bg_jobs", []) if isinstance(ctx.state, dict) else []
+        out = []
+        for j in jobs:
+            try:
+                if not j["done_file"].exists():
+                    out.append(j)
+            except Exception:
+                pass
+        return out
+
+    def _ask_close_bg(jobs):
+        """Return 'stop' | 'continue' | 'cancel' for running CopyKAT jobs."""
+        from qtpy.QtWidgets import QMessageBox
+        box = QMessageBox(viewer.window._qt_window)
+        box.setWindowTitle("CopyKAT analysis running")
+        box.setText(
+            f"{len(jobs)} CopyKAT background analysis(es) are still running.\n\n"
+            "Stop them now, or let them continue in the background after the app closes "
+            "(results will be picked up next time you open this dataset)?"
+        )
+        stop_btn = box.addButton("Stop analysis", QMessageBox.DestructiveRole)
+        cont_btn = box.addButton("Continue in background", QMessageBox.AcceptRole)
+        cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setDefaultButton(cont_btn)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is stop_btn:
+            return "stop"
+        if clicked is cancel_btn:
+            return "cancel"
+        return "continue"
+
+    def _kill_bg_jobs(jobs):
+        import os as _os
+        import signal as _signal
+        for j in jobs:
+            try:
+                _os.killpg(j["pgid"], _signal.SIGTERM)
+            except Exception:
+                try:
+                    j["proc"].terminate()
+                except Exception:
+                    pass
+
     # ── Open Dataset callback ────────────────────────────────────────────────
     def _on_open_dataset():
         nonlocal ctx
@@ -1189,6 +1238,14 @@ def run_viewer(data_path=None, no_cache: bool = False):
 
         if _app["reload_in_progress"]:
             return
+
+        running = _running_bg_jobs()
+        if running:
+            choice = _ask_close_bg(running)
+            if choice == "cancel":
+                return
+            if choice == "stop":
+                _kill_bg_jobs(running)
         _app["reload_in_progress"] = True
 
         try:
@@ -1398,6 +1455,28 @@ def run_viewer(data_path=None, no_cache: bool = False):
     # ── File / View menus — added once to napari's native menus ─────────────
     create_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset)
     create_view_menu(viewer, _app)
+
+    # ── Warn on close if a detached CopyKAT job is still running ─────────────
+    # aboutToQuit fires too late to veto, so filter the window's Close event.
+    from qtpy.QtCore import QObject as _QObject, QEvent as _QEvent
+
+    class _CloseGuard(_QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == _QEvent.Close:
+                running = _running_bg_jobs()
+                if running:
+                    choice = _ask_close_bg(running)
+                    if choice == "cancel":
+                        event.ignore()
+                        return True  # veto the close
+                    if choice == "stop":
+                        _kill_bg_jobs(running)
+                    # 'continue' leaves the detached process running
+            return False
+
+    _close_guard = _CloseGuard(viewer.window._qt_window)
+    viewer.window._qt_window.installEventFilter(_close_guard)
+    _app["_close_guard"] = _close_guard  # keep a reference alive
 
     # ── Snapshot layer data before Qt teardown, then save on exit ────────────
     if not no_cache:

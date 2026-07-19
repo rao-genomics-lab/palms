@@ -431,25 +431,47 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
     return df, adata_norm, groupby
 
 
-def save_cnv_results_to_adata(ctx: ViewerContext, result: dict) -> None:
-    """Write CNV inference results to adata.obs/uns and cache adata_cnv as h5ad.
+def _cnv_signature_from_info(backend: str, info: dict) -> tuple:
+    """Recompute a CNV profile signature from persisted run info.
 
-    Mirrors save_rank_genes_to_adata's shape: the derived per-cell score and
-    run metadata go into the main adata (so they round-trip on reopen), and
-    the full CNV-profile AnnData (with obsm['X_cnv'], gene positions, etc.)
-    is cached alongside the zarr store so the chromosome heatmap can be
-    regenerated without recomputation.
+    Must stay term-for-term identical to ``_cnv_signature`` in tab_cnv.py
+    (leading backend, then core params, trailing analyzed-cell-type set) so a
+    run after restore matches its prior profile and keeps accumulating.
+    """
+    params = dict(info.get("params", {}))
+    return (
+        backend,
+        info.get("reference_clustering_name", ""),
+        tuple(info.get("reference_categories", [])),
+        params.get("n_neighbors"),
+        params.get("smoothing_neighbors"),
+        params.get("window_size"),
+        params.get("step"),
+        params.get("lfc_clip"),
+        tuple(sorted(info.get("analyze_categories", []))),
+    )
+
+
+def save_cnv_results_to_adata(ctx: ViewerContext, result: dict) -> None:
+    """Write one backend's CNV results to adata.obs/uns and cache adata_cnv as h5ad.
+
+    Per-backend: the derived per-cell score goes to ``adata.obs["cnv_score_<backend>"]``,
+    run metadata into the nested ``adata.uns["cnv_runs"][backend]`` (so multiple
+    backends round-trip on reopen), and the CNV-profile AnnData into a per-backend
+    sibling ``adata_cnv_cache_<backend>.h5ad``.
     """
     adata = ctx.adata
+    backend = result.get("backend", "infercnv")
     score = result["cnv_score"]
     if "cell_id" in adata.obs.columns:
         cell_id_to_idx = pd.Series(adata.obs.index, index=adata.obs["cell_id"].values)
         aligned = score.rename(cell_id_to_idx).reindex(adata.obs.index)
     else:
         aligned = score.reindex(adata.obs.index)
-    adata.obs["cnv_score"] = aligned.astype(np.float64)
+    adata.obs[f"cnv_score_{backend}"] = aligned.astype(np.float64)
 
-    adata.uns["cnv_run_info"] = {
+    info = {
+        "backend": backend,
         "reference_obs_key": result["reference_obs_key"],
         "reference_clustering_name": result.get("reference_clustering_name", ""),
         "reference_categories": list(result["reference_categories"]),
@@ -461,16 +483,19 @@ def save_cnv_results_to_adata(ctx: ViewerContext, result: dict) -> None:
         "n_windows": int(result["n_windows"]),
         "params": dict(result["params"]),
     }
+    runs = dict(adata.uns.get("cnv_runs", {}))
+    runs[backend] = info
+    adata.uns["cnv_runs"] = runs
     _persist_table(ctx)
-    _persist_cnv_adata(ctx, result["adata_cnv"])
+    _persist_cnv_adata(ctx, result["adata_cnv"], backend)
 
 
-def _persist_cnv_adata(ctx: ViewerContext, adata_cnv) -> None:
-    """Write adata_cnv as h5ad alongside the zarr cache (see _persist_adata_norm)."""
+def _persist_cnv_adata(ctx: ViewerContext, adata_cnv, backend: str = "infercnv") -> None:
+    """Write adata_cnv as a per-backend h5ad beside the zarr cache."""
     if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
         return
     try:
-        cnv_path = Path(ctx.sdata.path) / "adata_cnv_cache.h5ad"
+        cnv_path = Path(ctx.sdata.path) / f"adata_cnv_cache_{backend}.h5ad"
         _convert_adata_arrow_strings(adata_cnv)
         adata_cnv.write_h5ad(cnv_path)
     except Exception as e:
@@ -478,69 +503,99 @@ def _persist_cnv_adata(ctx: ViewerContext, adata_cnv) -> None:
         print(f"Warning: could not persist adata_cnv: {e}")
 
 
-def load_cnv_results_from_adata(adata: AnnData, sdata) -> "dict | None":
-    """Read CNV run info from adata.uns/obs and adata_cnv from the h5ad cache.
-
-    Returns None if no CNV run has been saved.
-    """
-    info = adata.uns.get("cnv_run_info")
-    if info is None:
+def _load_cnv_cache(sdata, backend: str):
+    """Load a per-backend adata_cnv h5ad (falling back to the legacy filename)."""
+    if sdata is None or sdata.path is None:
         return None
-
-    score = None
-    if "cnv_score" in adata.obs.columns:
-        if "cell_id" in adata.obs.columns:
-            score = pd.Series(
-                adata.obs["cnv_score"].values,
-                index=adata.obs["cell_id"].values,
-                name="cnv_score",
-            )
-        else:
-            score = adata.obs["cnv_score"].rename("cnv_score")
-
-    adata_cnv = None
-    if sdata is not None and sdata.path is not None:
-        cnv_path = Path(sdata.path) / "adata_cnv_cache.h5ad"
+    candidates = [Path(sdata.path) / f"adata_cnv_cache_{backend}.h5ad"]
+    if backend == "infercnv":
+        candidates.append(Path(sdata.path) / "adata_cnv_cache.h5ad")  # legacy single-profile cache
+    for cnv_path in candidates:
         if cnv_path.exists():
             try:
                 import scanpy as sc
-                adata_cnv = sc.read_h5ad(cnv_path)
+                return sc.read_h5ad(cnv_path)
             except Exception as e:
-                print(f"Warning: could not load adata_cnv cache: {e}")
+                print(f"Warning: could not load adata_cnv cache {cnv_path.name}: {e}")
+    return None
 
+
+def _build_cnv_entry(backend: str, info: dict, adata: AnnData, adata_cnv) -> dict:
+    """Assemble a registry result dict from persisted info + the cached profile."""
     cluster_key = info.get("cluster_key")
     cluster_keys = list(info.get("cluster_keys") or ([cluster_key] if cluster_key else []))
     analyze_categories = list(info.get("analyze_categories", []))
-    params = dict(info.get("params", {}))
-    # Recompute the core-params signature so a subsequent run under the same
-    # parameters can keep accumulating resolutions (see _cnv_signature in tab_cnv).
-    # Must stay term-for-term identical to _cnv_signature, including the trailing
-    # analyzed-cell-type set.
-    signature = (
-        info.get("reference_clustering_name", ""),
-        tuple(info.get("reference_categories", [])),
-        params.get("n_neighbors"),
-        params.get("smoothing_neighbors"),
-        params.get("window_size"),
-        params.get("step"),
-        params.get("lfc_clip"),
-        tuple(sorted(analyze_categories)),
-    )
+
+    # Per-cell score: prefer the main adata's per-backend column, else the legacy
+    # 'cnv_score' column (infercnv), else the profile cache's own obs.
+    score = None
+    for col in (f"cnv_score_{backend}", "cnv_score"):
+        if col in adata.obs.columns:
+            if "cell_id" in adata.obs.columns:
+                score = pd.Series(adata.obs[col].values, index=adata.obs["cell_id"].values, name="cnv_score")
+            else:
+                score = adata.obs[col].rename("cnv_score")
+            break
+    if score is None and adata_cnv is not None and "cnv_score" in adata_cnv.obs.columns:
+        idx = adata_cnv.obs["cell_id"].values if "cell_id" in adata_cnv.obs.columns else adata_cnv.obs_names
+        score = pd.Series(adata_cnv.obs["cnv_score"].values, index=idx, name="cnv_score")
+
     return {
+        "backend": backend,
         "reference_obs_key": info.get("reference_obs_key"),
         "reference_clustering_name": info.get("reference_clustering_name", ""),
         "reference_categories": list(info.get("reference_categories", [])),
         "analyze_categories": analyze_categories,
         "cluster_key": cluster_key,
         "cluster_keys": cluster_keys,
-        "signature": signature,
+        "signature": _cnv_signature_from_info(backend, info),
         "n_genes_total": info.get("n_genes_total"),
         "n_genes_mapped": info.get("n_genes_mapped"),
         "n_windows": info.get("n_windows"),
-        "params": params,
+        "n_cells": info.get("n_cells"),
+        "params": dict(info.get("params", {})),
         "cnv_score": score,
         "adata_cnv": adata_cnv,
     }
+
+
+def load_cnv_results_from_adata(adata: AnnData, sdata) -> "dict | None":
+    """Load the per-backend CNV registry (``{backend: result}``) or ``None``.
+
+    Sources, in order: the nested ``adata.uns["cnv_runs"]`` (+ per-backend cache),
+    the legacy flat ``adata.uns["cnv_run_info"]`` (→ ``infercnv``), and any
+    ``cnv_<backend>_result.json`` sidecar written by the detached CopyKAT worker
+    (so a background run restores even if the GUI never folded it into the table).
+    """
+    import json
+
+    infos: dict[str, dict] = {}
+    runs = adata.uns.get("cnv_runs")
+    if runs:
+        for backend in runs:
+            infos[str(backend)] = dict(runs[backend])
+    else:
+        legacy = adata.uns.get("cnv_run_info")
+        if legacy is not None:
+            infos["infercnv"] = dict(legacy)
+
+    registry: dict[str, dict] = {}
+    for backend, info in infos.items():
+        registry[backend] = _build_cnv_entry(backend, info, adata, _load_cnv_cache(sdata, backend))
+
+    # Detached-worker sidecars: pick up backends the table doesn't already carry.
+    if sdata is not None and sdata.path is not None:
+        for sidecar_path in sorted(Path(sdata.path).glob("cnv_*_result.json")):
+            try:
+                sidecar = json.loads(sidecar_path.read_text())
+            except Exception:
+                continue
+            backend = str(sidecar.get("backend", ""))
+            if not backend or backend in registry:
+                continue
+            registry[backend] = _build_cnv_entry(backend, sidecar, adata, _load_cnv_cache(sdata, backend))
+
+    return registry or None
 
 
 # ── DEG result caches (sidecar parquets at zarr root) ─────────────────────────

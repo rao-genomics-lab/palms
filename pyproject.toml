@@ -64,7 +64,12 @@ celltypist = ["celltypist"]
 r = ["rpy2", "anndata2ri"]
 gpu = ["torch", "torch-geometric", "pytorch-lightning", "xgboost"]
 references = ["readfcs", "rasterio"]
-cnv = ["infercnvpy>=0.6.0", "insitucnv>=0.1.0"]
+# inferCNV backend. (CopyKAT needs an incompatible R/python-3.11 stack and runs
+# in a separate env — see environment-copykat.yml.)
+cnv = [
+    "infercnvpy>=0.6.0",
+    "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git",
+]
 full = ["xenium-viewer[celltypist,r,gpu,references,cnv]"]
 dev = ["pytest", "ruff"]
 

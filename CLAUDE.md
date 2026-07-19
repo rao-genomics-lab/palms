@@ -95,7 +95,8 @@ regardless of the order actions were taken — even across sessions.
   node, defines `data_path`), `record_normalize`, `record_clustering` (`clustering:<key>`),
   `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
   `nhood:<key>`, `cooccur:<key>`, `ligrec:<key>`, `annotation:<col>`, `rois`, `roi_deg`,
-  `cnv`; terminals `plot:*` / `export:*` / `viewer:*` / `he:*` / `arms:*`.
+  `cnv:<backend>` (`cnv:infercnv` / `cnv:copykat`); terminals `plot:*`
+  (incl. `plot:cnv_heatmap:<backend>:<key>`) / `export:*` / `viewer:*` / `he:*` / `arms:*`.
 - **Outputs**: a flat `analysis.py` (derived, stable filename) written live, and
   `analysis_notebook.ipynb` (via `utils/notebook_export.py` + nbformat) on session save /
   the Notebook tab's "Export .ipynb". The notebook is code-only and replays from the raw
@@ -115,6 +116,16 @@ regardless of the order actions were taken — even across sessions.
 - **zarr** — caching and session persistence
 - **dask** — lazy array loading
 - **tifffile**, **opencv**, **scikit-image** — image processing
+- **insitucnv** (the `insituCNV-copykat` fork, in `environment.yml`) + **infercnvpy** — CNV
+  inference. `utils/cnv_analysis.py` drives both backends via `run_cnv_pipeline(..., backend=)`.
+  **inferCNV** runs in the main env. **CopyKAT** needs **rpy2 + R 4.3 + the `copykat` R package**,
+  whose stack requires **python 3.11** — incompatible with the main env's python 3.12. So CopyKAT
+  runs in a **second conda env** (`environment-copykat.yml` → `xenium_viewer_copykat`): the viewer
+  resolves that env's python (`_resolve_copykat_python` in `tabs/tab_cnv.py`; override via
+  `XENIUM_COPYKAT_ENV`/`XENIUM_COPYKAT_PYTHON`) and launches the detached worker
+  (`src/xenium_viewer/cnv_copykat_worker.py`) there, passing the viewer source on `PYTHONPATH`.
+  The detached process survives the GUI closing; the GitHub-only copykat R package auto-installs
+  on first run (`src/xenium_viewer/install_copykat.py::ensure_copykat_installed`).
 
 ## Known Compatibility Patches
 

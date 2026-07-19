@@ -60,6 +60,8 @@ def run_cnv_pipeline(
     lfc_clip: float = 4.0,
     resolution: float = 0.2,
     analyze_categories: list[str] | None = None,
+    backend: str = "infercnv",
+    copykat_output_dir: str | None = None,
 ) -> dict:
     """Run the InSituCNV pipeline on ``adata`` (raw counts expected in ``.X``).
 
@@ -101,6 +103,15 @@ def run_cnv_pipeline(
         is dropped before inference so the CNV profile, score, clustering, and
         heatmap only cover the selected cells. ``None`` (or empty) analyzes all
         cells (the previous behavior).
+    backend : str
+        CNV-calling engine: ``"infercnv"`` (default, infercnvpy) or ``"copykat"``
+        (the insituCNV-copykat fork's R-based CopyKAT, run on the smoothed ``"M"``
+        layer). Both write ``adata.obsm["X_cnv"]`` so the rest of the pipeline is
+        shared; cluster columns are namespaced (``cnv_leiden_res*`` vs
+        ``copykat_leiden_res*``).
+    copykat_output_dir : str or None
+        Directory CopyKAT writes its R-side side-effect files into (ignored for
+        inferCNV). Defaults to the current working directory.
 
     Returns
     -------
@@ -108,6 +119,9 @@ def run_cnv_pipeline(
     n_genes_total, n_genes_mapped, n_windows, n_cells, reference_obs_key,
     reference_clustering_name, reference_categories, analyze_categories, params.
     """
+    if backend not in ("infercnv", "copykat"):
+        raise ValueError(f"Unknown CNV backend '{backend}'. Choose 'infercnv' or 'copykat'.")
+
     try:
         from insitucnv.tl import (
             prepare_cnv_input,
@@ -158,20 +172,57 @@ def run_cnv_pipeline(
     # zarr writer — see loader.py's _convert_arrow_strings).
     _convert_adata_arrow_strings(adata_work)
 
-    run_infercnv(
-        adata_work,
-        reference_key=CNV_REFERENCE_OBS_KEY,
-        reference_categories=[str(c) for c in reference_categories],
-        window_size=window_size,
-        step=step,
-        lfc_clip=lfc_clip,
-        calculate_gene_values=True,
-        copy=False,
-    )
+    # ── CNV calling: inferCNV or CopyKAT ────────────────────────────────
+    # Both engines write adata.obsm["X_cnv"] and adata.uns["cnv"]["chr_pos"],
+    # so everything downstream (neighbors, clustering, heatmap) is shared.
+    if backend == "copykat":
+        try:
+            from insitucnv.tl import run_copykat
+        except ImportError as e:
+            raise RuntimeError(
+                "CopyKAT backend requires the insituCNV-copykat fork with rpy2.\n"
+                "Install: pip install 'git+https://github.com/sraorao/insituCNV-copykat.git' rpy2"
+            ) from e
+        # The copykat R package is GitHub-only (not in environment.yml); make sure
+        # it's installed before the first CopyKAT run (idempotent, one-time fetch).
+        from xenium_viewer.install_copykat import ensure_copykat_installed
+        ensure_copykat_installed()
+        try:
+            # Fork defaults: input_layer='M' (spatially-smoothed), genome hg20,
+            # win_size 25, ks_cut 0.1, ngene_chr 5, min_gene_per_cell 5, etc.
+            run_copykat(
+                adata_work,
+                reference_key=CNV_REFERENCE_OBS_KEY,
+                reference_categories=[str(c) for c in reference_categories],
+                input_layer="M",
+                output_dir=copykat_output_dir,
+                copy=False,
+            )
+        except ImportError as e:
+            raise RuntimeError(
+                "CopyKAT backend requires rpy2 + R + the copykat R package.\n"
+                "Install the r-* deps and: R -e "
+                "'remotes::install_github(\"navinlabcode/copykat\", dependencies=FALSE)'"
+            ) from e
+        key_prefix = "copykat_leiden_res"
+    else:
+        run_infercnv(
+            adata_work,
+            reference_key=CNV_REFERENCE_OBS_KEY,
+            reference_categories=[str(c) for c in reference_categories],
+            window_size=window_size,
+            step=step,
+            lfc_clip=lfc_clip,
+            calculate_gene_values=True,
+            copy=False,
+        )
+        key_prefix = "cnv_leiden_res"
     n_windows = adata_work.obsm["X_cnv"].shape[1]
 
     compute_cnv_neighbors(adata_work, copy=False)
-    cluster_keys = cluster_cnv_resolutions(adata_work, [resolution], dendrogram=False, copy=False)
+    cluster_keys = cluster_cnv_resolutions(
+        adata_work, [resolution], key_prefix=key_prefix, dendrogram=False, copy=False
+    )
     cluster_key = cluster_keys[0]
 
     cluster_series = adata_work.obs[cluster_key].copy()
@@ -196,6 +247,7 @@ def run_cnv_pipeline(
         "n_genes_mapped": int(n_genes_mapped),
         "n_windows": int(n_windows),
         "n_cells": int(adata_work.n_obs),
+        "backend": backend,
         "reference_obs_key": CNV_REFERENCE_OBS_KEY,
         "reference_clustering_name": reference_clustering_name,
         "reference_categories": [str(c) for c in reference_categories],
@@ -221,5 +273,60 @@ def make_cnv_heatmap(adata_cnv, groupby: str):
     import infercnvpy as cnv
     import matplotlib.pyplot as plt
 
-    cnv.pl.chromosome_heatmap(adata_cnv, groupby=groupby, dendrogram=False, show=False)
+    # Heatmap settings match the insituCNV-copykat fork's plot_chromosome_heatmap
+    # (dendrogram + a fixed ±0.4 CNV colour range), used for both backends.
+    cnv.pl.chromosome_heatmap(
+        adata_cnv, groupby=groupby, dendrogram=True, vmin=-0.4, vmax=0.4, show=False
+    )
     return plt.gcf()
+
+
+def subsample_indices(
+    reference_series: pd.Series,
+    reference_ids: list[str],
+    analyze_ids: list[str] | None,
+    obs_index,
+    max_cells: int,
+    seed: int = 0,
+) -> np.ndarray:
+    """Boolean mask (aligned to ``obs_index``) selecting up to ``max_cells`` cells.
+
+    Used for CopyKAT, which is too slow to run on a full Xenium sample. All
+    reference (baseline) cells are kept first — CopyKAT needs them to seed its
+    diploid baseline — then the remaining slots are filled with a seeded random
+    draw of the analyzed (non-reference) cells. If reference cells alone exceed
+    ``max_cells`` they are themselves subsampled. Returns all-True when the cell
+    count is already <= ``max_cells``.
+    """
+    aligned = reference_series.reindex(obs_index).astype("object")
+    values = np.array([str(v) for v in aligned.to_numpy()], dtype=object)
+    n = len(values)
+    keep = np.zeros(n, dtype=bool)
+    if n <= max_cells:
+        keep[:] = True
+        return keep
+
+    ref_set = {str(r) for r in reference_ids}
+    if analyze_ids:
+        analyze_set = {str(a) for a in analyze_ids} | ref_set
+        in_scope = np.array([v in analyze_set for v in values], dtype=bool)
+    else:
+        in_scope = np.ones(n, dtype=bool)
+
+    is_ref = np.array([v in ref_set for v in values], dtype=bool) & in_scope
+    is_other = in_scope & ~is_ref
+    rng = np.random.RandomState(seed)
+
+    ref_idx = np.flatnonzero(is_ref)
+    if ref_idx.size >= max_cells:
+        chosen = rng.choice(ref_idx, size=max_cells, replace=False)
+        keep[chosen] = True
+        return keep
+
+    keep[ref_idx] = True
+    remaining = max_cells - ref_idx.size
+    other_idx = np.flatnonzero(is_other)
+    if other_idx.size > remaining:
+        other_idx = rng.choice(other_idx, size=remaining, replace=False)
+    keep[other_idx] = True
+    return keep

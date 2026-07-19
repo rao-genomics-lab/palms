@@ -3,6 +3,32 @@
 ## [Unreleased] — 2026-07-18
 
 ### Added
+- **CopyKAT CNV backend (inferCNV / CopyKAT / both).** The CNV tab can now call
+  copy-number with **inferCNV**, **CopyKAT**, or **both** (default), via the
+  `insituCNV-copykat` fork's `run_copykat` (which writes the same
+  `obsm["X_cnv"]`/`uns["cnv"]` keys, so clustering + heatmaps are shared). A
+  per-backend registry keeps both results live at once — cluster columns are
+  namespaced (`cnv_leiden_res*` vs `copykat_leiden_res*`), both are colorable,
+  and the heatmap saver has a **backend** selector alongside the resolution one
+  (`cnv_heatmap_<backend>_<res>.png/.pdf`, fork settings: dendrogram, ±0.4, dpi
+  200). CopyKAT is slow (~2 h), so it runs on a random ≤10k-cell subsample
+  (reference cells kept) as a **detached background process** that survives the
+  GUI: closing the app mid-run prompts **Stop / Continue in background / Cancel**,
+  and a finished background run writes `adata_cnv_cache_copykat.h5ad` +
+  `cnv_copykat_result.json` + `plots/cnv_heatmap_copykat_*` +
+  `plots/copykat_DONE.txt`, restored on next launch. New module
+  `cnv_copykat_worker.py`. **CopyKAT runs in a second conda env** — its R stack
+  (r-base 4.3 + rpy2 3.5.11) requires python 3.11, which is incompatible with the
+  viewer's python 3.12 (scanpy≥1.12 / zarr≥3). Create it once with
+  `conda env create -f environment-copykat.yml` (`xenium_viewer_copykat`); the
+  viewer auto-detects it (override via `XENIUM_COPYKAT_ENV` /
+  `XENIUM_COPYKAT_PYTHON`) and launches the detached worker there, passing the
+  viewer source on `PYTHONPATH` so that env needn't install the package. The
+  GitHub-only copykat R package auto-installs on first run. inferCNV still runs
+  in the main env. (`tabs/tab_cnv.py`, `utils/cnv_analysis.py`,
+  `utils/adata_persistence.py`, `app.py`, `install_copykat.py`,
+  `cnv_copykat_worker.py`, `environment.yml`, `environment-copykat.yml`,
+  `pyproject.toml`)
 - **Limit CNV analysis to specific cell types.** A new "Cell types to analyze
   (CNV subclones)" checkbox grid in the CNV tab (drawn from the same
   clustering/annotation column as the reference selector, so it shows your

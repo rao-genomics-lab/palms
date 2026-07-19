@@ -1,0 +1,61 @@
+# Second env for the CopyKAT CNV backend.
+#
+# CopyKAT's R stack (r-dlm -> r-base 4.3 -> rpy2 3.5.11) only builds for python 3.11,
+# which is incompatible with the main viewer env (python 3.12, scanpy>=1.12, zarr>=3).
+# So CopyKAT runs here, in a separate python-3.11 env, as a detached background job
+# launched by the viewer. This env only needs the compute + R stack (no napari/Qt);
+# the viewer package is made importable at launch time via PYTHONPATH, so it is NOT
+# installed here.
+#
+#   conda env create -f environment-copykat.yml     # (mamba is much faster)
+#
+# The viewer auto-detects the env by name (xenium_viewer_copykat). Override with the
+# XENIUM_COPYKAT_ENV (env name) or XENIUM_COPYKAT_PYTHON (full python path) env vars.
+#
+# The copykat R package (GitHub-only) auto-installs on first CopyKAT run; to
+# pre-install it:  conda run -n xenium_viewer_copykat \
+#   R -e 'remotes::install_github("navinlabcode/copykat", dependencies=FALSE)'
+name: xenium_viewer_copykat
+channels:
+  - conda-forge
+  - bioconda
+  - r          # r-dlm (a copykat dep) is only on the Anaconda 'r' channel
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+  # --- compute stack the detached worker imports (no napari/Qt) ---
+  - anndata>=0.10,<0.12
+  - h5py
+  # InSituCNV/infercnvpy plotting uses matplotlib.cm.get_cmap (removed in 3.9)
+  - matplotlib>=3.8,<3.9
+  - numpy>=1.26
+  - pandas>=2.1
+  - python-igraph
+  - leidenalg
+  - scanpy>=1.10
+  - squidpy
+  - spatialdata
+  - spatialdata-io
+  - zarr<3
+  - scikit-learn>=1.4
+  - scipy
+  - scvelo>=0.3.3
+  - seaborn>=0.13
+  - tqdm
+  # --- Python <-> R bridge + CopyKAT's CRAN dependencies (all conda binaries) ---
+  - rpy2>=3.5
+  - r-base=4.3      # pinned so the r43 builds of r-dlm/copykat deps resolve
+  - libopenblas     # r-dlm (from the 'r' channel) hard-links libopenblas.so.0; MKL alone isn't enough
+  - r-remotes
+  - r-paralleldist
+  - r-dlm
+  - r-gplots
+  - r-rcolorbrewer
+  - r-mixtools
+  - r-cluster
+  - r-mcmcpack
+  - r-transport
+  - pip:
+      - infercnvpy>=0.6.0
+      - insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git
