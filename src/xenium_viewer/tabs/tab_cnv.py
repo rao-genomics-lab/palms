@@ -280,10 +280,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
     cnv_extrapolate = CheckBox(label="Extrapolate CopyKAT calls to all cells", value=False)
     cnv_extrapolate.tooltip = (
-        "After CopyKAT finishes on the subsample, spread its tumor/normal (cnv_status), "
-        "copykat_pred, and CNV-subclone (copykat_leiden_res*) results to every cell by majority "
-        "vote within each group of the reference clustering (cluster-majority). These are copied "
-        "cluster-level values, not per-cell inferred CNV; groups with no sampled cell are labelled "
+        "After CopyKAT finishes on the subsample, extend its tumor/normal (cnv_status), "
+        "copykat_pred, and CNV-subclone (copykat_leiden_res*) results to every cell. Cells CopyKAT "
+        "actually ran keep their real value; each un-run cell is filled with the majority value "
+        "among run cells in its reference-clustering group. Filled values are copied cluster-level "
+        "values, not per-cell inferred CNV; un-run cells in a group with no run cell are labelled "
         "'unknown'. Adds colorable '<col>_propagated' clusterings for each."
     )
 
@@ -554,13 +555,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
         keys_repr = repr(tuple(label_cols))
         prop_cols = [f"{c}_propagated" for c in label_cols]
         L = [
-            "\n# Extrapolate CopyKAT calls to all cells (cluster-majority)",
+            "\n# Extrapolate CopyKAT results to all cells (fill un-run cells; keep run cells' real values)",
             "from insitucnv.tl import propagate_cnv_labels",
-            f"# adata = full dataset; {var} = CopyKAT-labeled subsample (from the CNV step above)",
+            f"# adata = full dataset; {var} = CopyKAT-run subsample (from the CNV step above)",
             f"adata.obs['{ref_key}'] = adata.obs['{ref_key}'].astype(str)",
             f"propagate_cnv_labels(adata, {var}, label_keys={keys_repr},",
             f"    method='cluster', cluster_key='{ref_key}', suffix='_propagated', copy=False)",
-            f"# result: adata.obs[{prop_cols!r}] (all cells; empty groups -> 'unknown')",
+            "# Overlay each run cell's real value so its true call/subclone isn't collapsed",
+            "# to the reference-cluster majority (extrapolation only fills the un-run cells):",
+            f"for _k in {list(label_cols)!r}:",
+            f"    _real = {var}.obs[_k].astype(str)",
+            "    _pk = f'{_k}_propagated'",
+            "    adata.obs[_pk] = adata.obs[_pk].astype(str)",
+            "    adata.obs.loc[_real.index, _pk] = _real.values",
+            f"# result: adata.obs[{prop_cols!r}] (all cells; un-run empty groups -> 'unknown')",
         ]
         ctx.record_node("cnv:copykat_propagated", "\n".join(L), deps=[f"cnv:{backend}"],
                         label="Extrapolate CopyKAT calls (all cells)")
@@ -568,14 +576,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _extrapolate_copykat(result):
         """Propagate CopyKAT results from the run subsample to ALL cells.
 
-        Uses the reference clustering as a clone proxy: each cell inherits the
-        majority CopyKAT value among labeled cells in its reference-clustering group
-        (``propagate_cnv_labels(method="cluster")``). Propagates both the per-cell
-        calls (``cnv_status``, ``copykat_pred``) and the CNV-subclone clustering(s)
-        (``copykat_leiden_res*``), registering each as a full-coverage
-        ``<col>_propagated`` colorable clustering. These are copied cluster-level
-        values, not per-cell inferred CNV; reference groups with no sampled cell are
-        labelled ``unknown``.
+        Cells CopyKAT actually ran keep their real value; only the un-run cells are
+        filled, by majority CopyKAT value among run cells in their reference-clustering
+        group (``propagate_cnv_labels(method="cluster")``, then the run cells' real
+        values overlaid back on top). Propagates both the per-cell calls (``cnv_status``,
+        ``copykat_pred``) and the CNV-subclone clustering(s) (``copykat_leiden_res*``),
+        registering each as a full-coverage ``<col>_propagated`` colorable clustering.
+        Filled values are copied cluster-level values, not per-cell inferred CNV;
+        un-run cells in a reference group with no run cell are labelled ``unknown``.
         """
         ref_key = result.get("reference_clustering_name")
         adata_cnv = result.get("adata_cnv")
@@ -612,20 +620,29 @@ def build_tab(ctx: ViewerContext) -> tuple:
         )
 
         from xenium_viewer.utils.adata_persistence import save_clustering_to_adata
+        n_filled = 0
         for c in label_cols:
             pkey = f"{c}_propagated"
-            series = adata_full.obs[pkey].astype(str)
-            series.index = full_ids
-            series.name = pkey
+            series = pd.Series(adata_full.obs[pkey].astype(str).values, index=full_ids, name=pkey)
+            # Extrapolation should only *fill in* the cells CopyKAT never ran; keep each
+            # SAMPLED cell's real value instead of overwriting it with its reference-cluster
+            # majority (which would collapse the true 0/1/2/3 subclones to the dominant one).
+            real = pd.Series([str(v) for v in adata_cnv.obs[c].values], index=sub_idx)
+            common = real.index.intersection(series.index)
+            series.loc[common] = real.loc[common]
+            n_filled = int(series.index.difference(common).size)
             ctx.color_manager._cluster_cache.pop(pkey, None)
             ctx.clusterings[pkey] = series
             state.setdefault("custom_clusterings", {})[pkey] = series
             save_clustering_to_adata(ctx, pkey, series)
         ctx.refresh_clustering_choices()
 
-        cov = adata_full.uns.get("insitucnv", {}).get("label_propagation", {}).get("coverage", {})
-        cov_txt = ", ".join(f"{k} {v:.0%}" for k, v in cov.items()) or "n/a"
-        ctx.set_status(f"Extrapolated CopyKAT calls to all cells (coverage: {cov_txt}).")
+        n_labeled = len(set(sub_idx) & set(full_ids))
+        ctx.set_status(
+            f"Extrapolated CopyKAT results: kept {n_labeled} run cells' real calls, "
+            f"filled {n_filled} un-run cells by reference-cluster majority "
+            f"({', '.join(label_cols)})."
+        )
         _record_extrapolation_node(result, label_cols, ref_key)
 
     # ── Background-job polling (detached CopyKAT worker) ────────────────
