@@ -26,6 +26,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -51,7 +52,10 @@ def main(argv: list[str]) -> int:
     try:
         if running_marker is not None:
             running_marker.parent.mkdir(parents=True, exist_ok=True)
-            running_marker.write_text(datetime.now().isoformat())
+            # Record our PID so a later viewer launch can tell a genuinely-running
+            # detached worker from a stale marker left by a killed one.
+            running_marker.write_text(json.dumps(
+                {"pid": os.getpid(), "timestamp": datetime.now().isoformat()}))
 
         import re
         import anndata as ad

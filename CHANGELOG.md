@@ -24,6 +24,19 @@
   the updated `insituCNV-copykat` fork (force-reinstalled in both envs).
   (`tabs/tab_cnv.py`, `cnv_copykat_worker.py`)
 
+### Fixed
+- **Stale CopyKAT "running" marker after a killed worker.** A SIGTERM/SIGKILL on the
+  detached CopyKAT worker (e.g. from htop) skips its `finally` cleanup, leaving
+  `plots/copykat_RUNNING.txt` behind so the next launch wrongly reported a job "in
+  progress". The worker now records its **PID** in that marker, and the viewer
+  distinguishes a genuinely-running detached worker from a dead one by checking
+  `/proc/<pid>/cmdline` (with an `os.kill(pid, 0)` fallback; a reused/unrelated PID
+  reads as interrupted). Stale markers are now auto-cleared — on restore and in the
+  live poll loop — and the CNV tab reports the true state. Terminating the worker was
+  already safe for the SpatialData zarr (the worker only writes standalone
+  `.h5ad`/`.json`/plot files, never the zarr store). (`tabs/tab_cnv.py`,
+  `cnv_copykat_worker.py`)
+
 ### Added
 - **CopyKAT CNV backend (inferCNV / CopyKAT / both).** The CNV tab can now call
   copy-number with **inferCNV**, **CopyKAT**, or **both** (default), via the

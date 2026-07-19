@@ -27,6 +27,56 @@ def _backend_label(backend: str) -> str:
     return _BACKEND_LABELS.get(backend, backend)
 
 
+def _copykat_worker_pid(running_marker: "Path") -> "int | None":
+    """PID recorded in a CopyKAT RUNNING marker, or ``None`` (legacy/no PID).
+
+    Newer markers hold ``{"pid": ..., "timestamp": ...}``; older ones held a bare
+    ISO timestamp string, from which no PID can be recovered.
+    """
+    try:
+        return int(json.loads(running_marker.read_text())["pid"])
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _copykat_run_state(plots_dir: "Path") -> "tuple[str, int | None]":
+    """Classify a detached CopyKAT run from its marker files.
+
+    Returns one of:
+      * ``("running", pid)``     — worker PID is alive and is our worker;
+      * ``("interrupted", pid)`` — marker present but the worker is gone (killed);
+      * ``("unknown", None)``    — marker present but no PID to check (legacy);
+      * ``("idle", None)``       — no in-progress marker (absent, or already DONE).
+
+    Liveness is confirmed against ``/proc/<pid>/cmdline`` (so a reused PID belonging
+    to an unrelated process is treated as gone), falling back to an ``os.kill(pid, 0)``
+    probe where ``/proc`` is unavailable.
+    """
+    running = plots_dir / "copykat_RUNNING.txt"
+    done = plots_dir / "copykat_DONE.txt"
+    if not running.exists() or done.exists():
+        return ("idle", None)
+    pid = _copykat_worker_pid(running)
+    if pid is None:
+        return ("unknown", None)
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+        alive = "cnv_copykat_worker" in cmdline
+    except FileNotFoundError:
+        alive = False  # no such process
+    except OSError:
+        # /proc unreadable (non-Linux, permissions) — fall back to a bare liveness probe.
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:
+            alive = True  # exists but owned by another user
+    return ("running", pid) if alive else ("interrupted", pid)
+
+
 def _resolve_copykat_prefix() -> "Path | None":
     """Locate the CopyKAT conda env *prefix* (a separate py3.11 + R env).
 
@@ -596,6 +646,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 proc = job.get("proc")
                 if proc is not None and proc.poll() is not None:
                     jobs.remove(job)
+                    # The worker died without finishing (crash/kill); its finally-block
+                    # cleanup didn't run, so clear the stale RUNNING marker ourselves.
+                    marker = job.get("running_marker")
+                    if marker is not None:
+                        try:
+                            Path(marker).unlink(missing_ok=True)
+                        except OSError:
+                            pass
                     cnv_status.value = "CopyKAT background job exited without a result (see log)."
                 continue
             jobs.remove(job)
@@ -996,10 +1054,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
             scope = (", ".join(analyze_cats) if analyze_cats else "all cell types")
             lines.append(f"  [{_backend_label(backend)}] ref={result.get('reference_clustering_name')} "
                          f"cells={result.get('n_cells')} ({scope}); resolutions: {res_line or '(none)'}")
-        # Surface a possibly-still-running detached CopyKAT job.
+        # Surface a possibly-still-running detached CopyKAT job, and clear the
+        # stale marker a killed worker leaves behind (its finally-block cleanup
+        # never runs on SIGTERM/SIGKILL).
         try:
             plots_dir = Path(ctx.data_path) / "plots"
-            if (plots_dir / "copykat_RUNNING.txt").exists() and not (plots_dir / "copykat_DONE.txt").exists():
+            st, pid = _copykat_run_state(plots_dir)
+            if st == "running":
+                lines.append(f"  ⚠ a background CopyKAT job is still running (pid {pid}).")
+            elif st == "interrupted":
+                try:
+                    (plots_dir / "copykat_RUNNING.txt").unlink(missing_ok=True)
+                except OSError:
+                    pass
+                lines.append("  ⚠ a previous CopyKAT job was interrupted; cleared its stale marker.")
+            elif st == "unknown":
                 lines.append("  ⚠ a background CopyKAT job appears to be in progress or was interrupted.")
         except Exception:
             pass
