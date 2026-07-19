@@ -287,6 +287,13 @@ def make_cnv_heatmap(adata_cnv, groupby: str):
     return plt.gcf()
 
 
+# CopyKAT needs some normal cells to seed its diploid baseline, but not many —
+# reserve a modest slice of the subsample budget for the reference population so a
+# large reference cluster can never crowd out the analyzed cells (the point of the run).
+_REFERENCE_BUDGET_FRACTION = 0.25
+_MIN_REFERENCE_CELLS = 500
+
+
 def subsample_indices(
     reference_series: pd.Series,
     reference_ids: list[str],
@@ -297,12 +304,19 @@ def subsample_indices(
 ) -> np.ndarray:
     """Boolean mask (aligned to ``obs_index``) selecting up to ``max_cells`` cells.
 
-    Used for CopyKAT, which is too slow to run on a full Xenium sample. All
-    reference (baseline) cells are kept first — CopyKAT needs them to seed its
-    diploid baseline — then the remaining slots are filled with a seeded random
-    draw of the analyzed (non-reference) cells. If reference cells alone exceed
-    ``max_cells`` they are themselves subsampled. Returns all-True when the cell
-    count is already <= ``max_cells``.
+    Used for CopyKAT, which is too slow to run on a full Xenium sample. The budget
+    is split between the reference (baseline) population and the analyzed cells:
+    the **analyzed cells get priority** for the slots, while a modest baseline of
+    reference cells (``_REFERENCE_BUDGET_FRACTION`` of ``max_cells``, at least
+    ``_MIN_REFERENCE_CELLS``) is reserved so CopyKAT can seed its diploid baseline.
+    Any budget the analyzed cells don't use is topped up with more reference cells.
+    Each side is drawn with a seeded RNG. Returns all-True when the cell count is
+    already <= ``max_cells``.
+
+    This split matters when the reference cluster is large: keeping *all* reference
+    cells first (the previous behaviour) let a reference population bigger than
+    ``max_cells`` consume the entire subsample, so no analyzed cell was ever
+    profiled and every analyzed cluster came back empty (``unknown``).
     """
     aligned = reference_series.reindex(obs_index).astype("object")
     values = np.array([str(v) for v in aligned.to_numpy()], dtype=object)
@@ -324,15 +338,17 @@ def subsample_indices(
     rng = np.random.RandomState(seed)
 
     ref_idx = np.flatnonzero(is_ref)
-    if ref_idx.size >= max_cells:
-        chosen = rng.choice(ref_idx, size=max_cells, replace=False)
-        keep[chosen] = True
-        return keep
-
-    keep[ref_idx] = True
-    remaining = max_cells - ref_idx.size
     other_idx = np.flatnonzero(is_other)
-    if other_idx.size > remaining:
-        other_idx = rng.choice(other_idx, size=remaining, replace=False)
-    keep[other_idx] = True
+    n_ref, n_other = ref_idx.size, other_idx.size
+
+    # Reserve a reference baseline, give the rest to analyzed cells, then top the
+    # reference back up with whatever the analyzed cells left unused.
+    ref_baseline = min(n_ref, max(_MIN_REFERENCE_CELLS, int(max_cells * _REFERENCE_BUDGET_FRACTION)))
+    other_keep = min(n_other, max_cells - ref_baseline)
+    ref_keep = min(n_ref, max_cells - other_keep)
+
+    ref_sel = rng.choice(ref_idx, size=ref_keep, replace=False) if ref_keep < n_ref else ref_idx
+    other_sel = rng.choice(other_idx, size=other_keep, replace=False) if other_keep < n_other else other_idx
+    keep[ref_sel] = True
+    keep[other_sel] = True
     return keep

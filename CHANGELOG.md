@@ -27,6 +27,16 @@
   (`tabs/tab_cnv.py`, `cnv_copykat_worker.py`)
 
 ### Fixed
+- **CopyKAT subsample starved the analyzed cells when the reference cluster was large.**
+  `subsample_indices` kept *all* reference (baseline) cells first, so a reference
+  population bigger than `max_cells` filled the entire subsample and **no analyzed cell
+  was ever run** — every analyzed cluster came back with no CNV call and showed as
+  `unknown` in the extrapolation (e.g. a 17.9k-cell reference cluster consumed the whole
+  10k budget). The budget is now split: analyzed cells get priority for the slots while a
+  modest reference baseline (25% of `max_cells`, ≥500) is reserved to seed CopyKAT's
+  diploid baseline, and any unused budget tops the reference back up. Small-reference runs
+  are unchanged. Existing CopyKAT caches produced before this fix must be re-run.
+  (`utils/cnv_analysis.py`)
 - **Stale CopyKAT "running" marker after a killed worker.** A SIGTERM/SIGKILL on the
   detached CopyKAT worker (e.g. from htop) skips its `finally` cleanup, leaving
   `plots/copykat_RUNNING.txt` behind so the next launch wrongly reported a job "in
