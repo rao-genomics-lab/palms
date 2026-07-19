@@ -590,16 +590,25 @@ def build_tab(ctx: ViewerContext) -> tuple:
         conda_exe = os.environ.get("CONDA_EXE") or "conda"
         from xenium_viewer.utils.cnv_analysis import subsample_indices
 
+        import anndata as _ad
+
         adata = ctx.adata
         reference_series = ctx.clusterings[reference_key]
         obs_index = adata.obs["cell_id"].values if "cell_id" in adata.obs.columns else adata.obs_names
         keep = subsample_indices(reference_series, reference_ids, analyze_categories,
                                  obs_index, int(cnv_max_cells.value))
-        subset = adata[keep].copy()
-        sub_idx = subset.obs["cell_id"].values if "cell_id" in subset.obs.columns else subset.obs_names
-        subset.obs["_cnv_ref_src"] = reference_series.reindex(sub_idx).astype(str).values
-        if "cell_id" not in subset.obs.columns:
-            subset.obs["cell_id"] = list(subset.obs_names)
+        sub = adata[keep]
+        # Write a MINIMAL, clean input h5ad (raw counts + cell_id + reference column
+        # + gene names only). The copykat env pins an older anndata (python 3.11), so
+        # extra obs/obsm/uns from the main env's newer anndata can use encodings it
+        # can't read (e.g. all-null columns -> encoding_type='null').
+        cell_ids = [str(c) for c in (sub.obs["cell_id"].values if "cell_id" in sub.obs.columns else sub.obs_names)]
+        ref_src = [str(v) for v in reference_series.reindex(cell_ids).to_numpy()]
+        names = [str(x) for x in sub.obs_names]
+        obs = pd.DataFrame({"cell_id": cell_ids, "_cnv_ref_src": ref_src}, index=names)
+        var = pd.DataFrame(index=[str(g) for g in sub.var_names])
+        X = sub.X
+        subset = _ad.AnnData(X=(X.copy() if hasattr(X, "copy") else X), obs=obs, var=var)
 
         cache_dir = Path(ctx.sdata.path)
         plots_dir = Path(ctx.data_path) / "plots"
