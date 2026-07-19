@@ -2,6 +2,14 @@
 
 ## [Unreleased] — 2026-07-19
 
+### Docs
+- **Tracked TODO to migrate napari off the deprecated PyQt5 backend.** Napari warns
+  that PyQt5 support is deprecated and will be removed in fall 2026. No code change
+  yet (the viewer runs fine on PyQt5 until then); the codebase already routes all Qt
+  access through `qtpy`, so the migration is small — only the backend pins plus a few
+  Qt5-isms (8 unscoped enums, 7 `.exec_()` calls). Captured the migration checklist in
+  `docs/pyqt6-migration.md` for a future session. (`docs/pyqt6-migration.md`)
+
 ### Added
 - **Global CPU-cores preference wired into CopyKAT.** A new **Preferences → CPU
   cores** submenu sets `ctx.state["n_cores"]` (default `max(1, os.cpu_count()//2)`,
