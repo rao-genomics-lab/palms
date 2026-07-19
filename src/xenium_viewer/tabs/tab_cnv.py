@@ -280,11 +280,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
     cnv_extrapolate = CheckBox(label="Extrapolate CopyKAT calls to all cells", value=False)
     cnv_extrapolate.tooltip = (
-        "After CopyKAT finishes on the subsample, spread its tumor/normal (cnv_status) and "
-        "copykat_pred calls to every cell by majority vote within each group of the reference "
-        "clustering (cluster-majority). These are copied cluster-level calls, not per-cell inferred "
-        "CNV; groups with no sampled cell are labelled 'unknown'. Adds two colorable clusterings "
-        "(cnv_status_propagated, copykat_pred_propagated)."
+        "After CopyKAT finishes on the subsample, spread its tumor/normal (cnv_status), "
+        "copykat_pred, and CNV-subclone (copykat_leiden_res*) results to every cell by majority "
+        "vote within each group of the reference clustering (cluster-majority). These are copied "
+        "cluster-level values, not per-cell inferred CNV; groups with no sampled cell are labelled "
+        "'unknown'. Adds colorable '<col>_propagated' clusterings for each."
     )
 
     run_button = PushButton(label="Run CNV Inference", enabled=True)
@@ -566,23 +566,27 @@ def build_tab(ctx: ViewerContext) -> tuple:
                         label="Extrapolate CopyKAT calls (all cells)")
 
     def _extrapolate_copykat(result):
-        """Propagate CopyKAT tumor/normal calls from the run subsample to ALL cells.
+        """Propagate CopyKAT results from the run subsample to ALL cells.
 
         Uses the reference clustering as a clone proxy: each cell inherits the
-        majority CopyKAT call among labeled cells in its reference-clustering group
-        (``propagate_cnv_labels(method="cluster")``). Registers the resulting
-        full-coverage ``cnv_status_propagated`` / ``copykat_pred_propagated`` columns
-        as colorable clusterings. These are copied cluster-level calls, not per-cell
-        inferred CNV; groups with no sampled cell are labelled ``unknown``.
+        majority CopyKAT value among labeled cells in its reference-clustering group
+        (``propagate_cnv_labels(method="cluster")``). Propagates both the per-cell
+        calls (``cnv_status``, ``copykat_pred``) and the CNV-subclone clustering(s)
+        (``copykat_leiden_res*``), registering each as a full-coverage
+        ``<col>_propagated`` colorable clustering. These are copied cluster-level
+        values, not per-cell inferred CNV; reference groups with no sampled cell are
+        labelled ``unknown``.
         """
         ref_key = result.get("reference_clustering_name")
         adata_cnv = result.get("adata_cnv")
         if not ref_key or ref_key not in ctx.clusterings or adata_cnv is None:
             ctx.set_status("Extrapolation skipped: reference clustering unavailable.")
             return
-        label_cols = [c for c in ("cnv_status", "copykat_pred") if c in adata_cnv.obs.columns]
+        call_cols = [c for c in ("cnv_status", "copykat_pred") if c in adata_cnv.obs.columns]
+        cluster_cols = [k for k in (result.get("cluster_keys") or []) if k in adata_cnv.obs.columns]
+        label_cols = call_cols + cluster_cols
         if not label_cols:
-            ctx.set_status("Extrapolation skipped: no CopyKAT call columns found.")
+            ctx.set_status("Extrapolation skipped: no CopyKAT result columns found.")
             return
         try:
             from insitucnv.tl import propagate_cnv_labels

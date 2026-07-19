@@ -15,10 +15,10 @@
 - **Extrapolate CopyKAT calls to the whole dataset.** A new **"Extrapolate CopyKAT
   calls to all cells"** checkbox on the CNV tab. Because CopyKAT runs on a subsample,
   only those cells get a call; when enabled, after the run finishes the viewer
-  spreads the per-cell tumor/normal (`cnv_status`) and `copykat_pred` labels to every
-  cell by cluster majority within the reference clustering (the fork's
-  `propagate_cnv_labels(method="cluster")`). Adds two colorable, session-persisted
-  clusterings (`cnv_status_propagated`, `copykat_pred_propagated`) and a
+  spreads the per-cell tumor/normal (`cnv_status`), `copykat_pred`, and CNV-subclone
+  (`copykat_leiden_res*`) results to every cell by cluster majority within the
+  reference clustering (the fork's `propagate_cnv_labels(method="cluster")`). Adds a
+  colorable, session-persisted `<col>_propagated` clustering for each and a
   `cnv:copykat_propagated` provenance node. These are copied cluster-level calls, not
   per-cell inferred CNV; groups with no sampled cell are labelled `unknown`. Requires
   the updated `insituCNV-copykat` fork (force-reinstalled in both envs).
