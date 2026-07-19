@@ -431,6 +431,22 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
     return df, adata_norm, groupby
 
 
+def _as_str_list(v) -> list:
+    """Coerce a persisted uns value (list, numpy array, scalar, or None) to list[str].
+
+    uns round-trips lists through zarr as numpy arrays, so plain truthiness /
+    ``or`` on them raises 'truth value of an array is ambiguous'. This normalizes.
+    """
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    try:
+        return [str(x) for x in v]
+    except TypeError:
+        return [str(v)]
+
+
 def _cnv_signature_from_info(backend: str, info: dict) -> tuple:
     """Recompute a CNV profile signature from persisted run info.
 
@@ -441,14 +457,14 @@ def _cnv_signature_from_info(backend: str, info: dict) -> tuple:
     params = dict(info.get("params", {}))
     return (
         backend,
-        info.get("reference_clustering_name", ""),
-        tuple(info.get("reference_categories", [])),
+        str(info.get("reference_clustering_name", "")),
+        tuple(_as_str_list(info.get("reference_categories"))),
         params.get("n_neighbors"),
         params.get("smoothing_neighbors"),
         params.get("window_size"),
         params.get("step"),
         params.get("lfc_clip"),
-        tuple(sorted(info.get("analyze_categories", []))),
+        tuple(sorted(_as_str_list(info.get("analyze_categories")))),
     )
 
 
@@ -523,8 +539,9 @@ def _load_cnv_cache(sdata, backend: str):
 def _build_cnv_entry(backend: str, info: dict, adata: AnnData, adata_cnv) -> dict:
     """Assemble a registry result dict from persisted info + the cached profile."""
     cluster_key = info.get("cluster_key")
-    cluster_keys = list(info.get("cluster_keys") or ([cluster_key] if cluster_key else []))
-    analyze_categories = list(info.get("analyze_categories", []))
+    cluster_key = str(cluster_key) if cluster_key is not None else None
+    cluster_keys = _as_str_list(info.get("cluster_keys")) or ([cluster_key] if cluster_key else [])
+    analyze_categories = _as_str_list(info.get("analyze_categories"))
 
     # Per-cell score: prefer the main adata's per-backend column, else the legacy
     # 'cnv_score' column (infercnv), else the profile cache's own obs.
@@ -543,8 +560,8 @@ def _build_cnv_entry(backend: str, info: dict, adata: AnnData, adata_cnv) -> dic
     return {
         "backend": backend,
         "reference_obs_key": info.get("reference_obs_key"),
-        "reference_clustering_name": info.get("reference_clustering_name", ""),
-        "reference_categories": list(info.get("reference_categories", [])),
+        "reference_clustering_name": str(info.get("reference_clustering_name", "")),
+        "reference_categories": _as_str_list(info.get("reference_categories")),
         "analyze_categories": analyze_categories,
         "cluster_key": cluster_key,
         "cluster_keys": cluster_keys,
