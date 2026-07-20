@@ -144,6 +144,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         # Record code
         species = species_widget.value
         n_domains = n_domains_slider.value
+        level = level_slider.value
         n_dom_arg = n_domains if n_domains > 0 else None
         ctx.record_preamble()
         ctx.record_node(

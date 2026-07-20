@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from xenium_viewer.utils.prov_graph import (  # noqa: E402
     ProvGraph, CycleError, graph_to_cells, graph_to_script,
+    graph_to_mermaid, graph_to_dot,
     SETUP, ARTIFACT, TERMINAL,
 )
 
@@ -158,6 +159,48 @@ def test_markdown_header_precedes_code():
     cells = graph_to_cells(g)
     assert cells[0].cell_type == "markdown" and "Setup" in cells[0].source
     assert cells[1].cell_type == "code" and cells[1].source == "P"
+
+
+def test_mermaid_contains_every_node_and_edge():
+    g = _pipeline()
+    m = graph_to_mermaid(g)
+    assert m.startswith("flowchart TD")
+    # Mermaid uses opaque tokens (n0, n1, ...) for node ids, so labels/ids show
+    # up in the node-declaration text. Every node's display text must appear.
+    for nid in g.topo_sort():
+        node = g.get(nid)
+        assert (node.label or nid) in m
+    # One directed edge per dep; count the arrows.
+    n_deps = sum(len(node.deps) for node in g.nodes())
+    assert m.count(" --> ") == n_deps
+    # Fresh graph → no stale marker.
+    assert "⚠" not in m
+
+
+def test_mermaid_marks_stale_nodes():
+    g = _pipeline()
+    # Re-record an upstream node → downstream nhood goes stale.
+    g.upsert("clustering:leiden_r1.0", "CHANGED", deps=["normalize"])
+    assert g.get("nhood:leiden_r1.0").stale is True
+    m = graph_to_mermaid(g)
+    assert "⚠" in m
+    assert "classDef stale" in m
+
+
+def test_dot_is_valid_digraph_with_all_edges():
+    g = _pipeline()
+    d = graph_to_dot(g)
+    assert d.startswith("digraph provenance {")
+    assert d.rstrip().endswith("}")
+    for nid in g.topo_sort():
+        node = g.get(nid)
+        assert (node.label or nid) in d
+    n_deps = sum(len(node.deps) for node in g.nodes())
+    assert d.count(" -> ") == n_deps
+    # Stale annotation only appears once a node is stale.
+    assert "(stale)" not in d
+    g.upsert("clustering:leiden_r1.0", "CHANGED", deps=["normalize"])
+    assert "(stale)" in graph_to_dot(g)
 
 
 def _run_all():

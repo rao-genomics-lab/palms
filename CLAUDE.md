@@ -26,7 +26,14 @@ xenium-viewer /path/to/xenium/output/ --no-cache
 
 The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
 
-There is no test suite or CI/CD. All testing is manual/exploratory.
+There is a small `pytest` suite in `tests/` covering the codebase's *pure* logic
+(provenance graph, CopyKAT subsampling, registration math, LLM prompt/response parsing,
+patch-size inference, notebook export). Run it with `pytest` from the repo root
+(`[tool.pytest.ini_options]` sets `pythonpath = ["src"]`, so no install is needed).
+GitHub Actions (`.github/workflows/ci.yml`) runs the suite in the full conda env plus a
+fast `ruff` error-only lint gate on every push/PR. The GUI, spatial-analysis, and
+zarr/SpatialData persistence paths have no automated coverage — that testing remains
+manual/exploratory.
 
 ## Architecture
 

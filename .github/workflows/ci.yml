@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (conda env)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}          # login shell activates the conda env
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build xenium_viewer env from environment.yml
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true    # cache the solved env across runs
+          cache-downloads: true
+
+      - name: Run test suite
+        env:
+          MPLBACKEND: Agg            # headless matplotlib; no X server needed
+        run: pytest
+
+  lint:
+    name: lint (ruff, errors only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install ruff
+
+      # Pyflakes syntax + undefined-name checks only: a real-bug safety net
+      # without style churn on the existing codebase.
+      - name: Ruff (E9, F63, F7, F82)
+        run: ruff check --select E9,F63,F7,F82 src tests

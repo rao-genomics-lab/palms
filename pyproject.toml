@@ -84,6 +84,11 @@ Homepage = "https://github.com/sraorao/xenium_viewer"
 Repository = "https://github.com/sraorao/xenium_viewer"
 Issues = "https://github.com/sraorao/xenium_viewer/issues"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]        # import xenium_viewer.* without installing the package
+addopts = "-q"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/xenium_viewer"]
 

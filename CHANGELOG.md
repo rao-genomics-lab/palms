@@ -11,6 +11,17 @@
   `docs/pyqt6-migration.md` for a future session. (`docs/pyqt6-migration.md`)
 
 ### Added
+- **Unit tests + continuous integration.** Added a `pytest` suite over the codebase's
+  pure logic — `tests/test_prov_graph.py` (extended with Mermaid/DOT rendering),
+  `test_cnv_subsample.py` (the CopyKAT budget-split invariant), `test_registration.py`
+  (landmark affine + JSON round-trip), `test_gene_analysis.py` (LLM prompt/response
+  parsing, label mapping), `test_patch_overlay_io.py` (patch-size/stride inference), and
+  `test_notebook_export.py` (graph → `.ipynb` round-trip). A GitHub Actions workflow
+  (`.github/workflows/ci.yml`) runs the suite in the full conda env (micromamba) plus a
+  fast `ruff` error-only lint gate on every push/PR; README now shows CI / license /
+  Python badges. Configured via `[tool.pytest.ini_options]` in `pyproject.toml`
+  (`pythonpath = ["src"]`). (`tests/`, `.github/workflows/ci.yml`, `pyproject.toml`,
+  `README.md`, `.gitignore`)
 - **Global CPU-cores preference wired into CopyKAT.** A new **Preferences → CPU
   cores** submenu sets `ctx.state["n_cores"]` (default `max(1, os.cpu_count()//2)`,
   session-only like the other preferences). The CopyKAT path threads it through
@@ -35,6 +46,13 @@
   (`tabs/tab_cnv.py`, `cnv_copykat_worker.py`)
 
 ### Fixed
+- **`NameError` on a successful Novae run (surfaced by the new CI lint gate).** In the
+  Novae tab, `_on_novae_ready()` referenced `level` when recording the reproducible code
+  and building the results summary, but `level` was only bound in `on_run_novae()`'s
+  scope (unlike `species`/`n_domains`, which are re-read from their widgets there). Any
+  completed Novae domain inference would raise `NameError: name 'level' is not defined`.
+  Now `_on_novae_ready()` reads `level = level_slider.value` alongside the others.
+  (`tabs/tab_novae.py`)
 - **CopyKAT subsample starved the analyzed cells when the reference cluster was large.**
   `subsample_indices` kept *all* reference (baseline) cells first, so a reference
   population bigger than `max_cells` filled the entire subsample and **no analyzed cell
