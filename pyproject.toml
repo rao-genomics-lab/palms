@@ -89,6 +89,13 @@ testpaths = ["tests"]
 pythonpath = ["src"]        # import xenium_viewer.* without installing the package
 addopts = "-q"
 
+# The optional `cnv` extra pins insitucnv via a git URL (a direct reference).
+# Hatchling rejects direct references in project metadata unless this is enabled,
+# which otherwise breaks `pip install -e .` (metadata generation) even when the
+# extra isn't requested.
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/xenium_viewer"]
 
