@@ -22,6 +22,7 @@ from qtpy.QtGui import QColor
 from superqt import QDoubleRangeSlider
 from napari.qt.threading import thread_worker
 
+from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.tabs._helpers import make_tab
 from xenium_viewer.utils.registration import load_multichannel_pyramid, compute_landmark_affine
 from xenium_viewer.utils.composite import (
@@ -557,12 +558,14 @@ def build_tab(ctx: "ViewerContext"):
         ename = entry["element_name"]
         save_landmarks_to_sdata(ctx, f"{ename}_xenium_lm", xen_pts)
         save_landmarks_to_sdata(ctx, f"{ename}_image_lm", img_pts)
-        ctx.record_code(
-            f"\n# External image landmark registration\n"
+        ctx.record_node(
+            f"extimg:register:{ename}",
+            f"\n# External image landmark registration ({ename})\n"
             f"from xenium_viewer.utils.registration import compute_landmark_affine\n"
             f"ext_xen_pts = np.array({xen_pts.tolist()})\n"
             f"ext_img_pts = np.array({img_pts.tolist()})\n"
-            f"ext_affine, ext_residuals = compute_landmark_affine(ext_xen_pts, ext_img_pts)"
+            f"ext_affine, ext_residuals = compute_landmark_affine(ext_xen_pts, ext_img_pts)",
+            deps=["preamble"], kind=TERMINAL, label=f"External image registration: {ename}",
         )
 
     # ── Entry creation / registration ───────────────────────────────────
@@ -633,11 +636,13 @@ def build_tab(ctx: "ViewerContext"):
         save_external_image_to_sdata(
             ctx, element_name, pyramid, channel_axis, channel_names,
         )
-        ctx.record_code(
-            f"\n# Load multichannel image\n"
+        ctx.record_node(
+            f"extimg:load:{element_name}",
+            f"\n# Load multichannel image ({element_name})\n"
             f"from xenium_viewer.utils.registration import load_multichannel_pyramid\n"
             f"ext_pyramid, ext_tif, channel_axis, channel_names = "
-            f"load_multichannel_pyramid(\"{path}\")"
+            f"load_multichannel_pyramid(\"{path}\")",
+            deps=["preamble"], kind=TERMINAL, label=f"Load external image: {element_name}",
         )
         ctx.set_status(f"Loaded {Path(path).name} ({len(channel_names)} channels)")
 

@@ -26,7 +26,14 @@ xenium-viewer /path/to/xenium/output/ --no-cache
 
 The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
 
-There is no test suite or CI/CD. All testing is manual/exploratory.
+There is a small `pytest` suite in `tests/` covering the codebase's *pure* logic
+(provenance graph, CopyKAT subsampling, registration math, LLM prompt/response parsing,
+patch-size inference, notebook export). Run it with `pytest` from the repo root
+(`[tool.pytest.ini_options]` sets `pythonpath = ["src"]`, so no install is needed).
+GitHub Actions (`.github/workflows/ci.yml`) runs the suite in the full conda env plus a
+fast `ruff` error-only lint gate on every push/PR. The GUI, spatial-analysis, and
+zarr/SpatialData persistence paths have no automated coverage — that testing remains
+manual/exploratory.
 
 ## Architecture
 
@@ -43,7 +50,7 @@ There is no test suite or CI/CD. All testing is manual/exploratory.
 - Layer references: `cell_labels_layer`, `transcript_layer`, `roi_layer`
 - Manager objects: `CellColorManager`, `TranscriptLoader`, `UMAPViewer`
 - Mutable state dicts: `state` (general), `he_state` (H&E registration), `arms_state` (ARMS overlay)
-- Shared callables: `record_code()`, `set_status()`, `refresh_clustering_choices()`
+- Shared callables: `record_node()` / `record_code()`, `set_status()`, `refresh_clustering_choices()`
 
 ### Tab Modules (`src/xenium_viewer/tabs/`)
 
@@ -69,16 +76,43 @@ The 11 tabs cover: Clustering, Cell Coloring, Transcripts, UMAP, ROI Analysis, H
 | `spatial_analysis.py` | Squidpy-based spatial analysis (neighborhood enrichment, co-occurrence, L-R) |
 | `registration.py` | Landmark-based similarity affine registration for H&E/ARMS |
 | `transcript_index.py` | Per-gene feather loader |
-| `session.py` | Zarr-based session persistence (ROIs, H&E/ARMS registration, clusterings, DEG results) |
+| `session.py` | Zarr-based session persistence (ROIs, H&E/ARMS registration, clusterings, DEG results, provenance graph) |
+| `prov_graph.py` | Provenance DAG for reproducible code — nodes/deps, upsert+staleness, topo-sort, cells/script/mermaid/dot rendering |
+| `notebook_export.py` | Build/write/read `.ipynb` (nbformat) from the graph |
+| `dag_view.py` | Matplotlib+networkx render of the provenance DAG |
 | `umap_widget.py` | Separate linked napari window for UMAP scatter |
 
 ### Session Persistence
 
-Stored in `sdata_cached.zarr/viewer_session/` as zarr arrays and parquet files. Auto-saved on relevant actions and restored at startup. Supports zarr v2 and v3.
+Stored in `sdata_cached.zarr/viewer_session/` as zarr arrays and parquet files (plus the code provenance graph as a JSON attr). Auto-saved on relevant actions and restored at startup. Supports zarr v2 and v3.
 
-### Code Recording
+### Code Recording (provenance DAG)
 
-All user actions generate reproducible Python code saved to `data_dir/code.py`. Use `ctx.record_code(snippet)` in tab callbacks. Preamble (imports, data loading) is auto-inserted.
+User actions are recorded as a **provenance graph** (`utils/prov_graph.py`), the
+single source of truth for reproducible code — `ctx.state["prov_graph"]`. Each step
+is a node with a stable `id` (the artifact it produces), its `code`, its `deps`
+(parent node ids), and a `kind` (`setup` / `artifact` / `terminal`). The notebook is
+*derived* from the graph by topological sort, so it always respects dependencies
+regardless of the order actions were taken — even across sessions.
+
+- **Record with `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
+  in tab callbacks. Re-running a step (same `id`) revises its node in place and flags
+  descendants stale; a missing dependency errors at record time. `ctx.record_code(code, tag)`
+  remains as a thin backward-compat shim. Helper recorders: `record_preamble` (`preamble`
+  node, defines `data_path`), `record_normalize`, `record_clustering` (`clustering:<key>`),
+  `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
+  `nhood:<key>`, `cooccur:<key>`, `ligrec:<key>`, `annotation:<col>`, `rois`, `roi_deg`,
+  `cnv:<backend>` (`cnv:infercnv` / `cnv:copykat`); terminals `plot:*`
+  (incl. `plot:cnv_heatmap:<backend>:<key>`) / `export:*` / `viewer:*` / `he:*` / `arms:*`.
+- **Outputs**: a flat `analysis.py` (derived, stable filename) written live, and
+  `analysis_notebook.ipynb` (via `utils/notebook_export.py` + nbformat) on session save /
+  the Notebook tab's "Export .ipynb". The notebook is code-only and replays from the raw
+  Xenium output.
+- **Notebook tab** (`tabs/tab_notebook.py`) renders the graph as topo-ordered cells with a
+  ⚠ stale badge, an editable free-form cell area, and a "Show DAG" button (`utils/dag_view.py`,
+  matplotlib+networkx). `graph_to_mermaid` / `graph_to_dot` give diagram text.
+- **Persistence**: the graph is serialized into `sdata_cached.zarr/viewer_session/` and
+  restored at startup, so a multi-session analysis accumulates into one notebook.
 
 ## Key Dependencies
 
@@ -89,6 +123,16 @@ All user actions generate reproducible Python code saved to `data_dir/code.py`. 
 - **zarr** — caching and session persistence
 - **dask** — lazy array loading
 - **tifffile**, **opencv**, **scikit-image** — image processing
+- **insitucnv** (the `insituCNV-copykat` fork, in `environment.yml`) + **infercnvpy** — CNV
+  inference. `utils/cnv_analysis.py` drives both backends via `run_cnv_pipeline(..., backend=)`.
+  **inferCNV** runs in the main env. **CopyKAT** needs **rpy2 + R 4.3 + the `copykat` R package**,
+  whose stack requires **python 3.11** — incompatible with the main env's python 3.12. So CopyKAT
+  runs in a **second conda env** (`environment-copykat.yml` → `xenium_viewer_copykat`): the viewer
+  resolves that env's python (`_resolve_copykat_python` in `tabs/tab_cnv.py`; override via
+  `XENIUM_COPYKAT_ENV`/`XENIUM_COPYKAT_PYTHON`) and launches the detached worker
+  (`src/xenium_viewer/cnv_copykat_worker.py`) there, passing the viewer source on `PYTHONPATH`.
+  The detached process survives the GUI closing; the GitHub-only copykat R package auto-installs
+  on first run (`src/xenium_viewer/install_copykat.py::ensure_copykat_installed`).
 
 ## Known Compatibility Patches
 

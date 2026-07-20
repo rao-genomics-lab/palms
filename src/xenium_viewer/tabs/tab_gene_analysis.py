@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,7 @@ from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -176,11 +178,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _rg_method = state.get("_rg_method", "wilcoxon")
         _rg_n = state.get("_rg_n_genes", 25)
         ctx.record_clustering(clustering_key)
-        ctx.record_code(
+        ctx.record_node(
+            f"rank_genes:{clustering_key}",
             f"\n# Rank genes: method={_rg_method}, groupby={clustering_key}, n_genes={_rg_n}\n"
             f"sc.tl.rank_genes_groups(adata, groupby=\"{clustering_key}\", "
             f"method=\"{_rg_method}\", n_genes={_rg_n})\n"
-            f"rank_df = sc.get.rank_genes_groups_df(adata, group=None)"
+            f"rank_df = sc.get.rank_genes_groups_df(adata, group=None)",
+            deps=[f"clustering:{clustering_key}"],
+            label=f"Rank genes: {clustering_key}",
         )
 
     def on_show_dotplot():
@@ -218,12 +223,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _dp_dendro = ga_dendro_check.value
         _dp_groupby = state.get("rank_genes_groupby", "")
         _dp_fmt = ctx.state.get("plot_format", "svg")
-        ctx.record_code(
+        ctx.record_node(
+            f"plot:dotplot:{_dp_groupby}",
             f"\n# Dotplot (n_genes={_dp_n}, dendrogram={_dp_dendro})\n"
             + (f"sc.tl.dendrogram(adata, groupby=\"{_dp_groupby}\")\n" if _dp_dendro else "")
             + f"sc.pl.rank_genes_groups_dotplot(adata, n_genes={_dp_n}, "
-            f"dendrogram={_dp_dendro})\nplt.show()\n"
-            f"fig.savefig(\"dotplot.{_dp_fmt}\", dpi=300, bbox_inches='tight')"
+            f"dendrogram={_dp_dendro})\nfig = plt.gcf()\n"
+            f"fig.savefig(\"dotplot.{_dp_fmt}\", dpi=300, bbox_inches='tight')",
+            deps=[f"rank_genes:{_dp_groupby}"],
+            kind=TERMINAL,
+            label="Rank-genes dotplot",
         )
 
     def _reset_labels():
@@ -231,8 +240,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         all_labels = state.get("cluster_labels", {})
         if clustering_key in all_labels:
             del all_labels[clustering_key]
+        # Drop the annotation node so it no longer appears in the notebook.
+        graph = state.get("prov_graph")
+        if graph is not None and f"annotation:{clustering_key}" in graph:
+            try:
+                graph.remove(f"annotation:{clustering_key}")
+            except ValueError:
+                pass
         ga_status.value = f"Labels reset for {clustering_key}"
-        ctx.record_code(f"\n# Reset cluster labels for {clustering_key}")
 
     def _open_label_editor():
         clustering_key = ga_clustering_widget.value
@@ -252,9 +267,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         fig = make_rank_genes_plot(adata_norm, n_genes=_rp_n, cluster_labels=labels)
         _plt.show(block=False)
         ga_status.value = "Rank genes plot displayed"
-        ctx.record_code(
+        ctx.record_node(
+            f"plot:rank_panel:{groupby}",
             f"\n# Rank genes panel plot (n_genes={_rp_n})\n"
-            f"sc.pl.rank_genes_groups(adata, n_genes={_rp_n})\nplt.show()"
+            f"sc.pl.rank_genes_groups(adata, n_genes={_rp_n})",
+            deps=[f"rank_genes:{groupby}"],
+            kind=TERMINAL,
+            label="Rank-genes panel plot",
         )
 
     def on_export_rank_genes():
@@ -268,7 +287,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         df.to_csv(path, index=False)
         ga_status.value = f"Exported {len(df)} rows to {path}"
-        ctx.record_code(f"\n# Export rank genes results\n# rank_genes_results.csv -> \"{path}\"")
+        _rg_groupby = state.get("rank_genes_groupby", "")
+        ctx.record_node(
+            f"export:rank_genes:{_rg_groupby}",
+            f"\n# Export rank genes results\n"
+            f"rank_df.to_csv(\"{os.path.basename(path)}\", index=False)",
+            deps=[f"rank_genes:{_rg_groupby}"],
+            kind=TERMINAL,
+            label="Export rank genes results",
+        )
 
     def on_generate_volcanos():
         adata_norm = state.get("rank_genes_adata_norm")
@@ -282,12 +309,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_volcano_button.enabled = False
         ga_status.value = "Generating volcano plots..."
         method = state.get("_rg_method", "wilcoxon")
-        ctx.record_code(
-            f"\n# Generate pairwise volcano plots\n"
-            f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
+        ctx.record_node(
+            f"plot:volcano:{groupby}",
+            f"\n# Pairwise volcano plots (groupby={groupby}, method={method})\n"
             f"import itertools\n"
-            f"volcano_dir = \"{output_dir}\"\n"
-            f"# groupby={groupby}, method=\"{method}\""
+            f"from pathlib import Path\n"
+            f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
+            f"volcano_dir = Path(\"{os.path.basename(output_dir)}\"); "
+            f"volcano_dir.mkdir(parents=True, exist_ok=True)\n"
+            f"_groups = [g for g in adata.obs[\"{groupby}\"].cat.categories if str(g) != '-1']\n"
+            f"for _a, _b in itertools.combinations(_groups, 2):\n"
+            f"    _df = run_pairwise_deg(adata, \"{groupby}\", str(_a), str(_b), method=\"{method}\")\n"
+            f"    _vfig = make_volcano_plot(_df, str(_a), str(_b))\n"
+            f"    _vfig.savefig(volcano_dir / f'volcano_{{_a}}_vs_{{_b}}.png', dpi=300)\n"
+            f"    plt.close(_vfig)",
+            deps=[f"rank_genes:{groupby}"],
+            kind=TERMINAL,
+            label="Pairwise volcano plots",
         )
 
         @thread_worker(connect={"yielded": lambda msg: setattr(ga_status, 'value', msg),
@@ -423,16 +461,25 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 f"passed conf≥{conf_threshold:.2f}, {pct_passed:.0f}%): {summary}"
             )
 
-            # Code recording
-            ctx.record_code(
-                f"\n# CellTypist annotation (confidence threshold={conf_threshold})\n"
-                f"import celltypist\n"
-                f"from celltypist import models\n"
-                f"model = models.Model.load(\"{model_name}\")\n"
-                f"predictions = celltypist.annotate(adata, model=model, majority_voting=False)\n"
-                f"# Filtered to cells with max probability >= {conf_threshold}\n"
-                f"# Majority vote per cluster: {clust_key}\n"
-                f"# Assigned labels: {labels}"
+            # Code recording — emit the resolved cluster→label mapping as real,
+            # runnable code (deterministic), with the CellTypist derivation as a
+            # provenance comment above it.
+            ctx.record_clustering(clust_key)
+            _ct_map = {str(k): v for k, v in labels.items()}
+            ctx.record_node(
+                f"annotation:{clust_key}",
+                f"\n# Cell-type annotation of '{clust_key}' (CellTypist, "
+                f"confidence >= {conf_threshold})\n"
+                f"# Derived with: celltypist.annotate(adata, "
+                f"model=celltypist.models.Model.load('{model_name}'), "
+                f"majority_voting=False),\n"
+                f"# then majority-voted per cluster among cells passing the threshold.\n"
+                f"annotation_map = {_ct_map!r}\n"
+                f"adata.obs[\"{clust_key}_annotated\"] = ("
+                f"adata.obs[\"{clust_key}\"].astype(str).map(annotation_map)"
+                f".astype(\"category\"))",
+                deps=[f"clustering:{clust_key}"],
+                label=f"Cell-type annotation: {clust_key}",
             )
 
         worker = _run()
@@ -490,11 +537,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
             summary = ", ".join(summary_parts)
             ga_status.value = f"{len(labels)} clusters annotated via {cli}: {summary}"
 
-            ctx.record_code(
-                f"\n# LLM annotation via {cli}\n"
-                f"from xenium_viewer.utils.gene_analysis import run_llm_annotation\n"
-                f"llm_labels = run_llm_annotation(rank_df, cli=\"{cli}\", n_genes=10)\n"
-                f"# Assigned labels: {labels}"
+            ctx.record_clustering(clustering_key)
+            _llm_map = {str(k): v for k, v in labels.items()}
+            ctx.record_node(
+                f"annotation:{clustering_key}",
+                f"\n# Cell-type annotation of '{clustering_key}' (LLM via {cli})\n"
+                f"# Derived with: run_llm_annotation(rank_df, cli='{cli}', n_genes=10)\n"
+                f"annotation_map = {_llm_map!r}\n"
+                f"adata.obs[\"{clustering_key}_annotated\"] = ("
+                f"adata.obs[\"{clustering_key}\"].astype(str).map(annotation_map)"
+                f".astype(\"category\"))",
+                deps=[f"clustering:{clustering_key}"],
+                label=f"Cell-type annotation: {clustering_key}",
             )
 
         def _on_llm_error(exc):
@@ -672,23 +726,29 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 f"{len(labels)} clusters annotated ({n_common} common genes): {summary}"
             )
 
-            # Code recording
-            ctx.record_code(
-                f"\n# Label transfer via sc.tl.ingest()\n"
-                f"# Reference: {ref_path}\n"
-                f"# Annotation column: {annotation_col}\n"
-                f"# Common genes: {n_common}\n"
-                f"ref_adata = sc.read_h5ad(\"{ref_path}\")\n"
-                f"common_genes = sorted(set(adata.var_names) & set(ref_adata.var_names))\n"
-                f"ref_sub = ref_adata[:, common_genes].copy()\n"
-                f"xen_sub = adata[:, common_genes].copy()\n"
-                f"sc.pp.normalize_total(ref_sub, target_sum=1e4); sc.pp.log1p(ref_sub)\n"
-                f"sc.pp.highly_variable_genes(ref_sub); sc.pp.pca(ref_sub)\n"
-                f"sc.pp.neighbors(ref_sub); sc.tl.umap(ref_sub)\n"
-                f"sc.pp.normalize_total(xen_sub, target_sum=1e4); sc.pp.log1p(xen_sub)\n"
-                f"sc.tl.ingest(xen_sub, ref_sub, obs=\"{annotation_col}\")\n"
-                f"# Majority vote per cluster: {clust_key}\n"
-                f"# Assigned labels: {labels}"
+            # Code recording — deterministic mapping application, with the ingest
+            # derivation kept as a provenance comment (ingest/UMAP is stochastic).
+            ctx.record_clustering(clust_key)
+            _lt_map = {str(k): v for k, v in labels.items()}
+            ctx.record_node(
+                f"annotation:{clust_key}",
+                f"\n# Cell-type annotation of '{clust_key}' (label transfer via sc.tl.ingest)\n"
+                f"# Reference: {ref_path} | column: {annotation_col} | common genes: {n_common}\n"
+                f"# Derived by ingesting the Xenium cells into the reference embedding:\n"
+                f"#   ref = sc.read_h5ad('{ref_path}')\n"
+                f"#   genes = sorted(set(adata.var_names) & set(ref.var_names))\n"
+                f"#   ref, xen = ref[:, genes].copy(), adata[:, genes].copy()\n"
+                f"#   sc.pp.normalize_total(ref, target_sum=1e4); sc.pp.log1p(ref)\n"
+                f"#   sc.pp.highly_variable_genes(ref); sc.pp.pca(ref); "
+                f"sc.pp.neighbors(ref); sc.tl.umap(ref)\n"
+                f"#   sc.pp.normalize_total(xen, target_sum=1e4); sc.pp.log1p(xen)\n"
+                f"#   sc.tl.ingest(xen, ref, obs='{annotation_col}')  # majority-vote per cluster\n"
+                f"annotation_map = {_lt_map!r}\n"
+                f"adata.obs[\"{clust_key}_annotated\"] = ("
+                f"adata.obs[\"{clust_key}\"].astype(str).map(annotation_map)"
+                f".astype(\"category\"))",
+                deps=[f"clustering:{clust_key}"],
+                label=f"Cell-type annotation: {clust_key}",
             )
 
         worker = _run()

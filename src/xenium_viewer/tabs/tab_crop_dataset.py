@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from xenium_viewer.utils.prov_graph import TERMINAL
 from magicgui.widgets import PushButton
 from qtpy.QtWidgets import QLabel, QFileDialog, QInputDialog, QLineEdit, QMessageBox
 from qtpy.QtCore import QThread, Signal as QtSignal
@@ -187,12 +189,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 if success:
                     n_ok += 1
                     lines.append(f"✓ {name} -> {info}")
-                    ctx.record_code(
-                        f"\n# Crop & Export dataset '{name}'\n"
+                    ctx.record_node(
+                        f"crop_export:{name}",
+                        f"\n# Crop & Export dataset '{name}' (writes a standalone dataset)\n"
                         f"# from xenium_viewer.utils.crop_export import crop_and_export\n"
                         f"# crop_and_export(ctx, polygon_yx=<region drawn in the \"Crop Regions\" layer>,\n"
                         f"#                 output_dir=Path({str(Path(info).parent)!r}), name={name!r})\n"
-                        f"# -> wrote standalone dataset to \"{info}\""
+                        f"# -> wrote standalone dataset to \"{info}\"",
+                        deps=["preamble"],
+                        kind=TERMINAL,
+                        label=f"Crop & export: {name}",
                     )
                 else:
                     lines.append(f"✗ {name}: {info}")

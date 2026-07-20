@@ -64,7 +64,12 @@ celltypist = ["celltypist"]
 r = ["rpy2", "anndata2ri"]
 gpu = ["torch", "torch-geometric", "pytorch-lightning", "xgboost"]
 references = ["readfcs", "rasterio"]
-cnv = ["infercnvpy>=0.6.0", "insitucnv>=0.1.0"]
+# inferCNV backend. (CopyKAT needs an incompatible R/python-3.11 stack and runs
+# in a separate env — see environment-copykat.yml.)
+cnv = [
+    "infercnvpy>=0.6.0",
+    "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git",
+]
 full = ["xenium-viewer[celltypist,r,gpu,references,cnv]"]
 dev = ["pytest", "ruff"]
 
@@ -78,6 +83,18 @@ xenium-build-custom-segmentation = "xenium_viewer.scripts.build_custom_segmentat
 Homepage = "https://github.com/sraorao/xenium_viewer"
 Repository = "https://github.com/sraorao/xenium_viewer"
 Issues = "https://github.com/sraorao/xenium_viewer/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]        # import xenium_viewer.* without installing the package
+addopts = "-q"
+
+# The optional `cnv` extra pins insitucnv via a git URL (a direct reference).
+# Hatchling rejects direct references in project metadata unless this is enabled,
+# which otherwise breaks `pip install -e .` (metadata generation) even when the
+# extra isn't requested.
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/xenium_viewer"]

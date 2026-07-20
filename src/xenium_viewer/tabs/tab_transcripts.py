@@ -8,6 +8,7 @@ from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QListWidget, QHBoxLayout, QWidget, QLabel
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -87,9 +88,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         status_label.value = (
             f"Transcripts: {', '.join(genes)} ({len(points):,} spots total)"
         )
-        ctx.record_code(
-            f"\n# Display transcript overlay\n"
-            f"# genes={genes}, qv_threshold={qv_slider.value}, {len(points):,} spots total"
+        ctx.record_node(
+            "viewer:transcript_overlay",
+            f"\n# Display transcript overlay (viewer)\n"
+            f"# genes={genes}, qv_threshold={qv_slider.value}, {len(points):,} spots total",
+            deps=["preamble"], kind=TERMINAL, label="Transcript overlay",
         )
         apply_transcripts_button.enabled = True
 
@@ -224,10 +227,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 density_status.text() +
                 " [WARNING: rebuild transcript cache for cell-level filtering]"
             )
-        ctx.record_code(
-            f"\n# Transcript density heatmap\n"
+        ctx.record_node(
+            "viewer:transcript_density",
+            f"\n# Transcript density heatmap (viewer)\n"
             f"# gene={_gene}, bin_size={_bin_um}\u00b5m, normalise_by_cells={normalised}"
-            + (f", cluster_filter=active" if _had_filter else "")
+            + (f", cluster_filter=active" if _had_filter else ""),
+            deps=["preamble"], kind=TERMINAL, label="Transcript density heatmap",
         )
         compute_density_button.enabled = True
 

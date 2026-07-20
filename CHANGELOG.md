@@ -1,5 +1,178 @@
 # Changelog
 
+## [Unreleased] — 2026-07-19
+
+### Docs
+- **Tracked TODO to migrate napari off the deprecated PyQt5 backend.** Napari warns
+  that PyQt5 support is deprecated and will be removed in fall 2026. No code change
+  yet (the viewer runs fine on PyQt5 until then); the codebase already routes all Qt
+  access through `qtpy`, so the migration is small — only the backend pins plus a few
+  Qt5-isms (8 unscoped enums, 7 `.exec_()` calls). Captured the migration checklist in
+  `docs/pyqt6-migration.md` for a future session. (`docs/pyqt6-migration.md`)
+
+### Added
+- **Unit tests + continuous integration.** Added a `pytest` suite over the codebase's
+  pure logic — `tests/test_prov_graph.py` (extended with Mermaid/DOT rendering),
+  `test_cnv_subsample.py` (the CopyKAT budget-split invariant), `test_registration.py`
+  (landmark affine + JSON round-trip), `test_gene_analysis.py` (LLM prompt/response
+  parsing, label mapping), `test_patch_overlay_io.py` (patch-size/stride inference), and
+  `test_notebook_export.py` (graph → `.ipynb` round-trip). A GitHub Actions workflow
+  (`.github/workflows/ci.yml`) runs the suite in the full conda env (micromamba) plus a
+  fast `ruff` error-only lint gate on every push/PR; README now shows CI / license /
+  Python badges. Configured via `[tool.pytest.ini_options]` in `pyproject.toml`
+  (`pythonpath = ["src"]`). (`tests/`, `.github/workflows/ci.yml`, `pyproject.toml`,
+  `README.md`, `.gitignore`)
+- **Global CPU-cores preference wired into CopyKAT.** A new **Preferences → CPU
+  cores** submenu sets `ctx.state["n_cores"]` (default `max(1, os.cpu_count()//2)`,
+  session-only like the other preferences). The CopyKAT path threads it through
+  the launch params → `cnv_copykat_worker` → `run_cnv_pipeline(n_cores=)` →
+  `run_copykat(n_cores=)` (CopyKAT's R `n.cores`, which speeds its `parallelDist`
+  passes); inferCNV is unaffected. The value is echoed into
+  `cnv_copykat_params.json` and the recorded `run_copykat(...)` code cell.
+  (`app.py`, `tabs/_helpers.py`, `tabs/tab_cnv.py`, `cnv_copykat_worker.py`,
+  `utils/cnv_analysis.py`)
+- **Extrapolate CopyKAT calls to the whole dataset.** A new **"Extrapolate CopyKAT
+  calls to all cells"** checkbox on the CNV tab. Because CopyKAT runs on a subsample,
+  only those cells get a call; when enabled, after the run finishes the viewer
+  extends the per-cell tumor/normal (`cnv_status`), `copykat_pred`, and CNV-subclone
+  (`copykat_leiden_res*`) results to every cell: cells CopyKAT actually ran keep their
+  real value, and each un-run cell is filled with the majority value among run cells in
+  its reference-clustering group (the fork's `propagate_cnv_labels(method="cluster")`,
+  with run cells' real values overlaid back on top so the true 0/1/2/3 subclones aren't
+  collapsed to the dominant one). Adds a colorable, session-persisted `<col>_propagated`
+  clustering for each and a `cnv:copykat_propagated` provenance node. These are copied cluster-level calls, not
+  per-cell inferred CNV; groups with no sampled cell are labelled `unknown`. Requires
+  the updated `insituCNV-copykat` fork (force-reinstalled in both envs).
+  (`tabs/tab_cnv.py`, `cnv_copykat_worker.py`)
+
+### Fixed
+- **`NameError` on a successful Novae run (surfaced by the new CI lint gate).** In the
+  Novae tab, `_on_novae_ready()` referenced `level` when recording the reproducible code
+  and building the results summary, but `level` was only bound in `on_run_novae()`'s
+  scope (unlike `species`/`n_domains`, which are re-read from their widgets there). Any
+  completed Novae domain inference would raise `NameError: name 'level' is not defined`.
+  Now `_on_novae_ready()` reads `level = level_slider.value` alongside the others.
+  (`tabs/tab_novae.py`)
+- **CopyKAT subsample starved the analyzed cells when the reference cluster was large.**
+  `subsample_indices` kept *all* reference (baseline) cells first, so a reference
+  population bigger than `max_cells` filled the entire subsample and **no analyzed cell
+  was ever run** — every analyzed cluster came back with no CNV call and showed as
+  `unknown` in the extrapolation (e.g. a 17.9k-cell reference cluster consumed the whole
+  10k budget). The budget is now split: analyzed cells get priority for the slots while a
+  modest reference baseline (25% of `max_cells`, ≥500) is reserved to seed CopyKAT's
+  diploid baseline, and any unused budget tops the reference back up. Small-reference runs
+  are unchanged. Existing CopyKAT caches produced before this fix must be re-run.
+  (`utils/cnv_analysis.py`)
+- **Stale CopyKAT "running" marker after a killed worker.** A SIGTERM/SIGKILL on the
+  detached CopyKAT worker (e.g. from htop) skips its `finally` cleanup, leaving
+  `plots/copykat_RUNNING.txt` behind so the next launch wrongly reported a job "in
+  progress". The worker now records its **PID** in that marker, and the viewer
+  distinguishes a genuinely-running detached worker from a dead one by checking
+  `/proc/<pid>/cmdline` (with an `os.kill(pid, 0)` fallback; a reused/unrelated PID
+  reads as interrupted). Stale markers are now auto-cleared — on restore and in the
+  live poll loop — and the CNV tab reports the true state. Terminating the worker was
+  already safe for the SpatialData zarr (the worker only writes standalone
+  `.h5ad`/`.json`/plot files, never the zarr store). (`tabs/tab_cnv.py`,
+  `cnv_copykat_worker.py`)
+
+### Added
+- **CopyKAT CNV backend (inferCNV / CopyKAT / both).** The CNV tab can now call
+  copy-number with **inferCNV**, **CopyKAT**, or **both** (default), via the
+  `insituCNV-copykat` fork's `run_copykat` (which writes the same
+  `obsm["X_cnv"]`/`uns["cnv"]` keys, so clustering + heatmaps are shared). A
+  per-backend registry keeps both results live at once — cluster columns are
+  namespaced (`cnv_leiden_res*` vs `copykat_leiden_res*`), both are colorable,
+  and the heatmap saver has a **backend** selector alongside the resolution one
+  (`cnv_heatmap_<backend>_<res>.png/.pdf`, fork settings: dendrogram, ±0.4, dpi
+  200). CopyKAT is slow (~2 h), so it runs on a random ≤10k-cell subsample
+  (reference cells kept) as a **detached background process** that survives the
+  GUI: closing the app mid-run prompts **Stop / Continue in background / Cancel**,
+  and a finished background run writes `adata_cnv_cache_copykat.h5ad` +
+  `cnv_copykat_result.json` + `plots/cnv_heatmap_copykat_*` +
+  `plots/copykat_DONE.txt`, restored on next launch. New module
+  `cnv_copykat_worker.py`. **CopyKAT runs in a second conda env** — its R stack
+  (r-base 4.3 + rpy2 3.5.11) requires python 3.11, which is incompatible with the
+  viewer's python 3.12 (scanpy≥1.12 / zarr≥3). Create it once with
+  `conda env create -f environment-copykat.yml` (`xenium_viewer_copykat`); the
+  viewer auto-detects it (override via `XENIUM_COPYKAT_ENV` /
+  `XENIUM_COPYKAT_PYTHON`) and launches the detached worker there, passing the
+  viewer source on `PYTHONPATH` so that env needn't install the package. The
+  GitHub-only copykat R package auto-installs on first run. inferCNV still runs
+  in the main env. (`tabs/tab_cnv.py`, `utils/cnv_analysis.py`,
+  `utils/adata_persistence.py`, `app.py`, `install_copykat.py`,
+  `cnv_copykat_worker.py`, `environment.yml`, `environment-copykat.yml`,
+  `pyproject.toml`)
+- **Limit CNV analysis to specific cell types.** A new "Cell types to analyze
+  (CNV subclones)" checkbox grid in the CNV tab (drawn from the same
+  clustering/annotation column as the reference selector, so it shows your
+  cell-type labels) lets you restrict inference to chosen cell types. Before
+  running, the AnnData is subset to the selected types **plus** the reference
+  population (inferCNV needs the reference as its baseline), so the CNV profile,
+  score, subclone clustering, and chromosome heatmap only cover the cells of
+  interest — immune/stromal cells you don't care about are excluded entirely.
+  Leaving all boxes checked (the default) analyzes the whole tissue as before.
+  The analyzed cell-type set joins the CNV profile signature (so it interacts
+  correctly with per-resolution heatmap accumulation), persists across sessions
+  (`cnv_run_info["analyze_categories"]`), and the `cnv` provenance node emits the
+  leading `adata = adata[...].copy()` subset step. (`tabs/tab_cnv.py`,
+  `utils/cnv_analysis.py`, `utils/adata_persistence.py`)
+
+## [Unreleased] — 2026-07-17
+
+### Added
+- **Per-resolution CNV chromosome heatmaps.** The CNV tab now *remembers* every
+  leiden resolution run under the same core parameters (reference, neighbors,
+  smoothing, window, step) instead of overwriting the previous run. A new
+  **"Heatmap resolution"** selector lets you save the chromosome heatmap for any
+  accumulated resolution; each writes its own `plots/cnv_heatmap_<key>.png/.pdf`
+  and a distinct `plot:cnv_heatmap:<key>` provenance terminal, so comparing
+  resolutions no longer clobbers earlier heatmaps. Accumulation is scoped to a
+  shared CNV profile — changing a core parameter starts a fresh profile (with a
+  status note), since prior resolutions' heatmaps require the earlier profile.
+  The accumulated resolution list persists across sessions
+  (`cnv_run_info["cluster_keys"]`) and the `cnv` provenance node emits the full
+  `cluster_cnv_resolutions(adata, [...])` list. (`tabs/tab_cnv.py`,
+  `utils/adata_persistence.py`)
+
+## [Unreleased] — 2026-07-16
+
+### Added
+- **Reproducible analysis as a provenance DAG.** User actions are now recorded
+  as a dependency graph of artifacts (`utils/prov_graph.py`) rather than an
+  append-only script. Each step is a node keyed by the artifact it produces,
+  with its code and dependencies; the notebook is *derived* from the graph by
+  topological sort. Re-running a step revises its node in place and flags
+  descendants **stale** (instead of being silently dropped or appended out of
+  order), and a missing dependency errors at record time rather than as a
+  `NameError` on replay. New recorder API `ctx.record_node(id, code, deps, kind,
+  label, params)`; `ctx.record_code(code, tag)` kept as a compat shim.
+- **Cross-session accumulation.** The graph is serialized into
+  `sdata_cached.zarr/viewer_session/` and restored at startup, so a workflow
+  spanning several sessions builds one coherent notebook. Output filename is a
+  stable `analysis.py` (was a per-launch `code_<timestamp>.py`).
+- **Jupyter export.** `utils/notebook_export.py` (nbformat) writes
+  `analysis_notebook.ipynb` — code-only, dependency-ordered, replayable from the
+  raw Xenium output — on session save and via the Notebook tab's "Export .ipynb"
+  button. Added `nbformat` to `environment.yml`.
+- **Notebook tab overhaul** (`tabs/tab_notebook.py`): cells are derived from the
+  graph with a ⚠ stale badge, re-running a step updates its cell in place, and a
+  **"Show DAG"** button renders the graph (`utils/dag_view.py`, matplotlib +
+  networkx) to `plots/provenance_dag.png`. `graph_to_mermaid` / `graph_to_dot`
+  provide diagram text.
+
+### Fixed
+- Recorded code now actually replays: undefined `fig` in every plot-save snippet
+  (`fig = plt.gcf()`), undefined `data_path` (now defined in the preamble), the
+  preamble is always emitted, and durable comment-only actions became real code —
+  ROI polygons (inlined vertex arrays instead of a cache-only
+  `load_rois_from_sdata`), cell-type annotations (CellTypist/LLM/label-transfer
+  now emit a real `.map()` producing a `<key>_annotated` column), clustering
+  import/export, and the pairwise-volcano loops.
+- Leiden HVG/scale branch now copies labels back onto `adata.obs` (previously
+  left only on `adata_leiden`); CNV takes raw counts from `sdata['table'].X`
+  rather than an already-normalized `adata.X`. `random_state` threaded into
+  recorded Leiden/UMAP for determinism.
+
 ## [Unreleased] — 2026-07-15 (b)
 
 ### Changed

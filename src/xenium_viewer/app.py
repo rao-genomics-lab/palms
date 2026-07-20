@@ -65,6 +65,7 @@ from xenium_viewer.utils.transcript_index import TranscriptLoader
 from xenium_viewer.utils.umap_widget import UMAPViewer
 from xenium_viewer.utils.viewer_context import ViewerContext
 from xenium_viewer.tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu, create_view_menu
+from xenium_viewer.utils.prov_graph import ProvGraph
 from xenium_viewer import loader as _loader_mod
 from xenium_viewer import preprocess as _preprocess_mod
 
@@ -321,6 +322,13 @@ def _build_control_panel(ctx: ViewerContext):
 
     # ── Create shared helpers (needs all widgets registered) ─────────────
     create_shared_helpers(ctx)
+
+    # ── Seed the code preamble so data_path/imports are always cell #1 ────
+    # Emitted up front (when recording is on) so every recorded step has a
+    # correct, self-contained preamble to depend on, even if the first action
+    # a user takes doesn't chain through normalize/clustering.
+    if ctx.state.get("record_code"):
+        ctx.record_preamble()
 
     # ── Populate initial cluster checkboxes ──────────────────────────────
     ctx.repopulate_cluster_checkboxes()
@@ -831,10 +839,18 @@ def _make_initial_state(gene_names: list, clustering_names: list) -> dict:
         "co_fig": None,
         "plot_format": "svg",
         "plot_font_size": 10,
+        # Global CPU-core budget for parallel analyses (currently CopyKAT's
+        # parallelDist). Default to half the machine's cores, leaving headroom.
+        "n_cores": max(1, (os.cpu_count() or 2) // 2),
         "record_code": True,
         "code_journal": [],
         "code_journal_tags": set(),
-        "code_file": f"code_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py",
+        "prov_graph": ProvGraph(),
+        "_legacy_counter": 0,
+        # Stable filename so the recorded code accumulates into one file across
+        # sessions (was a per-launch code_<timestamp>.py). The .ipynb sidecar is
+        # written by the notebook export.
+        "code_file": "analysis.py",
         "custom_clusterings": {},
     }
 
@@ -975,9 +991,9 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         ctx.state['rank_genes_adata_norm'] = rg_adata_norm
         ctx.state['rank_genes_groupby'] = rg_groupby
 
-    cnv_result = load_cnv_results_from_adata(adata, data["sdata"])
-    if cnv_result is not None and ctx.state.get('cnv_result') is None:
-        ctx.state['cnv_result'] = cnv_result
+    cnv_results = load_cnv_results_from_adata(adata, data["sdata"])
+    if cnv_results is not None and not ctx.state.get('cnv_results'):
+        ctx.state['cnv_results'] = cnv_results
 
     # Load ROIs from sdata.shapes['rois'] (new format); zarr arrays in
     # load_session() serve as fallback for datasets not yet saved with new code.
@@ -1038,6 +1054,30 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
                 merged = dict(session.get('cluster_labels') or {})
                 merged.update(sdata_cluster_labels)  # sdata wins on conflict
                 session['cluster_labels'] = merged
+            # Restore the reproducible-code provenance graph so the analysis
+            # notebook accumulates across sessions (re-derive the flat journal
+            # and rewrite analysis.py from the restored graph).
+            if session.get("prov_graph"):
+                from xenium_viewer.utils.prov_graph import ProvGraph, graph_to_cells
+                _g = ProvGraph.from_list(session["prov_graph"])
+                ctx.state["prov_graph"] = _g
+                # Re-emit the preamble for THIS launch's data_path (upsert; a
+                # no-op when the path is unchanged).
+                if ctx.state.get("record_code"):
+                    ctx.record_preamble()
+                ctx.state["code_journal"] = [
+                    c.source for c in graph_to_cells(_g) if c.cell_type == "code"
+                ]
+                try:
+                    _cp = ctx.data_path / ctx.state.get("code_file", "analysis.py")
+                    with open(_cp, "w") as _f:
+                        _f.write("\n".join(ctx.state["code_journal"]) + "\n")
+                except OSError:
+                    pass
+                _sync = ctx.state.get("_notebook_sync_fn")
+                if _sync:
+                    _sync()
+                print(f"Restored code provenance graph: {len(_g)} node(s)")
             print("Restoring session from zarr cache...")
             restore_fn(session)
             print("Session restored.")
@@ -1145,6 +1185,55 @@ def run_viewer(data_path=None, no_cache: bool = False):
 
     ctx = None  # set after first dataset load
 
+    # ── Detached CopyKAT background jobs: close/switch guard helpers ──────────
+    def _running_bg_jobs():
+        """Jobs whose done-file hasn't appeared yet (still running / detached)."""
+        if ctx is None:
+            return []
+        jobs = ctx.state.get("_cnv_bg_jobs", []) if isinstance(ctx.state, dict) else []
+        out = []
+        for j in jobs:
+            try:
+                if not j["done_file"].exists():
+                    out.append(j)
+            except Exception:
+                pass
+        return out
+
+    def _ask_close_bg(jobs):
+        """Return 'stop' | 'continue' | 'cancel' for running CopyKAT jobs."""
+        from qtpy.QtWidgets import QMessageBox
+        box = QMessageBox(viewer.window._qt_window)
+        box.setWindowTitle("CopyKAT analysis running")
+        box.setText(
+            f"{len(jobs)} CopyKAT background analysis(es) are still running.\n\n"
+            "Stop them now, or let them continue in the background after the app closes "
+            "(results will be picked up next time you open this dataset)?"
+        )
+        stop_btn = box.addButton("Stop analysis", QMessageBox.DestructiveRole)
+        cont_btn = box.addButton("Continue in background", QMessageBox.AcceptRole)
+        cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setDefaultButton(cont_btn)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is stop_btn:
+            return "stop"
+        if clicked is cancel_btn:
+            return "cancel"
+        return "continue"
+
+    def _kill_bg_jobs(jobs):
+        import os as _os
+        import signal as _signal
+        for j in jobs:
+            try:
+                _os.killpg(j["pgid"], _signal.SIGTERM)
+            except Exception:
+                try:
+                    j["proc"].terminate()
+                except Exception:
+                    pass
+
     # ── Open Dataset callback ────────────────────────────────────────────────
     def _on_open_dataset():
         nonlocal ctx
@@ -1152,6 +1241,14 @@ def run_viewer(data_path=None, no_cache: bool = False):
 
         if _app["reload_in_progress"]:
             return
+
+        running = _running_bg_jobs()
+        if running:
+            choice = _ask_close_bg(running)
+            if choice == "cancel":
+                return
+            if choice == "stop":
+                _kill_bg_jobs(running)
         _app["reload_in_progress"] = True
 
         try:
@@ -1186,6 +1283,13 @@ def run_viewer(data_path=None, no_cache: bool = False):
                     ctx.state["segmentation_source"] = ctx.segmentation_source
                     from xenium_viewer.utils.session import save_session
                     save_session(zarr_path_old, ctx.state, ctx.he_state, _app["snapshot"])
+                    try:
+                        from xenium_viewer.utils.notebook_export import write_graph_notebook
+                        _g = ctx.state.get("prov_graph")
+                        if _g is not None and len(_g):
+                            write_graph_notebook(_g, ctx.data_path / "analysis_notebook.ipynb")
+                    except Exception:
+                        pass
                     print("Session saved for previous dataset.")
 
                 # 3. Close UMAP second window if open
@@ -1355,6 +1459,28 @@ def run_viewer(data_path=None, no_cache: bool = False):
     create_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset)
     create_view_menu(viewer, _app)
 
+    # ── Warn on close if a detached CopyKAT job is still running ─────────────
+    # aboutToQuit fires too late to veto, so filter the window's Close event.
+    from qtpy.QtCore import QObject as _QObject, QEvent as _QEvent
+
+    class _CloseGuard(_QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == _QEvent.Close:
+                running = _running_bg_jobs()
+                if running:
+                    choice = _ask_close_bg(running)
+                    if choice == "cancel":
+                        event.ignore()
+                        return True  # veto the close
+                    if choice == "stop":
+                        _kill_bg_jobs(running)
+                    # 'continue' leaves the detached process running
+            return False
+
+    _close_guard = _CloseGuard(viewer.window._qt_window)
+    viewer.window._qt_window.installEventFilter(_close_guard)
+    _app["_close_guard"] = _close_guard  # keep a reference alive
+
     # ── Snapshot layer data before Qt teardown, then save on exit ────────────
     if not no_cache:
         def _on_viewer_closing(_event=None):
@@ -1385,6 +1511,13 @@ def run_viewer(data_path=None, no_cache: bool = False):
             ctx.state["segmentation_source"] = ctx.segmentation_source
             from xenium_viewer.utils.session import save_session
             save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
+            try:
+                from xenium_viewer.utils.notebook_export import write_graph_notebook
+                _g = ctx.state.get("prov_graph")
+                if _g is not None and len(_g):
+                    write_graph_notebook(_g, ctx.data_path / "analysis_notebook.ipynb")
+            except Exception:
+                pass
             print("Session saved to zarr cache.")
 
 

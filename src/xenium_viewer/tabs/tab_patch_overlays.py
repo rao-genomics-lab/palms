@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from xenium_viewer.utils.prov_graph import TERMINAL
+
 from qtpy.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -418,10 +420,14 @@ def build_tab(ctx: "ViewerContext"):
             ctx, entry["element_name"], data.coords_xy, patch_size,
             data.cluster_columns, data.confidence,
         )
-        ctx.record_code(
-            f"\n# Load patch overlay ({data.source_kind})\n"
+        ctx.record_node(
+            "viewer:patch_overlay",
+            f"\n# Load patch overlay ({data.source_kind}) — viewer overlay\n"
             f"# source: {data.source_path}\n"
-            f"# patch_size: {patch_size} px, N={len(data.coords_xy)}"
+            f"# patch_size: {patch_size} px, N={len(data.coords_xy)}",
+            deps=["preamble"],
+            kind=TERMINAL,
+            label="Patch overlay",
         )
         ctx.set_status(
             f"Loaded {len(data.coords_xy)} patches from {Path(data.source_path).name}"

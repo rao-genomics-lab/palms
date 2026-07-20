@@ -1,10 +1,18 @@
-"""Tab: Notebook — Jupyter-style code cells with inline output."""
+"""Tab: Notebook — Jupyter-style code cells derived from the provenance graph.
+
+Cells are *derived* from ``state["prov_graph"]``: one cell per node, in
+topological order, with a staleness badge when an upstream input changed. The
+graph is the source of truth, so re-running a step revises its cell in place and
+the whole notebook stays dependency-ordered — including across sessions. Users
+can still add/edit/run free-form cells; "Export .ipynb" writes a standalone,
+replayable notebook (graph cells + any user cells).
+"""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit, QLabel,
-    QPushButton, QFrame, QScrollArea,
+    QPushButton, QFrame, QScrollArea, QFileDialog,
 )
 from qtpy.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 from qtpy.QtCore import Qt
@@ -59,12 +67,20 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
 # ── Cell widget ──────────────────────────────────────────────────────────────
 
 class NotebookCell(QFrame):
-    """A single notebook cell with code editor and output area."""
+    """A single notebook cell with code editor and output area.
 
-    def __init__(self, cell_number, code="", on_run=None, on_delete=None, parent=None):
+    ``node_id`` links the cell to a provenance-graph node (None for free-form
+    user cells). Graph cells are refreshed from the graph unless the user has
+    edited them.
+    """
+
+    def __init__(self, cell_number, code="", on_run=None, on_delete=None,
+                 node_id=None, node_label=None, stale=False, parent=None):
         super().__init__(parent)
         self.cell_number = cell_number
-        self.from_journal = False
+        self.node_id = node_id
+        self.edited_by_user = False
+        self._loading = True
         self.setFrameShape(QFrame.StyledPanel)
         self.setLineWidth(1)
 
@@ -73,11 +89,15 @@ class NotebookCell(QFrame):
 
         # Header row
         header = QHBoxLayout()
-        self.label = QLabel(f"In [{cell_number}]:")
+        self.label = QLabel()
         font = QFont("monospace")
         font.setBold(True)
         self.label.setFont(font)
         header.addWidget(self.label)
+        self.stale_label = QLabel("⚠ stale — input changed; re-run in the viewer")
+        self.stale_label.setStyleSheet("color: #CC6600;")
+        self.stale_label.setVisible(False)
+        header.addWidget(self.stale_label)
         header.addStretch()
 
         self.run_btn = QPushButton("Run")
@@ -96,7 +116,7 @@ class NotebookCell(QFrame):
         self.code_edit.setMinimumHeight(60)
         self.code_edit.setMaximumHeight(300)
         self._auto_resize()
-        self.code_edit.textChanged.connect(self._auto_resize)
+        self.code_edit.textChanged.connect(self._on_text_changed)
         layout.addWidget(self.code_edit)
 
         # Syntax highlighter
@@ -118,6 +138,14 @@ class NotebookCell(QFrame):
         if on_delete:
             self.delete_btn.clicked.connect(lambda: on_delete(self))
 
+        self._loading = False
+        self.set_meta(node_label, stale)
+
+    def _on_text_changed(self):
+        self._auto_resize()
+        if not self._loading:
+            self.edited_by_user = True
+
     def _auto_resize(self):
         doc_height = self.code_edit.document().size().toSize().height() + 10
         self.code_edit.setFixedHeight(max(60, min(300, doc_height)))
@@ -126,7 +154,18 @@ class NotebookCell(QFrame):
         return self.code_edit.toPlainText()
 
     def set_code(self, code):
+        self._loading = True
         self.code_edit.setPlainText(code)
+        self._loading = False
+
+    def set_meta(self, node_label, stale):
+        """Update the header label + staleness badge (graph cells)."""
+        self.stale = bool(stale)
+        if self.node_id is not None:
+            self.label.setText(node_label or self.node_id)
+        else:
+            self.label.setText(f"In [{self.cell_number}]:")
+        self.stale_label.setVisible(self.stale)
 
     def clear_output(self):
         while self.output_layout.count():
@@ -196,7 +235,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     _engine = [None]  # mutable container for lazy init
     cells = []
     cell_counter = [0]
-    journal_cell_count = [0]
 
     # ── Layout ────────────────────────────────────────────────────────────
     outer = QWidget()
@@ -205,11 +243,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # Toolbar
     toolbar = QHBoxLayout()
-    sync_btn = QPushButton("Sync Journal")
+    sync_btn = QPushButton("Sync Graph")
     add_btn = QPushButton("+ Cell")
     run_all_btn = QPushButton("Run All")
     clear_btn = QPushButton("Clear Outputs")
-    for btn in [sync_btn, add_btn, run_all_btn, clear_btn]:
+    dag_btn = QPushButton("Show DAG")
+    export_btn = QPushButton("Export .ipynb")
+    for btn in [sync_btn, add_btn, run_all_btn, clear_btn, dag_btn, export_btn]:
         toolbar.addWidget(btn)
     outer_layout.addLayout(toolbar)
 
@@ -245,26 +285,63 @@ def build_tab(ctx: ViewerContext) -> tuple:
         cell_layout.removeWidget(cell)
         cell.deleteLater()
 
-    def _add_cell(code="", from_journal=False):
+    def _add_cell(code="", node_id=None, node_label=None, stale=False):
         cell_counter[0] += 1
         cell = NotebookCell(
             cell_counter[0], code,
             on_run=_on_run_cell,
             on_delete=_on_delete_cell,
+            node_id=node_id, node_label=node_label, stale=stale,
         )
-        cell.from_journal = from_journal
         cells.append(cell)
-        # Insert before the stretch
+        # Insert before the trailing stretch
         cell_layout.insertWidget(cell_layout.count() - 1, cell)
         return cell
 
-    def _sync_journal():
-        journal = state.get("code_journal", [])
-        new_count = len(journal)
-        old_count = journal_cell_count[0]
-        for i in range(old_count, new_count):
-            _add_cell(code=journal[i], from_journal=True)
-        journal_cell_count[0] = new_count
+    def _reorder(order):
+        """Graph cells in topological order first, then free-form user cells."""
+        pos = {nid: i for i, nid in enumerate(order)}
+        graph_cells = sorted(
+            (c for c in cells if c.node_id is not None),
+            key=lambda c: pos.get(c.node_id, 1 << 30),
+        )
+        user_cells = [c for c in cells if c.node_id is None]
+        ordered = graph_cells + user_cells
+        for c in ordered:
+            cell_layout.removeWidget(c)
+        for c in ordered:
+            cell_layout.insertWidget(cell_layout.count() - 1, c)
+        cells[:] = ordered
+
+    def _sync_from_graph():
+        """Render/refresh cells from the provenance graph (source of truth)."""
+        graph = state.get("prov_graph")
+        if graph is None:
+            return
+        try:
+            order = graph.topo_sort()
+        except Exception:
+            return
+        existing = {c.node_id: c for c in cells if c.node_id is not None}
+        seen = set()
+        for nid in order:
+            node = graph.get(nid)
+            if node is None:
+                continue
+            cell = existing.get(nid)
+            if cell is not None:
+                if not cell.edited_by_user and cell.get_code() != node.code:
+                    cell.set_code(node.code)
+                cell.set_meta(node.label, node.stale)
+            else:
+                _add_cell(code=node.code, node_id=nid,
+                          node_label=node.label, stale=node.stale)
+            seen.add(nid)
+        # Drop cells whose node was removed from the graph
+        for c in list(cells):
+            if c.node_id is not None and c.node_id not in seen:
+                _on_delete_cell(c)
+        _reorder(order)
 
     def _run_all():
         engine = _get_engine()
@@ -276,17 +353,76 @@ def build_tab(ctx: ViewerContext) -> tuple:
         for cell in cells:
             cell.clear_output()
 
+    def _reconcile_edits():
+        """Fold user edits of graph cells back into the graph before export."""
+        graph = state.get("prov_graph")
+        if graph is None:
+            return
+        for c in cells:
+            if c.node_id is not None and c.edited_by_user:
+                node = graph.get(c.node_id)
+                if node is not None:
+                    node.code = c.get_code()
+                    c.edited_by_user = False
+
+    def _export_cells():
+        """(cell_type, source) list for export: graph cells + user cells."""
+        from xenium_viewer.utils import notebook_export
+        _reconcile_edits()
+        graph = state.get("prov_graph")
+        out = notebook_export.graph_to_cells(graph) if graph is not None else []
+        for c in cells:
+            if c.node_id is None and c is not welcome_cell:
+                src = c.get_code().strip()
+                if src:
+                    out.append(("code", src))
+        return out
+
+    def _on_show_dag():
+        import os
+        import matplotlib.pyplot as plt
+        from xenium_viewer.utils.dag_view import render_dag
+        graph = state.get("prov_graph")
+        if graph is None or len(graph) == 0:
+            ctx.set_status("Provenance graph is empty — record some steps first")
+            return
+        plots_dir = os.path.join(str(ctx.data_path), "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        out = os.path.join(plots_dir, "provenance_dag.png")
+        try:
+            render_dag(graph, out)
+            plt.show(block=False)
+            ctx.set_status(f"Provenance DAG ({len(graph)} nodes) — saved to {out}")
+        except Exception as e:
+            ctx.set_status(f"DAG render failed: {e}")
+
+    def _on_export_ipynb():
+        from xenium_viewer.utils import notebook_export
+        default = str(ctx.data_path / "analysis_notebook.ipynb")
+        path, _ = QFileDialog.getSaveFileName(
+            None, "Export Notebook", default, "Jupyter Notebook (*.ipynb)",
+        )
+        if not path:
+            return
+        try:
+            notebook_export.write_notebook(_export_cells(), path)
+            ctx.set_status(f"Notebook exported to {path}")
+        except Exception as e:
+            ctx.set_status(f"Notebook export failed: {e}")
+
     # ── Connect buttons ──────────────────────────────────────────────────
-    sync_btn.clicked.connect(_sync_journal)
+    sync_btn.clicked.connect(_sync_from_graph)
     add_btn.clicked.connect(lambda: _add_cell())
     run_all_btn.clicked.connect(_run_all)
     clear_btn.clicked.connect(_clear_all_outputs)
+    dag_btn.clicked.connect(_on_show_dag)
+    export_btn.clicked.connect(_on_export_ipynb)
 
-    # ── Register auto-sync callback ──────────────────────────────────────
-    state["_notebook_sync_fn"] = _sync_journal
+    # ── Register auto-sync callback (called by record_node) ──────────────
+    state["_notebook_sync_fn"] = _sync_from_graph
 
     # ── Welcome cell ─────────────────────────────────────────────────────
-    _add_cell(
+    welcome_cell = _add_cell(
         code=(
             "# Available objects in this session\n"
             "print('Available variables:')\n"
@@ -301,7 +437,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ),
     )
 
-    # ── Initial sync ─────────────────────────────────────────────────────
-    _sync_journal()
+    # ── Initial render from the graph ────────────────────────────────────
+    _sync_from_graph()
 
-    return outer, {}
+    return outer, {
+        "restore_session": lambda session: _sync_from_graph(),
+        "get_export_cells": _export_cells,
+    }

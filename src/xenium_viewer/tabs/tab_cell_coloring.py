@@ -10,6 +10,7 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -144,10 +145,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["label_to_cluster"] = None
         state["active_clustering_name"] = None
         status_label.value = f"Cells colored by gene: {gene}{filter_desc}"
-        ctx.record_code(
-            f"\n# Color cells by gene expression\n"
-            f"# gene={gene}, colormap={state['current_colormap']}"
-            + (f", filter={filter_desc}" if filter_desc else "")
+        ctx.record_node(
+            "plot:spatial_gene",
+            f"\n# Spatial plot colored by gene expression"
+            + (f"  (viewer filter: {filter_desc})" if filter_desc else "") + "\n"
+            f"sc.pl.embedding(adata, basis=\"spatial\", color=\"{gene}\", "
+            f"cmap=\"{state['current_colormap']}\")",
+            deps=["preamble"],
+            kind=TERMINAL,
+            label=f"Spatial plot: {gene}",
         )
         apply_color_button.enabled = True
 
@@ -170,10 +176,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
         )
         filter_desc = f" (clusters: {sorted(selected_ids)})" if selected_ids is not None else ""
         status_label.value = f"Cells colored by cluster: {clustering_key}{filter_desc}"
-        ctx.record_code(
-            f"\n# Color cells by cluster\n"
-            f"# clustering={clustering_key}"
-            + (f", filter=clusters {sorted(selected_ids)}" if selected_ids else "")
+        ctx.record_clustering(clustering_key)
+        ctx.record_node(
+            "plot:spatial_cluster",
+            f"\n# Spatial plot colored by cluster"
+            + (f"  (viewer filter: clusters {sorted(selected_ids)})" if selected_ids else "")
+            + "\n"
+            f"sc.pl.embedding(adata, basis=\"spatial\", color=\"{clustering_key}\")",
+            deps=[f"clustering:{clustering_key}"],
+            kind=TERMINAL,
+            label=f"Spatial plot: {clustering_key}",
         )
         apply_color_button.enabled = True
 
@@ -237,9 +249,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     def on_bg_change(value):
         ctx.viewer.window._qt_viewer.canvas.bgcolor = (1, 1, 1, 1) if value else (0, 0, 0, 1)
-        ctx.record_code(
-            f"\n# Background color\n"
-            f"# background={'white' if value else 'black'}"
+        ctx.record_node(
+            "viewer:background",
+            f"\n# Viewer background set to {'white' if value else 'black'} (display only)",
+            deps=["preamble"],
+            kind=TERMINAL,
+            label="Viewer background",
         )
 
     def _on_filter_small_clusters():
@@ -266,9 +281,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         status_label.value = (
             f"Size filter: {n_excluded} cluster(s) with < {threshold} cells excluded"
         )
-        ctx.record_code(
-            f"\n# Filter clusters by size\n"
-            f"# min_cells={threshold}, {n_excluded} cluster(s) excluded"
+        ctx.record_node(
+            "viewer:size_filter",
+            f"\n# Cluster size filter (viewer): min_cells={threshold}, "
+            f"{n_excluded} cluster(s) excluded from the display",
+            deps=["preamble"],
+            kind=TERMINAL,
+            label="Cluster size filter",
         )
 
     def _on_edit_labels():

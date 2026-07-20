@@ -8,6 +8,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 from qtpy.QtWidgets import QWidget, QVBoxLayout
 
+from xenium_viewer.utils.prov_graph import (
+    ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
+)
+
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
@@ -235,18 +239,17 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.set_status = _set_status
 
-    # ── record_code ──────────────────────────────────────────────────────
-    def _record_code(code: str, tag: str = None):
-        if not state.get("record_code"):
-            return
-        if tag:
-            if tag in state["code_journal_tags"]:
-                return
-            state["code_journal_tags"].add(tag)
-        state["code_journal"].append(code)
-        sync_fn = state.get("_notebook_sync_fn")
-        if sync_fn:
-            sync_fn()
+    # ── code recording (provenance DAG) ──────────────────────────────────
+    # The graph in state["prov_graph"] is the source of truth. record_node
+    # upserts a step keyed by a stable artifact id; re-recording revises it in
+    # place and flags dependents stale. The flat state["code_journal"] and the
+    # on-disk .py file are kept as a derived, append-style view so the existing
+    # Notebook tab and Save-code action keep working during the tab-by-tab
+    # migration (task 5 switches those consumers to the derived, topo-ordered
+    # graph output; task 4 makes the file persistent across sessions).
+    state.setdefault("prov_graph", ProvGraph())
+
+    def _write_code_file():
         code_path = ctx.data_path / state.get("code_file", "code.py")
         try:
             with open(code_path, 'w') as f:
@@ -255,22 +258,81 @@ def create_shared_helpers(ctx: ViewerContext):
             from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog
             _maybe_show_permission_dialog(e, "code journal")
 
+    def _emit_flat(code: str):
+        """Append to the derived flat journal + file + Notebook tab."""
+        state["code_journal"].append(code)
+        sync_fn = state.get("_notebook_sync_fn")
+        if sync_fn:
+            sync_fn()
+        _write_code_file()
+
+    def _record_node(node_id: str, code: str, deps=(), kind: str = ARTIFACT,
+                     label: str = None, params: dict = None):
+        """Record one analysis step as a node in the provenance graph.
+
+        ``node_id`` is the stable identity of the artifact produced (the upsert
+        key); all parameters belong in ``code``/``params``, never in the id, so
+        re-running the same artifact revises its node rather than duplicating.
+        Dependencies must already be recorded — a missing dep is surfaced here,
+        at record time, instead of as a NameError at replay.
+        """
+        if not state.get("record_code"):
+            return
+        graph = state.setdefault("prov_graph", ProvGraph())
+        prev = graph.get(node_id)
+        prev_code = prev.code if prev is not None else None
+        try:
+            graph.upsert(node_id, code, deps=deps, kind=kind,
+                         label=label, params=params)
+        except (KeyError, CycleError) as e:
+            # Never let a recorder bug abort the user's analysis action; degrade
+            # to appending the snippet so the code isn't silently lost.
+            import warnings
+            warnings.warn(f"record_node({node_id!r}): {e}")
+            _emit_flat(code)
+            return
+        if prev_code != code:  # new node, or revised → show the (new) code
+            _emit_flat(code)
+
+    ctx.record_node = _record_node
+
+    # ── record_code (backward-compat shim) ───────────────────────────────
+    def _record_code(code: str, tag: str = None):
+        """Legacy string-append recorder, mapped onto the provenance graph.
+
+        A ``tag`` becomes the node id (so the old tag-dedup becomes upsert);
+        untagged calls get a fresh opaque id so they still append. Superseded by
+        :func:`record_node` — call sites are migrated to declare real deps.
+        """
+        if not state.get("record_code"):
+            return
+        if tag:
+            node_id = tag
+        else:
+            state["_legacy_counter"] = state.get("_legacy_counter", 0) + 1
+            node_id = f"_legacy:{state['_legacy_counter']}"
+        _record_node(node_id, code, deps=(), kind=ARTIFACT)
+
     ctx.record_code = _record_code
 
     # ── record_preamble ──────────────────────────────────────────────────
     def _record_preamble():
-        _record_code(
+        _record_node(
+            "preamble",
             "import scanpy as sc\n"
             "import squidpy as sq\n"
             "import matplotlib.pyplot as plt\n"
             "import pandas as pd\n"
             "import numpy as np\n"
+            "from pathlib import Path\n"
             f"\nplt.rcParams['font.size'] = {state.get('plot_font_size', 10)}\n"
             f"\n# Load data\n"
             "from spatialdata_io import xenium\n"
-            f"sdata = xenium(\"{ctx.data_path}\")\n"
+            f"data_path = Path(r\"{ctx.data_path}\")\n"
+            "sdata = xenium(data_path)\n"
             "adata = sdata[\"table\"].copy()",
-            tag="preamble"
+            kind=SETUP,
+            label="Setup & data loading",
         )
 
     ctx.record_preamble = _record_preamble
@@ -278,41 +340,58 @@ def create_shared_helpers(ctx: ViewerContext):
     # ── record_normalize ─────────────────────────────────────────────────
     def _record_normalize():
         _record_preamble()
-        _record_code(
+        _record_node(
+            "normalize",
             "\n# Normalize, log-transform, PCA\n"
             "sc.pp.normalize_total(adata)\n"
             "sc.pp.log1p(adata)\n"
             "sc.pp.pca(adata)",
-            tag="normalize"
+            deps=["preamble"],
+            kind=SETUP,
+            label="Normalize, log-transform, PCA",
         )
 
     ctx.record_normalize = _record_normalize
 
     # ── record_clustering ────────────────────────────────────────────────
     def _record_clustering(key):
+        # If the true producer already recorded this clustering column (the
+        # Leiden tab, a file import, or a prior session), leave it alone — don't
+        # overwrite real code with a CSV loader (and don't flag dependents stale).
+        graph = state.get("prov_graph")
+        if graph is not None and f"clustering:{key}" in graph:
+            return
         _record_normalize()
         dir_name = f"gene_expression_{key}"
         csv_path = os.path.join(ctx.data_path, "analysis", "clustering", dir_name, "clusters.csv")
         if not os.path.exists(csv_path):
             csv_path = os.path.join(ctx.data_path, "analysis", "clustering", key, "clusters.csv")
-        _record_code(
+        _record_node(
+            f"clustering:{key}",
             f"\n# Add clustering: {key}\n"
-            f"clust_df = pd.read_csv(\"{csv_path}\", index_col=0)\n"
+            f"clust_df = pd.read_csv(r\"{csv_path}\", index_col=0)\n"
             f"adata.obs[\"{key}\"] = pd.Categorical("
             f"clust_df.reindex(adata.obs_names).iloc[:, 0].astype(str).values)",
-            tag=f"clustering_{key}"
+            deps=["normalize"],
+            kind=ARTIFACT,
+            label=f"Clustering: {key}",
         )
 
     ctx.record_clustering = _record_clustering
 
     # ── record_spatial_neighbors ─────────────────────────────────────────
     def _record_spatial_neighbors(n_neighs):
-        _record_code(
+        _record_preamble()
+        _record_node(
+            "spatial_neighbors",
             f"\n# Compute spatial neighbors (k={n_neighs})\n"
             "adata.obsm['spatial'] = adata.obsm.get('spatial', "
             "np.column_stack([adata.obs['x_centroid'], adata.obs['y_centroid']]))\n"
             f"sq.gr.spatial_neighbors(adata, n_neighs={n_neighs}, coord_type=\"generic\")",
-            tag=f"spatial_neighbors_{n_neighs}"
+            deps=["preamble"],
+            kind=ARTIFACT,
+            params={"n_neighs": n_neighs},
+            label="Spatial neighbors",
         )
 
     ctx.record_spatial_neighbors = _record_spatial_neighbors
@@ -472,11 +551,17 @@ def create_shared_helpers(ctx: ViewerContext):
             state["cluster_labels"][clustering_key] = new_labels
             from xenium_viewer.utils.adata_persistence import save_cluster_labels_to_sdata
             save_cluster_labels_to_sdata(ctx, clustering_key, new_labels)
-            safe_key = clustering_key.replace(" ", "_").replace("-", "_")
-            ctx.record_code(
-                f"\n# Cluster label mapping for '{clustering_key}'\n"
-                f"cluster_labels_{safe_key} = {repr(new_labels)}\n"
-                f"# Pass as cluster_labels=cluster_labels_{safe_key} in plotting calls"
+            _record_clustering(clustering_key)
+            _lbl_map = {str(k): v for k, v in new_labels.items()}
+            _record_node(
+                f"annotation:{clustering_key}",
+                f"\n# Manual cluster labels for '{clustering_key}'\n"
+                f"annotation_map = {_lbl_map!r}\n"
+                f"adata.obs[\"{clustering_key}_annotated\"] = ("
+                f"adata.obs[\"{clustering_key}\"].astype(str).map(annotation_map)"
+                f".astype(\"category\"))",
+                deps=[f"clustering:{clustering_key}"],
+                label=f"Cluster labels: {clustering_key}",
             )
             return True
         return False
@@ -661,6 +746,31 @@ def create_preferences_menu(ctx: ViewerContext):
         state["plot_font_size"] = int(action.text())
     fontsize_group.triggered.connect(_on_fontsize_changed)
 
+    # CPU cores — global budget for parallel analyses (currently CopyKAT).
+    n_cpu = os.cpu_count() or 2
+    current_cores = int(state.get("n_cores", max(1, n_cpu // 2)))
+    # A small, machine-scaled set of choices: powers of two up to the core count,
+    # plus explicit "half" and "all" (as labelled aliases), deduped and sorted.
+    core_choices = sorted({c for c in (1, 2, 4, 8, 16, 32, 64) if c <= n_cpu}
+                          | {max(1, n_cpu // 2), n_cpu})
+    cores_menu = prefs_menu.addMenu("CPU cores")
+    cores_group = QActionGroup(cores_menu)
+    cores_group.setExclusive(True)
+    for c in core_choices:
+        if c == n_cpu:
+            label = f"{c} (all)"
+        elif c == max(1, n_cpu // 2):
+            label = f"{c} (half)"
+        else:
+            label = str(c)
+        act = QAction(label, cores_group, checkable=True, checked=(c == current_cores))
+        act.setData(c)
+        cores_menu.addAction(act)
+
+    def _on_cores_changed(action):
+        state["n_cores"] = int(action.data())
+    cores_group.triggered.connect(_on_cores_changed)
+
     # Record code checkbox
     record_action = QAction("Record reproducible code", prefs_menu, checkable=True, checked=True)
     prefs_menu.addAction(record_action)
@@ -670,6 +780,10 @@ def create_preferences_menu(ctx: ViewerContext):
         if checked:
             state["code_journal"].clear()
             state["code_journal_tags"].clear()
+            state["prov_graph"] = ProvGraph()
+            state["_legacy_counter"] = 0
+            # Re-seed the preamble so a freshly-restarted recording is valid.
+            ctx.record_preamble()
     record_action.toggled.connect(_on_record_toggled)
 
     # Save code action

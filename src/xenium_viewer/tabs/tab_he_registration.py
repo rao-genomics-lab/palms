@@ -10,6 +10,7 @@ from magicgui.widgets import CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -93,9 +94,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if he_flip_h.value: flips.append("H")
         if flips:
             he_status_label.value = f"Flip applied: {'+'.join(flips)}"
-        ctx.record_code(
-            f"\n# H&E image flip\n"
-            f"# flip_vertical={he_flip_v.value}, flip_horizontal={he_flip_h.value}"
+        ctx.record_node(
+            "he:flip",
+            f"\n# H&E image flip (registration): "
+            f"flip_vertical={he_flip_v.value}, flip_horizontal={he_flip_h.value}",
+            deps=["preamble"], kind=TERMINAL, label="H&E flip",
         )
 
     he_flip_v.changed.connect(on_flip_changed)
@@ -221,10 +224,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         coarse_align_button.enabled = morph_thumb is not None
         shape_str = "x".join(str(s) for s in pyramid[0].shape)
         he_status_label.value = f"H&E loaded: {Path(path).name} ({shape_str}, {len(pyramid)} levels)"
-        ctx.record_code(
+        ctx.record_node(
+            "he:load",
             f"\n# Load H&E image\n"
             f"from xenium_viewer.utils.registration import load_he_pyramid\n"
-            f"he_pyramid, he_tif = load_he_pyramid(\"{path}\")"
+            f"he_pyramid, he_tif = load_he_pyramid(\"{path}\")",
+            deps=["preamble"], kind=TERMINAL, label="Load H&E image",
         )
 
     def on_load_he():
@@ -259,7 +264,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         coarse_align_button.enabled = True
         scale = np.sqrt(coarse_affine[0, 0]**2 + coarse_affine[0, 1]**2)
         reg_status_label.value = f"Coarse aligned (scale={scale:.4f}). Place landmarks to refine."
-        ctx.record_code(f"\n# Coarse H&E alignment (tissue outlines)\n# scale={scale:.4f}")
+        ctx.record_node(
+            "he:coarse_align",
+            f"\n# Coarse H&E alignment to tissue outlines (registration; scale={scale:.4f})",
+            deps=["preamble"], kind=TERMINAL, label="H&E coarse align",
+        )
         reg_residuals_qt.setPlainText(
             f"Coarse tissue-outline alignment applied.\n"
             f"Scale: {scale:.4f}\n"
@@ -350,12 +359,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         lines.append(f"\nScale factor: {scale:.4f}")
         reg_residuals_qt.setPlainText("\n".join(lines))
         reg_status_label.value = f"Registered ({n} landmarks, mean residual {residuals.mean():.1f} px)"
-        ctx.record_code(
+        ctx.record_node(
+            "he:landmark_register",
             f"\n# H&E landmark registration\n"
             f"from xenium_viewer.utils.registration import compute_landmark_affine\n"
             f"he_xen_pts = np.array({xen_pts.tolist()})\n"
             f"he_he_pts = np.array({he_pts.tolist()})\n"
-            f"he_affine, he_residuals = compute_landmark_affine(he_xen_pts, he_he_pts)"
+            f"he_affine, he_residuals = compute_landmark_affine(he_xen_pts, he_he_pts)",
+            deps=["preamble"], kind=TERMINAL, label="H&E landmark registration",
         )
         _save_he_affine_to_sdata()
         from xenium_viewer.utils.adata_persistence import save_landmarks_to_sdata
@@ -376,7 +387,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             affine=he_state["affine_3x3"], he_filename=he_state["he_filename"],
         )
         reg_status_label.value = f"Landmarks saved to {Path(path).name}"
-        ctx.record_code(f"\n# Save landmarks\n# landmarks -> \"{path}\"")
+        ctx.record_node(
+            "he:save_landmarks",
+            f"\n# Save H&E landmarks to {Path(path).name}",
+            deps=["preamble"], kind=TERMINAL, label="Save H&E landmarks",
+        )
 
     def on_load_landmarks():
         default_dir = str(data_path) if data_path else ""
@@ -399,10 +414,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
             he_state["he_filename"] = data["he_filename"]
         n = min(len(data["xenium_landmarks_yx"]), len(data["he_landmarks_yx"]))
         reg_status_label.value = f"Loaded {n} landmarks from {Path(path).name}"
-        ctx.record_code(
-            f"\n# Load landmarks from file\n"
+        ctx.record_node(
+            "he:load_landmarks",
+            f"\n# Load H&E landmarks from file\n"
             f"from xenium_viewer.utils.registration import load_landmarks\n"
-            f"landmarks = load_landmarks(\"{path}\")"
+            f"landmarks = load_landmarks(\"{path}\")",
+            deps=["preamble"], kind=TERMINAL, label="Load H&E landmarks",
         )
 
     # Wire events

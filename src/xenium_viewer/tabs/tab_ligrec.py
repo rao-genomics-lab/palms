@@ -3,12 +3,15 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import os
+
 from magicgui.widgets import ComboBox, PushButton, Slider
 from qtpy.QtWidgets import (
     QTextEdit, QHBoxLayout, QWidget, QFileDialog, QCheckBox, QGridLayout, QGroupBox,
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -168,9 +171,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _lr_np = _lr_p.get("n_perms", 1000)
         _lr_nn = _lr_p.get("n_neighs", 6)
         ctx.record_clustering(_lr_ck)
-        ctx.record_spatial_neighbors(_lr_nn)
         _lr_idesc = _lr_p.get("interactions_desc", "")
-        ctx.record_code(
+        ctx.record_node(
+            f"ligrec:{_lr_ck}",
             f"\n# Ligand-receptor analysis (n_perms={_lr_np})\n"
             f"# interactions: {_lr_idesc}\n"
             f"sq.gr.ligrec(\n"
@@ -178,7 +181,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"    threshold=0.01, seed=42,\n"
             f"    transmitter_params={{\"categories\": \"ligand\"}},\n"
             f"    receiver_params={{\"categories\": \"receptor\"}},\n"
-            f")"
+            f")",
+            deps=[f"clustering:{_lr_ck}"],
+            label=f"Ligand-receptor: {_lr_ck}",
         )
 
     def on_show_lr_plot():
@@ -207,13 +212,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
             _lr_ck = state.get("_lr_params", {}).get("clustering_key", "")
             _lr_fmt = ctx.state.get("plot_format", "svg")
-            ctx.record_code(
+            ctx.record_node(
+                f"plot:ligrec:{_lr_ck}",
                 f"\n# L-R dotplot (pvalue_threshold={pval_thresh})\n"
                 f"sq.pl.ligrec(adata, cluster_key=\"{_lr_ck}\", "
                 f"pvalue_threshold={pval_thresh}"
                 + (f", source_groups={groups}, target_groups={groups}" if groups else "")
-                + f")\nplt.show()\n"
-                + f"fig.savefig(\"ligrec.{_lr_fmt}\", dpi=300, bbox_inches='tight')"
+                + f")\nfig = plt.gcf()\n"
+                + f"fig.savefig(\"ligrec.{_lr_fmt}\", dpi=300, bbox_inches='tight')",
+                deps=[f"ligrec:{_lr_ck}"],
+                kind=TERMINAL,
+                label="Ligand-receptor dotplot",
             )
         except Exception as e:
             lr_status.value = f"Plot error: {e}"
@@ -229,7 +238,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         result['means'].to_csv(path)
         lr_status.value = f"Means exported to {path}"
-        ctx.record_code(f"\n# Export L-R means\n# ligrec_means.csv -> \"{path}\"")
+        _lr_ck = state.get("_lr_params", {}).get("clustering_key", "")
+        ctx.record_node(
+            f"export:ligrec_means:{_lr_ck}",
+            f"\n# Export L-R means\n"
+            f"adata.uns[\"{_lr_ck}_ligrec\"][\"means\"].to_csv(\"{os.path.basename(path)}\")",
+            deps=[f"ligrec:{_lr_ck}"],
+            kind=TERMINAL,
+            label="Export L-R means",
+        )
 
     def on_export_lr_pvals():
         result = state.get("ligrec_result")
@@ -242,7 +259,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         result['pvalues'].to_csv(path)
         lr_status.value = f"P-values exported to {path}"
-        ctx.record_code(f"\n# Export L-R p-values\n# ligrec_pvalues.csv -> \"{path}\"")
+        _lr_ck = state.get("_lr_params", {}).get("clustering_key", "")
+        ctx.record_node(
+            f"export:ligrec_pvalues:{_lr_ck}",
+            f"\n# Export L-R p-values\n"
+            f"adata.uns[\"{_lr_ck}_ligrec\"][\"pvalues\"].to_csv(\"{os.path.basename(path)}\")",
+            deps=[f"ligrec:{_lr_ck}"],
+            kind=TERMINAL,
+            label="Export L-R p-values",
+        )
 
     lr_run_button.clicked.connect(on_run_ligrec)
     lr_plot_button.clicked.connect(on_show_lr_plot)

@@ -1,5 +1,9 @@
 # xenium_viewer
 
+![CI](https://github.com/sraorao/xenium_viewer/actions/workflows/ci.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
+
 A napari-based spatial transcriptomics viewer for 10x Genomics Xenium 3.x output —
 the Linux equivalent of the commercial Xenium Explorer. Visualises high-resolution
 spatial gene expression at cell-level resolution with:
