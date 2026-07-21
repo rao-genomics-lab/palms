@@ -17,7 +17,7 @@ jobs:
       run:
         shell: bash -el {0}          # login shell activates the conda env
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The pip section of environment.yml clones a *private* fork
       # (insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git) that CI
@@ -28,7 +28,7 @@ jobs:
         run: grep -v 'insitucnv @ git+' environment.yml > environment-ci.yml
 
       - name: Build xenium_viewer env from environment.yml
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           environment-file: environment-ci.yml
           cache-environment: true    # cache the solved env across runs
@@ -43,9 +43,9 @@ jobs:
     name: lint (ruff, errors only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
