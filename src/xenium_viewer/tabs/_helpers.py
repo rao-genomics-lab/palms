@@ -442,8 +442,14 @@ def create_shared_helpers(ctx: ViewerContext):
         if not key or key not in ctx.clusterings:
             return
         raw_ids = ctx.clusterings[key].dropna().unique().tolist()
+        # Keep the raw category values as checkbox keys — do NOT coerce to int.
+        # CNV clusterings carry *string* categories ('0','1','2', or 'tumor'/'unknown'),
+        # and get_cluster_ids_per_obs factorizes them into _cluster_raw_to_id keyed by
+        # those raw strings. Coercing the checkbox keys to int broke that lookup, so
+        # translate_selected_ids_to_int returned [] and the cluster filter blanked every
+        # cell. Sort numerically for display order only; preserve the original type.
         try:
-            ids = sorted([int(x) for x in raw_ids])
+            ids = sorted(raw_ids, key=lambda x: int(x))
         except (ValueError, TypeError):
             ids = sorted(raw_ids, key=lambda x: str(x))
         try:
