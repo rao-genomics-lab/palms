@@ -2,6 +2,21 @@
 
 ## [Unreleased] — 2026-07-19
 
+### Fixed
+- **CNV clusterings showed no cells when the "Filter by cluster" checkbox was on.**
+  Selecting a CNV clustering (inferCNV `cnv_leiden_res*` or a CopyKAT `*_propagated`
+  column) in Cells → Coloring with the cluster filter engaged blanked *every* cell,
+  even though the cluster IDs were listed. CNV clusterings carry *string* categories
+  (`'0','1','2'`, or `'tumor'/'normal'/'unknown'`) unlike ordinary Leiden's *integer*
+  categories, so they take the `factorize` path whose `_cluster_raw_to_id` map is keyed
+  by the raw strings — but `_repopulate_cluster_checkboxes` coerced the checkbox ids to
+  `int`, so `translate_selected_ids_to_int` matched nothing, returned `[]`, and the
+  `~np.isin(...)` mask removed all cells. The checkbox ids now keep their raw category
+  type (sorted numerically for display only), matching the map. Reviewed and verified
+  the CopyKAT extrapolation/propagation itself is correct — the "sometimes wrong
+  propagation" was this same blanking artifact, not a propagation bug. Added
+  `tests/test_cluster_filter.py`. (`tabs/_helpers.py`, `tests/test_cluster_filter.py`)
+
 ### Docs
 - **Tracked TODO to migrate napari off the deprecated PyQt5 backend.** Napari warns
   that PyQt5 support is deprecated and will be removed in fall 2026. No code change
