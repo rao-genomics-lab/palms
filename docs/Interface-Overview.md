@@ -80,9 +80,13 @@ A status bar at the bottom of the control panel displays progress messages for l
 
 A separate floating napari window can be opened from the **UMAP** sub-tab. This window displays the UMAP scatter plot with cells coloured to match the main canvas. Clicking a cell in the UMAP window highlights the corresponding cell in the main canvas, and vice versa. The UMAP window can be repositioned independently of the main viewer.
 
-## Code Journal
+## Reproducible Code
 
-Every user action that modifies the dataset or triggers an analysis generates a reproducible Python code snippet. These snippets are appended to `code.py` in the dataset directory. You can view and copy the accumulated code from the **Notebook** tab in the Tools group. The file includes a preamble with the necessary imports and data loading steps, so the full script can be run independently.
+Every user action that modifies the dataset or triggers an analysis is recorded as a step in a provenance graph, where each step carries its own code and its dependencies on earlier steps. Two files are written into the dataset directory: `analysis.py`, a flat script derived from the graph, and `analysis_notebook.ipynb`, the same steps as notebook cells.
+
+Because the notebook is derived by sorting the graph rather than by logging actions in order, it always respects dependencies no matter what order you worked in. Both files open with a preamble containing the imports and data loading, so either can be run independently against the raw Xenium output.
+
+You can view the accumulated code, inspect the graph, and export the notebook from the **Notebook** tab in the Tools group. The graph is saved with the session and restored when you reopen the dataset, so an analysis spanning several sessions accumulates into one notebook.
 
 ## Session Persistence
 

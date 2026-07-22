@@ -20,7 +20,7 @@ Xenium Viewer is an open-source, napari-based viewer for 10x Genomics Xenium spa
 - Annotation tools for labelling cells and regions
 - Crop Dataset tool for exporting drawn regions as standalone, independently-openable datasets
 - Interactive Notebook tab for running code against the loaded dataset
-- Reproducible code journal: every user action generates a Python snippet saved to `code.py`
+- Reproducible analysis: every user action is recorded as a step in a provenance graph, exported as `analysis.py` and `analysis_notebook.ipynb` and carried across sessions
 
 ## Requirements
 

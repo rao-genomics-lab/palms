@@ -19,8 +19,26 @@ rm -rf "$WIKI_DIR"
 git clone https://github.com/sraorao/xenium_viewer.wiki.git "$WIKI_DIR"
 
 echo "Copying docs to wiki..."
-# Copy all markdown files (but not mkdocs.yml)
-cp "$REPO_ROOT"/docs/*.md "$WIKI_DIR"/
+# docs/ doubles as the wiki source, so every .md added there is published by
+# default. Internal planning/design notes live there too but are not wiki pages;
+# list them here to keep them repo-only.
+WIKI_EXCLUDE=(
+    pyqt6-migration.md
+    reproducible_notebook_plan.md
+)
+
+for src in "$REPO_ROOT"/docs/*.md; do
+    name="$(basename "$src")"
+    skip=""
+    for excluded in "${WIKI_EXCLUDE[@]}"; do
+        [ "$name" = "$excluded" ] && skip=1 && break
+    done
+    if [ -n "$skip" ]; then
+        echo "  skipping $name (repo-only)"
+        continue
+    fi
+    cp "$src" "$WIKI_DIR"/
+done
 
 # Copy screenshots if they exist
 if ls "$REPO_ROOT"/docs/screenshots/*.png 2>/dev/null; then
