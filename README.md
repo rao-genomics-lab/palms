@@ -19,7 +19,8 @@ spatial gene expression at cell-level resolution with:
 - **Annotation tools** — draw/label/export annotation shapes (GeoJSON); annotate
   cells by neighbourhood composition or distance to a reference population
 - **Session persistence** — all analyses auto-saved to a zarr cache and restored on
-  relaunch; reproducible Python code journal exported to `code.py`
+  relaunch; reproducible analysis exported as `analysis.py` and
+  `analysis_notebook.ipynb`, accumulated across sessions
 
 ## Install
 
@@ -36,6 +37,8 @@ conda activate xenium_viewer
 
 The env file installs the core stack via conda-forge and `xenium-viewer` itself
 in editable mode, so source edits in this checkout are picked up immediately.
+It also installs the CNV inference stack (`infercnvpy` and `insitucnv`), so the
+CNV tab's **inferCNV** backend works out of the box — no extra step needed.
 
 ### Optional extras
 
@@ -48,7 +51,7 @@ pip install -e ".[celltypist]"   # CellTypist label transfer (Rank Genes tab)
 pip install -e ".[r]"            # rpy2-based reference fetcher (needs system R)
 pip install -e ".[gpu]"          # torch / torch-geometric / xgboost
 pip install -e ".[references]"   # rasterio + readfcs
-pip install -e ".[cnv]"          # InSituCNV/infercnvpy CNV inference (CNV tab)
+pip install -e ".[cnv]"          # InSituCNV/infercnvpy — already in environment.yml
 pip install -e ".[full]"         # all of the above
 ```
 
@@ -57,13 +60,30 @@ optional dependency isn't installed still appears in the UI; it just reports
 a clear "not installed" error (with the `pip install` command to run) the
 first time you try to use it, instead of failing at startup.
 
-**CNV extra note**: the `cnv` extra installs `insitucnv` from the
-[`insituCNV-copykat`](https://github.com/sraorao/insituCNV-copykat) fork,
-which resolves against this app's `anndata`/`pandas` versions — no
-`--no-deps` workaround is needed. (Earlier versions of the fork carried
-stale `anndata<0.12`/`pandas<3` upper pins that broke resolution; those
-were removed.) The `cnv` extra covers the **inferCNV** backend only —
-CopyKAT needs a separate environment, see below.
+The `cnv` extra is the exception: it is already covered by `environment.yml`, so
+you only need it if you installed with plain `pip` instead of conda. It pulls
+`insitucnv` from the [`insituCNV-copykat`](https://github.com/sraorao/insituCNV-copykat)
+fork, which is public and resolves cleanly against this app's `anndata`/`pandas`
+versions.
+
+### CopyKAT backend (optional second environment)
+
+The CNV tab's inferCNV backend runs in the main environment. Its **CopyKAT**
+backend does not: CopyKAT needs rpy2 with R 4.3, a stack that only builds on
+python 3.11 and so cannot coexist with the main env's python 3.12. It therefore
+lives in a second environment:
+
+```bash
+conda env create -f environment-copykat.yml   # creates 'xenium_viewer_copykat'
+```
+
+The viewer finds that environment by name and launches CopyKAT there as a
+detached background job, which survives the GUI closing. The `copykat` R package
+itself is GitHub-only and installs automatically on first run. To point the
+viewer at a differently-named environment, set `XENIUM_COPYKAT_ENV` (env name) or
+`XENIUM_COPYKAT_PYTHON` (full path to its python).
+
+Skip this entirely if you only need inferCNV.
 
 ### Reinstalling
 
