@@ -29,14 +29,9 @@ This installs the `xenium-viewer` package in editable mode along with all requir
 
 Install optional extras after activating the `xenium_viewer` conda environment.
 
-**CNV inference note**: `insitucnv`'s published package metadata pins `anndata<0.12`/`pandas<3`, which conflicts with this app's own `anndata`/`pandas` requirements and will make `pip install -e ".[cnv]"` fail to resolve. Install its real dependencies directly instead, then add `insitucnv` itself without letting pip re-resolve its stale pin:
+**CNV inference note**: the `cnv` extra installs `insitucnv` from the [`insituCNV-copykat`](https://github.com/sraorao/insituCNV-copykat) fork, which resolves cleanly against this app's `anndata`/`pandas` versions — `pip install -e ".[cnv]"` is all that is needed. (Earlier versions of the fork carried stale `anndata<0.12`/`pandas<3` upper pins that made resolution fail and required a `pip install --no-deps insitucnv` workaround; those pins have been removed.)
 
-```bash
-pip install infercnvpy scvelo
-pip install --no-deps insitucnv
-```
-
-The pin is stale — `insitucnv` only uses stable AnnData APIs and runs fine against newer `anndata`/`pandas` in practice (verified against `anndata` 0.13 / `pandas` 3.0).
+This extra covers the **inferCNV** backend, which runs in the main environment. The **CopyKAT** backend needs an R stack that is incompatible with this environment's Python version and runs in a second environment — see [`environment-copykat.yml`](../environment-copykat.yml).
 
 ## Reinstalling
 

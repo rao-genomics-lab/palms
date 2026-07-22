@@ -125,6 +125,10 @@ regardless of the order actions were taken — even across sessions.
 - **tifffile**, **opencv**, **scikit-image** — image processing
 - **insitucnv** (the `insituCNV-copykat` fork, in `environment.yml`) + **infercnvpy** — CNV
   inference. `utils/cnv_analysis.py` drives both backends via `run_cnv_pipeline(..., backend=)`.
+  The fork is installed from an *unpinned* git URL (tracks master) in `environment.yml`,
+  `environment-copykat.yml`, and the `cnv` extra — the same distribution in all three,
+  because the two conda envs share no site-packages. Keep the fork's dependency bounds
+  loose: upper pins there make the main env's pip section unsolvable against `-e .`.
   **inferCNV** runs in the main env. **CopyKAT** needs **rpy2 + R 4.3 + the `copykat` R package**,
   whose stack requires **python 3.11** — incompatible with the main env's python 3.12. So CopyKAT
   runs in a **second conda env** (`environment-copykat.yml` → `xenium_viewer_copykat`): the viewer
@@ -139,6 +143,10 @@ regardless of the order actions were taken — even across sessions.
 - **ICE/X11 disconnect** — handled at startup of `src/xenium_viewer/app.py`
 - **pandas 3.0 PyArrow strings** — `_convert_arrow_strings()` in `src/xenium_viewer/loader.py`
 - **NumPy 2.0** — `np.NAN` fallback for omnipath compatibility
+- **matplotlib 3.9 `cm.get_cmap` removal** — `_patch_matplotlib_cm_compat()` in
+  `src/xenium_viewer/utils/cnv_analysis.py`. Now a no-op against the pinned
+  `insituCNV-copykat` fork (fixed there); retained for pre-existing environments
+  and upstream InSituCNV.
 
 ## Version History
 

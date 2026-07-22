@@ -3,6 +3,22 @@
 ## [Unreleased] — 2026-07-19
 
 ### Fixed
+- **`conda env create -f environment.yml` failed to solve because of `insitucnv`.**
+  The `insituCNV-copykat` fork's published metadata carried stale upper pins
+  (`anndata<0.12`, `pandas<3`). Since the pip section of `environment.yml` resolves
+  `-e .` and `insitucnv` together, pip had to satisfy `anndata>=0.12` (this package's
+  own requirement) *and* `anndata<0.12` at once — an unsatisfiable constraint, so the
+  environment build died with `ResolutionImpossible`. The bounds were never real: the
+  fork only uses stable AnnData APIs and has been exercised end-to-end against
+  anndata 0.13 / pandas 3.0. Fixed at the source by dropping both upper bounds in the
+  fork (which also drops its unused `seaborn` dependency and replaces the
+  matplotlib-3.9-removed `matplotlib.cm.get_cmap` with `matplotlib.pyplot.get_cmap`).
+  No dependency line in this repo changed — `environment.yml`, `environment-copykat.yml`,
+  and the `cnv` extra all track the fork's master and now resolve unmodified. The
+  `pip install --no-deps insitucnv` workaround is retired from the install docs, and
+  `_patch_matplotlib_cm_compat()` is now a no-op guard kept only for pre-existing
+  environments and upstream InSituCNV. (`README.md`, `docs/Installation.md`,
+  `environment-copykat.yml`, `utils/cnv_analysis.py`, `CLAUDE.md`)
 - **CNV clusterings showed no cells when the "Filter by cluster" checkbox was on.**
   Selecting a CNV clustering (inferCNV `cnv_leiden_res*` or a CopyKAT `*_propagated`
   column) in Cells → Coloring with the cluster filter engaged blanked *every* cell,

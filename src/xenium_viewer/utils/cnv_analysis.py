@@ -37,11 +37,14 @@ CNV_REFERENCE_OBS_KEY = "cnv_reference"
 
 
 def _patch_matplotlib_cm_compat() -> None:
-    """Compatibility shim: insitucnv 0.1.0 calls the removed
-    ``matplotlib.cm.get_cmap()`` API (deprecated since matplotlib 3.7,
-    removed in 3.9+) when building its own cluster color palette. Alias it
-    back to ``matplotlib.pyplot.get_cmap`` if missing, matching this repo's
-    other third-party compatibility patches (see CLAUDE.md)."""
+    """Compatibility shim for older ``insitucnv`` installs that call the
+    removed ``matplotlib.cm.get_cmap()`` API (deprecated since matplotlib
+    3.7, removed in 3.9+) when building their cluster color palette. The
+    insituCNV-copykat fork pinned in ``environment.yml`` now uses
+    ``matplotlib.pyplot.get_cmap`` directly, so this is a no-op there; it is
+    kept as a guard for pre-existing environments and for upstream
+    InSituCNV. Alias the name back if missing, matching this repo's other
+    third-party compatibility patches (see CLAUDE.md)."""
     import matplotlib.cm as _cm
     if not hasattr(_cm, "get_cmap"):
         import matplotlib.pyplot as _plt
