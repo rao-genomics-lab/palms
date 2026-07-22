@@ -57,20 +57,13 @@ optional dependency isn't installed still appears in the UI; it just reports
 a clear "not installed" error (with the `pip install` command to run) the
 first time you try to use it, instead of failing at startup.
 
-**CNV extra note**: `insitucnv`'s published package metadata pins
-`anndata<0.12`/`pandas<3`, which conflicts with this app's own `anndata`/
-`pandas` requirements and can make `pip install -e ".[cnv]"` fail to
-resolve. If that happens, install its real dependencies directly instead,
-then add `insitucnv` itself without letting pip re-resolve its stale pin:
-
-```bash
-pip install infercnvpy scvelo
-pip install --no-deps insitucnv
-```
-
-The pin is stale — `insitucnv` only uses stable AnnData APIs and runs fine
-against newer `anndata`/`pandas` in practice (verified against `anndata`
-0.13 / `pandas` 3.0).
+**CNV extra note**: the `cnv` extra installs `insitucnv` from the
+[`insituCNV-copykat`](https://github.com/sraorao/insituCNV-copykat) fork,
+which resolves against this app's `anndata`/`pandas` versions — no
+`--no-deps` workaround is needed. (Earlier versions of the fork carried
+stale `anndata<0.12`/`pandas<3` upper pins that broke resolution; those
+were removed.) The `cnv` extra covers the **inferCNV** backend only —
+CopyKAT needs a separate environment, see below.
 
 ### Reinstalling
 

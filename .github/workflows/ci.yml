@@ -19,18 +19,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The pip section of environment.yml clones a *private* fork
-      # (insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git) that CI
-      # can't authenticate to. It's only the CopyKAT half of the CNV backend, which
-      # runs in a separate env anyway, and no test imports it (infercnvpy — public,
-      # kept — covers the inferCNV path). Strip that one line for the CI env.
-      - name: Prepare CI env file (drop private git dependency)
-        run: grep -v 'insitucnv @ git+' environment.yml > environment-ci.yml
-
       - name: Build xenium_viewer env from environment.yml
         uses: mamba-org/setup-micromamba@v3
         with:
-          environment-file: environment-ci.yml
+          environment-file: environment.yml
           cache-environment: true    # cache the solved env across runs
           cache-downloads: true
 
