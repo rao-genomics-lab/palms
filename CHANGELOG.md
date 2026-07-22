@@ -19,6 +19,14 @@
   `_patch_matplotlib_cm_compat()` is now a no-op guard kept only for pre-existing
   environments and upstream InSituCNV. (`README.md`, `docs/Installation.md`,
   `environment-copykat.yml`, `utils/cnv_analysis.py`, `CLAUDE.md`)
+- **`mamba env create` prompted for GitHub credentials.** Separately from the pin
+  conflict above, the `insituCNV-copykat` fork was a *private* repo installed over
+  `https://`, so pip's clone stopped to ask for a username/password that could never
+  work (GitHub dropped Git password auth in 2021). The fork is now **public**, so the
+  pip section clones anonymously on any machine. This also retires the CI workaround
+  that stripped the private dependency out of `environment.yml` — CI now builds from
+  the unmodified env file, so the environment it tests matches the one users get.
+  (`.github/workflows/ci.yml`)
 - **CNV clusterings showed no cells when the "Filter by cluster" checkbox was on.**
   Selecting a CNV clustering (inferCNV `cnv_leiden_res*` or a CopyKAT `*_propagated`
   column) in Cells → Coloring with the cluster filter engaged blanked *every* cell,
