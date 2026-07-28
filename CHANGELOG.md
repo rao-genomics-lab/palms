@@ -1,5 +1,58 @@
 # Changelog
 
+## [Unreleased] — 2026-07-28
+
+### Added
+- **Step executor: the code the GUI runs is now literally the code the notebook
+  records.** New `utils/steps.py` introduces `Step` (a provenance node id, a
+  `string.Template` of plain scverse source, and a dict of literal `params`) plus
+  `StepExecutor`, which renders the template **once** and hands that same string both
+  to `exec` and to `ProvGraph.upsert`. This is the E1 infrastructure for closing the
+  drift between executed and recorded code — the defect that let the GUI run
+  `leidenalg.find_partition(..., seed=42, n_iterations=2)` while the notebook recorded
+  `sc.tl.leiden(..., random_state=0)` (scanpy's default is `n_iterations=-1`), and let
+  the GUI normalise with `target_sum=1e4` while the notebook recorded scanpy's median
+  default. With one rendering there is no second expression to drift.
+
+  The invariant that makes the guarantee hold, and which review must enforce: *a tab
+  callback may never call an analysis function with a widget value — it may only build
+  a `params` dict.*
+
+  Design notes:
+  - `string.Template` (`$name`) rather than `str.format`, so `{...}` dict literals and
+    f-strings inside templates are left alone.
+  - Params are substituted via `repr()` and validated with
+    `ast.literal_eval(repr(v)) == v`, which rejects numpy scalars (whose NumPy-2 repr
+    is `np.float64(1.0)` — not importable in a bare notebook, and not stable across
+    versions), non-finite floats, and objects with a default `<... at 0x...>` repr.
+    `coerce()` is provided for use at the widget boundary. Float noise such as
+    `1.0000000000000002` round-trips exactly and is therefore allowed.
+  - Execution is serialised behind an `RLock` (steps mutate shared namespace state) and
+    proceeds one top-level statement at a time via `ast`, so long steps can report
+    progress while the compiled source stays byte-identical to the recorded source;
+    statement line numbers are preserved so tracebacks point into the recorded cell.
+  - `compile(..., "<step:id>")` puts the step id in the traceback, and failures raise
+    `StepError` naming the step and statement instead of being swallowed.
+  - Recording happens only on success, so a failed step leaves no node claiming an
+    artifact that does not exist.
+  - `free_names()` / `check_step()` provide the template lint: a rendered template must
+    reference only names the namespace guarantees. This is what makes the exactness
+    guarantee auditable rather than merely asserted.
+  - `params` finally becomes meaningful — every node now carries a machine-readable
+    parameter record alongside its source (it was previously populated at exactly one
+    call site and never rendered).
+
+  `tests/test_steps.py` (36 tests) covers the executed-equals-recorded guarantee, param
+  round-tripping for every literal type the GUI can produce, numpy rejection plus
+  coercion, brace survival, free-variable analysis, per-statement progress, failure
+  naming, and the inherited upsert/staleness semantics on re-run with changed params.
+  No existing module imports `steps.py` yet — tabs migrate in E2.
+  (`utils/steps.py`, `tests/test_steps.py`)
+
+### Changed
+- **`.gitignore`**: added `manuscript/` (preprint drafts and planning notes, kept out of
+  the public repo) and `data/` (untracked local datasets).
+
 ## [Unreleased] — 2026-07-19
 
 ### Fixed
