@@ -173,6 +173,22 @@
   itself is E4.
 
 ### Fixed
+- **Re-running a clustering under an existing key kept the previous run's colors.**
+  `CellColorManager.get_cluster_colors` caches on the series' `name`, which is the
+  clustering key. Re-running Leiden at the same resolution (or re-importing the same
+  file) replaces the series behind that key, but nothing dropped the cache entry — so
+  the raster kept the old color array while the legend and cluster filter were rebuilt
+  from the new assignment. On screen that reads as a clustering that was only *partially*
+  overwritten: cells whose new cluster id happened to match their old one looked right,
+  the rest did not. Compounding it, the Leiden tab named every series `"leiden"`
+  regardless of resolution, so one cache entry served every run at every resolution.
+  Producers now call `color_manager.invalidate_cluster_cache(key)` — a named method
+  replacing the `_cluster_cache.pop()` the CNV and Novae tabs were already doing by
+  hand — and the Leiden series is named for the key it is stored under.
+  `tests/test_cluster_color_cache.py` (7 tests) covers the behaviour and adds a
+  source-level guard that fails if any tab rebinds `ctx.clusterings[key]` without
+  invalidating. (`utils/coloring.py`, `tabs/tab_clustering.py`, `tabs/tab_cnv.py`,
+  `tabs/tab_novae.py`)
 - **The Marker Genes correlation-matrix button never worked.** It called
   `sc.tl.correlation_matrix`, which does not exist in scanpy — the `AttributeError` was
   raised inside a worker thread where nothing surfaced it. `sc.pl.correlation_matrix` reads

@@ -99,6 +99,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return  # dataset reloaded while worker ran
         series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs = result
         key = f"leiden_r{resolution}"
+        # Re-running at the same resolution replaces the series behind an
+        # existing key, so the cached color array for it is now wrong.
+        ctx.color_manager.invalidate_cluster_cache(key)
         ctx.clusterings[key] = series
         state["custom_clusterings"][key] = series
         ctx.refresh_clustering_choices()
@@ -167,8 +170,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             labels = _adata.obs[key]
             cell_ids = (_adata.obs['cell_id'].values
                         if 'cell_id' in _adata.obs.columns else _adata.obs_names)
+            # Named for the key it is stored under, not "leiden": the color
+            # manager caches on the series name, so a constant name made every
+            # resolution share one cache entry.
             series = pd.Series(
-                labels.astype(int).values, index=cell_ids, name="leiden",
+                labels.astype(int).values, index=cell_ids, name=key,
             )
             n_clusters = series.nunique()
             return series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs
@@ -202,6 +208,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         else:
             series = pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0].values)
         name = Path(path).stem
+        series.name = name
+        # Re-importing the same filename replaces an existing key.
+        ctx.color_manager.invalidate_cluster_cache(name)
         ctx.clusterings[name] = series
         state["custom_clusterings"][name] = series
         ctx.refresh_clustering_choices()

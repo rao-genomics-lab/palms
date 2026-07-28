@@ -102,7 +102,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         key = "novae_domains"
 
         # Store in clusterings (invalidate stale color cache for this key first)
-        ctx.color_manager._cluster_cache.pop(key, None)
+        ctx.color_manager.invalidate_cluster_cache(key)
         ctx.clusterings[key] = series
         if "custom_clusterings" not in state:
             state["custom_clusterings"] = {}

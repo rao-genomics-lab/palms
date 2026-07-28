@@ -112,6 +112,22 @@ class CellColorManager:
         self._continuous_cache: dict[str, np.ndarray] = {}
         self._max_label = len(label_to_obs) - 1
 
+    def invalidate_cluster_cache(self, name: str | None = None) -> None:
+        """Drop cached cluster colors for *name* (or all of them).
+
+        ``get_cluster_colors`` caches on the series' ``name``, which is the
+        clustering key. Any producer that *replaces* the series behind an
+        existing key — re-running Leiden at the same resolution, re-importing a
+        file, a new CNV run — must call this, or the raster keeps the previous
+        run's colors while the legend and cluster filter are rebuilt from the
+        new assignment. The mismatch reads as a clustering that was only
+        partially overwritten.
+        """
+        if name is None:
+            self._cluster_cache.clear()
+        else:
+            self._cluster_cache.pop(name, None)
+
     def _empty_color_array(self) -> np.ndarray:
         """Return transparent (alpha=0) RGBA array for all labels."""
         arr = np.zeros((self._max_label + 1, 4), dtype=np.float32)

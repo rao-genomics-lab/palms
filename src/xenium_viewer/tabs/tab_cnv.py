@@ -585,7 +585,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["cnv_result"] = result  # alias to the most-recently-updated backend
 
         # Register the new clustering(s) so Cell Coloring lists them.
-        ctx.color_manager._cluster_cache.pop(key, None)
+        ctx.color_manager.invalidate_cluster_cache(key)
         ctx.clusterings[key] = series
         state.setdefault("custom_clusterings", {})[key] = series
         ctx.refresh_clustering_choices()
@@ -728,7 +728,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             common = real.index.intersection(series.index)
             series.loc[common] = real.loc[common]
             n_filled = int(series.index.difference(common).size)
-            ctx.color_manager._cluster_cache.pop(pkey, None)
+            ctx.color_manager.invalidate_cluster_cache(pkey)
             ctx.clusterings[pkey] = series
             state.setdefault("custom_clusterings", {})[pkey] = series
             save_clustering_to_adata(ctx, pkey, series)
