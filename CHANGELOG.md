@@ -148,12 +148,29 @@
   `tabs/tab_marker_genes.py`, `tabs/tab_gene_correlation.py`, `tabs/tab_roi.py`,
   `utils/viewer_context.py`, `utils/spatial_analysis.py`, `tests/test_spatial_roi_steps.py`)
 
-  **Known remaining divergence:** the CNV tab still records code against a bare `adata`
-  (and with `sc.pp.normalize_total` at scanpy's median default rather than the
-  `target_sum=1e4` it runs), and the annotation-neighbourhood tab records nothing at all.
-  Plot/export **terminals** across the migrated tabs are still on `ctx.record_node`; their
-  code strings were corrected to read `adata_norm` where the artifact now lives, but the
-  terminal-node policy itself is E4.
+- **The inferCNV backend migrated onto the step executor.** `cnv:infercnv` is now a
+  templated step running in-process; the tab builds the result dict from its outputs
+  instead of calling `run_cnv_pipeline`. Three drifts closed: the recorded cell normalised
+  at scanpy's *median* default while the viewer used `target_sum=1e4`, and it dropped both
+  `lfc_clip` (so a replay used infercnvpy's default, not the pipeline's 4.0) and
+  `dendrogram=False`. The pandas-3 PyArrow-string conversion `infercnvpy` needs is inlined
+  as plain pandas, so the notebook no longer imports `xenium_viewer` at all.
+
+  **CopyKAT is deliberately not migrated.** It runs detached, in a second conda env
+  (its R stack needs python 3.11), so no in-process step can be the code that ran. Its
+  node stays on `ctx.record_node` and now says so in the cell itself — it is a
+  reconstruction of that run, not executed source. Its recorded parameters were corrected
+  the same way (`target_sum=1e4`, `dendrogram=False`).
+  `run_cnv_pipeline` is now the CopyKAT path only; `tests/test_cnv_step.py` (11 tests)
+  pins the parameters both sides carry so they cannot drift apart again.
+  (`tabs/tab_cnv.py`, `utils/cnv_analysis.py`, `tests/test_cnv_step.py`)
+
+  **Known remaining divergence:** the annotation-neighbourhood tab records nothing at all —
+  its synthetic virtual cells are sampled from a napari shapes layer the notebook has no
+  access to, which needs E3's spatialdata shapes to resolve. Plot/export **terminals**
+  across the migrated tabs are still on `ctx.record_node`; their code strings were
+  corrected to read the object the artifact now lives on, but the terminal-node policy
+  itself is E4.
 
 ### Fixed
 - **The Marker Genes correlation-matrix button never worked.** It called

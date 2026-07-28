@@ -112,19 +112,22 @@ regardless of the order actions were taken — even across sessions.
   (`tab_gene_analysis.py`), **spatial neighbours**
   (`ctx.ensure_spatial_neighbors(k)`, which builds the graph on `adata_norm` and
   replaces `record_spatial_neighbors`), **neighbourhood enrichment**, **co-occurrence**,
-  **ligand-receptor**, **marker-gene plots**, **gene correlation**, and **ROI DEG +
-  `rois`**. Every expression-based step consumes `adata_norm` and
+  **ligand-receptor**, **marker-gene plots**, **gene correlation**, **ROI DEG +
+  `rois`**, and **inferCNV**. Every expression-based step consumes `adata_norm` and
   declares `deps=["normalize"]` — never an implicit reliance on `adata` having been
   normalised in place, which is what made the DAG lie before. Call
   `ctx.ensure_normalized()` (idempotent) before `ctx.run_step()` in any such step.
   One documented exception: the `preamble` node records
   `xenium(data_path)` while the viewer reaches the same objects via the zarr cache.
-  Still unmigrated: the **CNV** tab (records against a bare `adata`, and its CopyKAT
-  backend runs out-of-process in a second conda env, so it cannot be an in-process step)
-  and the **annotation-neighbourhood** tab (records nothing; its synthetic virtual cells
-  are sampled from a napari shapes layer the notebook has no access to — resolving that
-  needs E3's spatialdata shapes). **Plot/export terminals** across the migrated tabs are
-  still on `record_node`; the terminal-node policy is E4.
+  A second documented exception: **CopyKAT** (`cnv:copykat`) stays on `record_node`
+  because it runs detached in the `xenium_viewer_copykat` env — no in-process step can be
+  the code that ran, so its cell says in-line that it is a reconstruction. `run_cnv_pipeline`
+  is now the CopyKAT path only; the inferCNV template must stay in sync with it
+  (`tests/test_cnv_step.py` pins both).
+  Still unmigrated: the **annotation-neighbourhood** tab (records nothing; its synthetic
+  virtual cells are sampled from a napari shapes layer the notebook has no access to —
+  resolving that needs E3's spatialdata shapes). **Plot/export terminals** across the
+  migrated tabs are still on `record_node`; the terminal-node policy is E4.
 - **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
   in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
   and executed code could drift. Re-running a step (same `id`) revises its node in place

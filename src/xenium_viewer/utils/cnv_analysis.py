@@ -69,6 +69,11 @@ def run_cnv_pipeline(
 ) -> dict:
     """Run the InSituCNV pipeline on ``adata`` (raw counts expected in ``.X``).
 
+    Now used only by the **CopyKAT** path (``cnv_copykat_worker.py``), which runs
+    detached in a second conda env. The inferCNV path in ``tabs/tab_cnv.py`` is a
+    templated ``Step`` instead, so the code the viewer executes is the code the
+    notebook records — keep the two in sync when changing either.
+
     Parameters
     ----------
     adata : AnnData
