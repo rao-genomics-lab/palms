@@ -49,6 +49,43 @@
   No existing module imports `steps.py` yet — tabs migrate in E2.
   (`utils/steps.py`, `tests/test_steps.py`)
 
+- **Leiden clustering migrated onto the step executor — the first analysis whose
+  recorded code is the code that ran.** `tab_clustering.py` now builds a single `Step`
+  from `_leiden_template(use_hvg, do_scale)` and calls `ctx.run_step()`; the separate
+  `_record_leiden_code` branch that hand-wrote a parallel description of the pipeline is
+  gone. `ctx.run_step` / `ctx.executor` are attached in `create_shared_helpers`, with a
+  namespace seeded with `sc`/`sq`/`pd`/`np`/`plt`/`Path`/`data_path`/`sdata`/`adata` so
+  steps operate on the same objects the viewer holds.
+
+  Behaviour changes that follow, all of them fixes:
+  - **Leiden now runs `sc.tl.leiden(flavor='igraph', n_iterations=2, random_state=0)`**
+    instead of `leidenalg.find_partition(..., seed=42)` on a directed graph in a spawned
+    subprocess. `flavor`, `n_iterations` and `random_state` are pinned explicitly because
+    scanpy 1.12 emits a `FutureWarning` that the default backend will become `igraph`
+    (which also requires `directed=False`) — leaving them implicit would silently change
+    clusterings on a scanpy upgrade. **Cluster labels will differ from previous runs**;
+    existing saved clusterings are untouched.
+  - **Both preprocessing branches are now one self-contained step** that normalises its
+    own `adata_leiden` copy. The old default branch depended on the shared `normalize`
+    SETUP node, which sorts ahead of every artifact node and mutates `adata` in place —
+    so an exported notebook containing both could double-normalise. It no longer can.
+  - Flat-journal/notebook-tab updates are bounced to the GUI thread via
+    `superqt.utils.ensure_main_thread`, since steps execute in napari worker threads.
+
+  `tests/test_clustering_step.py` (9 tests) runs the real template on synthetic data
+  across all four HVG/scale combinations, asserts recorded source == executed source,
+  and — the reproducibility claim in miniature — re-executes the recorded cell in a clean
+  namespace and checks the labels match exactly.
+  (`tabs/tab_clustering.py`, `tabs/_helpers.py`, `utils/viewer_context.py`,
+  `tests/test_clustering_step.py`, `CLAUDE.md`)
+
+### Removed
+- **`utils/leiden_worker.py`.** The spawned-subprocess Leiden existed for GUI
+  responsiveness, but it was also the second expression of the algorithm that drifted from
+  the recorded one. scanpy's `igraph` flavor is, per its own warning, "orders of magnitude
+  faster" than `leidenalg`, which removes the motivation. (`utils/leiden_worker.py`,
+  `cnv_copykat_worker.py` docstring reference)
+
 ### Changed
 - **`.gitignore`**: added `manuscript/` (preprint drafts and planning notes, kept out of
   the public repo) and `data/` (untracked local datasets).

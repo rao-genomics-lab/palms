@@ -10,12 +10,53 @@ from magicgui.widgets import CheckBox, PushButton, Slider, FloatSpinBox
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
+from xenium_viewer.utils.steps import Step, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
-from xenium_viewer.utils.gene_analysis import get_normalized_adata
+
+# Leiden runs as a single self-contained Step: the source below is what the
+# viewer executes *and* what the notebook records — there is no second
+# expression of this pipeline to drift from (see utils/steps.py).
+#
+# It deliberately works on its own ``adata_leiden`` copy rather than depending
+# on the shared, in-place-mutating ``normalize`` node. That makes the step
+# order-independent: a notebook that also contains ``normalize`` cannot
+# double-normalise this branch, which the previous two-branch recording could.
+_LEIDEN_TEMPLATE_HEAD = """
+# Leiden clustering ($key)
+adata_leiden = adata.copy()
+sc.pp.normalize_total(adata_leiden, target_sum=1e4)
+sc.pp.log1p(adata_leiden)"""
+
+_LEIDEN_TEMPLATE_HVG = """
+sc.pp.highly_variable_genes(adata_leiden, n_top_genes=$n_top_genes, flavor='seurat')
+adata_leiden = adata_leiden[:, adata_leiden.var.highly_variable].copy()"""
+
+_LEIDEN_TEMPLATE_SCALE = """
+sc.pp.scale(adata_leiden, max_value=10)"""
+
+_LEIDEN_TEMPLATE_TAIL = """
+sc.pp.pca(adata_leiden)
+sc.pp.neighbors(adata_leiden, n_neighbors=$n_neighbors, n_pcs=$n_pcs)
+sc.tl.leiden(
+    adata_leiden, resolution=$resolution, key_added=$key,
+    flavor='igraph', n_iterations=2, random_state=$random_state,
+)
+adata.obs[$key] = adata_leiden.obs[$key].values"""
+
+
+def _leiden_template(use_hvg: bool, do_scale: bool) -> str:
+    """Assemble the Leiden template for the selected preprocessing options."""
+    parts = [_LEIDEN_TEMPLATE_HEAD]
+    if use_hvg:
+        parts.append(_LEIDEN_TEMPLATE_HVG)
+    if do_scale:
+        parts.append(_LEIDEN_TEMPLATE_SCALE)
+    parts.append(_LEIDEN_TEMPLATE_TAIL)
+    return "".join(parts)
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -69,36 +110,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         from xenium_viewer.utils.adata_persistence import save_clustering_to_adata
         save_clustering_to_adata(ctx, key, series)
 
-        if use_hvg or do_scale:
-            code_lines = [
-                "\n# Custom preprocessing for Leiden",
-                "adata_leiden = adata.copy()",
-                "sc.pp.normalize_total(adata_leiden, target_sum=1e4)",
-                "sc.pp.log1p(adata_leiden)",
-            ]
-            if use_hvg:
-                code_lines.append(f"sc.pp.highly_variable_genes(adata_leiden, n_top_genes={n_hvgs}, flavor='seurat')")
-                code_lines.append("adata_leiden = adata_leiden[:, adata_leiden.var.highly_variable].copy()")
-            if do_scale:
-                code_lines.append("sc.pp.scale(adata_leiden, max_value=10)")
-            code_lines.append("sc.pp.pca(adata_leiden)")
-            code_lines.append(f"sc.pp.neighbors(adata_leiden, n_neighbors={n_neighbors}, n_pcs={n_pcs})")
-            code_lines.append(f'sc.tl.leiden(adata_leiden, resolution={resolution}, key_added="{key}", random_state=0)')
-            # Copy the labels back onto the full adata so downstream steps find the column.
-            code_lines.append(f'adata.obs["{key}"] = adata_leiden.obs["{key}"].values')
-            ctx.record_node(
-                f"clustering:{key}", "\n".join(code_lines),
-                deps=["preamble"], label=f"Clustering: {key}",
-            )
-        else:
-            ctx.record_normalize()
-            ctx.record_node(
-                f"clustering:{key}",
-                f"\n# Leiden clustering (n_neighbors={n_neighbors}, n_pcs={n_pcs}, resolution={resolution})\n"
-                f"sc.pp.neighbors(adata, n_neighbors={n_neighbors}, n_pcs={n_pcs})\n"
-                f"sc.tl.leiden(adata, resolution={resolution}, key_added=\"{key}\", random_state=0)",
-                deps=["normalize"], label=f"Clustering: {key}",
-            )
+        # Recording happened inside ctx.run_step(), which recorded the very
+        # source it executed — there is nothing to re-describe here.
 
     def on_run_leiden():
         n_neighbors = leiden_n_neighbors.value
@@ -113,45 +126,36 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
+        key = f"leiden_r{resolution}"
+        ctx.record_preamble()   # the step's declared dependency must exist first
+        step = Step(
+            id=f"clustering:{key}",
+            template=_leiden_template(use_hvg, do_scale),
+            params={
+                "key": key,
+                "resolution": coerce(resolution),
+                "n_neighbors": coerce(n_neighbors),
+                "n_pcs": coerce(n_pcs),
+                "n_top_genes": coerce(n_hvgs),
+                "random_state": 0,
+            },
+            deps=["preamble"],
+            kind=ARTIFACT,
+            label=f"Clustering: {key}",
+        )
+
         @thread_worker
         def _run():
-            import scanpy as sc
-            yield "Preparing data..."
-            if use_hvg or do_scale:
-                adata_work = _adata.copy()
-                sc.pp.normalize_total(adata_work, target_sum=1e4)
-                sc.pp.log1p(adata_work)
-                if use_hvg:
-                    sc.pp.highly_variable_genes(adata_work, n_top_genes=n_hvgs, flavor="seurat")
-                    adata_work = adata_work[:, adata_work.var.highly_variable].copy()
-                if do_scale:
-                    sc.pp.scale(adata_work, max_value=10)
-                sc.pp.pca(adata_work)
-            else:
-                adata_work = get_normalized_adata(_adata)
-            yield "Computing neighbors..."
-            sc.pp.neighbors(adata_work, n_neighbors=n_neighbors, n_pcs=n_pcs)
-            yield "Running Leiden algorithm..."
-            import concurrent.futures, multiprocessing
-            from xenium_viewer.utils.leiden_worker import run_leiden
-            conn = adata_work.obsp['connectivities'].tocsr()
-            spawn_ctx = multiprocessing.get_context('spawn')
-            with concurrent.futures.ProcessPoolExecutor(
-                    max_workers=1, mp_context=spawn_ctx) as ex:
-                membership = ex.submit(
-                    run_leiden,
-                    conn.data, conn.indices, conn.indptr,
-                    conn.shape[0], resolution,
-                ).result()
             import pandas as pd
-            adata_work.obs['leiden'] = pd.Categorical(
-                [str(m) for m in membership]
-            )
-            cell_ids = _adata.obs['cell_id'].values if 'cell_id' in _adata.obs.columns else _adata.obs_names
+            yield "Running Leiden clustering..."
+            # One call: this executes exactly the source it records.
+            ctx.run_step(step)
+
+            labels = _adata.obs[key]
+            cell_ids = (_adata.obs['cell_id'].values
+                        if 'cell_id' in _adata.obs.columns else _adata.obs_names)
             series = pd.Series(
-                adata_work.obs['leiden'].astype(int).values,
-                index=cell_ids,
-                name="leiden",
+                labels.astype(int).values, index=cell_ids, name="leiden",
             )
             n_clusters = series.nunique()
             return series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs

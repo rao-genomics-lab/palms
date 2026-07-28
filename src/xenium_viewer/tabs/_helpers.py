@@ -7,10 +7,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from qtpy.QtWidgets import QWidget, QVBoxLayout
+from superqt.utils import ensure_main_thread
 
 from xenium_viewer.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
+from xenium_viewer.utils.steps import Step, StepExecutor
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -295,6 +297,71 @@ def create_shared_helpers(ctx: ViewerContext):
             _emit_flat(code)
 
     ctx.record_node = _record_node
+
+    # ── run_step (the executed-code-is-recorded-code path) ───────────────
+    @ensure_main_thread
+    def _emit_flat_main_thread(code: str):
+        _emit_flat(code)
+
+    def _get_executor():
+        """Lazily build the StepExecutor, sharing the session's ProvGraph.
+
+        The namespace mirrors the exported notebook's globals, seeded with the
+        objects the viewer already loaded. Note the one documented divergence:
+        the ``preamble`` node records ``xenium(data_path)``, but the viewer
+        reaches the same objects via the zarr cache rather than re-reading the
+        raw output. Every *other* step executes exactly what it records.
+        """
+        if ctx.executor is None:
+            import matplotlib.pyplot as plt
+            import numpy as _np
+            import pandas as pd
+            import scanpy as sc
+            import squidpy as sq
+            from pathlib import Path as _Path
+
+            graph = state.setdefault("prov_graph", ProvGraph())
+            ctx.executor = StepExecutor(
+                namespace={
+                    "sc": sc, "sq": sq, "pd": pd, "np": _np, "plt": plt,
+                    "Path": _Path,
+                    "data_path": ctx.data_path,
+                    "sdata": ctx.sdata,
+                    "adata": ctx.adata,
+                },
+                graph=graph,
+            )
+        return ctx.executor
+
+    def _run_step(step: Step, progress=None) -> dict:
+        """Execute *step* and record the same source, then sync viewer state.
+
+        Returns the step's declared outputs. Raises ``StepError`` on failure —
+        callers surface it rather than swallowing it, so a broken step is
+        visible instead of producing a node for an artifact that never existed.
+        """
+        executor = _get_executor()
+        # Keep the namespace pointed at the live objects: a dataset reload
+        # rebinds ctx.adata/ctx.sdata without going through the executor.
+        if executor.ns.get("adata") is not ctx.adata:
+            executor.ns["adata"] = ctx.adata
+        if executor.ns.get("sdata") is not ctx.sdata:
+            executor.ns["sdata"] = ctx.sdata
+
+        outputs = executor.run(step, progress=progress)
+
+        # A step may rebind rather than mutate (``adata = adata[:, mask]``);
+        # follow it so the GUI and the notebook stay on the same object.
+        if executor.ns.get("adata") is not ctx.adata:
+            ctx.adata = executor.ns["adata"]
+
+        if state.get("record_code"):
+            # Steps run in napari worker threads; the flat journal writes a file
+            # and refreshes the Notebook tab widget, so bounce it to the GUI thread.
+            _emit_flat_main_thread(step.render())
+        return outputs
+
+    ctx.run_step = _run_step
 
     # ── record_code (backward-compat shim) ───────────────────────────────
     def _record_code(code: str, tag: str = None):

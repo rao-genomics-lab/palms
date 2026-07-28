@@ -66,6 +66,14 @@ class ViewerContext:
     mg_clustering_widget: Any = None      # marker genes tab
     cnv_clustering_widget: Any = None     # CNV tab — reference-population picker
 
+    # ── Step execution (attached by create_shared_helpers) ───────────────────
+    # ``executor`` is the StepExecutor whose namespace mirrors the exported
+    # notebook's globals; ``run_step`` runs a Step through it and performs the
+    # recorder side-effects. Prefer ``run_step`` over ``record_node`` in new
+    # code — it is what makes the executed and recorded source identical.
+    executor: Any = None
+    run_step: Any = None
+
     # ── Shared helper callables (attached by create_shared_helpers) ──────────
     record_code: Any = None
     record_node: Any = None

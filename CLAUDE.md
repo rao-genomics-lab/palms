@@ -95,10 +95,26 @@ is a node with a stable `id` (the artifact it produces), its `code`, its `deps`
 *derived* from the graph by topological sort, so it always respects dependencies
 regardless of the order actions were taken — even across sessions.
 
-- **Record with `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
-  in tab callbacks. Re-running a step (same `id`) revises its node in place and flags
-  descendants stale; a missing dependency errors at record time. `ctx.record_code(code, tag)`
-  remains as a thin backward-compat shim. Helper recorders: `record_preamble` (`preamble`
+- **Preferred: `ctx.run_step(Step(...))`** (`utils/steps.py`). A `Step` is a node id, a
+  `string.Template` of plain scverse source, and a dict of literal `params`. `run_step`
+  renders the template **once** and hands that same string both to `exec` and to the
+  provenance graph — so the code the GUI runs *is* the code the notebook records, by
+  construction rather than by discipline. **The invariant to enforce in review: a tab
+  callback may never call an analysis function with a widget value; it may only build a
+  `params` dict.** Params are validated with `ast.literal_eval(repr(v)) == v` (use
+  `steps.coerce()` at the widget boundary for numpy scalars); templates use `$name` so
+  `{...}` literals survive; execution is serialised and proceeds statement-by-statement
+  so progress can be reported without changing the compiled source. Failures raise
+  `StepError` naming the step, and nothing is recorded for a step that did not succeed.
+  Migrated so far: **Leiden clustering** (`tab_clustering.py`). One documented exception:
+  the `preamble` node records `xenium(data_path)` while the viewer reaches the same
+  objects via the zarr cache.
+- **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
+  in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
+  and executed code could drift. Re-running a step (same `id`) revises its node in place
+  and flags descendants stale; a missing dependency errors at record time.
+  `ctx.record_code(code, tag)` remains as a thin backward-compat shim.
+  Helper recorders: `record_preamble` (`preamble`
   node, defines `data_path`), `record_normalize`, `record_clustering` (`clustering:<key>`),
   `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
   `nhood:<key>`, `cooccur:<key>`, `ligrec:<key>`, `annotation:<col>`, `rois`, `roi_deg`,

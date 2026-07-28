@@ -16,7 +16,7 @@ polling the done-file) or on its next launch:
   completion (``status: ok`` or ``status: error``).
 
 Top-level imports are kept light (no napari/Qt); the heavy work happens inside
-``main`` with local imports, mirroring ``utils/leiden_worker.py``.
+``main`` with local imports, so the module stays cheap to import in the child.
 
 Usage::
 
