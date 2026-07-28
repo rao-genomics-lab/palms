@@ -3,10 +3,13 @@ Spatial analysis utilities for the Xenium viewer.
 
 Provides:
   - Spatial neighbor graph construction via squidpy
-  - Ligand-receptor interaction analysis
-  - L-R result plotting
+  - L-R and co-occurrence result plotting
   - Neighborhood enrichment analysis
-  - Co-occurrence analysis
+
+The ``ligrec`` and ``co_occurrence`` runners were deleted when those tabs moved
+onto the step executor: they are one squidpy call each, and the templates in
+``tabs/tab_ligrec.py`` / ``tabs/tab_co_occurrence.py`` now *are* that call — the
+same string the viewer executes and the notebook records.
 """
 
 from __future__ import annotations
@@ -33,61 +36,6 @@ def compute_spatial_neighbors(
         adata_norm, coord_type='generic', n_neighs=n_neighs,
     )
 
-
-def run_ligrec(
-    adata_norm: sc.AnnData,
-    cluster_key: str,
-    n_perms: int = 1000,
-    threshold: float = 0.01,
-    seed: int = 42,
-    interactions_params: dict | None = None,
-) -> dict:
-    """Run ligand-receptor interaction analysis.
-
-    Parameters
-    ----------
-    interactions_params : dict or None
-        Passed to ``sq.gr.ligrec(interactions_params=...)``.
-        Keys may include ``"include"`` (tuple of InteractionDataset enums)
-        and ``"resources"`` (e.g. ``"CellPhoneDB"``).
-
-    Returns dict with keys 'means', 'pvalues' (both DataFrames),
-    and 'warning' (str or None).
-    """
-    warning_msg = None
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            result = sq.gr.ligrec(
-                adata_norm,
-                cluster_key=cluster_key,
-                n_perms=n_perms,
-                threshold=threshold,
-                seed=seed,
-                use_raw=False,
-                copy=True,
-                transmitter_params={"categories": "ligand"},
-                receiver_params={"categories": "receptor"},
-                interactions_params=interactions_params or {},
-            )
-        means = result['means']
-        pvalues = result['pvalues']
-
-        if means.shape[0] == 0:
-            warning_msg = (
-                "No ligand-receptor interactions found. "
-                "The 480-gene Xenium panel may not contain enough L-R pairs."
-            )
-    except Exception as e:
-        means = pd.DataFrame()
-        pvalues = pd.DataFrame()
-        warning_msg = f"L-R analysis failed: {e}"
-
-    return {
-        'means': means,
-        'pvalues': pvalues,
-        'warning': warning_msg,
-    }
 
 
 def run_nhood_enrichment(
@@ -296,43 +244,6 @@ def make_ligrec_plot(
     )
     return plt.gcf()
 
-
-def run_co_occurrence(
-    adata_norm: sc.AnnData,
-    cluster_key: str,
-    interval: int = 50,
-    seed: int = 42,
-) -> dict:
-    """Run spatial co-occurrence analysis.
-
-    Returns dict with keys 'occ' (n_clusters x n_clusters x n_intervals-1),
-    'interval' (n_intervals,), 'clusters' (list of str), and 'warning' (str or None).
-    """
-    warning_msg = None
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            sq.gr.co_occurrence(
-                adata_norm,
-                cluster_key=cluster_key,
-                interval=interval,
-            )
-        result = adata_norm.uns[f'{cluster_key}_co_occurrence']
-        occ = np.array(result['occ'])
-        interval_arr = np.array(result['interval'])
-        clusters = list(adata_norm.obs[cluster_key].cat.categories.astype(str))
-    except Exception as e:
-        occ = np.array([])
-        interval_arr = np.array([])
-        clusters = []
-        warning_msg = f"Co-occurrence analysis failed: {e}"
-
-    return {
-        'occ': occ,
-        'interval': interval_arr,
-        'clusters': clusters,
-        'warning': warning_msg,
-    }
 
 
 def make_co_occurrence_plot(

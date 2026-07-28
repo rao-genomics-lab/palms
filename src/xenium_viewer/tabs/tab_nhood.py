@@ -10,10 +10,24 @@ from magicgui.widgets import ComboBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
+from xenium_viewer.utils.steps import Step, StepError, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
+
+
+# The source below is what the viewer executes *and* what the notebook records.
+# It runs on ``adata_norm`` with the spatial graph the ``spatial_neighbors``
+# step built on that same object; the old recorded cell called
+# ``sq.gr.nhood_enrichment(adata, ...)`` on raw, graph-less counts.
+_NHOOD_TEMPLATE = """
+# Neighborhood enrichment: $cluster_key (n_perms=$n_perms)
+adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
+sq.gr.nhood_enrichment(
+    adata_norm, cluster_key=$cluster_key, n_perms=$n_perms, seed=$seed,
+)
+nhood_zscore = adata_norm.uns[$uns_key]['zscore']"""
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -41,10 +55,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ne_status = StatusProxy(ctx.viewer)
     ne_progress = make_progress_bar()
 
-    from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
-    from xenium_viewer.utils.spatial_analysis import (
-        compute_spatial_neighbors, run_nhood_enrichment, make_nhood_enrichment_plot,
-    )
+    from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+    from xenium_viewer.utils.spatial_analysis import make_nhood_enrichment_plot
 
     def on_run_nhood():
         ne_status.value = "Running neighborhood enrichment..."
@@ -56,19 +68,46 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["_ne_params"] = {"n_perms": n_perms, "n_neighs": n_neighs}
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
+        # The clustering must exist as a node, and in adata.obs, before a step
+        # can declare it as a dependency and read it. Both on the GUI thread.
+        ctx.record_clustering(clustering_key)
+        add_clustering_to_obs(_adata, _adata, ctx.clusterings[clustering_key], clustering_key)
+
+        step = Step(
+            id=f"nhood:{clustering_key}",
+            template=_NHOOD_TEMPLATE,
+            params={
+                "cluster_key": clustering_key,
+                "uns_key": f"{clustering_key}_nhood_enrichment",
+                "n_perms": coerce(n_perms),
+                "seed": 42,
+            },
+            deps=[f"clustering:{clustering_key}", "spatial_neighbors"],
+            kind=ARTIFACT,
+            label=f"Neighborhood enrichment: {clustering_key}",
+            outputs=["adata_norm"],
+        )
+
         _progress = [None]  # filled after worker is created
 
         @thread_worker
         def _run():
-            adata_norm = get_normalized_adata(_adata)
-            add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
-            adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
-            compute_spatial_neighbors(adata_norm, n_neighs=n_neighs)
-            with qt_tqdm_context(_progress[0], "Enrichment permutations: "):
-                result = run_nhood_enrichment(adata_norm, clustering_key, n_perms=n_perms)
-            result['_adata_norm'] = adata_norm
-            result['_cluster_key'] = clustering_key
-            return result
+            ctx.ensure_spatial_neighbors(n_neighs)   # implies ensure_normalized()
+            try:
+                with qt_tqdm_context(_progress[0], "Enrichment permutations: "):
+                    adata_norm = ctx.run_step(step)["adata_norm"]
+            except StepError as e:
+                return {'zscore': np.array([]), 'count': np.array([]),
+                        'clusters': [], 'warning': str(e)}
+            uns = adata_norm.uns[f'{clustering_key}_nhood_enrichment']
+            return {
+                'zscore': np.array(uns['zscore']),
+                'count': np.array(uns['count']),
+                'clusters': list(adata_norm.obs[clustering_key].cat.categories.astype(str)),
+                'warning': None,
+                '_adata_norm': adata_norm,
+                '_cluster_key': clustering_key,
+            }
 
         worker = _run()
         _progress[0], state['_progress_timer'] = attach_tqdm_progress(
@@ -127,20 +166,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ne_plot_button.enabled = True
         ne_export_button.enabled = True
 
-        _ne_ck = result.get('_cluster_key', '')
-        _ne_p = state.get("_ne_params", {})
-        _ne_np = _ne_p.get("n_perms", 1000)
-        _ne_nn = _ne_p.get("n_neighs", 6)
-        ctx.record_clustering(_ne_ck)
-        ctx.record_spatial_neighbors(_ne_nn)
-        ctx.record_node(
-            f"nhood:{_ne_ck}",
-            f"\n# Neighborhood enrichment (n_perms={_ne_np})\n"
-            f"sq.gr.nhood_enrichment(adata, cluster_key=\"{_ne_ck}\", "
-            f"n_perms={_ne_np}, seed=42)",
-            deps=[f"clustering:{_ne_ck}", "spatial_neighbors"],
-            label=f"Neighborhood enrichment: {_ne_ck}",
-        )
+        # Recording happened inside ctx.run_step(), which recorded the source it ran.
 
     def on_show_nhood_plot():
         result = state.get("nhood_result")
@@ -182,10 +208,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
             _ne_mode = ne_mode_widget.value
             _ne_ck = result.get('_cluster_key', '')
             _ne_fmt = ctx.state.get("plot_format", "svg")
+            # TERMINAL, still on the legacy recorder — plot nodes are the E4
+            # view/analysis split. It reads adata_norm because that is where the
+            # nhood step now puts the result.
             ctx.record_node(
                 f"plot:nhood:{_ne_ck}",
                 f"\n# Nhood enrichment heatmap (mode={_ne_mode})\n"
-                f"sq.pl.nhood_enrichment(adata, cluster_key=\"{_ne_ck}\", "
+                f"sq.pl.nhood_enrichment(adata_norm, cluster_key=\"{_ne_ck}\", "
                 f"mode=\"{_ne_mode}\")\n"
                 f"fig = plt.gcf()\n"
                 f"fig.savefig(\"nhood_enrichment.{_ne_fmt}\", dpi=300, bbox_inches='tight')",
@@ -221,8 +250,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.record_node(
             f"export:nhood_zscore:{_ne_ck}",
             f"\n# Export nhood z-scores\n"
-            f"_cats = adata.obs[\"{_ne_ck}\"].cat.categories\n"
-            f"pd.DataFrame(adata.uns[\"{_ne_ck}_nhood_enrichment\"][\"zscore\"], "
+            f"_cats = adata_norm.obs[\"{_ne_ck}\"].cat.categories\n"
+            f"pd.DataFrame(adata_norm.uns[\"{_ne_ck}_nhood_enrichment\"][\"zscore\"], "
             f"index=_cats, columns=_cats).to_csv(\"{_fname}\")",
             deps=[f"nhood:{_ne_ck}"],
             kind=TERMINAL,

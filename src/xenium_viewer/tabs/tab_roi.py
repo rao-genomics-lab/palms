@@ -10,10 +10,69 @@ from magicgui.widgets import ComboBox, CheckBox, PushButton
 from qtpy.QtWidgets import QTextEdit, QFileDialog, QLabel as QtLabel
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, make_progress_bar
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import ARTIFACT, SETUP, TERMINAL
+from xenium_viewer.utils.steps import Step, StepError, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
+
+
+# The drawn polygons are inlined as literals so the notebook reproduces them
+# without the viewer's zarr cache. ``rois`` is a SETUP node: it binds a constant.
+_ROIS_TEMPLATE = """
+# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)
+roi_polygons = [np.array(_p) for _p in $polygons]"""
+
+
+# ROI DEG, executed and recorded from one string. The old recorded cell called
+# ``xenium_viewer.utils.gene_analysis.compute_roi_deg`` — so the notebook needed
+# this package installed and the reader could not see what it did. It is plain
+# shapely + scanpy, so it is now written out in full. (E3 replaces the
+# point-in-polygon block with ``spatialdata.polygon_query``.)
+_ROI_DEG_HEAD = """
+# ROI differential expression (method=$method)
+from shapely import contains_xy
+from shapely.geometry import Polygon
+
+centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
+roi_region = np.full(adata.n_obs, '', dtype=object)"""
+
+_ROI_DEG_FILTER = """
+# Cluster filter: cells must be inside an ROI *and* in the selected clusters
+cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()"""
+
+_ROI_DEG_LOOP_HEAD = """
+for _i, _poly_yx in enumerate(roi_polygons):
+    _poly = Polygon(_poly_yx[:, ::-1])
+    if not _poly.is_valid:
+        _poly = _poly.buffer(0)
+    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])"""
+
+_ROI_DEG_LOOP_FILTER = """
+    _inside = _inside & cluster_mask"""
+
+_ROI_DEG_TAIL = """
+    roi_region[_inside] = f'Region {_i + 1}'
+
+roi_adata = adata[roi_region != ''].copy()
+roi_adata.obs['roi_region'] = pd.Categorical(roi_region[roi_region != ''])
+sc.pp.normalize_total(roi_adata, target_sum=1e4)
+sc.pp.log1p(roi_adata)
+sc.tl.rank_genes_groups(
+    roi_adata, 'roi_region', method=$method, reference='rest', key_added=$method,
+)
+roi_deg_df = sc.get.rank_genes_groups_df(roi_adata, group=None, key=$method)"""
+
+
+def _roi_deg_template(filtered: bool) -> str:
+    parts = [_ROI_DEG_HEAD]
+    if filtered:
+        parts.append(_ROI_DEG_FILTER)
+    parts.append(_ROI_DEG_LOOP_HEAD)
+    if filtered:
+        parts.append(_ROI_DEG_LOOP_FILTER)
+    parts.append(_ROI_DEG_TAIL)
+    return "".join(parts)
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -31,21 +90,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
     roi_deg_progress = make_progress_bar()
 
     def _record_rois():
-        """Record the drawn ROI polygons as an inlined `roi_polygons` node so
-        the notebook reproduces them without the viewer's zarr cache."""
+        """Bind and record ``roi_polygons`` from the drawn shapes."""
         polygons = ctx.roi_layer.data if ctx.roi_layer is not None else []
         if len(polygons) == 0:
             return
-        arrs = ",\n    ".join(
-            f"np.array({np.round(np.asarray(p), 2).tolist()})" for p in polygons
-        )
-        ctx.record_node(
-            "rois",
-            "\n# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)\n"
-            f"roi_polygons = [\n    {arrs},\n]",
+        ctx.record_preamble()
+        ctx.run_step(Step(
+            id="rois",
+            template=_ROIS_TEMPLATE,
+            params={"polygons": [
+                np.round(np.asarray(p), 2).tolist() for p in polygons
+            ]},
             deps=["preamble"],
+            kind=SETUP,
             label=f"ROI polygons ({len(polygons)})",
-        )
+            outputs=["roi_polygons"],
+        ))
 
     def on_calculate_roi():
         from shapely.geometry import Polygon as ShapelyPolygon
@@ -228,8 +288,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     roi_deg_export_button = PushButton(label="Export DEG CSV...", enabled=False)
     roi_volcano_button = PushButton(label="Save Volcano Plot(s)...", enabled=False)
 
-    from xenium_viewer.utils.gene_analysis import compute_roi_deg
-
     def on_roi_deg():
         polygons = ctx.roi_layer.data if ctx.roi_layer is not None else []
         if len(polygons) < 2:
@@ -240,77 +298,66 @@ def build_tab(ctx: ViewerContext) -> tuple:
         roi_deg_button.enabled = False
         gen = ctx.dataset_generation
 
+        # The polygons must be bound before the DEG step, which reads them.
+        _record_rois()
+
         use_filter = roi_deg_filter_check.value
-        cluster_mask = None
+        deps = ["rois"]
+        params = {
+            "method": roi_deg_method_widget.value,
+            "pixel_size": coerce(ctx.pixel_size),
+        }
+        clustering_key = None
         if use_filter:
             clustering_key = ctx.clustering_widget.value
             selected_ids = ctx.get_selected_cluster_ids()
-            cluster_series = ctx.clusterings[clustering_key]
-            _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
-            if 'cell_id' in _adata.obs.columns:
-                clusters_aligned = cluster_series.reindex(_adata.obs['cell_id'].values)
-            else:
-                clusters_aligned = cluster_series.reindex(_adata.obs_names)
-            cluster_mask = ctx.make_cluster_mask(clusters_aligned.values, selected_ids)
+            ctx.record_clustering(clustering_key)
+            from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+            add_clustering_to_obs(ctx.adata, ctx.adata,
+                                  ctx.clusterings[clustering_key], clustering_key)
+            params["clustering"] = clustering_key
+            params["selected"] = sorted({str(i) for i in selected_ids})
+            deps.append(f"clustering:{clustering_key}")
 
-        method = roi_deg_method_widget.value
-        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+        step = Step(
+            id="roi_deg",
+            template=_roi_deg_template(use_filter),
+            params=params,
+            deps=deps,
+            kind=ARTIFACT,
+            label="ROI differential expression",
+            outputs=["roi_deg_df", "roi_adata"],
+        )
 
         @thread_worker
         def _run():
-            return compute_roi_deg(
-                _adata, ctx.centroids_yx, polygons, ctx.pixel_size,
-                cluster_mask=cluster_mask, method=method,
-            )
-
-        _use_filter = use_filter
-        _selected_ids = selected_ids if use_filter else None
+            try:
+                out = ctx.run_step(step)
+            except StepError as e:
+                import pandas as _pd
+                return _pd.DataFrame(), None, str(e)
+            return out["roi_deg_df"], out["roi_adata"], None
 
         worker = _run()
-        worker.returned.connect(lambda df: _on_roi_deg_ready(df, gen, _use_filter, _selected_ids))
+        worker.returned.connect(lambda r: _on_roi_deg_ready(r, gen))
         roi_deg_progress.setVisible(True)
         worker.finished.connect(lambda: roi_deg_progress.setVisible(False))
         worker.start()
 
-    def _on_roi_deg_ready(result, _gen, _use_filter, _selected_ids):
+    def _on_roi_deg_ready(result, _gen):
         if ctx.dataset_generation != _gen:
             return  # dataset reloaded while worker ran
-        df, adata_norm = result
+        df, adata_norm, error = result
         state["roi_deg_df"] = df
         state["roi_deg_adata_norm"] = adata_norm
         roi_deg_button.enabled = True
-        if not df.empty:
-            _record_rois()
-            _deps = ["rois"]
-            filter_line = ""
-            if _use_filter:
-                clustering_key = ctx.clustering_widget.value
-                ctx.record_clustering(clustering_key)
-                _deps.append(f"clustering:{clustering_key}")
-                filter_line = (
-                    f"\n# cluster filter (clustering='{clustering_key}', "
-                    f"clusters={sorted(_selected_ids)})\n"
-                    f"# cells must be inside an ROI AND in the selected clusters\n"
-                    f"cluster_series = adata.obs[{clustering_key!r}]\n"
-                    f"clusters_aligned = cluster_series.reindex(adata.obs['cell_id'].values)\n"
-                    f"cluster_mask = np.isin(clusters_aligned.values, {sorted(_selected_ids)})\n"
-                )
-            ctx.record_node(
-                "roi_deg",
-                f"\n# ROI differential expression\n"
-                f"import json\n"
-                f"from xenium_viewer.utils.gene_analysis import compute_roi_deg\n"
-                f"pixel_size = float(json.load(open(data_path / 'experiment.xenium'))['pixel_size'])\n"
-                f"centroids_yx = adata.obsm['spatial'][:, ::-1] / pixel_size  # µm→px, xy→yx\n"
-                f"{filter_line}"
-                f"roi_deg_df, roi_adata_norm = compute_roi_deg(\n"
-                f"    adata, centroids_yx, roi_polygons, pixel_size,\n"
-                f"    method={roi_deg_method_widget.value!r},\n"
-                f"    cluster_mask={'cluster_mask' if _use_filter else 'None'},\n"
-                f")",
-                deps=_deps,
-                label="ROI differential expression",
-            )
+        # Recording happened inside ctx.run_step(), which recorded the source it ran.
+        if error:
+            roi_deg_text.setPlainText(error)
+            roi_deg_status.value = f"DEG failed: {error}"
+            roi_deg_export_button.enabled = False
+            roi_volcano_button.enabled = False
+            return
         if df.empty:
             roi_deg_text.setPlainText("No significant results or insufficient cells in ROIs.")
             roi_deg_status.value = "DEG: no results"

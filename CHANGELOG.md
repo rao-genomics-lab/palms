@@ -113,12 +113,62 @@
   (`tabs/_helpers.py`, `tabs/tab_gene_analysis.py`, `utils/viewer_context.py`,
   `tests/test_normalize_rank_genes_steps.py`, `CLAUDE.md`)
 
-  **Known remaining divergence:** the tabs not yet migrated (marker genes, lig-rec,
-  neighbourhood enrichment, co-occurrence, gene correlation, annotation nhood, CNV) still
-  compute on `get_normalized_adata()` while recording code against a bare `adata` that
-  nothing in the graph normalises. That is the remainder of E2.
+- **The spatial, marker, correlation and ROI tabs migrated onto the step executor.**
+  Every one of them ran one expression and recorded a different one; each is now a single
+  templated `Step`.
+
+  - **Spatial neighbours** is now `ctx.ensure_spatial_neighbors(k)`, building the graph on
+    `adata_norm`. The old node built it on `adata` while every consumer was handed the
+    normalised copy — so a replayed notebook ran neighbourhood enrichment against an object
+    with no `.obsp` graph on it at all. It also stopped rebuilding `obsm['spatial']` from
+    `x_centroid`/`y_centroid`, columns the Xenium table does not have under those names.
+  - **Neighbourhood enrichment** and **co-occurrence** run on `adata_norm` with that graph.
+  - **Ligand-receptor**: the interaction-database checkboxes reached the notebook only as a
+    `# interactions: OmniPath, LigRecExtra` prose comment, so a replay silently fell back to
+    omnipath's defaults. They are now `InteractionDataset` members reconstructed by name in
+    the recorded source, along with the `CellPhoneDB`-only restriction, `use_raw=False` and
+    `copy=True`.
+  - **Marker genes** recorded *nothing at all* despite being five plain scanpy calls. All
+    five are now `plot:markers:<plot>:<key>` terminals carrying the marker dict and the
+    cluster display labels as literals.
+  - **Gene correlation**: the whole figure is one step, so the scatter the viewer shows is
+    the scatter the notebook draws. The recorded cell previously omitted the annotation box,
+    the *n* in the title, and the cluster filter entirely — a notebook that correlated all
+    cells while the GUI showed a filtered subset. Expression is pulled with `sc.get.obs_df`
+    instead of hand-indexing `.X` and calling `.toarray()`.
+  - **ROI DEG** no longer records a call into `xenium_viewer.utils.gene_analysis`, so the
+    notebook is standalone scverse code: the shapely point-in-polygon assignment and the
+    scanpy DEG are written out in full. `rois` became a real step that binds `roi_polygons`.
+    The cluster filter is recorded as an explicit `obs[key].isin([...])`.
+
+  `tests/test_spatial_roi_steps.py` (28 tests) executes the real templates and replays the
+  recorded graph in a clean namespace; ROI DEG is additionally checked frame-for-frame
+  against `compute_roi_deg`, the implementation it replaces.
+  (`tabs/_helpers.py`, `tabs/tab_nhood.py`, `tabs/tab_co_occurrence.py`, `tabs/tab_ligrec.py`,
+  `tabs/tab_marker_genes.py`, `tabs/tab_gene_correlation.py`, `tabs/tab_roi.py`,
+  `utils/viewer_context.py`, `utils/spatial_analysis.py`, `tests/test_spatial_roi_steps.py`)
+
+  **Known remaining divergence:** the CNV tab still records code against a bare `adata`
+  (and with `sc.pp.normalize_total` at scanpy's median default rather than the
+  `target_sum=1e4` it runs), and the annotation-neighbourhood tab records nothing at all.
+  Plot/export **terminals** across the migrated tabs are still on `ctx.record_node`; their
+  code strings were corrected to read `adata_norm` where the artifact now lives, but the
+  terminal-node policy itself is E4.
+
+### Fixed
+- **The Marker Genes correlation-matrix button never worked.** It called
+  `sc.tl.correlation_matrix`, which does not exist in scanpy — the `AttributeError` was
+  raised inside a worker thread where nothing surfaced it. `sc.pl.correlation_matrix` reads
+  the matrix `sc.tl.dendrogram` computes, so that is what the step now runs. Surfaced by
+  migrating the tab onto the executor, which reports step failures instead of swallowing
+  them. (`tabs/tab_marker_genes.py`)
+- **A dead `_get_adata_norm` in the Marker Genes tab** passed `add_clustering_to_obs` its
+  arguments in the wrong order (`adata_orig` and `clustering_series` swapped). Removed.
+  (`tabs/tab_marker_genes.py`)
 
 ### Removed
+- **`spatial_analysis.run_ligrec` and `spatial_analysis.run_co_occurrence`.** One squidpy
+  call each; the templates in the tabs now *are* that call. (`utils/spatial_analysis.py`)
 - **`utils/leiden_worker.py`.** The spawned-subprocess Leiden existed for GUI
   responsiveness, but it was also the second expression of the algorithm that drifted from
   the recorded one. scanpy's `igraph` flavor is, per its own warning, "orders of magnitude

@@ -10,6 +10,8 @@ from magicgui.widgets import ComboBox, PushButton
 from qtpy.QtWidgets import QTextEdit, QFileDialog, QLabel as QtLabel
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
+from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.steps import Step, StepError
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -19,6 +21,49 @@ _PLACEHOLDER = '''\
   "Cell type A": ["Gene1", "Gene2", "Gene3"],
   "Cell type B": ["Gene4", "Gene5"]
 }'''
+
+
+# This tab recorded nothing at all before, despite being five plain scanpy
+# plotting calls. It is now templated like the rest: the marker dict and the
+# display labels reach the notebook as literals, so a replay reproduces the
+# figure rather than a differently-grouped approximation of it.
+_MARKER_PLOT_HEAD = """
+# $plot_name: $groupby
+adata_norm.obs[$groupby] = adata.obs[$groupby].values"""
+
+_MARKER_PLOT_RELABEL = """
+adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)"""
+
+# sc.pl.correlation_matrix is the one that needs its statistic computed first,
+# and the one that ignores var_names.
+_MARKER_PLOT_CALLS = {
+    "dotplot": "\nsc.pl.dotplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)",
+    "heatmap": "\nsc.pl.heatmap(adata_norm, var_names=$markers, groupby=$groupby, show=False)",
+    "matrixplot": "\nsc.pl.matrixplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)",
+    "tracksplot": "\nsc.pl.tracksplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)",
+    # sc.tl.correlation_matrix does not exist (and has not for some time) — the
+    # correlation button raised AttributeError inside the worker thread, where
+    # nothing surfaced it. sc.pl.correlation_matrix reads the matrix that
+    # sc.tl.dendrogram computes into uns[f'dendrogram_{groupby}'].
+    "correlation_matrix": (
+        "\nsc.tl.dendrogram(adata_norm, $groupby)"
+        "\nsc.pl.correlation_matrix(adata_norm, $groupby, show=False)"
+    ),
+}
+
+_MARKER_PLOT_TAIL = """
+plt.gcf().savefig($path, bbox_inches='tight'$dpi_kwarg)"""
+
+
+def _marker_plot_template(plot_name: str, relabel: bool, dpi: bool) -> str:
+    parts = [_MARKER_PLOT_HEAD]
+    if relabel:
+        parts.append(_MARKER_PLOT_RELABEL)
+    parts.append(_MARKER_PLOT_CALLS[plot_name])
+    parts.append(_MARKER_PLOT_TAIL.replace(
+        "$dpi_kwarg", ", dpi=150" if dpi else "",
+    ))
+    return "".join(parts)
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -91,35 +136,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["marker_genes_json"] = json.dumps(marker_dict, indent=2)
         return marker_dict
 
-    def _get_adata_norm():
-        """Return (adata_norm, groupby_key) with clustering added to obs."""
-        from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
-
-        clustering_key = mg_clustering_widget.value
-        if not clustering_key or clustering_key not in ctx.clusterings:
-            return None, None
-
-        _adata = ctx.adata
-        adata_norm = get_normalized_adata(_adata)
-        add_clustering_to_obs(adata_norm, ctx.clusterings[clustering_key],
-                              _adata, key_name=clustering_key)
-
-        # Apply cluster labels as category names
-        labels = ctx.get_labels_for(clustering_key)
-        if labels:
-            cats = adata_norm.obs[clustering_key].cat.categories
-            new_cats = []
-            for c in cats:
-                try:
-                    label = labels.get(int(c), labels.get(c, c))
-                except (ValueError, TypeError):
-                    label = labels.get(c, c)
-                new_cats.append(str(label))
-            adata_norm.obs[clustering_key] = (
-                adata_norm.obs[clustering_key].cat.rename_categories(new_cats)
-            )
-        return adata_norm, clustering_key
-
     def _pick_save_path(plot_name: str) -> str | None:
         fmt = fmt_widget.value.lower()
         path, _ = QFileDialog.getSaveFileName(
@@ -130,8 +146,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         return path or None
 
     # ── Generic runner ───────────────────────────────────────────────────
-    def _run_plot(plot_name: str, plot_fn):
-        """Validate inputs, ask for save path, run plot_fn in thread."""
+    def _run_plot(plot_name: str):
+        """Validate inputs, ask for save path, then run the plot as a Step."""
         marker_dict = _parse_marker_dict()
         if marker_dict is None:
             return
@@ -149,45 +165,61 @@ def build_tab(ctx: ViewerContext) -> tuple:
         status_label.value = f"Generating {plot_name}..."
         gen = ctx.dataset_generation
 
-        _adata    = ctx.adata
-        _ckey     = clustering_key
-        _cser     = ctx.clusterings[clustering_key].copy()
-        _labels   = ctx.get_labels_for(clustering_key)
-        _mdict    = marker_dict
-        _fmt      = fmt_widget.value.lower()
+        _adata  = ctx.adata
+        _labels = ctx.get_labels_for(clustering_key)
+        _fmt    = fmt_widget.value.lower()
+
+        # The clustering must exist as a node, and in adata.obs, before a step
+        # can declare it as a dependency and read it. Both on the GUI thread.
+        from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+        ctx.record_clustering(clustering_key)
+        add_clustering_to_obs(_adata, _adata,
+                              ctx.clusterings[clustering_key], clustering_key)
+
+        # Display names, resolved here so they render as a literal list.
+        categories = None
+        if _labels:
+            categories = []
+            for c in _adata.obs[clustering_key].cat.categories:
+                try:
+                    label = _labels.get(int(c), _labels.get(c, c))
+                except (ValueError, TypeError):
+                    label = _labels.get(c, c)
+                categories.append(str(label))
+
+        params = {
+            "plot_name": plot_name,
+            "groupby": clustering_key,
+            "markers": marker_dict,
+            "path": path,
+        }
+        if categories is not None:
+            params["categories"] = categories
+
+        step = Step(
+            id=f"plot:markers:{plot_name}:{clustering_key}",
+            template=_marker_plot_template(
+                plot_name, relabel=categories is not None, dpi=_fmt == "png",
+            ),
+            params=params,
+            deps=["normalize", f"clustering:{clustering_key}"],
+            kind=TERMINAL,
+            label=f"Marker {plot_name}: {clustering_key}",
+        )
 
         @thread_worker
         def _run():
             import matplotlib
             matplotlib.use('Agg')
             import matplotlib.pyplot as plt
-            from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
 
-            adata_norm = get_normalized_adata(_adata)
-            add_clustering_to_obs(adata_norm, _adata, _cser, key_name=_ckey)
-
-            if _labels:
-                cats = adata_norm.obs[_ckey].cat.categories
-                new_cats = []
-                for c in cats:
-                    try:
-                        label = _labels.get(int(c), _labels.get(c, c))
-                    except (ValueError, TypeError):
-                        label = _labels.get(c, c)
-                    new_cats.append(str(label))
-                adata_norm.obs[_ckey] = (
-                    adata_norm.obs[_ckey].cat.rename_categories(new_cats)
-                )
-
-            # plot_fn renders to the current figure; capture with gcf()
+            ctx.ensure_normalized()
             plt.close('all')
-            plot_fn(adata_norm, _mdict, _ckey)
-            fig = plt.gcf()
-            save_kwargs = dict(bbox_inches='tight')
-            if _fmt == 'png':
-                save_kwargs['dpi'] = 150
-            fig.savefig(path, **save_kwargs)
-            plt.close(fig)
+            try:
+                ctx.run_step(step)
+            except StepError as e:
+                return str(e)
+            plt.close('all')
             return path
 
         worker = _run()
@@ -201,39 +233,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             btn.enabled = True
         status_label.value = f"{plot_name} saved: {path}"
 
-    # ── Plot functions (each runs inside a thread via _run_plot) ─────────
-    # These render to plt's current figure; _run_plot captures with plt.gcf().
-    def _dotplot_fn(adata_norm, marker_dict, groupby):
-        import scanpy as sc
-        sc.pl.dotplot(adata_norm, var_names=marker_dict, groupby=groupby, show=False)
-
-    def _heatmap_fn(adata_norm, marker_dict, groupby):
-        import scanpy as sc
-        sc.pl.heatmap(adata_norm, var_names=marker_dict, groupby=groupby, show=False)
-
-    def _matrixplot_fn(adata_norm, marker_dict, groupby):
-        import scanpy as sc
-        sc.pl.matrixplot(adata_norm, var_names=marker_dict, groupby=groupby, show=False)
-
-    def _tracksplot_fn(adata_norm, marker_dict, groupby):
-        import scanpy as sc
-        sc.pl.tracksplot(adata_norm, var_names=marker_dict, groupby=groupby, show=False)
-
-    def _corrplot_fn(adata_norm, marker_dict, groupby):
-        import scanpy as sc
-        sc.tl.correlation_matrix(adata_norm, groupby)
-        sc.pl.correlation_matrix(adata_norm, groupby, show=False)
-
-    dot_button.clicked.connect(
-        lambda: _run_plot("dotplot", _dotplot_fn))
-    heat_button.clicked.connect(
-        lambda: _run_plot("heatmap", _heatmap_fn))
-    matrix_button.clicked.connect(
-        lambda: _run_plot("matrixplot", _matrixplot_fn))
-    tracks_button.clicked.connect(
-        lambda: _run_plot("tracksplot", _tracksplot_fn))
-    corr_button.clicked.connect(
-        lambda: _run_plot("correlation_matrix", _corrplot_fn))
+    dot_button.clicked.connect(lambda: _run_plot("dotplot"))
+    heat_button.clicked.connect(lambda: _run_plot("heatmap"))
+    matrix_button.clicked.connect(lambda: _run_plot("matrixplot"))
+    tracks_button.clicked.connect(lambda: _run_plot("tracksplot"))
+    corr_button.clicked.connect(lambda: _run_plot("correlation_matrix"))
 
     # ── Layout ───────────────────────────────────────────────────────────
     widget = make_tab(

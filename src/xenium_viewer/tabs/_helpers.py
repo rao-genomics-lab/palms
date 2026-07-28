@@ -12,7 +12,7 @@ from superqt.utils import ensure_main_thread
 from xenium_viewer.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
-from xenium_viewer.utils.steps import Step, StepExecutor
+from xenium_viewer.utils.steps import Step, StepExecutor, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -28,6 +28,16 @@ adata_norm = adata.copy()
 sc.pp.normalize_total(adata_norm, target_sum=1e4)
 sc.pp.log1p(adata_norm)
 sc.pp.pca(adata_norm)"""
+
+
+# Built on ``adata_norm`` rather than ``adata``: every consumer of the spatial
+# graph (nhood enrichment, co-occurrence, ligrec) works on the normalised copy,
+# and squidpy stores the graph in ``.obsp`` of whichever object it was given.
+# The old recorded cell built it on ``adata`` — so the notebook's consumers read
+# a graph that did not exist on the object they were passed.
+_SPATIAL_NEIGHBORS_TEMPLATE = """
+# Spatial neighbor graph (k=$n_neighs)
+sq.gr.spatial_neighbors(adata_norm, coord_type='generic', n_neighs=$n_neighs)"""
 
 
 # ── magicgui ComboBox default helper ─────────────────────────────────────────
@@ -477,22 +487,36 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.record_clustering = _record_clustering
 
-    # ── record_spatial_neighbors ─────────────────────────────────────────
-    def _record_spatial_neighbors(n_neighs):
-        _record_preamble()
-        _record_node(
-            "spatial_neighbors",
-            f"\n# Compute spatial neighbors (k={n_neighs})\n"
-            "adata.obsm['spatial'] = adata.obsm.get('spatial', "
-            "np.column_stack([adata.obs['x_centroid'], adata.obs['y_centroid']]))\n"
-            f"sq.gr.spatial_neighbors(adata, n_neighs={n_neighs}, coord_type=\"generic\")",
-            deps=["preamble"],
-            kind=ARTIFACT,
-            params={"n_neighs": n_neighs},
-            label="Spatial neighbors",
-        )
+    # ── ensure_spatial_neighbors ─────────────────────────────────────────
+    def _ensure_spatial_neighbors(n_neighs):
+        """Build the spatial graph on ``adata_norm`` if needed, and record it.
 
-    ctx.record_spatial_neighbors = _record_spatial_neighbors
+        Replaces ``record_spatial_neighbors``, which recorded a graph built on
+        ``adata`` while the viewer built one on the normalised copy the analyses
+        were actually handed — so a replayed notebook ran nhood/co-occurrence
+        against an object with no ``.obsp`` graph on it.
+
+        Idempotent per ``(adata_norm, n_neighs)``. Re-running with a different
+        ``n_neighs`` upserts the node and flags its dependents stale, which is
+        the intended semantics.
+        """
+        n_neighs = coerce(n_neighs)
+        _ensure_normalized()
+        executor = _get_executor()
+        cache_key = (id(executor.ns.get("adata_norm")), n_neighs)
+        if state.get("_spatial_neighbors_key") == cache_key:
+            return
+        _run_step(Step(
+            id="spatial_neighbors",
+            template=_SPATIAL_NEIGHBORS_TEMPLATE,
+            params={"n_neighs": n_neighs},
+            deps=["normalize"],
+            kind=ARTIFACT,
+            label="Spatial neighbors",
+        ))
+        state["_spatial_neighbors_key"] = cache_key
+
+    ctx.ensure_spatial_neighbors = _ensure_spatial_neighbors
 
     # ── auto_save_plot ───────────────────────────────────────────────────
     def _auto_save_plot(fig, stem: str) -> str:

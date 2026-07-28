@@ -108,15 +108,23 @@ regardless of the order actions were taken — even across sessions.
   `StepError` naming the step, and nothing is recorded for a step that did not succeed.
   Migrated so far: **Leiden clustering** (`tab_clustering.py`), **normalize**
   (`ctx.ensure_normalized()`, which binds `adata_norm` and replaces the old
-  `record_normalize` + `get_normalized_adata` pair), and **rank genes**
-  (`tab_gene_analysis.py`). Every expression-based step consumes `adata_norm` and
+  `record_normalize` + `get_normalized_adata` pair), **rank genes**
+  (`tab_gene_analysis.py`), **spatial neighbours**
+  (`ctx.ensure_spatial_neighbors(k)`, which builds the graph on `adata_norm` and
+  replaces `record_spatial_neighbors`), **neighbourhood enrichment**, **co-occurrence**,
+  **ligand-receptor**, **marker-gene plots**, **gene correlation**, and **ROI DEG +
+  `rois`**. Every expression-based step consumes `adata_norm` and
   declares `deps=["normalize"]` — never an implicit reliance on `adata` having been
   normalised in place, which is what made the DAG lie before. Call
   `ctx.ensure_normalized()` (idempotent) before `ctx.run_step()` in any such step.
   One documented exception: the `preamble` node records
   `xenium(data_path)` while the viewer reaches the same objects via the zarr cache.
-  **Unmigrated tabs still record analysis code against a bare `adata`** that nothing
-  normalises — they are divergent until migrated; that is the remainder of E2.
+  Still unmigrated: the **CNV** tab (records against a bare `adata`, and its CopyKAT
+  backend runs out-of-process in a second conda env, so it cannot be an in-process step)
+  and the **annotation-neighbourhood** tab (records nothing; its synthetic virtual cells
+  are sampled from a napari shapes layer the notebook has no access to — resolving that
+  needs E3's spatialdata shapes). **Plot/export terminals** across the migrated tabs are
+  still on `record_node`; the terminal-node policy is E4.
 - **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
   in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
   and executed code could drift. Re-running a step (same `id`) revises its node in place

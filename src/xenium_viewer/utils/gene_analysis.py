@@ -334,6 +334,11 @@ def compute_roi_deg(
 ) -> pd.DataFrame:
     """Differential expression between ROI regions.
 
+    Retained as the reference implementation the ``roi_deg`` step is checked
+    against (``tests/test_spatial_roi_steps.py``). The viewer no longer calls
+    it: the ROI DEG tab runs a template of the same shapely + scanpy code, so
+    that what it executes is what the notebook records.
+
     Parameters
     ----------
     adata : raw-count AnnData

@@ -79,8 +79,8 @@ class ViewerContext:
     record_node: Any = None
     record_preamble: Any = None
     ensure_normalized: Any = None   # runs the "normalize" step, returns adata_norm
+    ensure_spatial_neighbors: Any = None  # runs the "spatial_neighbors" step on adata_norm
     record_clustering: Any = None
-    record_spatial_neighbors: Any = None
     refresh_clustering_choices: Any = None
     auto_save_plot: Any = None
     repopulate_cluster_checkboxes: Any = None
