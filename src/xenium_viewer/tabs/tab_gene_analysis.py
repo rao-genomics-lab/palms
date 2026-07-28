@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
 from xenium_viewer.utils.gene_analysis import (
-    get_normalized_adata, add_clustering_to_obs,
+    add_clustering_to_obs,
     make_rank_genes_dotplot, make_rank_genes_plot, generate_all_volcano_plots,
     run_celltypist_annotation,
     load_reference_h5ad, get_annotation_columns, run_label_transfer,
@@ -428,7 +428,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         @thread_worker
         def _run():
-            adata_norm = get_normalized_adata(_adata)
+            # The same adata_norm every other analysis uses, rather than a second
+            # normalised copy from get_normalized_adata's id()-keyed cache. The
+            # CellTypist call itself is not a Step: what gets recorded is the
+            # resolved cluster→label mapping, not the model run (see below).
+            adata_norm = ctx.ensure_normalized()
             cell_predictions, cell_confidence = run_celltypist_annotation(adata_norm, model_name)
             return cell_predictions, cell_confidence, clustering_key
 
