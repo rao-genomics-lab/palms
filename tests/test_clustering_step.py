@@ -29,6 +29,7 @@ from xenium_viewer.utils.steps import Step, StepExecutor, check_step  # noqa: E4
 
 # Imported from the tab module's constants without triggering its Qt imports.
 from xenium_viewer.tabs.tab_clustering import _leiden_template  # noqa: E402
+from xenium_viewer.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
 
 
 def _adata(n_obs: int = 200, n_vars: int = 60):
@@ -42,6 +43,11 @@ def _adata(n_obs: int = 200, n_vars: int = 60):
     return a
 
 
+def _normalize_step():
+    return Step(id="normalize", template=_NORMALIZE_TEMPLATE, kind="setup",
+                label="Normalize, log-transform, PCA", outputs=["adata_norm"])
+
+
 def _step(key="leiden_r1.0", use_hvg=False, do_scale=False, n_pcs=10):
     return Step(
         id=f"clustering:{key}",
@@ -50,14 +56,17 @@ def _step(key="leiden_r1.0", use_hvg=False, do_scale=False, n_pcs=10):
             "key": key, "resolution": 1.0, "n_neighbors": 15, "n_pcs": n_pcs,
             "n_top_genes": 30, "random_state": 0,
         },
+        deps=["normalize"],
         label=f"Clustering: {key}",
     )
 
 
 def _run(step, adata):
+    """Run the real normalize -> clustering pair, as the viewer does."""
     ex = StepExecutor(namespace={"sc": sc, "adata": adata})
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        ex.run(_normalize_step())
         ex.run(step)
     return ex
 
@@ -87,35 +96,61 @@ def test_recorded_source_replays_to_the_same_labels():
     ex = _run(step, adata)
     gui_labels = adata.obs["leiden_r1.0"].astype(str).to_numpy()
 
-    recorded = ex.graph.get("clustering:leiden_r1.0").code
+    # Replay every recorded cell in dependency order, as the notebook does.
     replay_ns = {"sc": sc, "adata": _adata()}
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        exec(compile(recorded, "<replay>", "exec"), replay_ns)  # noqa: S102
+        for node_id in ex.graph.topo_sort():
+            exec(compile(ex.graph.get(node_id).code, "<replay>", "exec"), replay_ns)  # noqa: S102
     replay_labels = replay_ns["adata"].obs["leiden_r1.0"].astype(str).to_numpy()
 
     assert (gui_labels == replay_labels).all()
 
 
-def test_step_is_self_contained_given_sc_and_adata():
+def test_step_is_self_contained_given_its_declared_inputs():
     """The template must not reach for anything the notebook won't have bound."""
-    assert check_step(_step(), available={"sc", "adata"}) == set()
-    assert check_step(_step(use_hvg=True, do_scale=True),
-                      available={"sc", "adata"}) == set()
+    available = {"sc", "adata", "adata_norm"}
+    assert check_step(_step(), available=available) == set()
+    assert check_step(_step(use_hvg=True, do_scale=True), available=available) == set()
 
 
-def test_template_does_not_depend_on_a_shared_normalize_node():
-    """Regression: the old HVG branch copied an externally-normalised adata.
+def test_clustering_starts_from_the_shared_normalized_copy():
+    """Regression, twice over.
 
-    ``normalize`` is a SETUP node, so it sorts ahead of every artifact node and
-    mutates ``adata`` in place. The step must normalise its own copy, so that a
-    notebook containing both cells cannot double-normalise this one.
+    Originally the step copied ``adata`` and relied on a SETUP ``normalize``
+    node having mutated it in place — invisible in the DAG, and wrong whenever
+    that node was absent. The over-correction then inlined normalisation into
+    the step, which normalised twice in the exported notebook and hid the
+    ``normalize -> clustering`` edge a reader expects.
+
+    Now ``normalize`` binds a *copy* (``adata_norm``), so the step can consume
+    it: one normalisation, one real edge.
     """
-    source = _leiden_template(use_hvg=True, do_scale=False)
-    assert "adata_leiden = adata.copy()" in source
-    assert "sc.pp.normalize_total(adata_leiden, target_sum=1e4)" in source
-    # and it must not silently rely on adata already being log-normalised
-    assert "sc.pp.log1p(adata_leiden)" in source
+    for use_hvg in (False, True):
+        source = _leiden_template(use_hvg=use_hvg, do_scale=False)
+        assert "adata_leiden = adata_norm.copy()" in source
+        # it must not re-normalise what `normalize` already normalised
+        assert "normalize_total" not in source
+        assert "log1p" not in source
+
+
+def test_clustering_declares_normalize_as_a_dependency():
+    """The edge must be in the graph, not just implied by the source."""
+    assert _step().deps == ["normalize"]
+
+
+def test_pca_is_recomputed_only_when_the_gene_set_or_scaling_changed():
+    """Otherwise ``adata_norm``'s X_pca is exactly what we'd recompute."""
+    assert "sc.pp.pca(adata_leiden)" not in _leiden_template(False, False)
+    for use_hvg, do_scale in [(True, False), (False, True), (True, True)]:
+        assert "sc.pp.pca(adata_leiden)" in _leiden_template(use_hvg, do_scale)
+
+
+def test_normalize_sorts_before_clustering():
+    adata = _adata()
+    ex = _run(_step(), adata)
+    order = ex.graph.topo_sort()
+    assert order.index("normalize") < order.index("clustering:leiden_r1.0")
 
 
 def test_leiden_call_pins_flavor_and_iterations():

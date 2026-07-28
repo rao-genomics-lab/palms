@@ -17,19 +17,22 @@ if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
 
-# Leiden runs as a single self-contained Step: the source below is what the
-# viewer executes *and* what the notebook records — there is no second
-# expression of this pipeline to drift from (see utils/steps.py).
+# Leiden runs as a single Step: the source below is what the viewer executes
+# *and* what the notebook records — there is no second expression of this
+# pipeline to drift from (see utils/steps.py).
 #
-# It deliberately works on its own ``adata_leiden`` copy rather than depending
-# on the shared, in-place-mutating ``normalize`` node. That makes the step
-# order-independent: a notebook that also contains ``normalize`` cannot
-# double-normalise this branch, which the previous two-branch recording could.
+# It starts from ``adata_norm`` (the log-normalised copy bound by the
+# "normalize" step) rather than re-normalising ``adata`` itself, so the graph
+# carries a real ``normalize -> clustering`` edge and the notebook normalises
+# once. This is safe only because ``normalize`` binds a *copy*: when it mutated
+# ``adata`` in place, any step that copied ``adata`` risked normalising twice.
+#
+# It still works on its own ``adata_leiden`` copy, so that neighbours/leiden
+# (and any HVG subsetting) don't mutate the shared ``adata_norm`` that
+# rank-genes and the other expression analyses read.
 _LEIDEN_TEMPLATE_HEAD = """
 # Leiden clustering ($key)
-adata_leiden = adata.copy()
-sc.pp.normalize_total(adata_leiden, target_sum=1e4)
-sc.pp.log1p(adata_leiden)"""
+adata_leiden = adata_norm.copy()"""
 
 _LEIDEN_TEMPLATE_HVG = """
 sc.pp.highly_variable_genes(adata_leiden, n_top_genes=$n_top_genes, flavor='seurat')
@@ -38,8 +41,12 @@ adata_leiden = adata_leiden[:, adata_leiden.var.highly_variable].copy()"""
 _LEIDEN_TEMPLATE_SCALE = """
 sc.pp.scale(adata_leiden, max_value=10)"""
 
+# PCA is recomputed only when the gene set or scaling changed; otherwise the
+# X_pca carried over from `normalize` is exactly what we would recompute.
+_LEIDEN_TEMPLATE_PCA = """
+sc.pp.pca(adata_leiden)"""
+
 _LEIDEN_TEMPLATE_TAIL = """
-sc.pp.pca(adata_leiden)
 sc.pp.neighbors(adata_leiden, n_neighbors=$n_neighbors, n_pcs=$n_pcs)
 sc.tl.leiden(
     adata_leiden, resolution=$resolution, key_added=$key,
@@ -55,6 +62,8 @@ def _leiden_template(use_hvg: bool, do_scale: bool) -> str:
         parts.append(_LEIDEN_TEMPLATE_HVG)
     if do_scale:
         parts.append(_LEIDEN_TEMPLATE_SCALE)
+    if use_hvg or do_scale:
+        parts.append(_LEIDEN_TEMPLATE_PCA)
     parts.append(_LEIDEN_TEMPLATE_TAIL)
     return "".join(parts)
 
@@ -127,7 +136,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
         key = f"leiden_r{resolution}"
-        ctx.record_preamble()   # the step's declared dependency must exist first
         step = Step(
             id=f"clustering:{key}",
             template=_leiden_template(use_hvg, do_scale),
@@ -139,7 +147,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 "n_top_genes": coerce(n_hvgs),
                 "random_state": 0,
             },
-            deps=["preamble"],
+            deps=["normalize"],
             kind=ARTIFACT,
             label=f"Clustering: {key}",
         )
@@ -147,6 +155,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         @thread_worker
         def _run():
             import pandas as pd
+            yield "Normalizing..."
+            # Binds adata_norm and records the "normalize" node this step
+            # declares as its dependency. Idempotent per adata.
+            ctx.ensure_normalized()
+
             yield "Running Leiden clustering..."
             # One call: this executes exactly the source it records.
             ctx.run_step(step)

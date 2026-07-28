@@ -65,17 +65,20 @@
     (which also requires `directed=False`) — leaving them implicit would silently change
     clusterings on a scanpy upgrade. **Cluster labels will differ from previous runs**;
     existing saved clusterings are untouched.
-  - **Both preprocessing branches are now one self-contained step** that normalises its
-    own `adata_leiden` copy. The old default branch depended on the shared `normalize`
-    SETUP node, which sorts ahead of every artifact node and mutates `adata` in place —
-    so an exported notebook containing both could double-normalise. It no longer can.
+  - **Both preprocessing branches are now one step**, which starts from `adata_norm`
+    (bound by the `normalize` step below) and works on its own `adata_leiden` copy, so
+    neighbours/Leiden/HVG-subsetting don't mutate the shared normalised object. It
+    declares `deps=["normalize"]`, so the DAG carries a real `normalize -> clustering`
+    edge and the exported notebook normalises exactly once. PCA is recomputed only when
+    HVG selection or scaling changed the feature space; otherwise `adata_norm`'s `X_pca`
+    is what a recomputation would produce anyway.
   - Flat-journal/notebook-tab updates are bounced to the GUI thread via
     `superqt.utils.ensure_main_thread`, since steps execute in napari worker threads.
 
-  `tests/test_clustering_step.py` (9 tests) runs the real template on synthetic data
-  across all four HVG/scale combinations, asserts recorded source == executed source,
-  and — the reproducibility claim in miniature — re-executes the recorded cell in a clean
-  namespace and checks the labels match exactly.
+  `tests/test_clustering_step.py` (12 tests) runs the real `normalize` + Leiden pair on
+  synthetic data across all four HVG/scale combinations, asserts recorded source ==
+  executed source, and — the reproducibility claim in miniature — replays the whole
+  topo-sorted graph in a clean namespace and checks the labels match exactly.
   (`tabs/tab_clustering.py`, `tabs/_helpers.py`, `utils/viewer_context.py`,
   `tests/test_clustering_step.py`, `CLAUDE.md`)
 
@@ -90,15 +93,14 @@
   Two structural fixes come with it:
   - **`normalize` binds `adata_norm = adata.copy()` instead of mutating `adata`.** The
     old node was `kind=SETUP`, so it sorted ahead of every artifact node and silently
-    log-normalised the object other cells then copied — an exported notebook containing
-    both it and a self-contained step could double-normalise. Consumers now name
-    `adata_norm` explicitly.
+    log-normalised the object other cells then copied — an implicit, invisible edge that
+    was wrong whenever the node happened to be absent. Consumers now name `adata_norm`
+    explicitly and declare `deps=["normalize"]`, which is what puts the edge in the DAG.
   - **Rank genes now ranks on `adata_norm`, not on raw `adata`.** The recorded cell had
     been `sc.tl.rank_genes_groups(adata, ...)`, correct only when a `normalize` SETUP node
-    happened to be in the graph. With clustering self-contained (above), a Leiden-only
-    session would have left nothing normalising `adata` at all, so the exported notebook
-    would have ranked raw counts. The step declares `deps=["normalize", "clustering:<key>"]`
-    and copies the clustering from `adata.obs` onto `adata_norm.obs`.
+    happened to be in the graph and had mutated `adata` first. The step declares
+    `deps=["normalize", "clustering:<key>"]` and copies the clustering from `adata.obs`
+    onto `adata_norm.obs`.
 
   `record_clustering`'s CSV-import node now depends on `preamble` rather than `normalize` —
   it reads a CSV into `.obs` and never needed normalised values. `ctx.record_normalize` is

@@ -109,7 +109,11 @@ regardless of the order actions were taken — even across sessions.
   Migrated so far: **Leiden clustering** (`tab_clustering.py`), **normalize**
   (`ctx.ensure_normalized()`, which binds `adata_norm` and replaces the old
   `record_normalize` + `get_normalized_adata` pair), and **rank genes**
-  (`tab_gene_analysis.py`). One documented exception: the `preamble` node records
+  (`tab_gene_analysis.py`). Every expression-based step consumes `adata_norm` and
+  declares `deps=["normalize"]` — never an implicit reliance on `adata` having been
+  normalised in place, which is what made the DAG lie before. Call
+  `ctx.ensure_normalized()` (idempotent) before `ctx.run_step()` in any such step.
+  One documented exception: the `preamble` node records
   `xenium(data_path)` while the viewer reaches the same objects via the zarr cache.
   **Unmigrated tabs still record analysis code against a bare `adata`** that nothing
   normalises — they are divergent until migrated; that is the remainder of E2.
