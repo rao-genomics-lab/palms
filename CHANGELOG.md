@@ -79,6 +79,43 @@
   (`tabs/tab_clustering.py`, `tabs/_helpers.py`, `utils/viewer_context.py`,
   `tests/test_clustering_step.py`, `CLAUDE.md`)
 
+- **`normalize` and rank genes migrated onto the step executor — the second known
+  divergence closed.** The viewer normalised with `target_sum=1e4`
+  (`gene_analysis.get_normalized_adata`) while the recorded cell said
+  `sc.pp.normalize_total(adata)`, i.e. scanpy's *median* default. Different `X`, so
+  different PCA, neighbours, clusters and DEG. `ctx.ensure_normalized()` replaces the
+  old `record_normalize` + `get_normalized_adata` pair with a single step that records
+  the `target_sum` it uses.
+
+  Two structural fixes come with it:
+  - **`normalize` binds `adata_norm = adata.copy()` instead of mutating `adata`.** The
+    old node was `kind=SETUP`, so it sorted ahead of every artifact node and silently
+    log-normalised the object other cells then copied — an exported notebook containing
+    both it and a self-contained step could double-normalise. Consumers now name
+    `adata_norm` explicitly.
+  - **Rank genes now ranks on `adata_norm`, not on raw `adata`.** The recorded cell had
+    been `sc.tl.rank_genes_groups(adata, ...)`, correct only when a `normalize` SETUP node
+    happened to be in the graph. With clustering self-contained (above), a Leiden-only
+    session would have left nothing normalising `adata` at all, so the exported notebook
+    would have ranked raw counts. The step declares `deps=["normalize", "clustering:<key>"]`
+    and copies the clustering from `adata.obs` onto `adata_norm.obs`.
+
+  `record_clustering`'s CSV-import node now depends on `preamble` rather than `normalize` —
+  it reads a CSV into `.obs` and never needed normalised values. `ctx.record_normalize` is
+  gone from `ViewerContext`, replaced by `ctx.ensure_normalized`.
+
+  `tests/test_normalize_rank_genes_steps.py` (9 tests) asserts the step reproduces
+  `get_normalized_adata`'s output to `rtol=1e-6`, that `adata` is left untouched, that
+  rank-genes reads `adata_norm`, and that replaying the whole topo-sorted graph in a clean
+  namespace yields an identical `rank_df`.
+  (`tabs/_helpers.py`, `tabs/tab_gene_analysis.py`, `utils/viewer_context.py`,
+  `tests/test_normalize_rank_genes_steps.py`, `CLAUDE.md`)
+
+  **Known remaining divergence:** the tabs not yet migrated (marker genes, lig-rec,
+  neighbourhood enrichment, co-occurrence, gene correlation, annotation nhood, CNV) still
+  compute on `get_normalized_adata()` while recording code against a bare `adata` that
+  nothing in the graph normalises. That is the remainder of E2.
+
 ### Removed
 - **`utils/leiden_worker.py`.** The spawned-subprocess Leiden existed for GUI
   responsiveness, but it was also the second expression of the algorithm that drifted from

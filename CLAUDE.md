@@ -106,16 +106,20 @@ regardless of the order actions were taken — even across sessions.
   `{...}` literals survive; execution is serialised and proceeds statement-by-statement
   so progress can be reported without changing the compiled source. Failures raise
   `StepError` naming the step, and nothing is recorded for a step that did not succeed.
-  Migrated so far: **Leiden clustering** (`tab_clustering.py`). One documented exception:
-  the `preamble` node records `xenium(data_path)` while the viewer reaches the same
-  objects via the zarr cache.
+  Migrated so far: **Leiden clustering** (`tab_clustering.py`), **normalize**
+  (`ctx.ensure_normalized()`, which binds `adata_norm` and replaces the old
+  `record_normalize` + `get_normalized_adata` pair), and **rank genes**
+  (`tab_gene_analysis.py`). One documented exception: the `preamble` node records
+  `xenium(data_path)` while the viewer reaches the same objects via the zarr cache.
+  **Unmigrated tabs still record analysis code against a bare `adata`** that nothing
+  normalises — they are divergent until migrated; that is the remainder of E2.
 - **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
   in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
   and executed code could drift. Re-running a step (same `id`) revises its node in place
   and flags descendants stale; a missing dependency errors at record time.
   `ctx.record_code(code, tag)` remains as a thin backward-compat shim.
   Helper recorders: `record_preamble` (`preamble`
-  node, defines `data_path`), `record_normalize`, `record_clustering` (`clustering:<key>`),
+  node, defines `data_path`), `record_clustering` (`clustering:<key>`),
   `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
   `nhood:<key>`, `cooccur:<key>`, `ligrec:<key>`, `annotation:<col>`, `rois`, `roi_deg`,
   `cnv:<backend>` (`cnv:infercnv` / `cnv:copykat`); terminals `plot:*`

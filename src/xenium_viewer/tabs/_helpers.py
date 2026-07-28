@@ -18,6 +18,18 @@ if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
 
+# Binds ``adata_norm`` rather than mutating ``adata``, so a step that makes its
+# own copy cannot end up normalising twice. Mirrors what the viewer has always
+# actually run (``utils.gene_analysis.get_normalized_adata``) — including the
+# ``target_sum=1e4`` the old recorded cell omitted.
+_NORMALIZE_TEMPLATE = """
+# Normalized copy used by expression-based analyses
+adata_norm = adata.copy()
+sc.pp.normalize_total(adata_norm, target_sum=1e4)
+sc.pp.log1p(adata_norm)
+sc.pp.pca(adata_norm)"""
+
+
 # ── magicgui ComboBox default helper ─────────────────────────────────────────
 
 def combo_value_kwargs(choices, index: int = 0) -> dict:
@@ -404,21 +416,40 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.record_preamble = _record_preamble
 
-    # ── record_normalize ─────────────────────────────────────────────────
-    def _record_normalize():
+    # ── ensure_normalized ────────────────────────────────────────────────
+    def _ensure_normalized():
+        """Run the ``normalize`` step if needed and return ``adata_norm``.
+
+        Replaces the old ``record_normalize`` + ``get_normalized_adata`` pair,
+        which had drifted: the GUI normalised with ``target_sum=1e4`` while the
+        recorded cell used scanpy's median default.
+
+        The step binds a *copy* rather than mutating ``adata`` in place. The old
+        node was ``kind=SETUP``, so it sorted ahead of every artifact node and
+        silently log-normalised the object other cells then copied — a notebook
+        containing both it and a self-contained step could double-normalise.
+        Consumers now name ``adata_norm`` explicitly.
+
+        Idempotent: re-running is skipped while the source ``adata`` is unchanged,
+        since the step has already been executed and recorded.
+        """
+        executor = _get_executor()
+        if (state.get("_norm_src_id") == id(ctx.adata)
+                and "adata_norm" in executor.ns):
+            return executor.ns["adata_norm"]
         _record_preamble()
-        _record_node(
-            "normalize",
-            "\n# Normalize, log-transform, PCA\n"
-            "sc.pp.normalize_total(adata)\n"
-            "sc.pp.log1p(adata)\n"
-            "sc.pp.pca(adata)",
+        outputs = _run_step(Step(
+            id="normalize",
+            template=_NORMALIZE_TEMPLATE,
             deps=["preamble"],
             kind=SETUP,
             label="Normalize, log-transform, PCA",
-        )
+            outputs=["adata_norm"],
+        ))
+        state["_norm_src_id"] = id(ctx.adata)
+        return outputs["adata_norm"]
 
-    ctx.record_normalize = _record_normalize
+    ctx.ensure_normalized = _ensure_normalized
 
     # ── record_clustering ────────────────────────────────────────────────
     def _record_clustering(key):
@@ -428,7 +459,7 @@ def create_shared_helpers(ctx: ViewerContext):
         graph = state.get("prov_graph")
         if graph is not None and f"clustering:{key}" in graph:
             return
-        _record_normalize()
+        _record_preamble()
         dir_name = f"gene_expression_{key}"
         csv_path = os.path.join(ctx.data_path, "analysis", "clustering", dir_name, "clusters.csv")
         if not os.path.exists(csv_path):
@@ -439,7 +470,7 @@ def create_shared_helpers(ctx: ViewerContext):
             f"clust_df = pd.read_csv(r\"{csv_path}\", index_col=0)\n"
             f"adata.obs[\"{key}\"] = pd.Categorical("
             f"clust_df.reindex(adata.obs_names).iloc[:, 0].astype(str).values)",
-            deps=["normalize"],
+            deps=["preamble"],   # reads a CSV into obs; needs no normalisation
             kind=ARTIFACT,
             label=f"Clustering: {key}",
         )

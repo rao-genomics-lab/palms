@@ -16,12 +16,25 @@ if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
 from xenium_viewer.utils.gene_analysis import (
-    get_normalized_adata, add_clustering_to_obs, run_rank_genes,
+    get_normalized_adata, add_clustering_to_obs,
     make_rank_genes_dotplot, make_rank_genes_plot, generate_all_volcano_plots,
     run_celltypist_annotation,
     load_reference_h5ad, get_annotation_columns, run_label_transfer,
     run_llm_annotation,
 )
+from xenium_viewer.utils.steps import Step, coerce
+
+# Executed *and* recorded — see utils/steps.py. Reads the clustering from
+# adata.obs (where the clustering cell puts it) and ranks on the normalized
+# copy bound by the "normalize" step, which is what the viewer has always
+# actually done; the previous recorded cell ranked on raw `adata`.
+_RANK_GENES_TEMPLATE = """
+# Rank genes: groupby=$groupby, method=$method, n_genes=$n_genes
+adata_norm.obs[$groupby] = adata.obs[$groupby].values
+sc.tl.rank_genes_groups(
+    adata_norm, groupby=$groupby, method=$method, n_genes=$n_genes,
+)
+rank_df = sc.get.rank_genes_groups_df(adata_norm, group=None)"""
 
 _APP_DIR = Path(__file__).resolve().parent.parent
 _REF_DIR = _APP_DIR / "reference_datasets"
@@ -138,12 +151,32 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
         _clustering_series = ctx.clusterings[clustering_key]
 
+        # The step declares clustering:<key> as a dependency, so the node must
+        # exist first. Recorded on the GUI thread — it writes analysis.py and
+        # refreshes the Notebook tab.
+        ctx.record_clustering(clustering_key)
+        # Mirror the clustering onto adata.obs, which is where the recorded
+        # clustering cell puts it and where the rank-genes step reads it from.
+        add_clustering_to_obs(_adata, _adata, _clustering_series, clustering_key)
+
+        step = Step(
+            id=f"rank_genes:{clustering_key}",
+            template=_RANK_GENES_TEMPLATE,
+            params={
+                "groupby": clustering_key,
+                "method": method,
+                "n_genes": coerce(n_genes),
+            },
+            deps=["normalize", f"clustering:{clustering_key}"],
+            label=f"Rank genes: {clustering_key}",
+            outputs=["rank_df", "adata_norm"],
+        )
+
         @thread_worker
         def _run():
-            adata_norm = get_normalized_adata(_adata)
-            add_clustering_to_obs(adata_norm, _adata, _clustering_series, clustering_key)
-            df = run_rank_genes(adata_norm, clustering_key, method=method, n_genes=n_genes)
-            return df, adata_norm, clustering_key
+            ctx.ensure_normalized()          # binds adata_norm, records "normalize"
+            outputs = ctx.run_step(step)     # executes exactly what it records
+            return outputs["rank_df"], outputs["adata_norm"], clustering_key
 
         worker = _run()
         timer, _ = attach_spinner(
@@ -175,18 +208,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_results_text.setPlainText(preview)
         ga_status.value = f"Rank genes done: {len(df)} results ({clustering_key}, {ga_method_widget.value})"
 
-        _rg_method = state.get("_rg_method", "wilcoxon")
-        _rg_n = state.get("_rg_n_genes", 25)
-        ctx.record_clustering(clustering_key)
-        ctx.record_node(
-            f"rank_genes:{clustering_key}",
-            f"\n# Rank genes: method={_rg_method}, groupby={clustering_key}, n_genes={_rg_n}\n"
-            f"sc.tl.rank_genes_groups(adata, groupby=\"{clustering_key}\", "
-            f"method=\"{_rg_method}\", n_genes={_rg_n})\n"
-            f"rank_df = sc.get.rank_genes_groups_df(adata, group=None)",
-            deps=[f"clustering:{clustering_key}"],
-            label=f"Rank genes: {clustering_key}",
-        )
+        # Recording happened inside ctx.run_step(), which recorded the source it ran.
 
     def on_show_dotplot():
         adata_norm = state.get("rank_genes_adata_norm")
