@@ -3,6 +3,39 @@
 ## [Unreleased] — 2026-07-29
 
 ### Added
+- **Notebook replay verification — the reproducibility claim, measured.** Until now
+  nothing executed an exported notebook and compared its results to the viewer's. The
+  step executor makes the recorded code *be* the executed code by construction, but
+  whether replaying that code from the raw output reproduces the result is an empirical
+  question, and it was unanswered. Two artifacts now answer it:
+
+  - **`tests/test_notebook_replay.py`** (CI gate, hermetic, ~35 s). Runs the real
+    `Step` templates — Leiden, normalize, rank genes, spatial neighbours, neighbourhood
+    enrichment — over a synthetic AnnData (`replay_adata` in `tests/conftest.py`), exports
+    the provenance graph as a real `.ipynb`, and executes it in a **clean kernel** with
+    `allow_errors=False`. Adjusted Rand index must be exactly **1.0** and the labels
+    identical (ARI alone is blind to relabelling); top-N ranked gene names must match in
+    order; nhood z-scores must be `allclose`. Further tests assert that the notebook's
+    cells are the recorded node sources *verbatim*, so a passing replay cannot be the
+    exporter quietly fixing something up. One documented substitution: the `preamble`
+    node reads an h5ad instead of `spatialdata_io.xenium(data_path)`, which CI has no
+    dataset for — the same preamble exception already documented, and a test asserts it
+    stays the only one.
+  - **`scripts/verify_notebook.py`** (evidence, run against a real dataset). Reads the
+    provenance graph straight out of `<cache>/viewer_session` attrs — no GUI, no napari —
+    replays it against the raw Xenium output with per-cell timing, and emits a JSON
+    report: per-clustering ARI and cluster counts, top-N gene agreement, wall-clock,
+    package versions, and **the ids of every comment-only node the notebook silently
+    skipped**. Those nodes execute fine and do nothing, so no amount of `allow_errors`
+    catches them; naming them turns the remaining recording work into a measurement.
+    `--dry-run` produces that list in seconds without replaying.
+
+  Supporting: `notebook_export.execute_notebook()` runs a notebook in a throwaway
+  kernelspec pointing at `sys.executable`, because the installed `python3` kernelspec
+  belongs to whichever environment registered it last — routinely the conda base env,
+  which has no scanpy. `nbclient`/`ipykernel` added to `environment.yml` and to a new
+  `test` extra; ruff's CI gate now covers `scripts/` too.
+
 - **Choosable Leiden flavour in the Clustering tab.** `sc.tl.leiden` has two backends —
   `igraph` (fast) and `leidenalg` (scanpy's historical default, optimising the
   RBConfiguration objective rather than igraph's modularity). The viewer hard-coded

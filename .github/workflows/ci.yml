@@ -46,4 +46,4 @@ jobs:
       # Pyflakes syntax + undefined-name checks only: a real-bug safety net
       # without style churn on the existing codebase.
       - name: Ruff (E9, F63, F7, F82)
-        run: ruff check --select E9,F63,F7,F82 src tests
+        run: ruff check --select E9,F63,F7,F82 src tests scripts

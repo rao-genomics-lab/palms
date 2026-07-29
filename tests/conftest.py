@@ -64,6 +64,38 @@ def tiny_sdata(tmp_path, make_table):
         return read_zarr(cache)
 
 
+@pytest.fixture(scope="session")
+def replay_adata():
+    """A small AnnData with structure to find: two populations plus coordinates.
+
+    Used by the notebook-replay test, which runs the real analysis steps over it
+    and then re-runs the exported notebook. Counts are drawn from a seeded RNG so
+    the *input* is identical in-process and on replay — any divergence in the
+    output is then attributable to the recorded code.
+    """
+    anndata = pytest.importorskip("anndata")
+    np = pytest.importorskip("numpy")
+
+    def _make(n_obs: int = 200, n_vars: int = 60):
+        rng = np.random.default_rng(0)
+        counts = rng.poisson(3, size=(n_obs, n_vars)).astype("float32")
+        half = n_obs // 2
+        counts[:half, : n_vars // 3] += 12          # population A markers
+        counts[half:, n_vars // 3: 2 * n_vars // 3] += 12   # population B markers
+        adata = anndata.AnnData(counts)
+        adata.obs_names = [f"cell{i}" for i in range(n_obs)]
+        adata.var_names = [f"gene{i}" for i in range(n_vars)]
+        # Two spatially separated blobs, so the neighbour graph is meaningful.
+        centers = np.where(np.arange(n_obs) < half, 0.0, 400.0)
+        adata.obsm["spatial"] = np.column_stack([
+            centers + rng.normal(0, 40, n_obs),
+            rng.normal(200, 40, n_obs),
+        ])
+        return adata
+
+    return _make
+
+
 @pytest.fixture
 def marker_of():
     """Read the marker column back out of a store or SpatialData."""

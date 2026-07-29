@@ -71,7 +71,10 @@ cnv = [
     "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git",
 ]
 full = ["xenium-viewer[celltypist,r,gpu,references,cnv]"]
-dev = ["pytest", "ruff"]
+# The replay tests execute an exported notebook in a real kernel, so the test
+# extra carries nbclient/ipykernel as well as pytest.
+test = ["pytest", "nbformat", "nbclient", "ipykernel"]
+dev = ["xenium-viewer[test]", "ruff"]
 
 [project.scripts]
 xenium-viewer = "xenium_viewer.app:main"

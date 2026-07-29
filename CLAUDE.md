@@ -26,13 +26,21 @@ xenium-viewer /path/to/xenium/output/ --no-cache
 
 The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
 
-There is a `pytest` suite in `tests/` (~280 tests) covering pure logic (provenance graph,
+There is a `pytest` suite in `tests/` (~320 tests) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
 the **zarr/SpatialData persistence paths** — crash-safe writes with simulated interrupted
 writes, cache verify/repair, session save, loader cache policy and sidecar locations.
 Several are *source guards* that fail if a fixed bug is reintroduced (calling
 `delete_element_from_disk` outside `zarr_safe.py`, `rmtree`ing the live cache, writing a
 sidecar into the store root, printing a warning instead of logging it).
+
+`tests/test_notebook_replay.py` is the end-to-end one: it runs the real `Step` templates
+over a synthetic AnnData, exports the provenance graph as a real `.ipynb`, executes it in
+a **clean kernel** (`nbclient`, `allow_errors=False`), and requires ARI **exactly 1.0** on
+every clustering plus identical top-N ranked genes. It takes ~35 s — most of it importing
+scanpy/squidpy in the kernel — which is why the fixture is module-scoped. Its one
+substitution is the `preamble` node (h5ad instead of `xenium(data_path)`, since CI has no
+dataset); a test asserts that stays the only one. See "Verifying the claim" below.
 
 Run with `pytest` from the repo root (`[tool.pytest.ini_options]` sets
 `pythonpath = ["src"]`, so no install is needed). Tests that touch Qt need
@@ -192,6 +200,30 @@ regardless of the order actions were taken — even across sessions.
   matplotlib+networkx). `graph_to_mermaid` / `graph_to_dot` give diagram text.
 - **Persistence**: the graph is serialized into `sdata_cached.zarr/viewer_session/` and
   restored at startup, so a multi-session analysis accumulates into one notebook.
+
+### Verifying the claim (notebook replay)
+
+`run_step` makes the recorded code equal the executed code *by construction*. Whether
+replaying it reproduces the result is a separate, empirical question — so it is run, at
+two tiers:
+
+- **`tests/test_notebook_replay.py`** — the CI gate, described under "Running the Viewer".
+- **`scripts/verify_notebook.py <dataset> --out report.json`** — the real measurement.
+  Reads the graph out of `<cache>/viewer_session` attrs (zarr only — no GUI, no napari,
+  no SpatialData load), exports the notebook, executes it against the **raw Xenium
+  output** with per-cell timing, and compares the replayed `adata.obs` against the
+  `clustering_*` columns and `uns['rank_genes_groups']` the viewer persisted. The JSON
+  report carries per-clustering ARI, cluster counts, top-N gene agreement, wall-clock,
+  package versions — and **the ids of every comment-only node**, which execute fine and
+  do nothing, so `allow_errors=False` can never catch them. That list is the remaining
+  recording work (Phase 0.3), enumerated by measurement. `--dry-run` produces it in
+  seconds without replaying.
+
+Both go through `notebook_export.execute_notebook()`, which runs the notebook in a
+throwaway kernelspec pointing at `sys.executable`. Do not switch it to the installed
+`python3` kernelspec: on a conda box that belongs to whichever env registered it last —
+routinely base, which has no scanpy — and the resulting failure would look like a
+reproducibility defect rather than a kernel-discovery one.
 
 ## Key Dependencies
 
