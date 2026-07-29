@@ -84,6 +84,7 @@ class ViewerContext:
     record_code: Any = None
     record_node: Any = None
     record_preamble: Any = None
+    record_environment: Any = None  # versions + seeds; recorded with the preamble
     ensure_normalized: Any = None   # runs the "normalize" step, returns adata_norm
     ensure_spatial_neighbors: Any = None  # runs the "spatial_neighbors" step on adata_norm
     record_clustering: Any = None

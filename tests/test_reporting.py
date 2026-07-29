@@ -205,6 +205,77 @@ def test_no_modal_is_raised_when_qt_is_headless(tmp_path, monkeypatch, qapp):
     assert failures()[-1]["operation"] == "table"
 
 
+# ── a step that ran but could not be recorded ────────────────────────────────
+
+def test_a_recording_failure_reaches_the_log_with_its_node_id(tmp_path):
+    """It used to go to ``warnings.warn`` — a terminal a GUI user never reads,
+    and only once per unique message under the default ``once`` filter."""
+    setup_logging(tmp_path)
+    try:
+        raise KeyError("unknown dependency: normalize")
+    except KeyError as exc:
+        reporting.report_recording_failure("nhood:leiden_r1.0", exc)
+
+    text = (tmp_path / LOG_FILENAME).read_text()
+    assert "nhood:leiden_r1.0" in text
+    assert "normalize" in text
+    assert "Traceback" in text
+
+
+def test_recording_failures_accumulate_separately_from_write_failures(tmp_path):
+    """Different things: one lost the code, the other lost the data."""
+    setup_logging(tmp_path)
+    reporting.report_write_failure(OSError("disk"), "ROIs")
+    reporting.report_recording_failure("rank_genes:k", KeyError("missing dep"))
+
+    assert [f["node_id"] for f in reporting.recording_failures()] == ["rank_genes:k"]
+    assert [f["operation"] for f in failures()] == ["ROIs"]
+
+
+def test_every_recording_failure_is_kept(tmp_path):
+    setup_logging(tmp_path)
+    for i in range(4):
+        reporting.report_recording_failure(f"node:{i}", KeyError("missing dep"))
+
+    assert len(reporting.recording_failures()) == 4
+
+
+def test_the_health_line_mentions_unrecorded_steps(tmp_path):
+    """The Cache tab's health section is where a user looks for "did anything
+    go wrong?" — a notebook missing a step belongs there."""
+    setup_logging(tmp_path)
+    assert "could not be recorded" not in failure_summary()
+
+    reporting.report_recording_failure("clustering:k", KeyError("missing dep"))
+    summary = failure_summary()
+    assert "No write failures" in summary
+    assert "1 step(s) could not be recorded" in summary
+
+
+def test_a_recording_failure_never_raises_a_modal(tmp_path, monkeypatch, qapp):
+    """The analysis succeeded — there is nothing for the user to decide, and a
+    dialog here would block a worker thread's callback."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    import qtpy.QtWidgets as qtw
+
+    class _Tripwire:
+        def __init__(self, *a, **k):
+            raise AssertionError("a modal dialog would have blocked here")
+
+    monkeypatch.setattr(qtw, "QMessageBox", _Tripwire)
+    setup_logging(tmp_path)
+
+    reporting.report_recording_failure("clustering:k", KeyError("missing dep"))
+    assert reporting.recording_failures()[-1]["node_id"] == "clustering:k"
+
+
+def test_the_recorder_does_not_fall_back_to_warnings(tmp_path):
+    """Source guard: ``warnings.warn`` in the recorder is what this replaces."""
+    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+    text = (src / "tabs" / "_helpers.py").read_text()
+    assert "warnings.warn" not in text
+
+
 # ── the shim keeps old call sites working ────────────────────────────────────
 
 def test_permission_dialog_shim_routes_to_the_reporter(tmp_path):

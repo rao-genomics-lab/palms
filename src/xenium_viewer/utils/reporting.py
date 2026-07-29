@@ -37,6 +37,10 @@ _lock = threading.Lock()
 # Failures since launch, for the Cache tab's health line.
 _failures: list[dict] = []
 
+# Steps whose *recording* failed since launch. Separate from _failures: the
+# analysis ran and its result is on screen; what was lost is the code for it.
+_recording_failures: list[dict] = []
+
 # Modal dialogs already shown, keyed by (dataset, error class). The previous
 # implementation used a single process-wide bool, so one permission error
 # suppressed every subsequent dialog for the life of the session.
@@ -157,6 +161,57 @@ def report_write_failure(exc: BaseException, operation: str = "data",
     _surface(kind, operation, str(exc), show_modal)
 
 
+def report_recording_failure(node_id: str, exc: BaseException) -> None:
+    """Surface a step that ran but could not be recorded properly.
+
+    The recorder degrades rather than aborting — a bug in provenance bookkeeping
+    must never lose the user's analysis — but it used to degrade through
+    ``warnings.warn``, which in a GUI process goes to a terminal nobody is
+    reading (and only once per unique message, since the default filter is
+    ``once``). The result was the failure mode this whole phase exists to
+    prevent: a result on screen whose cell is missing from the notebook, with
+    nothing said about it.
+
+    Logs with a traceback, keeps the failure for the Cache tab's health line,
+    and shows a non-modal napari warning. No dialog: the action succeeded, so
+    there is nothing for the user to stop and decide.
+    """
+    _log.warning("could not record step %r: %s", node_id, exc,
+                 exc_info=(type(exc), exc, exc.__traceback__))
+    _recording_failures.append({"node_id": node_id, "error": str(exc)})
+    _notify(
+        f"Code recording degraded for '{node_id}': {exc}. The step ran and its "
+        f"code was appended, but without its place in the provenance graph — "
+        f"the exported notebook may not replay it in the right order."
+    )
+
+
+def recording_failures() -> list[dict]:
+    """Steps whose recording failed since launch (most recent last)."""
+    return list(_recording_failures)
+
+
+def _notify(message: str) -> None:
+    """Non-modal napari warning, on the GUI thread; a no-op with no GUI."""
+    try:
+        from qtpy.QtWidgets import QApplication
+        if QApplication.instance() is None:
+            return
+        from superqt.utils import ensure_main_thread
+    except Exception:
+        return
+
+    @ensure_main_thread
+    def _show():
+        try:
+            from napari.utils.notifications import show_warning
+            show_warning(message)
+        except Exception:  # pragma: no cover - napari not always present
+            pass
+
+    _show()
+
+
 def _headless() -> bool:
     """True when Qt is up but nobody can answer a dialog.
 
@@ -213,18 +268,27 @@ def failures() -> list[dict]:
 
 
 def failure_summary() -> str:
-    if not _failures:
-        return "No write failures this session."
-    kinds: dict[str, int] = {}
-    for failure in _failures:
-        kinds[failure["kind"]] = kinds.get(failure["kind"], 0) + 1
-    detail = ", ".join(f"{count} {kind}" for kind, count in sorted(kinds.items()))
-    return f"{len(_failures)} write failure(s) this session ({detail})."
+    """One line for the Cache tab's health section."""
+    if _failures:
+        kinds: dict[str, int] = {}
+        for failure in _failures:
+            kinds[failure["kind"]] = kinds.get(failure["kind"], 0) + 1
+        detail = ", ".join(f"{count} {kind}" for kind, count in sorted(kinds.items()))
+        summary = f"{len(_failures)} write failure(s) this session ({detail})."
+    else:
+        summary = "No write failures this session."
+    if _recording_failures:
+        # A notebook missing a step is a health problem too, and this line is
+        # the one place a user goes looking for "did anything go wrong?".
+        summary += (f" {len(_recording_failures)} step(s) could not be recorded "
+                    f"— see the log.")
+    return summary
 
 
 def reset_failures() -> None:
     """Test helper — also used when switching datasets."""
     _failures.clear()
+    _recording_failures.clear()
     _modal_shown.clear()
 
 

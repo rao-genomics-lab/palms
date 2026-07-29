@@ -13,7 +13,8 @@ from xenium_viewer.utils.adata_persistence import CLUSTERING_PREFIX
 from xenium_viewer.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
-from xenium_viewer.utils.reporting import get_logger
+from xenium_viewer.utils.environment import environment_code, same_environment
+from xenium_viewer.utils.reporting import get_logger, report_recording_failure
 from xenium_viewer.utils.steps import Step, StepExecutor, coerce
 
 if TYPE_CHECKING:
@@ -359,9 +360,9 @@ def create_shared_helpers(ctx: ViewerContext):
                          label=label, params=params)
         except (KeyError, CycleError) as e:
             # Never let a recorder bug abort the user's analysis action; degrade
-            # to appending the snippet so the code isn't silently lost.
-            import warnings
-            warnings.warn(f"record_node({node_id!r}): {e}")
+            # to appending the snippet so the code isn't silently lost — but say
+            # so, because from here on the notebook is incomplete.
+            report_recording_failure(node_id, e)
             _emit_flat(code)
             return
         if prev_code != code:  # new node, or revised → show the (new) code
@@ -453,8 +454,31 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.record_code = _record_code
 
+    # ── record_environment ───────────────────────────────────────────────
+    def _record_environment():
+        """Record what the analysis is being run with.
+
+        A separate node from ``preamble``, and deliberately one with **no
+        dependents**: an environment that differs between recording and replay
+        is something to read, not a reason to flag every downstream result
+        stale. It has no deps either, so it sorts first among the setup nodes
+        (ties break on id, and ``environment`` < ``preamble``).
+        """
+        code = state.get("_environment_code")
+        if code is None:
+            code = state["_environment_code"] = environment_code()
+        graph = state.get("prov_graph")
+        previous = graph.get("environment") if graph is not None else None
+        if previous is not None and same_environment(previous.code, code):
+            return                       # same versions — keep the original stamp
+        _record_node("environment", code, kind=SETUP,
+                     label="Environment & seeds")
+
+    ctx.record_environment = _record_environment
+
     # ── record_preamble ──────────────────────────────────────────────────
     def _record_preamble():
+        _record_environment()
         _record_node(
             "preamble",
             "import scanpy as sc\n"
