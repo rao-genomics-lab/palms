@@ -61,22 +61,37 @@ adata_cnv = prepare_cnv_input(
 )"""
 
 # pandas 3 backs strings with PyArrow arrays, which do not support the
-# numpy-style fancy indexing infercnvpy does on var_names / var columns.
+# numpy-style fancy indexing infercnvpy does on var_names / var columns:
+# `_running_mean` slices the gene list with a *2-D* index array, and
+# ArrowStringArray routes that to pyarrow's take(), which raises
+# "ArrowInvalid: only handle 1-dimensional arrays".
+#
+# `future.infer_string` must be off across the *assignment*, not just the
+# conversion: AnnData re-infers string dtypes when a frame is assigned to
+# .obs/.var, so converting to object and assigning it back under the default
+# option leaves the Arrow array exactly where it was. This mirrors
+# adata_persistence._convert_adata_arrow_strings, which run_cnv_pipeline uses —
+# the two must stay identical (tests/test_cnv_step.py).
 _CNV_ARROW_SHIM = """
-for _attr in ('obs', 'var'):
-    _df = getattr(adata_cnv, _attr).copy()
-    if pd.api.types.is_string_dtype(_df.index):
-        _df.index = pd.Index(_df.index.to_numpy(dtype=object))
-    for _col in _df.columns:
-        if isinstance(_df[_col].dtype, pd.CategoricalDtype):
-            _cats = _df[_col].cat.categories
-            if pd.api.types.is_string_dtype(_cats):
-                _df[_col] = _df[_col].cat.rename_categories(
-                    dict(zip(_cats, _cats.astype(object)))
-                )
-        elif pd.api.types.is_string_dtype(_df[_col]):
-            _df[_col] = _df[_col].to_numpy(dtype=object)
-    setattr(adata_cnv, _attr, _df)"""
+_old_infer = pd.options.future.infer_string
+pd.options.future.infer_string = False
+try:
+    for _attr in ('obs', 'var'):
+        _df = getattr(adata_cnv, _attr).copy()
+        if pd.api.types.is_string_dtype(_df.index):
+            _df.index = pd.Index(_df.index.to_numpy(dtype=object))
+        for _col in _df.columns:
+            if isinstance(_df[_col].dtype, pd.CategoricalDtype):
+                _cats = _df[_col].cat.categories
+                if pd.api.types.is_string_dtype(_cats):
+                    _df[_col] = _df[_col].cat.rename_categories(
+                        dict(zip(_cats, _cats.astype(object)))
+                    )
+            elif pd.api.types.is_string_dtype(_df[_col]):
+                _df[_col] = _df[_col].to_numpy(dtype=object)
+        setattr(adata_cnv, _attr, _df)
+finally:
+    pd.options.future.infer_string = _old_infer"""
 
 _CNV_TAIL = """
 run_infercnv(

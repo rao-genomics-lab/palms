@@ -118,5 +118,73 @@ def test_run_cnv_pipeline_still_uses_the_parameters_the_template_records():
         assert fragment in src, fragment
 
 
+# ── the pandas-3 Arrow shim, which the template inlines by hand ──────────────
+
+def test_the_arrow_shim_actually_converts_the_index():
+    """Regression: it looked right and did nothing.
+
+    ``_running_mean`` slices the gene list with a **2-D** index array. Under
+    pandas 3 the index is an ArrowStringArray, which routes that to pyarrow's
+    ``take()`` and raises ``ArrowInvalid: only handle 1-dimensional arrays``.
+
+    The shim converted the index to object dtype and assigned it back — but
+    AnnData *re-infers* string dtypes on assignment to ``.obs``/``.var``, so
+    with ``future.infer_string`` at its default the Arrow array landed straight
+    back where it started. The conversion has to happen with the option off
+    across the assignment, and this executes the real shim to prove it does.
+    """
+    pd = pytest.importorskip("pandas")
+    np = pytest.importorskip("numpy")
+    anndata = pytest.importorskip("anndata")
+    from xenium_viewer.tabs.tab_cnv import _CNV_ARROW_SHIM
+
+    adata_cnv = anndata.AnnData(np.ones((4, 3), dtype="float32"))
+    adata_cnv.var_names = ["GENE1", "GENE2", "GENE3"]
+    adata_cnv.var["chromosome"] = ["chr1", "chr1", "chr2"]
+
+    exec(compile(_CNV_ARROW_SHIM, "<shim>", "exec"),  # noqa: S102
+         {"pd": pd, "adata_cnv": adata_cnv})
+
+    genes = adata_cnv.var.index.values
+    assert isinstance(genes, np.ndarray), type(genes).__name__
+    # the operation that used to raise: 2-D fancy indexing
+    assert genes[np.array([[0, 1], [1, 2]])].shape == (2, 2)
+
+
+def test_the_shim_restores_the_option_it_changed():
+    """It is a global pandas setting; leaving it off would change every
+    DataFrame built later in the session."""
+    pd = pytest.importorskip("pandas")
+    np = pytest.importorskip("numpy")
+    anndata = pytest.importorskip("anndata")
+    from xenium_viewer.tabs.tab_cnv import _CNV_ARROW_SHIM
+
+    adata_cnv = anndata.AnnData(np.ones((2, 2), dtype="float32"))
+    before = pd.options.future.infer_string
+    exec(compile(_CNV_ARROW_SHIM, "<shim>", "exec"),  # noqa: S102
+         {"pd": pd, "adata_cnv": adata_cnv})
+
+    assert pd.options.future.infer_string == before
+
+
+def test_the_template_shim_matches_the_helper_run_cnv_pipeline_uses():
+    """Two hand-maintained copies of one conversion; they drifted once already.
+
+    ``run_cnv_pipeline`` calls ``_convert_adata_arrow_strings``, which disables
+    ``future.infer_string`` around the assignment. The template inlines the same
+    logic as plain source — and omitted exactly that line, so the CopyKAT path
+    worked while inferCNV died.
+    """
+    from xenium_viewer.tabs.tab_cnv import _CNV_ARROW_SHIM
+    from xenium_viewer.utils.adata_persistence import _convert_adata_arrow_strings
+
+    helper = inspect.getsource(_convert_adata_arrow_strings)
+    for fragment in ("pd.options.future.infer_string = False",
+                     "is_string_dtype", "rename_categories",
+                     "to_numpy(dtype=object)"):
+        assert fragment.replace("pd.", "") in helper.replace("pd.", ""), fragment
+        assert fragment in _CNV_ARROW_SHIM, f"template is missing: {fragment}"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

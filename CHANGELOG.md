@@ -58,6 +58,23 @@
   at that resolution writes the new key *alongside* the old one rather than replacing it.
 
 ### Fixed
+- **inferCNV failed under pandas 3 with `ArrowInvalid: only handle 1-dimensional
+  arrays`.** infercnvpy's `_running_mean` slices the gene list with a **2-D** index
+  array. Under pandas 3 `var.index.values` is an `ArrowStringArray`, which routes that
+  to pyarrow's `take()` — it accepts only 1-D indices. The recorded template already
+  carried a shim converting `.obs`/`.var` strings to object dtype, and it did nothing:
+  **AnnData re-infers string dtypes when a frame is assigned back**, so with
+  `future.infer_string` at its pandas-3 default the Arrow array landed straight back
+  where it started. The option has to be off across the *assignment*, not just the
+  conversion.
+
+  This is precisely the drift `utils/steps.py` exists to prevent, one level down: the
+  in-process helper `_convert_adata_arrow_strings` had the option toggle, the template's
+  hand-inlined copy of it did not — so the CopyKAT path (which calls the helper) worked
+  while inferCNV (which runs the template) died. `tests/test_cnv_step.py` now *executes*
+  the real shim and asserts the 2-D indexing it exists to enable, restores the global
+  option it changes, and pins it against the helper.
+
 - **Saving the CNV heatmap crashed when the run had few windows.**
   `chromosome_heatmap(dendrogram=True)` ends in `sc.tl.dendrogram`, which represents
   cells with `pd.DataFrame(_choose_representation(...))`. Above `settings.N_PCS` (50)
