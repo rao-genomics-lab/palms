@@ -34,7 +34,10 @@ from typing import Optional
 import numpy as np
 import zarr
 
+from xenium_viewer.utils.reporting import get_logger, report_write_failure
 from xenium_viewer.utils.zarr_safe import safe_group_update
+
+log = get_logger(__name__)
 
 # Attrs written by other code paths and never recomputed here. Carrying every
 # unknown key forward by default (rather than an allow-list) is what keeps them
@@ -218,8 +221,8 @@ def save_session(
         attrs = _build_session_attrs(state, he_state, snapshot, prev_attrs)
         attrs, dropped = _json_safe(attrs)
         if dropped:
-            print(f"Warning: session keys could not be serialized and were "
-                  f"dropped: {', '.join(sorted(dropped))}")
+            log.warning("session keys could not be serialized and were dropped: %s",
+                        ", ".join(sorted(dropped)))
 
         arms_state = snapshot.get("arms_state", {})
         with safe_group_update(Path(zarr_path), "viewer_session") as (session, stage):
@@ -252,9 +255,7 @@ def save_session(
         print(f"Session saved: {_session_summary(attrs)}")
 
     except Exception as e:
-        from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog
-        _maybe_show_permission_dialog(e, "session state")
-        print(f"Warning: could not save session: {e}")
+        report_write_failure(e, "session state")
 
 
 

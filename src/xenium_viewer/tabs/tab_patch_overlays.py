@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.reporting import report_write_failure
 from xenium_viewer.utils.zarr_safe import safe_delete_element
 
 from qtpy.QtWidgets import (
@@ -591,9 +592,7 @@ def build_tab(ctx: "ViewerContext"):
             if element and ctx.sdata is not None and element in ctx.sdata:
                 safe_delete_element(ctx.sdata, element)
         except Exception as e:
-            from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog
-            _maybe_show_permission_dialog(e, f"delete '{element}' from zarr cache")
-            print(f"  Warning: could not delete {element} from sdata: {e}")
+            report_write_failure(e, f"delete '{element}' from zarr cache")
         list_widget.takeItem(row)
         _update_panel()
 

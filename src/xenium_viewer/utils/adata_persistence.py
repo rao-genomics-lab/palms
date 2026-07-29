@@ -20,9 +20,12 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from xenium_viewer.utils.reporting import get_logger, report_write_failure
 from xenium_viewer.utils.zarr_safe import (
     safe_delete_element, safe_write_element, store_lock,
 )
+
+log = get_logger(__name__)
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -35,8 +38,6 @@ CLUSTERING_PREFIX = "clustering_"
 # SpatialData element keys for custom segmentation
 CUSTOM_LABELS_KEY = "custom_cell_labels"
 CUSTOM_TABLE_KEY = "custom_table"
-
-_permission_dialog_shown = False
 
 # ── Sidecar files ────────────────────────────────────────────────────────────
 # Analysis outputs that are not zarr nodes: h5ad caches, parquet DEG tables and
@@ -96,34 +97,14 @@ def glob_sidecars(sdata, pattern: str) -> list[Path]:
 
 
 def _maybe_show_permission_dialog(e: Exception, operation: str = "data") -> None:
-    """Show a QMessageBox if e is a read-only / permission-denied error."""
-    global _permission_dialog_shown
-    is_perm = (
-        isinstance(e, PermissionError)
-        or (isinstance(e, OSError) and getattr(e, "errno", None) in (13, 30))
-        or "Permission denied" in str(e)
-        or "read-only" in str(e).lower()
-        or "Read-only" in str(e)
-    )
-    if not is_perm or _permission_dialog_shown:
-        return
-    _permission_dialog_shown = True
-    try:
-        from qtpy.QtWidgets import QApplication, QMessageBox
-        if QApplication.instance() is None:
-            return
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle("Write Permission Error")
-        msg.setText(f"Could not save {operation} — permission denied.")
-        msg.setInformativeText(
-            "The dataset folder may be read-only (e.g. a shared or mounted drive).\n\n"
-            "To enable saving, copy the dataset to a writable location and reopen it, "
-            "or launch with --no-cache to skip zarr persistence entirely."
-        )
-        msg.exec_()
-    except Exception:
-        pass
+    """Backward-compatible shim for :func:`reporting.report_write_failure`.
+
+    The original only fired for permission errors, showed a *modal* dialog that
+    could be constructed from a worker thread, and suppressed itself after the
+    first one via a process-wide flag — so every later failure was invisible
+    except for a print to a terminal a GUI user never reads.
+    """
+    report_write_failure(e, operation)
 
 
 def _convert_adata_arrow_strings(adata) -> None:
@@ -175,8 +156,7 @@ def _persist_custom_table(ctx: ViewerContext) -> None:
         )
         safe_write_element(ctx.sdata, CUSTOM_TABLE_KEY, adata_copy)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "clustering data")
-        print(f"Warning: could not persist custom table to sdata: {e}")
+        report_write_failure(e, "clustering data")
 
 
 def _persist_table(ctx: ViewerContext) -> None:
@@ -202,8 +182,7 @@ def _persist_table(ctx: ViewerContext) -> None:
         _convert_arrow_strings(sdata)
         safe_write_element(sdata, "table")
     except Exception as e:
-        _maybe_show_permission_dialog(e, "clustering/analysis data")
-        print(f"Warning: could not persist adata table: {e}")
+        report_write_failure(e, "clustering/analysis data")
 
 
 # Prefix for cluster label columns in adata.obs
@@ -241,8 +220,7 @@ def save_cluster_labels_to_sdata(ctx: "ViewerContext", clustering_key: str, labe
         )
         _persist_table(ctx)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "cluster labels")
-        print(f"Warning: could not save cluster labels to sdata: {e}")
+        report_write_failure(e, "cluster labels")
 
 
 def load_cluster_labels_from_sdata(sdata) -> dict:
@@ -282,7 +260,7 @@ def load_cluster_labels_from_sdata(sdata) -> dict:
             result[clustering_key] = label_dict
         return result
     except Exception as e:
-        print(f"Warning: could not load cluster labels from sdata: {e}")
+        log.warning(f"could not load cluster labels from sdata: {e}")
         return {}
 
 
@@ -362,8 +340,7 @@ def _persist_adata_norm(ctx: ViewerContext, adata_norm) -> None:
         _convert_adata_arrow_strings(adata_norm)
         adata_norm.write_h5ad(norm_path)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "normalized expression cache")
-        print(f"Warning: could not persist adata_norm: {e}")
+        report_write_failure(e, "normalized expression cache")
 
 
 def save_custom_seg_to_sdata(ctx: ViewerContext, new_adata, scales: list) -> None:
@@ -395,8 +372,7 @@ def save_custom_seg_to_sdata(ctx: ViewerContext, new_adata, scales: list) -> Non
             safe_write_element(ctx.sdata, CUSTOM_LABELS_KEY, parsed)
             print(f"Custom labels saved to sdata.labels['{CUSTOM_LABELS_KEY}']")
         except Exception as e:
-            _maybe_show_permission_dialog(e, "custom segmentation labels")
-            print(f"Warning: could not save custom labels to sdata: {e}")
+            report_write_failure(e, "custom segmentation labels")
         # ── Save AnnData as sdata.tables["custom_table"] ─────────────────
         _persist_custom_table(ctx)
 
@@ -435,7 +411,7 @@ def load_custom_seg_from_sdata(sdata) -> tuple:
             return None, None
         return adata, scales
     except Exception as e:
-        print(f"Warning: could not load custom seg from sdata: {e}")
+        log.warning(f"could not load custom seg from sdata: {e}")
         return None, None
 
 
@@ -469,7 +445,7 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
     try:
         df = sc.get.rank_genes_groups_df(adata, group=None)
     except Exception as e:
-        print(f"Warning: could not reconstruct rank genes DataFrame: {e}")
+        log.warning(f"could not reconstruct rank genes DataFrame: {e}")
         return None, None, None
 
     adata_norm = None
@@ -479,7 +455,7 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
             try:
                 adata_norm = sc.read_h5ad(norm_path)
             except Exception as e:
-                print(f"Warning: could not load adata_norm cache: {e}")
+                log.warning(f"could not load adata_norm cache: {e}")
 
     return df, adata_norm, groupby
 
@@ -568,8 +544,7 @@ def _persist_cnv_adata(ctx: ViewerContext, adata_cnv, backend: str = "infercnv")
         _convert_adata_arrow_strings(adata_cnv)
         adata_cnv.write_h5ad(cnv_path)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "CNV profile cache")
-        print(f"Warning: could not persist adata_cnv: {e}")
+        report_write_failure(e, "CNV profile cache")
 
 
 def _load_cnv_cache(sdata, backend: str):
@@ -585,7 +560,7 @@ def _load_cnv_cache(sdata, backend: str):
                 import scanpy as sc
                 return sc.read_h5ad(cnv_path)
             except Exception as e:
-                print(f"Warning: could not load adata_cnv cache {cnv_path.name}: {e}")
+                log.warning(f"could not load adata_cnv cache {cnv_path.name}: {e}")
     return None
 
 
@@ -684,8 +659,7 @@ def save_roi_deg_to_sdata(ctx: "ViewerContext", df) -> None:
         cache_path = sidecar_write_path(ctx, ROI_DEG_CACHE)
         df.to_parquet(cache_path, index=False)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "ROI DEG results")
-        print(f"Warning: could not save ROI DEG to sdata: {e}")
+        report_write_failure(e, "ROI DEG results")
 
 
 def load_roi_deg_from_sdata(sdata) -> "pd.DataFrame | None":
@@ -698,7 +672,7 @@ def load_roi_deg_from_sdata(sdata) -> "pd.DataFrame | None":
     try:
         return pd.read_parquet(cache_path)
     except Exception as e:
-        print(f"Warning: could not load ROI DEG from sdata: {e}")
+        log.warning(f"could not load ROI DEG from sdata: {e}")
         return None
 
 
@@ -712,8 +686,7 @@ def save_arms_tile_deg_to_sdata(ctx: "ViewerContext", df) -> None:
         cache_path = sidecar_write_path(ctx, ARMS_DEG_CACHE)
         df.to_parquet(cache_path, index=False)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "ARMS tile DEG results")
-        print(f"Warning: could not save ARMS tile DEG to sdata: {e}")
+        report_write_failure(e, "ARMS tile DEG results")
 
 
 def load_arms_tile_deg_from_sdata(sdata) -> "pd.DataFrame | None":
@@ -726,7 +699,7 @@ def load_arms_tile_deg_from_sdata(sdata) -> "pd.DataFrame | None":
     try:
         return pd.read_parquet(cache_path)
     except Exception as e:
-        print(f"Warning: could not load ARMS tile DEG from sdata: {e}")
+        log.warning(f"could not load ARMS tile DEG from sdata: {e}")
         return None
 
 
@@ -758,8 +731,7 @@ def save_rois_to_sdata(ctx: ViewerContext, roi_data: list) -> None:
         gdf = ShapesModel.parse(gpd.GeoDataFrame(geometry=polys))
         safe_write_element(ctx.sdata, 'rois', gdf)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "ROI shapes")
-        print(f"Warning: could not save ROIs to sdata: {e}")
+        report_write_failure(e, "ROI shapes")
 
 
 def load_rois_from_sdata(sdata) -> list:
@@ -781,7 +753,7 @@ def load_rois_from_sdata(sdata) -> list:
             rois.append(coords[:, ::-1])  # xy → yx
         return rois
     except Exception as e:
-        print(f"Warning: could not load ROIs from sdata: {e}")
+        log.warning(f"could not load ROIs from sdata: {e}")
         return []
 
 
@@ -828,8 +800,7 @@ def save_annotations_to_sdata(ctx: "ViewerContext") -> None:
         gdf = ShapesModel.parse(gdf)
         safe_write_element(ctx.sdata, 'annotations', gdf)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "annotations")
-        print(f"Warning: could not save annotations to sdata: {e}")
+        report_write_failure(e, "annotations")
 
 
 def load_annotations_from_sdata(sdata) -> tuple[list, list]:
@@ -855,7 +826,7 @@ def load_annotations_from_sdata(sdata) -> tuple[list, list]:
             types.append(ann_col.iloc[i] if ann_col is not None else "")
         return shapes, types
     except Exception as e:
-        print(f"Warning: could not load annotations from sdata: {e}")
+        log.warning(f"could not load annotations from sdata: {e}")
         return [], []
 
 
@@ -890,8 +861,7 @@ def save_landmarks_to_sdata(ctx, element_name: str, points_yx) -> None:
             return
         safe_write_element(ctx.sdata, element_name, _make_landmark_gdf(points_yx))
     except Exception as e:
-        _maybe_show_permission_dialog(e, "registration landmarks")
-        print(f"Warning: could not save {element_name} to sdata: {e}")
+        report_write_failure(e, "registration landmarks")
 
 
 def load_landmarks_from_sdata(sdata, element_name: str):
@@ -905,7 +875,7 @@ def load_landmarks_from_sdata(sdata, element_name: str):
         gdf = sdata[element_name]
         return np.array([[p.y, p.x] for p in gdf.geometry], dtype=np.float64)
     except Exception as e:
-        print(f"Warning: could not load {element_name} from sdata: {e}")
+        log.warning(f"could not load {element_name} from sdata: {e}")
         return None
 
 
@@ -936,8 +906,7 @@ def save_arms_tiles_to_sdata(ctx, tile_polygons_yx, tile_names, cluster_ids) -> 
         }))
         safe_write_element(ctx.sdata, 'arms_tiles', gdf)
     except Exception as e:
-        _maybe_show_permission_dialog(e, "ARMS tiles")
-        print(f"Warning: could not save ARMS tiles to sdata: {e}")
+        report_write_failure(e, "ARMS tiles")
 
 
 def load_arms_tiles_from_sdata(sdata) -> tuple:
@@ -954,7 +923,7 @@ def load_arms_tiles_from_sdata(sdata) -> tuple:
         polys = [np.array(p.exterior.coords[:-1])[:, ::-1] for p in gdf.geometry]  # xy → yx
         return polys, list(gdf['tile_name']), np.array(gdf['cluster_id'])
     except Exception as e:
-        print(f"Warning: could not load ARMS tiles from sdata: {e}")
+        log.warning(f"could not load ARMS tiles from sdata: {e}")
         return [], [], []
 
 
@@ -1069,7 +1038,7 @@ def migrate_landmarks_to_sdata(zarr_path: "Path", sdata: "SpatialData", session:
                 lm_json = _json.load(f)
             print(f"  Found landmarks.json with {len(lm_json.get('xenium_landmarks_yx', []))} H&E landmark pairs")
         except Exception as e:
-            print(f"  Warning: could not read landmarks.json: {e}")
+            log.warning(f"could not read landmarks.json: {e}")
 
     # Build a unified lookup: prefer json, fall back to zarr session
     def _get_pts(json_key, session_key):
@@ -1093,7 +1062,7 @@ def migrate_landmarks_to_sdata(zarr_path: "Path", sdata: "SpatialData", session:
             migrated_any = True
             print(f"  Migrated {len(pts)} landmarks → sdata.shapes['{sdata_name}']")
         except Exception as e:
-            print(f"  Warning: could not migrate {sdata_name}: {e}")
+            log.warning(f"could not migrate {sdata_name}: {e}")
 
     # ── ARMS tiles — re-parse from GeoJSON + CSV if files still exist ────
     if 'arms_tiles' not in sdata:
@@ -1158,7 +1127,7 @@ def migrate_landmarks_to_sdata(zarr_path: "Path", sdata: "SpatialData", session:
                         migrated_any = True
                         print(f"  Migrated {len(polys)} ARMS tiles → sdata.shapes['arms_tiles']")
                 except Exception as e:
-                    print(f"  Warning: could not migrate ARMS tiles: {e}")
+                    log.warning(f"could not migrate ARMS tiles: {e}")
 
     # Mark migration done (even if there was nothing to migrate)
     try:
@@ -1272,7 +1241,7 @@ def migrate_old_session_to_adata(
             safe_write_element(sdata, "table")
             print("  Migration persisted to zarr store")
         except Exception as e:
-            print(f"  Warning: migration persist failed: {e}")
+            log.warning(f"migration persist failed: {e}")
 
     # Mark migration done (even if no data to migrate)
     try:
@@ -1310,7 +1279,7 @@ def migrate_old_session_to_adata(
                             adata_norm.write_h5ad(norm_cache)
                             print("  Migrated rank genes and adata_norm to zarr cache")
                         except Exception as e:
-                            print(f"  Warning: could not migrate adata_norm: {e}")
+                            log.warning(f"could not migrate adata_norm: {e}")
                     # Clean up old files
                     try:
                         rg_parquet.unlink(missing_ok=True)
@@ -1318,7 +1287,7 @@ def migrate_old_session_to_adata(
                     except Exception:
                         pass
                 except Exception as e:
-                    print(f"  Warning: rank genes migration failed: {e}")
+                    log.warning(f"rank genes migration failed: {e}")
 
         try:
             session.attrs["migrated_rank_genes_to_adata"] = True
@@ -1340,7 +1309,7 @@ def migrate_old_session_to_adata(
                     shutil.copy2(old_path, new_path)
                     print(f"  Migrated {old_name} → zarr root")
                 except Exception as e:
-                    print(f"  Warning: could not migrate {old_name}: {e}")
+                    log.warning(f"could not migrate {old_name}: {e}")
         try:
             session.attrs["migrated_deg_to_sdata"] = True
         except Exception:
@@ -1404,8 +1373,7 @@ def save_external_image_to_sdata(
         )
         safe_write_element(ctx.sdata, element_name, parsed)
     except Exception as e:
-        _maybe_show_permission_dialog(e, f"external image '{element_name}'")
-        print(f"Warning: could not save external image {element_name} to sdata: {e}")
+        report_write_failure(e, f"external image '{element_name}'")
 
 
 def load_external_images_from_sdata(sdata, prefix: str = "ext_") -> list:
@@ -1430,7 +1398,7 @@ def load_external_images_from_sdata(sdata, prefix: str = "ext_") -> list:
                     "affine_matrix": _load_affine_from_sdata_element(sdata, name),
                 })
             except Exception as e:
-                print(f"Warning: could not read external image {name}: {e}")
+                log.warning(f"could not read external image {name}: {e}")
     except Exception:
         pass
     return out
@@ -1513,8 +1481,7 @@ def save_patch_overlay_to_sdata(
         gdf = ShapesModel.parse(gpd.GeoDataFrame(data))
         safe_write_element(ctx.sdata, element_name, gdf)
     except Exception as e:
-        _maybe_show_permission_dialog(e, f"patch overlay '{element_name}'")
-        print(f"Warning: could not save patch overlay {element_name} to sdata: {e}")
+        report_write_failure(e, f"patch overlay '{element_name}'")
 
 
 def save_overlay_affine_to_sdata(ctx, element_name: str, affine_matrix) -> None:
@@ -1542,8 +1509,7 @@ def save_overlay_affine_to_sdata(ctx, element_name: str, affine_matrix) -> None:
         set_transformation(elem, sd_affine, "global")
         ctx.sdata.write_transformations(element_name)
     except Exception as e:
-        _maybe_show_permission_dialog(e, f"affine transform for '{element_name}'")
-        print(f"Warning: could not save affine for {element_name}: {e}")
+        report_write_failure(e, f"affine transform for '{element_name}'")
 
 
 def _load_affine_from_sdata_element(sdata, element_name: str):
@@ -1620,5 +1586,5 @@ def load_patch_overlays_from_sdata(sdata, prefix: str = "patch_") -> list:
                 "affine_matrix": _load_affine_from_sdata_element(sdata, name),
             })
         except Exception as e:
-            print(f"Warning: could not load patch overlay {name}: {e}")
+            log.warning(f"could not load patch overlay {name}: {e}")
     return out

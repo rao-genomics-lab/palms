@@ -466,6 +466,15 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
     Returns a dict with: pixel_size, sdata, adata, umap_df, clusterings,
     label_to_obs, gene_names, clustering_names, color_manager, transcript_loader.
     """
+    # Start the per-dataset log before anything can fail. Write failures used to
+    # go only to stdout, which a GUI user never reads — so when the cache was
+    # being corrupted, the warnings that would have explained it were lost.
+    from xenium_viewer.utils.reporting import reset_failures, setup_logging
+    reset_failures()
+    log_file = setup_logging(data_path)
+    if log_file is not None:
+        print(f"Logging to {log_file}")
+
     pixel_size = _read_pixel_size(data_path)
     print(f"Pixel size: {pixel_size} um/px")
 

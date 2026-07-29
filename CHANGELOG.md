@@ -64,6 +64,21 @@
   `sc.tl.correlation_matrix`, which does not exist in scanpy. See the 2026-07-28 entry.
 
 ### Added
+- **`utils/reporting.py` — a per-dataset log and non-modal error surfacing.** Every write
+  failure went to stdout, which a GUI user never reads, and the only dialog was for
+  permission errors, shown **once per process** via a module-level flag — so the second
+  failure and everything after it was invisible. When the cache was being corrupted, the
+  warnings that would have explained it were lost. Now: a rotating
+  `<data_path>/xenium_viewer.log` (2 MB × 3) started before anything can fail;
+  `report_write_failure()` always logs with a traceback, shows a non-modal napari
+  notification marshalled to the GUI thread via `ensure_main_thread` (the old dialog could
+  be constructed from a `thread_worker`, a real Qt violation), and reserves a modal for
+  permission and disk-full errors only — tracked per (dataset, error class), not per
+  process. A running tally (`failure_summary()`) makes failures visible in aggregate
+  without a popup per event. The ~20 `print("Warning: could not ...")` sites in the cache
+  write paths now log, so the file captures them; a source guard fails if any come back.
+  (`utils/reporting.py`, `utils/adata_persistence.py`, `utils/session.py`, `app.py`)
+
 - **`utils/cache_repair.py`** — `verify()` (read-only; parses the root `zarr.json` with
   `json.loads` rather than `zarr.open`, so it reports on a store too broken to open) and
   `repair()` (idempotent; replays journals, clears debris, drops stray groups,
@@ -87,9 +102,10 @@
   `KeyboardInterrupt` that bypasses cleanup the way a `kill -9` does),
   `test_persistence_safety.py` (9), `test_session_persistence.py` (14),
   `test_cache_repair.py` (20), `test_loader_policy.py` (16), `test_sidecar_location.py`
-  (13). Plus source guards that fail if `delete_element_from_disk` is called outside
+  (13), `test_reporting.py` (21). Plus source guards that fail if `delete_element_from_disk` is called outside
   `zarr_safe.py`, if `loader.py` `rmtree`s the live cache, or if a sidecar is written into
-  the store root. 246 tests pass.
+  the store root, or if a cache write path prints a warning instead of logging it.
+  267 tests pass.
 
 ## [Unreleased] — 2026-07-28
 
