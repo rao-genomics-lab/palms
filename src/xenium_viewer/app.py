@@ -306,6 +306,7 @@ def _build_control_panel(ctx: ViewerContext):
     from xenium_viewer.tabs.tab_external_images import build_tab as build_external_images_tab
     from xenium_viewer.tabs.tab_patch_overlays import build_tab as build_patch_overlays_tab
     from xenium_viewer.tabs.tab_crop_dataset import build_tab as build_crop_dataset_tab
+    from xenium_viewer.tabs.tab_dataset import build_tab as build_dataset_tab
     from xenium_viewer.tabs.tab_cache import build_tab as build_cache_tab
 
     # ── Build Cell Coloring first (creates cross-tab widgets) ────────────
@@ -353,6 +354,7 @@ def _build_control_panel(ctx: ViewerContext):
     ext_img_widget, ext_img_exports = build_external_images_tab(ctx)
     patch_widget, patch_exports = build_patch_overlays_tab(ctx)
     crop_widget, crop_exports = build_crop_dataset_tab(ctx)
+    dataset_widget, dataset_exports = build_dataset_tab(ctx)
     cache_widget, cache_exports = build_cache_tab(ctx)
 
     # ── Mouse hover: show cluster ID in status bar ───────────────────────
@@ -433,6 +435,7 @@ def _build_control_panel(ctx: ViewerContext):
     tools_tabs.addTab(seg_widget,      "Segmentation")
     tools_tabs.addTab(crop_widget,     "Crop Dataset")
     tools_tabs.addTab(notebook_widget, "Notebook")
+    tools_tabs.addTab(dataset_widget,  "Dataset")
     tools_tabs.addTab(cache_widget,    "Cache")
 
     for _group in (cells_tabs, genes_tabs, spatial_tabs, images_tabs, tools_tabs):
@@ -451,7 +454,8 @@ def _build_control_panel(ctx: ViewerContext):
         umap_exports, roi_exports, he_exports, ga_exports, mg_exports,
         lr_exports, nhood_exports, co_exports, cnv_exports, novae_exports, arms_exports, corr_exports,
         notebook_exports, annot_exports, annot_nhood_exports, annot_dist_exports,
-        seg_exports, ext_img_exports, patch_exports, crop_exports, cache_exports,
+        seg_exports, ext_img_exports, patch_exports, crop_exports,
+        dataset_exports, cache_exports,
     ]
 
     def restore_session(session):
