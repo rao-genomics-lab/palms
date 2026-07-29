@@ -1501,7 +1501,14 @@ def run_viewer(data_path=None, no_cache: bool = False):
 def main():
     """Console-script entry point — parses argv and launches the viewer."""
     data_path, no_cache = _parse_args()
-    run_viewer(data_path, no_cache=no_cache)
+    from xenium_viewer.loader import CacheLoadAborted
+    try:
+        run_viewer(data_path, no_cache=no_cache)
+    except CacheLoadAborted as e:
+        # The user declined to rebuild, or we had no way to ask. Exiting
+        # quietly is the point: the cache is left exactly as it was.
+        print(f"\n{e}")
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
