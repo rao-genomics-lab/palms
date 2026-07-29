@@ -1,5 +1,96 @@
 # Changelog
 
+## [Unreleased] — 2026-07-29
+
+### Fixed
+- **Crash-safe zarr cache writes.** The viewer persisted elements with
+  `delete_element_from_disk` followed by `write_element`. That is not a metadata
+  operation — spatialdata does `del root[element_type][element_name]`, which recursively
+  unlinks, so the bytes were gone before the replacement started being written. Its own
+  docstring warns "data loss may occur if the execution is interrupted during writing."
+  `_persist_table` ran it on *every* analysis action, so every clustering, DEG run and
+  label edit opened a window in which a kill, a full disk or any exception left the store
+  structurally invalid — and the loader then discarded the whole cache (30 GB on the
+  dataset that prompted this, of which the table is 320 MB).
+
+  `utils/zarr_safe.py` replaces it with stage-then-swap: the new element is written to a
+  throwaway sibling store under `.xv_staging` (live store untouched, so a failure there
+  costs nothing), then journalled and swapped in with two `os.rename` calls. The previous
+  copy moves to `.xv_trash` rather than being deleted. `recover_pending()` finishes or
+  unwinds an interrupted swap at startup, inferring the phase from the filesystem.
+  All 16 delete-then-write call sites now use it, and the store lock covers every writer
+  rather than 3 of ~20. (`utils/zarr_safe.py`, `utils/adata_persistence.py`,
+  `tabs/tab_he_registration.py`, `tabs/tab_arms.py`, `tabs/tab_external_images.py`,
+  `tabs/tab_patch_overlays.py`)
+
+- **Four save functions erased data when a layer was transiently empty.**
+  `save_rois_to_sdata`, `save_annotations_to_sdata`, `save_landmarks_to_sdata` and
+  `save_arms_tiles_to_sdata` deleted the stored element *before* checking whether there
+  was anything to write. A napari layer that was empty for any reason — mid-teardown, a
+  missed snapshot — silently wiped the persisted ROIs, annotations or tiles.
+
+- **Session save destroyed the session it was writing.** `save_session` called
+  `create_group("viewer_session", overwrite=True)` and only wrote the replacement ~110
+  lines later; any exception in between (most plausibly a non-serialisable value reaching
+  `attrs.update`) left an empty group and one printed warning, after the user had closed
+  the window. Attrs are now built and JSON-validated before the group is touched, and the
+  write goes through `safe_group_update`. (`utils/session.py`)
+
+- **Startup migrations re-armed on every launch.** `save_session` rebuilt attrs from
+  scratch, wiping the four `migrated_*` markers each clean exit — so migrations re-ran at
+  the next launch, including two that themselves rewrote the whole cell table. Attrs are
+  now preserve-by-default. (`utils/session.py`)
+
+- **Caches were discarded too readily.** Three paths did it:
+  - an unreadable cache was renamed aside — or `rmtree`'d if the rename failed — with no
+    repair attempt and no check for user data. It now runs `verify`/`repair` first and
+    escalates to restoring a missing element from its backup.
+  - staleness compared `experiment.xenium`'s mtime against the cache *directory* mtime,
+    which only moves when a direct child is added or removed — so `rsync`/`cp -p`/a
+    re-download condemned a good cache. Caches now carry `.xv_manifest.json` with a
+    sha256 of the source. Pre-existing caches keep the mtime check as an *uncertain*
+    hint that prompts rather than rebuilding.
+  - the sidecar list omitted `adata_cnv_cache_*.h5ad`, so a cache whose only user data
+    was a multi-hour CopyKAT run reported "no user data" and was rebuilt with **no dialog
+    at all**.
+
+  Also: `_restore_user_elements` is now a deny-list (CNV scores, `cnv_runs` and
+  `rank_genes_groupby` were dropped even on "Rebuild and restore my data"); the rebuild
+  stages and renames rather than overwriting in place and `rmtree`ing on failure, after a
+  free-space check; and no-dialog no longer means "rebuild" — stale keeps, unopenable
+  raises `CacheLoadAborted` for a clean exit. (`loader.py`, `app.py`)
+
+- **The Marker Genes correlation-matrix button never worked** — it called
+  `sc.tl.correlation_matrix`, which does not exist in scanpy. See the 2026-07-28 entry.
+
+### Added
+- **`utils/cache_repair.py`** — `verify()` (read-only; parses the root `zarr.json` with
+  `json.loads` rather than `zarr.open`, so it reports on a store too broken to open) and
+  `repair()` (idempotent; replays journals, clears debris, drops stray groups,
+  re-consolidates, and at `FULL` restores an element from its `.xv_trash` backup).
+  Replaces the ad-hoc block in `app.py`, which handled two hard-coded cases and assumed a
+  nested consolidated-metadata layout — zarr 3.1 writes a flat one, so it could not have
+  detected the case it was written for. (`utils/cache_repair.py`, `app.py`)
+
+### Changed
+- **Sidecar analysis outputs moved out of the zarr store root** into
+  `<data_path>/viewer_cache/`. Files in the store root make zarr's hierarchy walk emit a
+  `ZarrUserWarning` each — the most likely source of the reported "several warnings",
+  since `app.py` called `consolidate_metadata` without the filter spatialdata itself uses.
+  It also meant a cache rebuild deleted them, including hours of CopyKAT compute. Readers
+  fall back to the old location, so existing datasets keep working and nothing is migrated
+  eagerly. (`utils/adata_persistence.py`, `tabs/tab_cnv.py`, `loader.py`)
+
+### Tests
+- First coverage the zarr/persistence paths have ever had: `test_zarr_safe.py` (26,
+  including interrupted-write simulation with both a recoverable `OSError` and a
+  `KeyboardInterrupt` that bypasses cleanup the way a `kill -9` does),
+  `test_persistence_safety.py` (9), `test_session_persistence.py` (14),
+  `test_cache_repair.py` (20), `test_loader_policy.py` (16), `test_sidecar_location.py`
+  (13). Plus source guards that fail if `delete_element_from_disk` is called outside
+  `zarr_safe.py`, if `loader.py` `rmtree`s the live cache, or if a sidecar is written into
+  the store root. 246 tests pass.
+
 ## [Unreleased] — 2026-07-28
 
 ### Added

@@ -101,8 +101,14 @@ def _detect_user_data(cache_path: Path) -> dict:
     obsm_dir = cache_path / "tables" / "table" / "obsm"
     if obsm_dir.exists() and (obsm_dir / "X_umap").exists():
         found["has_obsm_umap"] = True
+    # Sidecars now live beside the store, where a cache rebuild cannot touch
+    # them; the in-store location is still scanned so pre-existing datasets
+    # still count them as data at stake.
+    sidecar_home = cache_path.parent / "viewer_cache"
     for pattern in _SIDECAR_PATTERNS:
         found["sidecars"].extend(sorted(p.name for p in cache_path.glob(pattern)))
+        found["sidecars"].extend(sorted(p.name for p in sidecar_home.glob(pattern)))
+    found["sidecars"] = sorted(set(found["sidecars"]))
     if (cache_path / "viewer_session").exists():
         found["has_viewer_session"] = True
     return found

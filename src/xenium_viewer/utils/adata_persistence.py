@@ -38,6 +38,62 @@ CUSTOM_TABLE_KEY = "custom_table"
 
 _permission_dialog_shown = False
 
+# ── Sidecar files ────────────────────────────────────────────────────────────
+# Analysis outputs that are not zarr nodes: h5ad caches, parquet DEG tables and
+# the CopyKAT worker's JSON. These used to be written *into* the zarr store
+# root, where zarr's hierarchy walk hits each one, fails to open it, and emits a
+# ZarrUserWarning — the most likely source of the "several warnings" in the bug
+# report. Living inside the store also meant a cache rebuild destroyed them.
+#
+# They now live in a sibling directory. Readers fall back to the old location so
+# existing datasets keep working; nothing is migrated eagerly.
+SIDECAR_DIRNAME = "viewer_cache"
+
+
+def sidecar_dir(data_path, create: bool = False) -> Path:
+    """The directory sidecar files live in, beside (not inside) the zarr store."""
+    path = Path(data_path) / SIDECAR_DIRNAME
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _data_path_of(sdata) -> Path:
+    """The dataset directory containing ``sdata_cached.zarr``."""
+    return Path(sdata.path).parent
+
+
+def sidecar_write_path(ctx_or_sdata, name: str) -> Path:
+    """Where a sidecar should be written. Always the new location."""
+    data_path = getattr(ctx_or_sdata, "data_path", None)
+    if data_path is None:
+        data_path = _data_path_of(getattr(ctx_or_sdata, "sdata", ctx_or_sdata))
+    return sidecar_dir(data_path, create=True) / name
+
+
+def sidecar_read_paths(sdata, name: str) -> list[Path]:
+    """Candidate locations for reading *name*: new first, then legacy."""
+    store = Path(sdata.path)
+    return [sidecar_dir(_data_path_of(sdata)) / name, store / name]
+
+
+def find_sidecar(sdata, name: str) -> "Path | None":
+    for candidate in sidecar_read_paths(sdata, name):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def glob_sidecars(sdata, pattern: str) -> list[Path]:
+    """Files matching *pattern* in either location, new location winning."""
+    store = Path(sdata.path)
+    found: dict[str, Path] = {}
+    for path in sorted(store.glob(pattern)):
+        found[path.name] = path
+    for path in sorted(sidecar_dir(_data_path_of(sdata)).glob(pattern)):
+        found[path.name] = path
+    return [found[name] for name in sorted(found)]
+
 
 def _maybe_show_permission_dialog(e: Exception, operation: str = "data") -> None:
     """Show a QMessageBox if e is a read-only / permission-denied error."""
@@ -302,7 +358,7 @@ def _persist_adata_norm(ctx: ViewerContext, adata_norm) -> None:
     if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
         return
     try:
-        norm_path = Path(ctx.sdata.path) / "adata_norm_cache.h5ad"
+        norm_path = sidecar_write_path(ctx, "adata_norm_cache.h5ad")
         _convert_adata_arrow_strings(adata_norm)
         adata_norm.write_h5ad(norm_path)
     except Exception as e:
@@ -418,8 +474,8 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
 
     adata_norm = None
     if sdata is not None and sdata.path is not None:
-        norm_path = Path(sdata.path) / "adata_norm_cache.h5ad"
-        if norm_path.exists():
+        norm_path = find_sidecar(sdata, "adata_norm_cache.h5ad")
+        if norm_path is not None:
             try:
                 adata_norm = sc.read_h5ad(norm_path)
             except Exception as e:
@@ -508,7 +564,7 @@ def _persist_cnv_adata(ctx: ViewerContext, adata_cnv, backend: str = "infercnv")
     if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
         return
     try:
-        cnv_path = Path(ctx.sdata.path) / f"adata_cnv_cache_{backend}.h5ad"
+        cnv_path = sidecar_write_path(ctx, f"adata_cnv_cache_{backend}.h5ad")
         _convert_adata_arrow_strings(adata_cnv)
         adata_cnv.write_h5ad(cnv_path)
     except Exception as e:
@@ -520,9 +576,9 @@ def _load_cnv_cache(sdata, backend: str):
     """Load a per-backend adata_cnv h5ad (falling back to the legacy filename)."""
     if sdata is None or sdata.path is None:
         return None
-    candidates = [Path(sdata.path) / f"adata_cnv_cache_{backend}.h5ad"]
+    candidates = sidecar_read_paths(sdata, f"adata_cnv_cache_{backend}.h5ad")
     if backend == "infercnv":
-        candidates.append(Path(sdata.path) / "adata_cnv_cache.h5ad")  # legacy single-profile cache
+        candidates += sidecar_read_paths(sdata, "adata_cnv_cache.h5ad")  # legacy single-profile cache
     for cnv_path in candidates:
         if cnv_path.exists():
             try:
@@ -599,7 +655,7 @@ def load_cnv_results_from_adata(adata: AnnData, sdata) -> "dict | None":
 
     # Detached-worker sidecars: pick up backends the table doesn't already carry.
     if sdata is not None and sdata.path is not None:
-        for sidecar_path in sorted(Path(sdata.path).glob("cnv_*_result.json")):
+        for sidecar_path in glob_sidecars(sdata, "cnv_*_result.json"):
             try:
                 sidecar = json.loads(sidecar_path.read_text())
             except Exception:
@@ -625,7 +681,7 @@ def save_roi_deg_to_sdata(ctx: "ViewerContext", df) -> None:
     if df is None or df.empty:
         return
     try:
-        cache_path = Path(ctx.sdata.path) / ROI_DEG_CACHE
+        cache_path = sidecar_write_path(ctx, ROI_DEG_CACHE)
         df.to_parquet(cache_path, index=False)
     except Exception as e:
         _maybe_show_permission_dialog(e, "ROI DEG results")
@@ -636,8 +692,8 @@ def load_roi_deg_from_sdata(sdata) -> "pd.DataFrame | None":
     """Load ROI DEG DataFrame from <zarr_path>/roi_deg_cache.parquet."""
     if sdata is None or sdata.path is None:
         return None
-    cache_path = Path(sdata.path) / ROI_DEG_CACHE
-    if not cache_path.exists():
+    cache_path = find_sidecar(sdata, ROI_DEG_CACHE)
+    if cache_path is None:
         return None
     try:
         return pd.read_parquet(cache_path)
@@ -653,7 +709,7 @@ def save_arms_tile_deg_to_sdata(ctx: "ViewerContext", df) -> None:
     if df is None or df.empty:
         return
     try:
-        cache_path = Path(ctx.sdata.path) / ARMS_DEG_CACHE
+        cache_path = sidecar_write_path(ctx, ARMS_DEG_CACHE)
         df.to_parquet(cache_path, index=False)
     except Exception as e:
         _maybe_show_permission_dialog(e, "ARMS tile DEG results")
@@ -664,8 +720,8 @@ def load_arms_tile_deg_from_sdata(sdata) -> "pd.DataFrame | None":
     """Load ARMS tile DEG DataFrame from <zarr_path>/arms_tile_deg_cache.parquet."""
     if sdata is None or sdata.path is None:
         return None
-    cache_path = Path(sdata.path) / ARMS_DEG_CACHE
-    if not cache_path.exists():
+    cache_path = find_sidecar(sdata, ARMS_DEG_CACHE)
+    if cache_path is None:
         return None
     try:
         return pd.read_parquet(cache_path)
@@ -1244,9 +1300,11 @@ def migrate_old_session_to_adata(
                     # Persist updated main adata
                     _convert_arrow_strings(sdata)
                     safe_write_element(sdata, "table")
-                    # Migrate adata_norm to h5ad cache alongside the zarr store
-                    norm_cache = Path(zarr_path) / "adata_norm_cache.h5ad"
-                    if not norm_cache.exists():
+                    # Migrate adata_norm to the h5ad sidecar beside the store
+                    norm_cache = sidecar_dir(
+                        Path(zarr_path).parent, create=True) / "adata_norm_cache.h5ad"
+                    if not norm_cache.exists() and not (
+                            Path(zarr_path) / "adata_norm_cache.h5ad").exists():
                         try:
                             _convert_adata_arrow_strings(adata_norm)
                             adata_norm.write_h5ad(norm_cache)

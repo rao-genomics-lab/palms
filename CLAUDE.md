@@ -86,6 +86,33 @@ The 11 tabs cover: Clustering, Cell Coloring, Transcripts, UMAP, ROI Analysis, H
 
 Stored in `sdata_cached.zarr/viewer_session/` as zarr arrays and parquet files (plus the code provenance graph as a JSON attr). Auto-saved on relevant actions and restored at startup. Supports zarr v2 and v3.
 
+### Cache safety (`utils/zarr_safe.py`, `utils/cache_repair.py`)
+
+**Never write to the zarr store directly.** Every element write goes through
+`safe_write_element` / `safe_delete_element`, and plain zarr groups through
+`safe_group_update`. These stage the new value in `<cache>/.xv_staging/`, journal the
+operation, then swap it in with two `os.rename` calls; the previous copy is moved to
+`<cache>/.xv_trash/` rather than deleted. `delete_element_from_disk` unlinks the live
+element *before* its replacement exists, so any interruption left the store invalid —
+`tests/test_persistence_safety.py` fails if it is called outside `zarr_safe.py`.
+`recover_pending()` finishes or unwinds an interrupted swap at startup.
+
+`cache_repair.verify()` is read-only and parses the root `zarr.json` with `json.loads`
+(not `zarr.open`), so it works on a store too broken to open; `repair()` only renames,
+clears debris and re-consolidates. `loader.load_sdata` repairs before asking, and
+**never deletes a cache** — every destructive branch is a rename (guarded by a test).
+
+Cache freshness comes from `<cache>/.xv_manifest.json`, a sha256 of `experiment.xenium`.
+Caches without one fall back to an mtime comparison, treated as *uncertain* — it prompts
+rather than rebuilding, since copying a dataset changes mtime without changing content.
+
+**Sidecar analysis outputs** (`adata_norm_cache.h5ad`, `adata_cnv_cache_*.h5ad`,
+`roi_deg_cache.parquet`, `arms_tile_deg_cache.parquet`, `cnv_*_result.json`) live in
+`<data_path>/viewer_cache/`, *not* in the zarr store root — files there make zarr's
+hierarchy walk warn on every consolidation, and a rebuild would delete them. Write via
+`adata_persistence.sidecar_write_path()`; read via `find_sidecar()` / `glob_sidecars()`,
+which fall back to the legacy in-store location for existing datasets.
+
 ### Code Recording (provenance DAG)
 
 User actions are recorded as a **provenance graph** (`utils/prov_graph.py`), the

@@ -927,7 +927,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         X = sub.X
         subset = _ad.AnnData(X=(X.copy() if hasattr(X, "copy") else X), obs=obs, var=var)
 
-        cache_dir = Path(ctx.sdata.path)
+        # Beside the zarr store, not inside it. The detached worker writes here
+        # while the GUI is live; files in the store root make zarr's hierarchy
+        # walk warn on every consolidation, and a cache rebuild would delete
+        # hours of CopyKAT compute along with the cache.
+        from xenium_viewer.utils.adata_persistence import sidecar_dir
+        cache_dir = sidecar_dir(ctx.data_path, create=True)
         plots_dir = Path(ctx.data_path) / "plots"
         plots_dir.mkdir(parents=True, exist_ok=True)
         input_h5ad = cache_dir / "cnv_copykat_input.h5ad"
