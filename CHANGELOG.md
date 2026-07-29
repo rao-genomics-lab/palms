@@ -93,6 +93,14 @@
   precedence on load and in `scripts/verify_notebook.py`, which reports which source it
   used. Datasets without the sidecar restore from the attr exactly as before.
 
+  Two guards, because the first version of this ate a graph: writes are gated on
+  `state["prov_graph_restored"]`, which `app.py` sets *after* the session is restored —
+  tabs seed a preamble node while the viewer is still being built, and persisting that
+  replaced a 13-node graph with a one-node stub which the next launch then preferred, so
+  the DAG came up showing only "Setup & data loading". And on load, a sidecar with
+  *fewer* nodes than the attr loses: it is written on every step and the attr only at
+  exit, so it is never legitimately smaller, and nothing in the GUI removes nodes.
+
 - **A write-failure dialog could block a process with nobody at the keyboard.**
   `reporting._surface` guarded the modal only on `QApplication.instance() is None`. A
   test run, a headless script or CI creates an instance with no event loop and no user,

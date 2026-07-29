@@ -316,8 +316,16 @@ def create_shared_helpers(ctx: ViewerContext):
         atomic file write per recorded step, where updating the zarr group means
         copying every parquet under ``viewer_session/``. ``save_session`` still
         writes the attr, and the sidecar takes precedence on load.
+
+        Gated on ``prov_graph_restored``, which ``app.py`` sets once the session
+        has been restored. Tabs seed a preamble node while the viewer is still
+        being built — writing at that point replaced a 13-node graph on disk
+        with a one-node stub, which the next launch then preferred over the
+        session attr, and the DAG came up empty.
         """
         graph = state.get("prov_graph")
+        if not state.get("prov_graph_restored"):
+            return
         if graph is None or not len(graph) or ctx.data_path is None:
             return
         try:

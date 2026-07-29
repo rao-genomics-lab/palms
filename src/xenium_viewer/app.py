@@ -718,6 +718,16 @@ def _load_prov_graph_items(data_path, session: dict) -> list:
         return list(attr_items)
     if not isinstance(items, list) or not items:
         return list(attr_items)
+    if len(items) < len(attr_items):
+        # The sidecar is written on every recorded step and the attr only at
+        # exit, so the sidecar is never legitimately *smaller*. If it is,
+        # something wrote a partial graph (see prov_graph_restored) and the attr
+        # is the better record — losing an analysis to a stale file is the one
+        # outcome worth being conservative about. Nothing in the GUI removes
+        # nodes, so a smaller graph is never a deliberate edit.
+        print(f"  Provenance sidecar has {len(items)} node(s) but the session "
+              f"attr has {len(attr_items)}; using the session attr.")
+        return list(attr_items)
     if len(items) != len(attr_items):
         print(f"  Provenance graph: {len(items)} node(s) from {sidecar.name} "
               f"(session attr had {len(attr_items)})")
@@ -1119,6 +1129,13 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         if sdata_cluster_labels:
             partial_session['cluster_labels'] = sdata_cluster_labels
         restore_fn(partial_session)
+
+    # Only now may the graph be written back. Everything above this line runs
+    # with whatever the tabs seeded — at minimum the preamble emitted during
+    # construction — and persisting *that* would overwrite the session's real
+    # graph with a one-node stub, which the next launch would then prefer.
+    ctx.state["prov_graph_restored"] = True
+    ctx.save_prov_graph()
 
     viewer.title = f"Xenium Viewer — {data_path.name}"
 

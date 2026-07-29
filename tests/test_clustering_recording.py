@@ -45,7 +45,13 @@ def ctx(tmp_path, qapp):
     from xenium_viewer.utils.viewer_context import ViewerContext
 
     context = ViewerContext(
-        data_path=tmp_path, state={"record_code": True, "code_journal": []},
+        data_path=tmp_path,
+        state={
+            "record_code": True, "code_journal": [],
+            # app.py sets this once the session has been restored; the tests
+            # that care about the gate clear it explicitly.
+            "prov_graph_restored": True,
+        },
     )
     create_shared_helpers(context)
     return context
@@ -174,6 +180,21 @@ def _sidecar(ctx) -> Path:
     return sidecar_dir(ctx.data_path) / PROV_GRAPH_SIDECAR
 
 
+def test_nothing_is_persisted_before_the_session_has_been_restored(ctx):
+    """Regression, and the most destructive bug in this work.
+
+    Tabs seed a preamble node while the viewer is still being built, long before
+    the session is read back. Persisting at that moment replaced a 13-node graph
+    on disk with a one-node stub — and because the sidecar then won on load, the
+    next launch came up with an empty DAG and the real graph only survived in
+    the session attr by luck.
+    """
+    ctx.state.pop("prov_graph_restored", None)
+    ctx.record_preamble()
+
+    assert not _sidecar(ctx).exists()
+
+
 def test_the_graph_reaches_disk_as_soon_as_a_step_is_recorded(ctx):
     """Measured failure: the artifacts were persisted eagerly, the code lazily.
 
@@ -237,6 +258,32 @@ def test_the_sidecar_wins_over_a_stale_session_attr():
     (directory / PROV_GRAPH_SIDECAR).write_text(json.dumps(fresh))
 
     items = _load_prov_graph_items(data_path, {"prov_graph": stale})
+    assert [item["id"] for item in items] == ["preamble", "clustering:k"]
+
+
+def test_a_smaller_sidecar_never_beats_a_bigger_session_attr():
+    """Belt-and-braces for the bug above: a partial sidecar must not win.
+
+    The sidecar is written on every step and the attr only at exit, so the
+    sidecar is never legitimately smaller. Nothing in the GUI removes nodes, so
+    when it is, the attr is the better record.
+    """
+    import json
+    from xenium_viewer.app import _load_prov_graph_items
+    from xenium_viewer.utils.adata_persistence import sidecar_dir
+    from xenium_viewer.tabs._helpers import PROV_GRAPH_SIDECAR
+    import tempfile
+
+    data_path = Path(tempfile.mkdtemp())
+    full = [
+        {"id": "preamble", "code": "import scanpy as sc", "kind": "setup"},
+        {"id": "clustering:k", "code": "sc.tl.leiden(adata_leiden)",
+         "deps": ["preamble"]},
+    ]
+    stub = [{"id": "preamble", "code": "import scanpy as sc", "kind": "setup"}]
+    (sidecar_dir(data_path, create=True) / PROV_GRAPH_SIDECAR).write_text(json.dumps(stub))
+
+    items = _load_prov_graph_items(data_path, {"prov_graph": full})
     assert [item["id"] for item in items] == ["preamble", "clustering:k"]
 
 
