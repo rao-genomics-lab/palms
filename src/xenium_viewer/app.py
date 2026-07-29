@@ -469,45 +469,22 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
     pixel_size = _read_pixel_size(data_path)
     print(f"Pixel size: {pixel_size} um/px")
 
-    # Repair zarr store if consolidated metadata is out of sync with disk.
-    # A brief bug wrote adata_norm to sdata.tables without spatialdata_attrs,
-    # which corrupted the consolidated_metadata in zarr.json even after the
-    # directory was deleted, making sdata["table"] inaccessible on reload.
+    # Finish any write interrupted by a crash, and fix bookkeeping that no
+    # longer matches disk, before anything tries to open the store. This
+    # generalises an earlier fix that only knew about tables/table and a stray
+    # tables/adata_norm; utils/cache_repair diffs the whole consolidated
+    # metadata against the filesystem, and repairs without discarding.
     if not no_cache:
         zarr_cache = data_path / "sdata_cached.zarr"
         if zarr_cache.exists():
-            import shutil, json, zarr as _zarr
-            # Remove any stray adata_norm directory
-            bad_adata_norm = zarr_cache / "tables" / "adata_norm"
-            need_consolidate = bad_adata_norm.exists()
-            if need_consolidate:
-                shutil.rmtree(bad_adata_norm, ignore_errors=True)
-                print("  Removed invalid tables/adata_norm from zarr store")
-
-            # Also detect stale consolidated metadata: tables/table/ exists on
-            # disk but is absent from the inline zarr.json consolidated_metadata.
-            if not need_consolidate:
-                table_dir = zarr_cache / "tables" / "table"
-                zarr_json = zarr_cache / "zarr.json"
-                if table_dir.exists() and zarr_json.exists():
-                    try:
-                        root = json.loads(zarr_json.read_text())
-                        tables_cm = (root.get("consolidated_metadata", {})
-                                         .get("metadata", {})
-                                         .get("tables", {})
-                                         .get("consolidated_metadata", {})
-                                         .get("metadata", {}))
-                        if "table" not in tables_cm:
-                            need_consolidate = True
-                    except Exception:
-                        pass
-
-            if need_consolidate:
-                try:
-                    _zarr.consolidate_metadata(str(zarr_cache))
-                    print("  Rebuilt zarr consolidated metadata")
-                except Exception as e:
-                    print(f"  Warning: could not consolidate zarr metadata: {e}")
+            from xenium_viewer.utils import cache_repair
+            report = cache_repair.verify(zarr_cache)
+            if not report.ok:
+                result = cache_repair.repair(zarr_cache, report)
+                for action in result.actions:
+                    print(f"  Cache: {action}")
+                for failure in result.failures:
+                    print(f"  Cache warning: {failure}")
 
     loader_mod = _loader_mod
 
