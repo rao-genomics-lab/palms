@@ -53,6 +53,60 @@ def test_migration_markers_survive_a_save():
         assert attrs[marker] is True, marker
 
 
+# ── the provenance graph must never shrink on save ───────────────────────────
+
+def _graph(*ids):
+    from xenium_viewer.utils.prov_graph import ProvGraph
+    graph = ProvGraph()
+    for node_id in ids:
+        graph.upsert(node_id, f"# {node_id}", kind="setup")
+    return graph
+
+
+def test_a_saved_graph_is_never_replaced_by_a_smaller_one():
+    """Regression, and it cost a real 13-node analysis.
+
+    A launch that failed to restore came up holding only the preamble the tabs
+    seed during construction. Its exit then wrote that single node over the
+    stored graph — the last copy — because save simply serialised whatever was
+    in memory. Nothing in the GUI removes nodes, so a shrink is always a bug.
+    """
+    stored = [{"id": f"n{i}", "code": "pass", "deps": []} for i in range(13)]
+    attrs = _build_session_attrs(**_args(
+        state={"prov_graph": _graph("preamble")},
+        prev_attrs={"prov_graph": stored},
+    ))
+    assert len(attrs["prov_graph"]) == 13
+
+
+def test_a_session_with_no_graph_does_not_wipe_the_stored_one():
+    stored = [{"id": "preamble", "code": "pass", "deps": []}]
+    attrs = _build_session_attrs(**_args(
+        state={}, prev_attrs={"prov_graph": stored},
+    ))
+    assert attrs["prov_graph"] == stored
+
+
+def test_a_grown_graph_is_saved():
+    """The guard must not freeze the graph — growth is the normal case."""
+    stored = [{"id": "preamble", "code": "pass", "deps": []}]
+    attrs = _build_session_attrs(**_args(
+        state={"prov_graph": _graph("preamble", "clustering:k")},
+        prev_attrs={"prov_graph": stored},
+    ))
+    assert [item["id"] for item in attrs["prov_graph"]] == ["preamble", "clustering:k"]
+
+
+def test_a_revised_graph_of_the_same_size_is_saved():
+    """Same node count, different code — re-running a step must persist."""
+    stored = [{"id": "preamble", "code": "OLD", "deps": []}]
+    attrs = _build_session_attrs(**_args(
+        state={"prov_graph": _graph("preamble")},
+        prev_attrs={"prov_graph": stored},
+    ))
+    assert attrs["prov_graph"][0]["code"] == "# preamble"
+
+
 def test_unknown_previous_keys_are_carried_forward():
     """Preserve-by-default, so a key added elsewhere isn't silently dropped."""
     attrs = _build_session_attrs(**_args(prev_attrs={"some_future_key": 42}))

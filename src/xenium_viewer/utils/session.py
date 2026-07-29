@@ -153,11 +153,29 @@ def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
     attrs["segmentation_source"] = state.get("segmentation_source", "xenium")
 
     # ── Reproducible-code provenance graph ───────────────────────────────
+    # Never shrinks. Nothing in the GUI removes nodes, so a smaller graph means
+    # the in-memory one is not the session's — a restore that did not happen, a
+    # launch that seeded only the preamble. Saving it anyway is how a 13-node
+    # analysis became a 1-node stub: the viewer came up empty, and its exit
+    # wrote that emptiness over the only remaining copy.
     prov = state.get("prov_graph")
     try:
-        attrs["prov_graph"] = prov.to_list() if prov is not None and len(prov) else None
+        items = prov.to_list() if prov is not None and len(prov) else None
     except Exception:
-        attrs["prov_graph"] = None
+        items = None
+    previous = prev_attrs.get("prov_graph") or []
+    if items is not None and len(items) < len(previous):
+        log.warning(
+            "keeping the stored provenance graph (%d nodes); the session holds "
+            "only %d, which would lose recorded steps", len(previous), len(items),
+        )
+        attrs["prov_graph"] = previous
+    elif items is None and previous:
+        log.warning("keeping the stored provenance graph (%d nodes); the session "
+                    "holds none", len(previous))
+        attrs["prov_graph"] = previous
+    else:
+        attrs["prov_graph"] = items
 
     # ── External images / patch overlays UI residuals ────────────────────
     # An *empty* list means "none are loaded right now" — which is equally true
