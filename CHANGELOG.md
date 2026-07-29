@@ -2,6 +2,26 @@
 
 ## [Unreleased] — 2026-07-29
 
+### Added
+- **Choosable Leiden flavour in the Clustering tab.** `sc.tl.leiden` has two backends —
+  `igraph` (fast) and `leidenalg` (scanpy's historical default, optimising the
+  RBConfiguration objective rather than igraph's modularity). The viewer hard-coded
+  `flavor='igraph'`, so a partition from an existing scanpy pipeline could not be
+  reproduced. A **flavor** dropdown now selects between them, `igraph` remaining the
+  default, alongside an **n_iterations** spinbox that resets to the selected backend's
+  default (`2` for igraph, `-1` — iterate to convergence — for leidenalg). `directed` is
+  derived from the flavour rather than exposed, because scanpy raises on
+  `directed=True` under igraph. All four values are written literally into the recorded
+  step, so the notebook shows exactly which backend produced the labels; the replay test
+  now runs over both flavours, since each is seeded from `random_state`.
+  (`tabs/tab_clustering.py`, `tests/test_clustering_step.py`)
+
+  **Result keys now carry the flavour**: `leiden_igraph_r1.0` / `leiden_leidenalg_r1.0`,
+  so both backends can be run at one resolution and compared instead of one silently
+  overwriting the other. Clusterings computed before this change keep their older
+  `leiden_r{resolution}` keys and still load and appear in every dropdown, but a new run
+  at that resolution writes the new key *alongside* the old one rather than replacing it.
+
 ### Fixed
 - **Crash-safe zarr cache writes.** The viewer persisted elements with
   `delete_element_from_disk` followed by `write_element`. That is not a metadata

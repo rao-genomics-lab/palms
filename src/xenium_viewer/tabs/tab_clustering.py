@@ -6,7 +6,7 @@ from pathlib import Path
 
 import os
 
-from magicgui.widgets import CheckBox, PushButton, Slider, FloatSpinBox
+from magicgui.widgets import CheckBox, ComboBox, PushButton, Slider, SpinBox, FloatSpinBox
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
@@ -50,9 +50,25 @@ _LEIDEN_TEMPLATE_TAIL = """
 sc.pp.neighbors(adata_leiden, n_neighbors=$n_neighbors, n_pcs=$n_pcs)
 sc.tl.leiden(
     adata_leiden, resolution=$resolution, key_added=$key,
-    flavor='igraph', n_iterations=2, random_state=$random_state,
+    flavor=$flavor, n_iterations=$n_iterations, directed=$directed,
+    random_state=$random_state,
 )
 adata.obs[$key] = adata_leiden.obs[$key].values"""
+
+# scanpy's two Leiden backends. `igraph` is orders of magnitude faster;
+# `leidenalg` is scanpy's historical default and gives a different partition
+# (RBConfiguration rather than igraph's modularity objective), so results from
+# published pipelines are reproducible here.
+#
+# n_iterations and directed differ per backend, and scanpy *raises* on
+# directed=True under igraph — so `directed` is derived from the flavour rather
+# than exposed. Both are written literally into the recorded source: leaving
+# either implicit would let a scanpy upgrade silently change the clustering.
+LEIDEN_FLAVORS = ("igraph", "leidenalg")
+FLAVOR_DEFAULTS = {                # flavour -> (n_iterations, directed)
+    "igraph": (2, False),
+    "leidenalg": (-1, True),
+}
 
 
 def _leiden_template(use_hvg: bool, do_scale: bool) -> str:
@@ -74,6 +90,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
     leiden_n_neighbors = Slider(label="n_neighbors", min=5, max=50, value=15)
     leiden_n_pcs = Slider(label="n_pcs", min=10, max=50, value=40)
     leiden_resolution = FloatSpinBox(label="resolution", min=0.1, max=5.0, step=0.1, value=1.0)
+    leiden_flavor = ComboBox(
+        label="flavor", choices=LEIDEN_FLAVORS, value="igraph",
+        tooltip="Which implementation of the Leiden algorithm to use.\n"
+                "igraph is orders of magnitude faster and is the default.\n"
+                "leidenalg is scanpy's historical backend and gives a different\n"
+                "partition — pick it to reproduce an existing scanpy pipeline.",
+    )
+    leiden_n_iterations = SpinBox(
+        label="n_iterations", min=-1, max=100, value=FLAVOR_DEFAULTS["igraph"][0],
+        tooltip="How many Leiden iterations to run.\n"
+                "-1 iterates until the partition stops improving (slower).\n"
+                "Resets to the chosen backend's default when you change flavor.",
+    )
     leiden_hvg_check = CheckBox(label="Use HVGs only", value=False)
     leiden_n_hvgs = Slider(label="n_top_genes", min=500, max=4000, value=2000, enabled=False)
     leiden_scale_check = CheckBox(label="Scale (max_value=10)", value=False)
@@ -81,6 +110,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _on_hvg_toggle(val):
         leiden_n_hvgs.enabled = val
     leiden_hvg_check.changed.connect(_on_hvg_toggle)
+
+    def _on_flavor_change(flavor):
+        # The two backends disagree on what a sensible n_iterations is (2 vs
+        # -1), so follow the selection rather than carrying the old value over.
+        leiden_n_iterations.value = FLAVOR_DEFAULTS[flavor][0]
+    leiden_flavor.changed.connect(_on_flavor_change)
 
     leiden_run_button = PushButton(label="Run Leiden Clustering", enabled=True)
     leiden_import_button = PushButton(label="Import Clustering...", enabled=True)
@@ -97,9 +132,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _on_leiden_ready(result, _gen):
         if ctx.dataset_generation != _gen:
             return  # dataset reloaded while worker ran
-        series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs = result
-        key = f"leiden_r{resolution}"
-        # Re-running at the same resolution replaces the series behind an
+        key = result["key"]
+        series = result["series"]
+        n_clusters = result["n_clusters"]
+        # Re-running with the same settings replaces the series behind an
         # existing key, so the cached color array for it is now wrong.
         ctx.color_manager.invalidate_cluster_cache(key)
         ctx.clusterings[key] = series
@@ -110,11 +146,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"Leiden clustering complete\n"
             f"  Key: {key}\n"
             f"  Clusters: {n_clusters}\n"
-            f"  n_neighbors: {n_neighbors}\n"
-            f"  n_pcs: {n_pcs}\n"
-            f"  resolution: {resolution}\n"
-            f"  HVGs: {n_hvgs if use_hvg else 'all genes'}\n"
-            f"  Scaled: {'yes (max=10)' if do_scale else 'no'}"
+            f"  flavor: {result['flavor']}\n"
+            f"  n_iterations: {result['n_iterations']}\n"
+            f"  n_neighbors: {result['n_neighbors']}\n"
+            f"  n_pcs: {result['n_pcs']}\n"
+            f"  resolution: {result['resolution']}\n"
+            f"  HVGs: {result['n_hvgs'] if result['use_hvg'] else 'all genes'}\n"
+            f"  Scaled: {'yes (max=10)' if result['do_scale'] else 'no'}"
         )
         leiden_status.value = f"Leiden done: {n_clusters} clusters ({key})"
         leiden_run_button.enabled = True
@@ -132,13 +170,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
         use_hvg = leiden_hvg_check.value
         do_scale = leiden_scale_check.value
         n_hvgs = leiden_n_hvgs.value
+        flavor = leiden_flavor.value
+        n_iterations = leiden_n_iterations.value
+        directed = FLAVOR_DEFAULTS[flavor][1]
         leiden_run_button.enabled = False
         leiden_status.value = "Running Leiden clustering..."
         gen = ctx.dataset_generation
 
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        key = f"leiden_r{resolution}"
+        # The flavour is part of the key: the two backends produce genuinely
+        # different partitions, so at one resolution they must coexist rather
+        # than overwrite each other.
+        key = f"leiden_{flavor}_r{resolution}"
         step = Step(
             id=f"clustering:{key}",
             template=_leiden_template(use_hvg, do_scale),
@@ -148,6 +192,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 "n_neighbors": coerce(n_neighbors),
                 "n_pcs": coerce(n_pcs),
                 "n_top_genes": coerce(n_hvgs),
+                "flavor": flavor,
+                "n_iterations": coerce(n_iterations),
+                "directed": directed,
                 "random_state": 0,
             },
             deps=["normalize"],
@@ -176,8 +223,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
             series = pd.Series(
                 labels.astype(int).values, index=cell_ids, name=key,
             )
-            n_clusters = series.nunique()
-            return series, n_clusters, resolution, n_neighbors, n_pcs, use_hvg, do_scale, n_hvgs
+            return {
+                "key": key, "series": series, "n_clusters": series.nunique(),
+                "resolution": resolution, "n_neighbors": n_neighbors,
+                "n_pcs": n_pcs, "flavor": flavor, "n_iterations": n_iterations,
+                "use_hvg": use_hvg, "do_scale": do_scale, "n_hvgs": n_hvgs,
+            }
 
         worker = _run()
         worker.returned.connect(lambda result: _on_leiden_ready(result, gen))
@@ -282,6 +333,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         leiden_n_neighbors,
         leiden_n_pcs,
         leiden_resolution,
+        leiden_flavor,
+        leiden_n_iterations,
         leiden_hvg_check,
         leiden_n_hvgs,
         leiden_scale_check,

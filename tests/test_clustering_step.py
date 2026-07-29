@@ -28,7 +28,9 @@ sc = pytest.importorskip("scanpy")
 from xenium_viewer.utils.steps import Step, StepExecutor, check_step  # noqa: E402
 
 # Imported from the tab module's constants without triggering its Qt imports.
-from xenium_viewer.tabs.tab_clustering import _leiden_template  # noqa: E402
+from xenium_viewer.tabs.tab_clustering import (  # noqa: E402
+    FLAVOR_DEFAULTS, LEIDEN_FLAVORS, _leiden_template,
+)
 from xenium_viewer.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
 
 
@@ -48,13 +50,18 @@ def _normalize_step():
                 label="Normalize, log-transform, PCA", outputs=["adata_norm"])
 
 
-def _step(key="leiden_r1.0", use_hvg=False, do_scale=False, n_pcs=10):
+def _step(key=None, use_hvg=False, do_scale=False, n_pcs=10, flavor="igraph",
+          resolution=1.0):
+    """Build the step exactly as ``on_run_leiden`` does, key naming included."""
+    key = key if key is not None else f"leiden_{flavor}_r{resolution}"
+    n_iterations, directed = FLAVOR_DEFAULTS[flavor]
     return Step(
         id=f"clustering:{key}",
         template=_leiden_template(use_hvg, do_scale),
         params={
-            "key": key, "resolution": 1.0, "n_neighbors": 15, "n_pcs": n_pcs,
-            "n_top_genes": 30, "random_state": 0,
+            "key": key, "resolution": resolution, "n_neighbors": 15, "n_pcs": n_pcs,
+            "n_top_genes": 30, "flavor": flavor, "n_iterations": n_iterations,
+            "directed": directed, "random_state": 0,
         },
         deps=["normalize"],
         label=f"Clustering: {key}",
@@ -71,30 +78,40 @@ def _run(step, adata):
     return ex
 
 
+@pytest.mark.parametrize("flavor", LEIDEN_FLAVORS)
 @pytest.mark.parametrize("use_hvg,do_scale", [
     (False, False), (True, False), (False, True), (True, True),
 ])
-def test_template_executes_and_labels_the_cells(use_hvg, do_scale):
+def test_template_executes_and_labels_the_cells(use_hvg, do_scale, flavor):
+    if flavor == "leidenalg":
+        pytest.importorskip("leidenalg")
     adata = _adata()
-    step = _step(use_hvg=use_hvg, do_scale=do_scale)
+    step = _step(use_hvg=use_hvg, do_scale=do_scale, flavor=flavor)
     ex = _run(step, adata)
+    key = step.params["key"]
 
-    assert "leiden_r1.0" in adata.obs
-    assert adata.obs["leiden_r1.0"].nunique() >= 2
+    assert key in adata.obs
+    assert adata.obs[key].nunique() >= 2
     # recorded source == executed source
-    assert ex.graph.get("clustering:leiden_r1.0").code == step.render()
+    assert ex.graph.get(f"clustering:{key}").code == step.render()
 
 
-def test_recorded_source_replays_to_the_same_labels():
+@pytest.mark.parametrize("flavor", LEIDEN_FLAVORS)
+def test_recorded_source_replays_to_the_same_labels(flavor):
     """Re-running the recorded cell in a clean namespace reproduces the labels.
 
     This is the reproducibility claim in miniature: no viewer objects, no
-    session state — just the source the notebook would contain.
+    session state — just the source the notebook would contain. Both backends
+    are seeded from ``random_state`` (leidenalg via ``seed=``, igraph via
+    ``set_igraph_random_state``), so the claim has to hold for either.
     """
+    if flavor == "leidenalg":
+        pytest.importorskip("leidenalg")
     adata = _adata()
-    step = _step()
+    step = _step(flavor=flavor)
+    key = step.params["key"]
     ex = _run(step, adata)
-    gui_labels = adata.obs["leiden_r1.0"].astype(str).to_numpy()
+    gui_labels = adata.obs[key].astype(str).to_numpy()
 
     # Replay every recorded cell in dependency order, as the notebook does.
     replay_ns = {"sc": sc, "adata": _adata()}
@@ -102,7 +119,7 @@ def test_recorded_source_replays_to_the_same_labels():
         warnings.simplefilter("ignore")
         for node_id in ex.graph.topo_sort():
             exec(compile(ex.graph.get(node_id).code, "<replay>", "exec"), replay_ns)  # noqa: S102
-    replay_labels = replay_ns["adata"].obs["leiden_r1.0"].astype(str).to_numpy()
+    replay_labels = replay_ns["adata"].obs[key].astype(str).to_numpy()
 
     assert (gui_labels == replay_labels).all()
 
@@ -148,27 +165,46 @@ def test_pca_is_recomputed_only_when_the_gene_set_or_scaling_changed():
 
 def test_normalize_sorts_before_clustering():
     adata = _adata()
-    ex = _run(_step(), adata)
+    step = _step()
+    ex = _run(step, adata)
     order = ex.graph.topo_sort()
-    assert order.index("normalize") < order.index("clustering:leiden_r1.0")
+    assert order.index("normalize") < order.index(step.id)
 
 
-def test_leiden_call_pins_flavor_and_iterations():
-    """scanpy warns that the default flavor will change to igraph.
+@pytest.mark.parametrize("flavor", LEIDEN_FLAVORS)
+def test_leiden_call_pins_flavor_and_its_backend_specific_arguments(flavor):
+    """scanpy's default flavor is scheduled to change, and the two backends
+    disagree on ``n_iterations`` (2 vs -1) and ``directed`` (False vs True).
 
-    Leaving it implicit would silently change clusterings on a scanpy upgrade,
-    so the recorded source pins flavor, n_iterations and random_state.
+    Leaving any of them implicit would silently change clusterings on a scanpy
+    upgrade, so the recorded source pins all four literally.
     """
-    source = _step().render()
-    assert "flavor='igraph'" in source
-    assert "n_iterations=2" in source
+    n_iterations, directed = FLAVOR_DEFAULTS[flavor]
+    source = _step(flavor=flavor).render()
+    assert f"flavor={flavor!r}" in source
+    assert f"n_iterations={n_iterations}" in source
+    assert f"directed={directed}" in source
     assert "random_state=0" in source
 
 
+def test_the_flavor_is_part_of_the_key():
+    """Both backends at one resolution must coexist, not overwrite each other.
+
+    They produce genuinely different partitions, so sharing a key would both
+    lose a result and revise the DAG node in place, flagging its descendants
+    stale for a clustering the user still wanted.
+    """
+    igraph_step = _step(flavor="igraph")
+    leidenalg_step = _step(flavor="leidenalg")
+    assert igraph_step.params["key"] == "leiden_igraph_r1.0"
+    assert leidenalg_step.params["key"] == "leiden_leidenalg_r1.0"
+    assert igraph_step.id != leidenalg_step.id
+
+
 def test_params_appear_literally_in_the_recorded_source():
-    source = _step(key="leiden_r0.5").render()
-    assert "resolution=1.0" in source
-    assert "key_added='leiden_r0.5'" in source
+    source = _step(resolution=0.5).render()
+    assert "resolution=0.5" in source
+    assert "key_added='leiden_igraph_r0.5'" in source
     assert "n_neighbors=15" in source
     assert "n_pcs=10" in source
 

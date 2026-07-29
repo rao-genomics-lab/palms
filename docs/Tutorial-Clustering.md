@@ -13,9 +13,10 @@
 1. In the control panel, open the **Cells** group and click the **Clustering** tab.
 2. Set **Resolution** to `1.0` (higher values produce more clusters; lower values produce fewer).
 3. Leave **n_neighbors** and **n_pcs** at their defaults unless you have a reason to change them.
-4. Click **Run Leiden Clustering**.
+4. Leave **flavor** at `igraph` — it is much faster. Switch it to `leidenalg` only if you are reproducing an existing scanpy pipeline that used that backend; the two optimise different objectives and give different partitions, so both can be run at one resolution and compared.
+5. Click **Run Leiden Clustering**.
 
-The viewer runs PCA, constructs a neighbourhood graph, and runs the Leiden algorithm. When it finishes, a new clustering key `leiden_r1.0` appears in the clustering dropdowns throughout the interface.
+The viewer runs PCA, constructs a neighbourhood graph, and runs the Leiden algorithm. When it finishes, a new clustering key `leiden_igraph_r1.0` appears in the clustering dropdowns throughout the interface.
 
 ![Tutorial Clustering Step1](screenshots/tutorial-clustering-step1.png)
 
@@ -23,7 +24,7 @@ The viewer runs PCA, constructs a neighbourhood graph, and runs the Leiden algor
 
 1. Open the **Coloring** tab (Cells group).
 2. Set **Colour by** to **Cluster**.
-3. Select `leiden_r1.0` from the **Clustering** dropdown.
+3. Select `leiden_igraph_r1.0` from the **Clustering** dropdown.
 4. Click **Apply Cell Coloring**.
 
 Each cluster is assigned a distinct colour. The cell label layer updates immediately.
@@ -42,7 +43,7 @@ The UMAP scatter plot updates to match the cluster colouring. Each point represe
 ### 4. Run rank genes (differential expression)
 
 1. Open the **Genes** group and click the **Rank Genes** tab.
-2. Select `leiden_r1.0` from the **Clustering** dropdown.
+2. Select `leiden_igraph_r1.0` from the **Clustering** dropdown.
 3. Set **Method** to `wilcoxon` (recommended for count data).
 4. Set **Top N genes** to `25`.
 5. Click **Run Rank Genes**.
@@ -72,7 +73,7 @@ Click **Export Full Results CSV...** and choose a save location. The file contai
 
 ### 8. Save a UMAP plot
 
-1. In the **UMAP** tab, select `leiden_r1.0` from the **Clustering** dropdown.
+1. In the **UMAP** tab, select `leiden_igraph_r1.0` from the **Clustering** dropdown.
 2. Set the output format to `PNG`.
 3. Click **Save UMAP Plot...** and choose a save location.
 
