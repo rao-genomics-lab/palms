@@ -1,5 +1,40 @@
 # Changelog
 
+## [Unreleased] — 2026-07-30
+
+### Added
+- **Tools → Dataset: see what the dataset holds on disk, and delete the parts the
+  viewer created.** A dataset accumulates viewer data in four places nobody can see —
+  `sdata_cached.zarr/`, `viewer_cache/`, `transcript_cache/` and sibling backup stores.
+  Until now the only visibility was a comma-joined `Elements (N): …` line in the Cache
+  tab's report, with no sizes at all, and the only way to remove anything was to delete
+  a registered image or patch overlay from the tab that created it. There was no way to
+  drop a clustering you no longer wanted.
+
+  The new tab is a tree with a size per row: the original 10x output (read-only), every
+  cache element, every obs/uns/obsm key inside the tables, session state, the derived
+  caches, and the backups and trash — where the gigabytes usually are. Ticked rows are
+  deleted through one executor, with a confirmation listing every path, the bytes
+  reclaimed and a `⚠ not recoverable` block. On the reference dataset it scans in 2 s and
+  its section totals match `du`.
+
+  The safety property is structural, not a promise: `store_inventory.deletable_roots()`
+  names the four directories the viewer created, `assert_deletable` refuses anything that
+  does not resolve inside one of them, and a test asserts that over *every* node the
+  inventory produces. Structural elements (`tables/table`, both label rasters,
+  `morphology_focus`, `points/transcripts`) are listed with their sizes but cannot be
+  selected — deleting the table bricks the dataset and the others break Crop Export and
+  Segmentation-revert. Anything unrecognised defaults to not deletable, so an unfamiliar
+  vendor file shows up read-only instead of becoming selectable. `prov_graph.json` and its
+  dated backups are blocked: the sidecar wins over the session attr on load, so deleting
+  it would silently lose every step recorded since the last save.
+
+  Deleting a clustering also drops it from `ctx.clusterings`, which is what the combos
+  actually read — `refresh_clustering_choices` never looks at `adata.obs`, so without that
+  the column was gone from disk and still colouring cells. Deleting session state clears
+  its in-memory mirror, or `save_session` writes it straight back at exit. `transcript_cache/`
+  is offered (a `xenium-preprocess` re-run brings it back) and says so on the row.
+
 ## [Unreleased] — 2026-07-29
 
 ### Fixed (found by replaying a real session)

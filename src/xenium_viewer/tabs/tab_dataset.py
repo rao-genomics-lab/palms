@@ -305,8 +305,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         worker.start()
 
     scan_btn.clicked.connect(_on_scan)
-    expand_btn.clicked.connect(tree.expandAll)
-    collapse_btn.clicked.connect(tree.collapseAll)
+    # Wrapped in lambdas because magicgui inspects the signature of what it
+    # connects, and a Qt builtin slot has none to find.
+    expand_btn.clicked.connect(lambda: tree.expandAll())
+    collapse_btn.clicked.connect(lambda: tree.collapseAll())
     delete_btn.clicked.connect(_on_delete)
     trash_btn.clicked.connect(_on_empty_trash)
 

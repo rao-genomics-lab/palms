@@ -83,6 +83,10 @@ The tabs are grouped under Cells / Genes / Spatial / Images / Tools. **Tools →
 under "Cache safety" below: verify, re-consolidate, recover from a backup, and a
 force rebuild that moves the old cache aside rather than deleting it.
 
+**Tools → Dataset** (`tabs/tab_dataset.py`) is the per-item view the Cache tab's
+whole-store report cannot give: a `QTreeWidget` of everything on disk with sizes, and
+checkbox deletion of the parts the viewer created. See "Deleting components" below.
+
 **Anything that changes the zarr behind the viewer's back must call
 `ctx.reload_dataset()`** (bound by `app.py`, rebuilt on every dataset load). The live
 `SpatialData`, the napari layers and every tab's widgets are built from disk once at load
@@ -137,6 +141,42 @@ rather than rebuilding, since copying a dataset changes mtime without changing c
 hierarchy walk warn on every consolidation, and a rebuild would delete them. Write via
 `adata_persistence.sidecar_write_path()`; read via `find_sidecar()` / `glob_sidecars()`,
 which fall back to the legacy in-store location for existing datasets.
+
+### Deleting components (`utils/store_inventory.py`, `tabs/tab_dataset.py`)
+
+`store_inventory` is the model behind Tools → Dataset: five `Section`s of `Node`s
+(raw output / cache elements + table contents / session state / derived caches /
+backups & trash), each with a size, a detail and an honest `recoverable` value.
+Filesystem-only and Qt-free like `cache_repair.verify`, so it reports on a store too
+broken to open — and **read-only**, guarded by a test that greps it for every mutating
+call. Two rules carry the safety:
+
+- **`assert_deletable(path, roots, kind=)` is the single choke point.** A path may be
+  removed only if it resolves inside a `deletable_roots()` directory — `sdata_cached.zarr`,
+  `viewer_cache/`, `transcript_cache/`, or a `sdata_cached_*_*.zarr` backup. The raw 10x
+  output is in none of them. A root that *is* or *contains* the dataset directory is
+  refused outright (a `cache_path` of `.` would otherwise make every raw file deletable),
+  and symlinks are resolved before the containment test but never followed when sizing or
+  deleting. `tests/test_store_inventory.py` asserts the **property** over every node the
+  inventory produces, not a list of remembered cases.
+- **Unrecognised defaults to not deletable.** An unknown entry in the dataset directory is
+  raw output; an unknown element or obs column is left alone. The `loader._USER_*`
+  allow-lists decide only the yes cases. `CORE_ELEMENTS` (`tables/table`, both label
+  rasters, `morphology_focus`, `points/transcripts`) are listed with sizes but blocked;
+  so are `prov_graph*.json` and the `prov_graph` session attr.
+
+Table contents (`OBS`/`UNS`/`OBSM`) carry `path=None` on purpose: deleting a column is a
+rewrite of the whole table, so there is no path for an executor to `unlink`.
+
+The executor (`tab_dataset._apply_deletion`) applies by kind in `Plan` order — **table
+edits first**, backups last. Three things it must not skip, each of which was a real bug:
+`_persist_table` runs **once** per batch; a deleted `clustering_*` column is also popped
+from `ctx.clusterings` / `state["custom_clusterings"]` / `state["cluster_labels"]`
+(`refresh_clustering_choices` reads that dict, *not* `adata.obs`); and a deleted session
+node clears its `store_inventory.SESSION_MEMORY` mirror, or `save_session` writes it back
+at exit. Failures are per node and named in the report — a partly applied batch has to be
+describable, since several of these are irreversible. `_remove_tree` is the only function
+that touches the filesystem, enforced by a test that parses the module.
 
 ### Code Recording (provenance DAG)
 
