@@ -44,6 +44,7 @@ pytest.importorskip("ipykernel")
 adjusted_rand_score = pytest.importorskip("sklearn.metrics").adjusted_rand_score
 
 from xenium_viewer.utils import notebook_export  # noqa: E402
+from xenium_viewer.utils.environment import environment_code  # noqa: E402
 from xenium_viewer.utils.prov_graph import SETUP  # noqa: E402
 from xenium_viewer.utils.steps import Step, StepExecutor  # noqa: E402
 
@@ -109,6 +110,11 @@ def _run_the_analysis(h5ad_path: Path) -> StepExecutor:
     the preamble's imports, which is the same guarantee the notebook needs.
     """
     ex = StepExecutor(namespace={})
+    # Recorded, not executed in-process — exactly as the viewer records it. Its
+    # point here is that a clean kernel can run it: it is the first cell of
+    # every exported notebook, so if it raises, nothing downstream replays.
+    ex.graph.upsert("environment", environment_code(), kind=SETUP,
+                    label="Environment & seeds")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         ex.run(Step(
@@ -260,6 +266,24 @@ def test_every_exported_cell_is_executable_python(replay):
         assert tree.body, f"node {nid!r} exports no executable statement"
 
 
+def test_the_notebook_opens_by_declaring_its_environment(replay):
+    """First cell, and it must run — a version pin that raises is worse than none.
+
+    Recorded versions belong at the top of the notebook because that is where
+    someone reading a disagreeing result will look first; ``print_header()``
+    puts the replay's own versions right beside them in the output.
+    """
+    order = replay.graph.topo_sort()
+    assert order[0] == "environment"
+
+    code_cells = [
+        source for kind, source in notebook_export.read_notebook(replay.nb_path)
+        if kind == "code"
+    ]
+    assert "sc.logging.print_header()" in code_cells[0]
+    assert "np.random.seed(" in code_cells[0]
+
+
 def test_the_preamble_is_the_only_substituted_node(replay):
     """Guards the one documented divergence from staying alone.
 
@@ -301,6 +325,26 @@ def test_comment_only_nodes_are_the_ones_that_replay_as_no_ops():
         ("blank", "\n\n"),
     ])
     assert verify_notebook.comment_only_nodes(graph) == ["blank", "he:flip", "viewer:zoom"]
+
+
+def test_declared_viewer_state_is_counted_apart_from_the_punch_list():
+    """A note is not a gap, and a gap must not hide among the notes.
+
+    The canvas background has no notebook equivalent; a clustering that
+    recorded prose does. Both used to land in the same list, so the list was
+    mostly display state and the defects in it were invisible.
+    """
+    from xenium_viewer.utils.prov_graph import NOTE
+
+    graph = _graph_with([
+        ("real", "adata_norm = adata.copy()"),
+        ("clustering:k", "# Leiden clustering (shown in the viewer)"),
+    ])
+    graph.upsert("viewer:background", "# background set to white",
+                 kind=NOTE)
+
+    assert verify_notebook.comment_only_nodes(graph) == ["clustering:k"]
+    assert verify_notebook.note_nodes(graph) == ["viewer:background"]
 
 
 def test_a_failing_replay_can_be_traced_back_to_the_node_that_broke(tmp_path):

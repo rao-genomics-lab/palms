@@ -172,6 +172,28 @@ def test_the_backstop_does_not_flag_dependents_stale_on_a_second_call(ctx):
     assert not ctx.state["prov_graph"].get("rank_genes:graphclust").stale
 
 
+# ── when the recorder itself fails ───────────────────────────────────────────
+
+def test_a_step_with_a_missing_dependency_is_reported_not_warned(ctx):
+    """The recorder degrades so a bug here cannot lose the user's analysis —
+    but the degradation was announced with ``warnings.warn``, which in a GUI
+    process goes nowhere. What is left behind is exactly the failure this phase
+    exists to prevent: a result on screen with no cell that produces it.
+    """
+    from xenium_viewer.utils import reporting
+
+    reporting.reset_failures()
+    ctx.record_node("nhood:k", "sq.gr.nhood_enrichment(adata_norm)",
+                    deps=["clustering:never-recorded"])
+
+    reported = reporting.recording_failures()
+    assert [f["node_id"] for f in reported] == ["nhood:k"]
+    assert "clustering:never-recorded" in reported[0]["error"]
+    # the code is still not lost
+    assert "sq.gr.nhood_enrichment(adata_norm)" in ctx.state["code_journal"]
+    assert ctx.state["prov_graph"].get("nhood:k") is None
+
+
 # ── persisting the graph when it changes ─────────────────────────────────────
 
 def _sidecar(ctx) -> Path:
@@ -211,7 +233,8 @@ def test_the_graph_reaches_disk_as_soon_as_a_step_is_recorded(ctx):
                     deps=["preamble"])
 
     items = json.loads(_sidecar(ctx).read_text())
-    assert [item["id"] for item in items] == ["preamble", "clustering:leiden_igraph_r1.0"]
+    assert [item["id"] for item in items] == [
+        "environment", "preamble", "clustering:leiden_igraph_r1.0"]
 
 
 def test_the_persisted_graph_reloads_into_an_equivalent_graph(ctx):

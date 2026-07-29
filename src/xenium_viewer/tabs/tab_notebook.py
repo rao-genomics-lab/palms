@@ -17,6 +17,8 @@ from qtpy.QtWidgets import (
 from qtpy.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 from qtpy.QtCore import Qt
 
+from xenium_viewer.utils.prov_graph import NOTE
+
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
@@ -328,14 +330,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
             node = graph.get(nid)
             if node is None:
                 continue
+            # A note is viewer state, not code — say so in its header, since
+            # here (unlike the exported notebook) it still shows as a cell.
+            label = node.label
+            if node.kind == NOTE:
+                label = f"{label or nid} — viewer state, not code"
             cell = existing.get(nid)
             if cell is not None:
                 if not cell.edited_by_user and cell.get_code() != node.code:
                     cell.set_code(node.code)
-                cell.set_meta(node.label, node.stale)
+                cell.set_meta(label, node.stale)
             else:
                 _add_cell(code=node.code, node_id=nid,
-                          node_label=node.label, stale=node.stale)
+                          node_label=label, stale=node.stale)
             seen.add(nid)
         # Drop cells whose node was removed from the graph
         for c in list(cells):

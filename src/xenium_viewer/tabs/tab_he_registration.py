@@ -97,8 +97,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             he_status_label.value = f"Flip applied: {'+'.join(flips)}"
         ctx.record_node(
             "he:flip",
-            f"\n# H&E image flip (registration): "
-            f"flip_vertical={he_flip_v.value}, flip_horizontal={he_flip_h.value}",
+            f"\n# H&E image flip, applied before registration\n"
+            f"he_flip_vertical = {he_flip_v.value}\n"
+            f"he_flip_horizontal = {he_flip_h.value}",
             deps=["preamble"], kind=TERMINAL, label="H&E flip",
         )
 
@@ -264,7 +265,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         reg_status_label.value = f"Coarse aligned (scale={scale:.4f}). Place landmarks to refine."
         ctx.record_node(
             "he:coarse_align",
-            f"\n# Coarse H&E alignment to tissue outlines (registration; scale={scale:.4f})",
+            f"\n# Coarse H&E alignment to tissue outlines (scale={scale:.4f}).\n"
+            f"# Computed from the morphology thumbnail; the matrix it produced:\n"
+            f"he_coarse_affine = np.array({np.asarray(coarse_affine).tolist()})",
             deps=["preamble"], kind=TERMINAL, label="H&E coarse align",
         )
         reg_residuals_qt.setPlainText(
@@ -385,9 +388,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
             affine=he_state["affine_3x3"], he_filename=he_state["he_filename"],
         )
         reg_status_label.value = f"Landmarks saved to {Path(path).name}"
+        # The points are inlined rather than referenced: landmarks can be saved
+        # before a registration is computed, so ``he_xen_pts`` may not exist.
+        affine = he_state["affine_3x3"]
         ctx.record_node(
             "he:save_landmarks",
-            f"\n# Save H&E landmarks to {Path(path).name}",
+            f"\n# Save H&E landmarks to {Path(path).name}\n"
+            f"from xenium_viewer.utils.registration import save_landmarks\n"
+            f"save_landmarks(\n"
+            f"    r\"{path}\",\n"
+            f"    np.array({xen_pts.tolist()}),\n"
+            f"    np.array({he_pts.tolist()}),\n"
+            f"    affine={None if affine is None else f'np.array({np.asarray(affine).tolist()})'},\n"
+            f"    he_filename={he_state['he_filename']!r},\n"
+            f")",
             deps=["preamble"], kind=TERMINAL, label="Save H&E landmarks",
         )
 

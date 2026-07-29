@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from xenium_viewer.utils.prov_graph import (  # noqa: E402
     ProvGraph, CycleError, graph_to_cells, graph_to_script,
     graph_to_mermaid, graph_to_dot,
-    SETUP, ARTIFACT, TERMINAL,
+    SETUP, ARTIFACT, TERMINAL, NOTE,
 )
 
 
@@ -213,3 +213,60 @@ def _run_all():
 
 if __name__ == "__main__":
     _run_all()
+
+
+# ── notes: viewer state, declared rather than disguised as code ──────────────
+
+def _with_note() -> ProvGraph:
+    g = _pipeline()
+    g.upsert("viewer:background",
+             "\n# Viewer background set to white (display only)",
+             deps=["preamble"], kind=NOTE, label="Viewer background")
+    return g
+
+
+def test_a_note_exports_as_markdown_not_as_an_empty_code_cell():
+    """The defect this kind exists for.
+
+    As a TERMINAL its cell was a comment: it parses to nothing, executes
+    successfully and documents nothing, which is indistinguishable from an
+    analysis step that forgot to record its code.
+    """
+    cells = graph_to_cells(_with_note())
+    note_cells = [c for c in cells if c.node_id == "viewer:background"]
+
+    assert [c.cell_type for c in note_cells] == ["markdown", "markdown"]
+    assert "Viewer background" in note_cells[0].source          # the label header
+    assert "background set to white" in note_cells[1].source
+    assert not note_cells[1].source.lstrip().startswith("#")    # prose, not code
+
+
+def test_a_note_is_marked_as_viewer_state():
+    """A reader must be able to tell it apart from analysis narrative."""
+    from xenium_viewer.utils.prov_graph import NOTES_MARKER
+
+    cells = graph_to_cells(_with_note())
+    body = [c for c in cells if c.node_id == "viewer:background"][-1].source
+    assert NOTES_MARKER in body
+
+
+def test_a_note_keeps_its_comment_in_the_flat_script():
+    """A .py can carry a comment, and dropping it would lose the record."""
+    script = graph_to_script(_with_note())
+    assert "# Viewer background set to white (display only)" in script
+
+
+def test_notes_are_dropped_with_the_terminals():
+    without = graph_to_cells(_with_note(), include_terminals=False)
+    assert "viewer:background" not in {c.node_id for c in without}
+
+
+def test_a_note_never_sorts_before_the_analysis_it_annotates():
+    order = _with_note().topo_sort()
+    assert order[-1] == "viewer:background"
+
+
+def test_the_diagrams_render_a_note():
+    g = _with_note()
+    assert "classDef note" in graph_to_mermaid(g)
+    assert '"viewer:background"' in graph_to_dot(g)

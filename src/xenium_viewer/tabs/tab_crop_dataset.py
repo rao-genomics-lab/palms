@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import NOTE
 from magicgui.widgets import PushButton
 from qtpy.QtWidgets import QLabel, QFileDialog, QInputDialog, QLineEdit, QMessageBox
 from qtpy.QtCore import QThread, Signal as QtSignal
@@ -197,7 +197,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                         f"#                 output_dir=Path({str(Path(info).parent)!r}), name={name!r})\n"
                         f"# -> wrote standalone dataset to \"{info}\"",
                         deps=["preamble"],
-                        kind=TERMINAL,
+                        kind=NOTE,
                         label=f"Crop & export: {name}",
                     )
                 else:

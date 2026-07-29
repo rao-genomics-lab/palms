@@ -36,10 +36,26 @@ from typing import Iterable, Optional
 # ── Node kinds ───────────────────────────────────────────────────────────────
 SETUP = "setup"        # preamble, normalize — always sorts first
 ARTIFACT = "artifact"  # reusable state: clustering, neighbors, DEG, nhood, ...
-TERMINAL = "terminal"  # side-effect only: plot/export/viewer-only; no dependents
+TERMINAL = "terminal"  # side-effect only: plot/export; code, and no dependents
+NOTE = "note"          # viewer state with no code equivalent — see below
+
+# ``NOTE`` exists so that "this cell contains no code" can mean one thing.
+#
+# Some recorded actions have no notebook equivalent by nature: the napari
+# background colour, an overlay's opacity, which layers are visible. They were
+# recorded as TERMINAL nodes whose code was a comment — which reads, to every
+# consumer, exactly like an analysis step that *should* emit code and does not.
+# Both replay as silent no-ops that ``allow_errors=False`` cannot catch, so the
+# Tier-2 report's comment-only list was mostly display state and the real gaps
+# were buried in it.
+#
+# A NOTE declares itself: it renders as markdown rather than code, and the
+# verification counts it separately. A comment-only node of any *other* kind is
+# then unambiguously a defect.
+NOTES_MARKER = "Viewer state"
 
 # Sort priority among nodes that become ready simultaneously in the topo sort.
-_KIND_ORDER = {SETUP: 0, ARTIFACT: 1, TERMINAL: 2}
+_KIND_ORDER = {SETUP: 0, ARTIFACT: 1, TERMINAL: 2, NOTE: 3}
 
 
 @dataclass
@@ -280,7 +296,9 @@ def graph_to_cells(
 
     - ``keep_ids`` (optional): keep only these nodes and their transitive
       dependencies, dropping abandoned experiment branches.
-    - ``include_terminals``: drop terminal (plot/export) nodes when False.
+    - ``include_terminals``: drop terminal (plot/export) and note nodes when
+      False — neither produces anything a later cell can depend on.
+    - ``NOTE`` nodes render as markdown; every other kind renders as code.
     """
     order = graph.topo_sort()
     include = set(order)
@@ -293,20 +311,39 @@ def graph_to_cells(
         node = graph.get(nid)
         if node is None:
             continue
-        if not include_terminals and node.kind == TERMINAL:
+        if not include_terminals and node.kind in (TERMINAL, NOTE):
             continue
         if node.label:
             cells.append(Cell("markdown", f"## {node.label}", node_id=nid))
+        if node.kind == NOTE:
+            cells.append(Cell("markdown", note_to_markdown(node), node_id=nid))
+            continue
         cells.append(Cell("code", node.code, node_id=nid, stale=node.stale))
     return cells
 
 
+def note_to_markdown(node: ProvNode) -> str:
+    """Render a NOTE node's comment body as prose, marked as viewer state."""
+    body = " ".join(
+        line.lstrip("#").strip()
+        for line in node.code.splitlines() if line.strip()
+    ).strip()
+    return f"> **{NOTES_MARKER}** — {body}"
+
+
 def graph_to_script(graph: ProvGraph, include_terminals: bool = True) -> str:
-    """Flat ``.py`` rendering: the code cells joined in topological order."""
-    parts = [
-        c.source for c in graph_to_cells(graph, include_terminals=include_terminals)
-        if c.cell_type == "code"
-    ]
+    """Flat ``.py`` rendering: the code cells joined in topological order.
+
+    Notes keep their original comment form here — a ``.py`` can carry a comment,
+    and dropping them would lose the record of what the viewer was showing.
+    """
+    parts = []
+    for cell in graph_to_cells(graph, include_terminals=include_terminals):
+        if cell.cell_type == "code":
+            parts.append(cell.source)
+        elif cell.node_id and graph.get(cell.node_id).kind == NOTE \
+                and cell.source.startswith(">"):
+            parts.append(graph.get(cell.node_id).code)
     return "\n".join(parts) + "\n"
 
 
@@ -314,7 +351,7 @@ def graph_to_script(graph: ProvGraph, include_terminals: bool = True) -> str:
 def graph_to_mermaid(graph: ProvGraph) -> str:
     """Render the DAG as a Mermaid flowchart (paste into any Mermaid viewer).
 
-    Nodes are colored by kind (setup / artifact / terminal); stale nodes get a
+    Nodes are colored by kind (setup / artifact / terminal / note); stale nodes get a
     ``⚠`` marker and a highlighted outline.
     """
     order = graph.topo_sort()
@@ -339,6 +376,7 @@ def graph_to_mermaid(graph: ProvGraph) -> str:
         "    classDef setup fill:#e6f0ff,stroke:#4477cc,color:#003;",
         "    classDef artifact fill:#e9f9e9,stroke:#3a3,color:#030;",
         "    classDef terminal fill:#f3f3f3,stroke:#999,color:#333,stroke-dasharray:4 3;",
+        "    classDef note fill:#fffaf0,stroke:#c93,color:#530,stroke-dasharray:2 3;",
     ]
     if stale_any:
         lines.append("    classDef stale stroke:#cc6600,stroke-width:3px;")
@@ -347,7 +385,8 @@ def graph_to_mermaid(graph: ProvGraph) -> str:
 
 def graph_to_dot(graph: ProvGraph) -> str:
     """Render the DAG as Graphviz DOT text."""
-    fill = {SETUP: "#e6f0ff", ARTIFACT: "#e9f9e9", TERMINAL: "#f3f3f3"}
+    fill = {SETUP: "#e6f0ff", ARTIFACT: "#e9f9e9", TERMINAL: "#f3f3f3",
+            NOTE: "#fffaf0"}
     lines = [
         "digraph provenance {",
         "  rankdir=TB;",

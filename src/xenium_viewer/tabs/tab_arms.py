@@ -136,8 +136,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             arms_status_label.value = f"ARMS flip applied: {'+'.join(flips)}"
         ctx.record_node(
             "arms:flip",
-            f"\n# ARMS H&E image flip (registration): "
-            f"flip_vertical={arms_flip_v.value}, flip_horizontal={arms_flip_h.value}",
+            f"\n# ARMS H&E image flip, applied before registration\n"
+            f"arms_flip_vertical = {arms_flip_v.value}\n"
+            f"arms_flip_horizontal = {arms_flip_h.value}",
             deps=["preamble"], kind=TERMINAL, label="ARMS H&E flip",
         )
 
@@ -318,9 +319,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
             affine=arms_state["affine_3x3"], he_filename=arms_state.get("he_filename"),
         )
         arms_status_label.value = f"Landmarks saved to {Path(path).name}"
+        # Inlined, not referenced: landmarks can be saved before a registration
+        # is computed, so the register step's names may not exist.
+        affine = arms_state["affine_3x3"]
         ctx.record_node(
             "arms:save_landmarks",
-            f"\n# Save ARMS landmarks to {Path(path).name}",
+            f"\n# Save ARMS landmarks to {Path(path).name}\n"
+            f"from xenium_viewer.utils.registration import save_landmarks\n"
+            f"save_landmarks(\n"
+            f"    r\"{path}\",\n"
+            f"    np.array({xen_pts.tolist()}),\n"
+            f"    np.array({he_pts.tolist()}),\n"
+            f"    affine={None if affine is None else f'np.array({np.asarray(affine).tolist()})'},\n"
+            f"    he_filename={arms_state.get('he_filename')!r},\n"
+            f")",
             deps=["preamble"], kind=TERMINAL, label="Save ARMS landmarks",
         )
 

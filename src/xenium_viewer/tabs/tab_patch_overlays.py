@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import NOTE
 from xenium_viewer.utils.reporting import report_write_failure
 from xenium_viewer.utils.zarr_safe import safe_delete_element
 
@@ -428,7 +428,7 @@ def build_tab(ctx: "ViewerContext"):
             f"# source: {data.source_path}\n"
             f"# patch_size: {patch_size} px, N={len(data.coords_xy)}",
             deps=["preamble"],
-            kind=TERMINAL,
+            kind=NOTE,
             label="Patch overlay",
         )
         ctx.set_status(

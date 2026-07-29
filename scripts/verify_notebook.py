@@ -144,22 +144,38 @@ def read_viewer_rank_genes(cache: Path) -> tuple[dict, str | None]:
 
 
 def comment_only_nodes(graph: ProvGraph) -> list[str]:
-    """Node ids whose code parses to no executable statement.
+    """Node ids that claim to be code but parse to no executable statement.
 
     These are Phase 0.3's punch list. A notebook containing one runs it
     successfully and does nothing — the step it claims to document is simply
     absent from the replay, and no error is raised anywhere.
+
+    ``NOTE`` nodes are excluded: they are viewer state that has no code
+    equivalent (the canvas background, an overlay), declared as such and
+    rendered as markdown. Counting them here buried the real gaps among them.
     """
+    from xenium_viewer.utils.prov_graph import NOTE
+
     out = []
     for node_id in graph.topo_sort():
+        node = graph.get(node_id)
+        if node.kind == NOTE:
+            continue
         try:
-            tree = ast.parse(graph.get(node_id).code)
+            tree = ast.parse(node.code)
         except SyntaxError:
             out.append(node_id)
             continue
         if not tree.body:
             out.append(node_id)
     return out
+
+
+def note_nodes(graph: ProvGraph) -> list[str]:
+    """Node ids declared as viewer state — no code, and none expected."""
+    from xenium_viewer.utils.prov_graph import NOTE
+
+    return [nid for nid in graph.topo_sort() if graph.get(nid).kind == NOTE]
 
 
 # ── the replay ───────────────────────────────────────────────────────────────
@@ -321,16 +337,9 @@ def compare_rank_genes(viewer_names: dict, replay_rank, top_n: int) -> dict:
 
 
 def package_versions() -> dict:
-    from importlib.metadata import PackageNotFoundError, version
-    out = {"python": sys.version.split()[0]}
-    for name in ("scanpy", "anndata", "squidpy", "spatialdata", "spatialdata-io",
-                 "zarr", "numpy", "pandas", "scikit-learn", "leidenalg",
-                 "igraph", "nbclient", "nbformat", "xenium-viewer"):
-        try:
-            out[name] = version(name)
-        except PackageNotFoundError:
-            out[name] = None
-    return out
+    """The same pins the ``environment`` node records, plus the replay's own."""
+    from xenium_viewer.utils.environment import RECORDED_PACKAGES, package_versions
+    return package_versions(RECORDED_PACKAGES + ("nbclient", "nbformat"))
 
 
 # ── entry point ──────────────────────────────────────────────────────────────
@@ -361,9 +370,11 @@ def main(argv=None) -> int:
     cache = cache_path(data_path, args.cache)
     graph, graph_source = read_graph(data_path, args.cache or cache)
     skipped = comment_only_nodes(graph)
+    notes = note_nodes(graph)
 
     print(f"Provenance graph: {len(graph)} nodes from {graph_source} "
-          f"({len(skipped)} comment-only, which replay as no-ops)")
+          f"({len(skipped)} comment-only, which replay as no-ops; "
+          f"{len(notes)} viewer-state notes, which are not code by design)")
 
     if args.work_dir is not None:
         work_dir = args.work_dir.resolve()
@@ -380,6 +391,7 @@ def main(argv=None) -> int:
         "n_nodes": len(graph),
         "node_ids": graph.topo_sort(),
         "comment_only_nodes": skipped,
+        "note_nodes": notes,
         "versions": package_versions(),
     }
 

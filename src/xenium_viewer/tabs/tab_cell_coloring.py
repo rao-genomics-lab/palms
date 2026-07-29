@@ -10,7 +10,7 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import NOTE, TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -253,7 +253,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "viewer:background",
             f"\n# Viewer background set to {'white' if value else 'black'} (display only)",
             deps=["preamble"],
-            kind=TERMINAL,
+            kind=NOTE,
             label="Viewer background",
         )
 
@@ -286,7 +286,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"\n# Cluster size filter (viewer): min_cells={threshold}, "
             f"{n_excluded} cluster(s) excluded from the display",
             deps=["preamble"],
-            kind=TERMINAL,
+            kind=NOTE,
             label="Cluster size filter",
         )
 

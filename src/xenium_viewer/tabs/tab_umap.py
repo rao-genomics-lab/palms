@@ -9,7 +9,7 @@ from magicgui.widgets import PushButton, Slider, ComboBox
 from qtpy.QtWidgets import QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import NOTE, TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -28,7 +28,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "viewer:umap_window",
             "\n# Show UMAP scatter plot (viewer window; coords from Xenium analysis output)",
             deps=["preamble"],
-            kind=TERMINAL,
+            kind=NOTE,
             label="Show UMAP window",
         )
 
