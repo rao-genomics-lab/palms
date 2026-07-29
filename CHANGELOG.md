@@ -88,6 +88,16 @@
   tab and at the three pre-existing sites in `tabs/tab_segmentation.py`, where it had been
   hiding async segmentation-save failures. (`tabs/tab_cache.py`, `tabs/tab_segmentation.py`)
 
+- **Recovered data was invisible until the dataset was reopened.** Recovery writes
+  elements straight into the zarr, so the live SpatialData, the napari layers and every
+  tab's widgets knew nothing about them. `app.py`'s dataset-open path is now factored into
+  `_load_dataset_into_viewer(path)` and exposed as `ctx.reload_dataset`, so the Cache tab
+  offers a reload as soon as recovery finishes. Recovery also merges the backup's
+  `viewer_session` — H&E/ARMS filenames, flips and affines — for keys the live session
+  lacks: restoring `he_image` and its landmarks without that is half a job, since the
+  element would exist while the session still said no H&E was loaded.
+  (`app.py`, `tabs/tab_cache.py`, `utils/viewer_context.py`)
+
 - **A Cache tab (Tools → Cache).** The cache was a black box: when it broke, the loader
   moved it aside and rebuilt from raw, and the only signal was a long wait. The tab shows
   size, free space, build manifest, write failures this session and the log path, and
@@ -137,7 +147,7 @@
   `KeyboardInterrupt` that bypasses cleanup the way a `kill -9` does),
   `test_persistence_safety.py` (9), `test_session_persistence.py` (14),
   `test_cache_repair.py` (20), `test_loader_policy.py` (16), `test_sidecar_location.py`
-  (20), `test_reporting.py` (21), `test_tab_cache.py` (18). Plus source guards that fail if `delete_element_from_disk` is called outside
+  (20), `test_reporting.py` (21), `test_tab_cache.py` (24). Plus source guards that fail if `delete_element_from_disk` is called outside
   `zarr_safe.py`, if `loader.py` `rmtree`s the live cache, or if a sidecar is written into
   the store root, or if a cache write path prints a warning instead of logging it, or if recovery opens a backup as a whole.
   289 tests pass.

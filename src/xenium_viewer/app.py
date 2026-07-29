@@ -927,6 +927,9 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     ctx.state = _make_initial_state(data["gene_names"], data["clustering_names"])
     ctx.he_state = _make_initial_he_state()
     ctx.arms_state = _make_initial_arms_state()
+    # Bound here rather than once at startup because every reload builds a new
+    # ViewerContext; the callable itself lives in _app and outlives them all.
+    ctx.reload_dataset = _app.get("reload_current_dataset")
 
     # Remove old dock widget if present
     if _app["dock_widget"] is not None:
@@ -1223,41 +1226,33 @@ def run_viewer(data_path=None, no_cache: bool = False):
                 except Exception:
                     pass
 
-    # ── Open Dataset callback ────────────────────────────────────────────────
-    def _on_open_dataset():
+    # ── Open / reload dataset ────────────────────────────────────────────────
+    def _load_dataset_into_viewer(new_path: Path) -> bool:
+        """Tear down the current dataset and load *new_path* in its place.
+
+        Passing the dataset already open reloads it, which is how the Cache tab
+        makes recovered elements visible: they were written straight into the
+        zarr, so the in-memory sdata, the layers and the tab widgets know
+        nothing about them until everything is rebuilt from disk.
+
+        Returns True if a dataset was loaded.
+        """
         nonlocal ctx
-        from qtpy.QtWidgets import QFileDialog, QMessageBox
+        from qtpy.QtWidgets import QMessageBox
 
         if _app["reload_in_progress"]:
-            return
+            return False
 
         running = _running_bg_jobs()
         if running:
             choice = _ask_close_bg(running)
             if choice == "cancel":
-                return
+                return False
             if choice == "stop":
                 _kill_bg_jobs(running)
         _app["reload_in_progress"] = True
 
         try:
-            new_path_str = QFileDialog.getExistingDirectory(
-                None, "Select Xenium Output Directory"
-            )
-            if not new_path_str:
-                return
-
-            new_path = Path(new_path_str)
-
-            if not (new_path / "experiment.xenium").exists():
-                QMessageBox.warning(
-                    None,
-                    "Invalid Directory",
-                    f"No experiment.xenium found in:\n{new_path}\n\n"
-                    "Please select a valid Xenium output directory.",
-                )
-                return
-
             print(f"\nOpening dataset: {new_path}")
 
             if ctx is not None:
@@ -1362,12 +1357,34 @@ def run_viewer(data_path=None, no_cache: bool = False):
                     "Dataset Load Error",
                     f"Failed to load dataset:\n{new_path}\n\nError:\n{exc}",
                 )
-                return
+                return False
 
             print(f"Dataset opened: {new_path.name}")
+            return True
 
         finally:
             _app["reload_in_progress"] = False
+
+    def _on_open_dataset():
+        from qtpy.QtWidgets import QFileDialog, QMessageBox
+
+        if _app["reload_in_progress"]:
+            return
+        new_path_str = QFileDialog.getExistingDirectory(
+            None, "Select Xenium Output Directory"
+        )
+        if not new_path_str:
+            return
+        new_path = Path(new_path_str)
+        if not (new_path / "experiment.xenium").exists():
+            QMessageBox.warning(
+                None,
+                "Invalid Directory",
+                f"No experiment.xenium found in:\n{new_path}\n\n"
+                "Please select a valid Xenium output directory.",
+            )
+            return
+        _load_dataset_into_viewer(new_path)
 
     # ── Preprocess Dataset callback ──────────────────────────────────────────
     def _on_preprocess_dataset():
@@ -1447,6 +1464,21 @@ def run_viewer(data_path=None, no_cache: bool = False):
     # ── File / View menus — added once to napari's native menus ─────────────
     create_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset)
     create_view_menu(viewer, _app)
+
+    # Let tabs reload the open dataset. The Cache tab needs it: recovered
+    # elements are written straight into the zarr, so nothing in memory — the
+    # sdata, the layers, the clustering combo boxes — knows they exist until
+    # everything is rebuilt from disk. Rebound on every reload because
+    # _do_full_init returns a fresh ViewerContext.
+    def _reload_current_dataset() -> bool:
+        current = ctx.data_path if ctx is not None else None
+        if current is None:
+            return False
+        return _load_dataset_into_viewer(Path(current))
+
+    # Registered before the first _do_full_init below, so every ViewerContext
+    # ever built picks it up from _app.
+    _app["reload_current_dataset"] = _reload_current_dataset
 
     # ── Warn on close if a detached CopyKAT job is still running ─────────────
     # aboutToQuit fires too late to veto, so filter the window's Close event.

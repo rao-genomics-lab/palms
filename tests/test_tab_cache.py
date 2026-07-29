@@ -277,19 +277,103 @@ def test_recovery_uses_the_safe_write_path(tiny_sdata):
     assert "write_element(" not in source.replace("safe_import_element(", "")
 
 
+# ── making recovered data visible ────────────────────────────────────────────
+
+def test_recovery_restores_registration_state(tiny_sdata):
+    """Recovering he_image without its session state is half a job.
+
+    The element would exist while the session still said no H&E was loaded, so
+    nothing would display it.
+    """
+    import zarr
+
+    cache = Path(tiny_sdata.path)
+    backup = cache.parent / "sdata_cached_corrupt_20260728_222253.zarr"
+    shutil.copytree(cache, backup)
+
+    session = zarr.open_group(str(backup / "viewer_session"), mode="a",
+                              use_consolidated=False)
+    session.attrs.update({"he_filename": "slide.tif", "flip_v": True})
+    affine = session.create_group("he").create_array(
+        "affine_3x3", shape=(3, 3), dtype="float64")
+    affine[:] = np.eye(3)
+
+    actions = tab_cache._recover_session_attrs(cache, backup)
+    assert any("session state" in a for a in actions)
+    assert any("registration affine" in a for a in actions)
+
+    live = zarr.open_group(str(cache / "viewer_session"), mode="r",
+                           use_consolidated=False)
+    assert live.attrs["he_filename"] == "slide.tif"
+    assert "affine_3x3" in live["he"]
+
+
+def test_recovery_does_not_overwrite_live_session_state(tiny_sdata):
+    """Only gaps are filled — the live session is the newer one."""
+    import zarr
+
+    cache = Path(tiny_sdata.path)
+    backup = cache.parent / "sdata_cached_prev_20260101_000000.zarr"
+    shutil.copytree(cache, backup)
+
+    zarr.open_group(str(backup / "viewer_session"), mode="a",
+                    use_consolidated=False).attrs["he_filename"] = "old.tif"
+    zarr.open_group(str(cache / "viewer_session"), mode="a",
+                    use_consolidated=False).attrs["he_filename"] = "current.tif"
+
+    tab_cache._recover_session_attrs(cache, backup)
+    live = zarr.open_group(str(cache / "viewer_session"), mode="r",
+                           use_consolidated=False)
+    assert live.attrs["he_filename"] == "current.tif"
+
+
+def test_recovery_with_no_session_in_the_backup_is_a_no_op(tiny_sdata):
+    cache = Path(tiny_sdata.path)
+    backup = cache.parent / "sdata_cached_prev_20260101_000000.zarr"
+    backup.mkdir()
+    assert tab_cache._recover_session_attrs(cache, backup) == []
+
+
+def test_viewer_context_carries_a_reload_hook():
+    """The Cache tab needs it: recovered elements are invisible until reload."""
+    from xenium_viewer.utils.viewer_context import ViewerContext
+
+    assert hasattr(ViewerContext(), "reload_dataset")
+
+
+def test_app_binds_the_reload_hook_on_every_dataset_load():
+    """It must be rebound in _do_full_init — each reload makes a new context."""
+    source = (Path(__file__).resolve().parent.parent
+              / "src" / "xenium_viewer" / "app.py").read_text()
+    assert 'ctx.reload_dataset = _app.get("reload_current_dataset")' in source
+    assert "def _load_dataset_into_viewer" in source
+
+
+def test_the_tab_offers_a_reload_after_recovering(tiny_sdata, qapp):
+    source = Path(tab_cache.__file__).read_text()
+    assert "_offer_reload" in source
+    # and degrades to an instruction when there is no hook to call
+    assert "File → Open Dataset" in source
+
+
 # ── the guard the whole feature exists for ───────────────────────────────────
 
-def test_the_tab_never_deletes_the_cache():
-    """Force Rebuild moves the cache aside; nothing here may remove one."""
+def test_the_tab_never_deletes_a_cache_or_backup():
+    """Force Rebuild moves the cache aside; nothing here may remove one.
+
+    Deleting inside a staging directory is fine and necessary — the guard is
+    about the names that denote a real store.
+    """
     import re
 
     source = Path(tab_cache.__file__).read_text()
+    protected = r"(cache_path|backup|live_group|live\b|source\b)"
     offenders = [
         line.strip() for line in source.splitlines()
-        if re.search(r"rmtree\s*\(", line)
+        if re.search(rf"rmtree\s*\(\s*(str\()?{protected}", line)
     ]
     assert offenders == [], (
-        "the Cache tab must never delete a cache — move it aside: "
+        "the Cache tab must never delete a cache or a backup — move it aside: "
         + "; ".join(offenders)
     )
 

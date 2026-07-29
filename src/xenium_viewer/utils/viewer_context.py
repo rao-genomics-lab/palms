@@ -74,6 +74,12 @@ class ViewerContext:
     executor: Any = None
     run_step: Any = None
 
+    # Reloads the open dataset from disk, rebuilding layers, managers and every
+    # tab widget. Attached by app.py. Needed when something changes the zarr
+    # store behind the viewer's back — the Cache tab's recovery writes elements
+    # straight into it, so nothing in memory knows they exist until this runs.
+    reload_dataset: Any = None
+
     # ── Shared helper callables (attached by create_shared_helpers) ──────────
     record_code: Any = None
     record_node: Any = None

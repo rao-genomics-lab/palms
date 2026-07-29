@@ -75,6 +75,13 @@ The tabs are grouped under Cells / Genes / Spatial / Images / Tools. **Tools →
 under "Cache safety" below: verify, re-consolidate, recover from a backup, and a
 force rebuild that moves the old cache aside rather than deleting it.
 
+**Anything that changes the zarr behind the viewer's back must call
+`ctx.reload_dataset()`** (bound by `app.py`, rebuilt on every dataset load). The live
+`SpatialData`, the napari layers and every tab's widgets are built from disk once at load
+time and never re-read it, so recovered or externally-written elements stay invisible
+until the whole dataset is reloaded. It is synchronous and tears down every widget —
+never call it from inside a worker that holds a reference to a tab.
+
 `src/xenium_viewer/tabs/_helpers.py` contains shared utilities (e.g., `StatusProxy`, `make_tab()`).
 
 ### Key Utilities (`src/xenium_viewer/utils/`)

@@ -19,6 +19,7 @@ Every button runs in a ``thread_worker`` and every mutation goes through
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -231,9 +232,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             )
             _refresh_header(report)
             _refresh_backups(report)
-            status.value = (f"Recovered {len(actions)} item(s). Reopen the dataset "
-                            "to see restored data.")
             _set_busy(False)
+
+            recovered = [a for a in actions if "FAILED" not in a
+                         and not a.startswith("nothing to recover")]
+            if not recovered:
+                status.value = "Nothing was recovered."
+                return
+            status.value = f"Recovered {len(recovered)} item(s)."
+            _offer_reload(len(recovered))
 
         _start(_run, _done, "Recovery failed")
 
@@ -284,6 +291,39 @@ def build_tab(ctx: ViewerContext) -> tuple:
         status.value = "Cache moved aside — restart the viewer to rebuild."
         _refresh_header()
         _refresh_backups()
+
+    def _offer_reload(n: int):
+        """Recovered data is on disk but not in memory — offer to reload.
+
+        The elements were written straight into the zarr store, so the live
+        SpatialData, the napari layers and every tab's widgets know nothing
+        about them. Reloading rebuilds all of it from disk.
+        """
+        reload_dataset = getattr(ctx, "reload_dataset", None)
+        if reload_dataset is None:
+            report_text.append(
+                "\n\nRecovered data is on disk. Reopen this dataset "
+                "(File → Open Dataset) to see it."
+            )
+            return
+        if QMessageBox.question(
+            None, "Reload Dataset",
+            f"Recovered {n} item(s) into the cache.\n\n"
+            "They are on disk but not yet loaded — reload the dataset now to "
+            "see them?\n\nThis rebuilds the layers and tabs from disk and "
+            "takes a few seconds.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+        ) != QMessageBox.Yes:
+            report_text.append(
+                "\n\nRecovered data is on disk. Reopen this dataset "
+                "(File → Open Dataset) when you want to see it."
+            )
+            return
+        status.value = "Reloading dataset..."
+        # Deliberately synchronous: this tears down and rebuilds every widget,
+        # including the one this callback belongs to, so it must not run while
+        # a worker holds a reference to the old tab.
+        reload_dataset()
 
     # ── Small actions ────────────────────────────────────────────────────
     def _on_open_log():
@@ -366,8 +406,6 @@ def _recover_whole_cache(ctx, cache_path: Path, backup: Path) -> list[str]:
     sits beside it. Only gaps are filled — anything already in the live cache is
     the newer copy and is left alone.
     """
-    import shutil
-
     from xenium_viewer.loader import (
         _USER_IMAGE_KEYS, _USER_OBS_PREFIXES, _USER_SHAPE_KEYS, _is_user_element,
     )
@@ -395,6 +433,12 @@ def _recover_whole_cache(ctx, cache_path: Path, backup: Path) -> list[str]:
     # read can never reach.
     actions += _recover_obs_columns(ctx, backup, _USER_OBS_PREFIXES)
 
+    # ── Registration state ───────────────────────────────────────────────
+    # Recovering he_image and its landmarks without this is half a job: the
+    # image element would exist while the session still says no H&E is loaded,
+    # so nothing would display it.
+    actions += _recover_session_attrs(cache_path, backup)
+
     # ── Sidecars (CNV caches, DEG tables) ────────────────────────────────
     destination = sidecar_dir(Path(ctx.data_path), create=True)
     for pattern in ("*.h5ad", "*.parquet", "cnv_*_result.json"):
@@ -414,9 +458,71 @@ def _recover_whole_cache(ctx, cache_path: Path, backup: Path) -> list[str]:
     return actions
 
 
+_SESSION_KEYS = (
+    "he_filename", "he_path", "he_shape_yx", "flip_v", "flip_h",
+    "arms_he_filename", "arms_he_path", "arms_he_shape_yx",
+    "arms_affine_3x3", "arms_flip_v", "arms_flip_h",
+    "arms_geojson_path", "arms_csv_path",
+    "cluster_labels", "marker_genes_json", "prov_graph",
+    "external_images_ui", "patch_overlays_ui",
+)
+
+
+def _recover_session_attrs(cache_path: Path, backup: Path) -> list[str]:
+    """Merge registration and UI state from a backup's viewer_session.
+
+    Only fills keys the live session lacks, and copies the ``he``/``arms``
+    affine arrays if they are missing. Uses plain zarr on both sides, so a
+    backup whose *store* is unreadable still gives up its session.
+    """
+    import zarr
+
+    from xenium_viewer.utils.zarr_safe import safe_group_update
+
+    source = backup / "viewer_session"
+    if not source.is_dir():
+        return []
+    try:
+        old = zarr.open_group(str(source), mode="r", use_consolidated=False)
+        old_attrs = dict(old.attrs)
+    except Exception as e:
+        return [f"viewer_session — FAILED: {e}"]
+
+    live_group = cache_path / "viewer_session"
+    live_attrs: dict = {}
+    if live_group.is_dir():
+        try:
+            live_attrs = dict(zarr.open_group(
+                str(live_group), mode="r", use_consolidated=False).attrs)
+        except Exception:
+            live_attrs = {}
+
+    missing = {k: old_attrs[k] for k in _SESSION_KEYS
+               if old_attrs.get(k) not in (None, [], {}) and live_attrs.get(k) in (None, [], {})}
+    affines = [name for name in ("he", "arms")
+               if (source / name).is_dir() and not (live_group / name / "affine_3x3").exists()]
+    if not missing and not affines:
+        return []
+
+    actions: list[str] = []
+    try:
+        with safe_group_update(cache_path, "viewer_session") as (session, stage):
+            for name in affines:
+                target = stage / name
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.copytree(source / name, target)
+                actions.append(f"{name} registration affine")
+            if missing:
+                session.attrs.update(missing)
+                actions.append(f"session state ({', '.join(sorted(missing))})")
+    except Exception as e:
+        return [f"viewer_session — FAILED: {e}"]
+    return actions
+
+
 def _recover_obs_columns(ctx, backup: Path, prefixes: tuple) -> list[str]:
     """Pull clustering / CNV obs columns out of a backup table into the live one."""
-    import numpy as np
     import pandas as pd
 
     from xenium_viewer.utils.adata_persistence import _persist_table
