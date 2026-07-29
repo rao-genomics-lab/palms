@@ -143,9 +143,20 @@ which fall back to the legacy in-store location for existing datasets.
 User actions are recorded as a **provenance graph** (`utils/prov_graph.py`), the
 single source of truth for reproducible code — `ctx.state["prov_graph"]`. Each step
 is a node with a stable `id` (the artifact it produces), its `code`, its `deps`
-(parent node ids), and a `kind` (`setup` / `artifact` / `terminal`). The notebook is
-*derived* from the graph by topological sort, so it always respects dependencies
-regardless of the order actions were taken — even across sessions.
+(parent node ids), and a `kind` (`setup` / `artifact` / `terminal` / `note`). The
+notebook is *derived* from the graph by topological sort, so it always respects
+dependencies regardless of the order actions were taken — even across sessions.
+
+**`note` is the "not code, and not meant to be" kind.** A node whose cell is a
+comment replays as a silent no-op: `allow_errors=False` sees a cell that ran, so a
+missing step and a viewer-state annotation looked identical to every consumer.
+`NOTE` declares the second case — it renders as *markdown* in the notebook, keeps
+its comment in `analysis.py`, is labelled in the Notebook tab, and
+`scripts/verify_notebook.py` counts it apart from the comment-only punch list. Use
+it only for state with no notebook equivalent (canvas background, overlays,
+crop-export). A comment-only node of any other kind is a defect, and
+`tests/test_recorded_code_is_code.py` parses every `record_node` call site and
+fails on one — `viewer:transcript_density` is the single listed exception.
 
 - **Preferred: `ctx.run_step(Step(...))`** (`utils/steps.py`). A `Step` is a node id, a
   `string.Template` of plain scverse source, and a dict of literal `params`. `run_step`
@@ -165,7 +176,7 @@ regardless of the order actions were taken — even across sessions.
   (`ctx.ensure_spatial_neighbors(k)`, which builds the graph on `adata_norm` and
   replaces `record_spatial_neighbors`), **neighbourhood enrichment**, **co-occurrence**,
   **ligand-receptor**, **marker-gene plots**, **gene correlation**, **ROI DEG +
-  `rois`**, and **inferCNV**. Every expression-based step consumes `adata_norm` and
+  `rois`**, **ROI expression + its CSV export**, and **inferCNV**. Every expression-based step consumes `adata_norm` and
   declares `deps=["normalize"]` — never an implicit reliance on `adata` having been
   normalised in place, which is what made the DAG lie before. Call
   `ctx.ensure_normalized()` (idempotent) before `ctx.run_step()` in any such step.
@@ -179,18 +190,27 @@ regardless of the order actions were taken — even across sessions.
   Still unmigrated: the **annotation-neighbourhood** tab (records nothing; its synthetic
   virtual cells are sampled from a napari shapes layer the notebook has no access to —
   resolving that needs E3's spatialdata shapes). **Plot/export terminals** across the
-  migrated tabs are still on `record_node`; the terminal-node policy is E4.
+  migrated tabs are still on `record_node` — that is fine where the cell is real code
+  (`sc.pl.*`, `to_csv`); what is not fine is a terminal whose cell is prose, which the
+  source guard above now catches.
 - **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
   in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
   and executed code could drift. Re-running a step (same `id`) revises its node in place
   and flags descendants stale; a missing dependency errors at record time.
   `ctx.record_code(code, tag)` remains as a thin backward-compat shim.
   Helper recorders: `record_preamble` (`preamble`
-  node, defines `data_path`), `record_clustering` (`clustering:<key>`),
-  `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
+  node, defines `data_path` — and calls `record_environment`, which emits the
+  `environment` node: package versions as a comment block plus seeds and
+  `sc.logging.print_header()`, sorting first and with **no dependents**, so a version
+  change is readable without flagging every result stale), `record_clustering`
+  (`clustering:<key>`), `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
   `nhood:<key>`, `cooccur:<key>`, `ligrec:<key>`, `annotation:<col>`, `rois`, `roi_deg`,
   `cnv:<backend>` (`cnv:infercnv` / `cnv:copykat`); terminals `plot:*`
-  (incl. `plot:cnv_heatmap:<backend>:<key>`) / `export:*` / `viewer:*` / `he:*` / `arms:*`.
+  (incl. `plot:cnv_heatmap:<backend>:<key>`) / `export:*` / `he:*` / `arms:*`;
+  notes `viewer:*` and `crop_export:*`.
+  A recorder that fails (missing dep, cycle) degrades to appending the snippet and
+  reports through `reporting.report_recording_failure` — logged with a traceback and
+  surfaced as a napari warning naming the node, never `warnings.warn`.
 - **Outputs**: a flat `analysis.py` (derived, stable filename) written live, and
   `analysis_notebook.ipynb` (via `utils/notebook_export.py` + nbformat) on session save /
   the Notebook tab's "Export .ipynb". The notebook is code-only and replays from the raw
@@ -228,8 +248,9 @@ two tiers:
   report carries per-clustering ARI, cluster counts, top-N gene agreement, wall-clock,
   package versions — and **the ids of every comment-only node**, which execute fine and
   do nothing, so `allow_errors=False` can never catch them. That list is the remaining
-  recording work (Phase 0.3), enumerated by measurement. `--dry-run` produces it in
-  seconds without replaying.
+  recording work (Phase 0.3), enumerated by measurement; `note_nodes` is reported beside
+  it and is *not* work — those are the declared viewer-state nodes. `--dry-run` produces
+  both in seconds without replaying.
 
 Both go through `notebook_export.execute_notebook()`, which runs the notebook in a
 throwaway kernelspec pointing at `sys.executable`. Do not switch it to the installed

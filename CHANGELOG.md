@@ -3,6 +3,61 @@
 ## [Unreleased] — 2026-07-29
 
 ### Added
+- **The notebook now records what it was run with.** A replay only reproduces a result
+  against the same software, and the recorded code named the functions but never the
+  versions that answered the call — so a disagreement gave no way to separate a real
+  difference from a scanpy upgrade. An **`environment`** node now opens every exported
+  notebook: the versions present when the analysis was recorded, as a comment block, plus
+  `random.seed(0)` / `np.random.seed(0)` and `sc.logging.print_header()`, so the replay's
+  own versions print directly beneath the recorded ones. It is deliberately *not* an
+  assertion — a version mismatch is information, not a failure.
+
+  It has no dependents by design: an environment change is something to read, not a
+  reason to flag every clustering and DEG table in the session stale. Re-opening a
+  dataset in an unchanged environment leaves the node alone rather than rewriting its
+  timestamp. The CI replay test executes the cell in a clean kernel, since a version pin
+  that raises would be worse than none. (`utils/environment.py`, `tabs/_helpers.py`)
+
+- **Comment-only nodes are now either code or declared as notes.** A recorded node whose
+  cell is a comment replays as a silent no-op — `allow_errors=False` sees a cell that ran
+  fine, the notebook "passes", and the step it claims to document is simply absent. Some
+  of those nodes were real gaps; others were viewer state (the canvas background, an
+  overlay) that has no notebook equivalent at all. Both looked identical to every
+  consumer, so the Tier-2 report's punch list was mostly display state with the real
+  defects buried in it.
+
+  - A new node kind, **`NOTE`**, declares "viewer state, no code equivalent". It renders
+    as markdown in the notebook (marked as such), keeps its comment in the flat
+    `analysis.py`, is labelled in the Notebook tab, and `verify_notebook.py` counts it
+    separately from the punch list. The canvas background, the cluster size filter, the
+    UMAP window, patch and transcript overlays, and crop-export are now notes.
+  - **ROI expression is real code.** `roi_expression:<gene>` — the one node the first
+    Tier-2 run against a real dataset flagged — recorded two lines saying the per-region
+    means were "shown in the viewer". It now runs as a `Step`: shapely point-in-polygon
+    membership (the same idiom as the ROI DEG step), per-region count/mean/median/std/
+    min/max, and pairwise Welch's t-tests with Benjamini-Hochberg correction via
+    `scipy.stats.false_discovery_control`. The tab formats its text from that step's
+    outputs instead of computing them itself, and `export:roi_expression` is now the
+    `to_csv` that writes the file rather than a comment saying one was written.
+  - **H&E/ARMS registration nodes carry their data**: the flips bind
+    `he_flip_vertical`/`he_flip_horizontal`, the coarse alignment records the affine
+    matrix it computed (previously discarded, with only its scale printed), and saving
+    landmarks records the `save_landmarks(...)` call with the points inlined.
+  - **A source guard** (`tests/test_recorded_code_is_code.py`) parses every
+    `ctx.record_node` call site and fails if one records prose where the notebook needs a
+    statement. One known gap remains, listed with its reason: `viewer:transcript_density`
+    computes a 2-D histogram and needs the transcript loader expressed as plain code
+    first.
+
+- **Recorder failures are now visible.** `record_node` degrades rather than aborting when
+  provenance bookkeeping fails — a bug there must never lose the user's analysis — but it
+  announced the degradation with `warnings.warn`, which in a GUI process goes to a
+  terminal nobody reads, and only once per unique message under Python's default filter.
+  What was left behind is exactly the failure this work exists to prevent: a result on
+  screen with no cell that produces it. `reporting.report_recording_failure` now logs with
+  a traceback, keeps the failure for the session tally, and shows a non-modal napari
+  warning naming the node — no dialog, since the analysis itself succeeded.
+
 - **Notebook replay verification — the reproducibility claim, measured.** Until now
   nothing executed an exported notebook and compared its results to the viewer's. The
   step executor makes the recorded code *be* the executed code by construction, but
