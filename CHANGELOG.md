@@ -58,6 +58,29 @@
   at that resolution writes the new key *alongside* the old one rather than replacing it.
 
 ### Fixed
+- **Saving the CNV heatmap crashed when the run had few windows.**
+  `chromosome_heatmap(dendrogram=True)` ends in `sc.tl.dendrogram`, which represents
+  cells with `pd.DataFrame(_choose_representation(...))`. Above `settings.N_PCS` (50)
+  columns that representation is a PCA — dense, fine. At or below it, it is `.X` itself,
+  and `pd.DataFrame(csr_matrix)` does not densify: it builds a one-column *object* frame
+  of 1×n row matrices, so the `.groupby().mean()` that follows dies with
+  `TypeError: agg function failed [how->mean,dtype->object]`. The heatmap therefore
+  worked on a wide CNV matrix and crashed on a narrow one. `make_cnv_heatmap` now
+  densifies a narrow sparse `X_cnv` for the duration of the plot and restores the
+  original afterwards, so the live session object is unchanged.
+
+- **A CNV run on a non-human panel produced a result instead of an error.** InSituCNV's
+  default gene-position reference is the infercnvpy Maynard 2020 table, which is human.
+  A mouse panel matches only the symbols spelled identically in both nomenclatures — **8
+  of 5006** on the dataset that surfaced this (`C2`, `C3`, `C6`, `C7`, `F3`, `F8`, `F9`,
+  `H19`). The pipeline ran, clustered those 8 genes into 5 windows and reported CNV
+  clusters; the first sign of trouble came several steps later, as the heatmap crash
+  above. `run_cnv_pipeline` now refuses to continue when under 5% of the panel has
+  coordinates, and says so — naming the counts, and adding that the symbols look like
+  mouse nomenclature when the casing suggests it. Supplying a non-human annotation is
+  not yet wired up (`prepare_cnv_input` accepts `gene_reference`/`gene_reference_path`);
+  until it is, CNV inference is human-only.
+
 - **Exported notebooks died on any viewer-derived clustering.** `record_clustering` is
   the backstop that gives a clustering a `clustering:<key>` node so analysis tabs can
   declare `deps=[...]` on it. It recorded `pd.read_csv(".../analysis/clustering/<key>/
