@@ -99,6 +99,28 @@ def test_oversized_backups_are_not_kept(tiny_sdata, make_table):
     assert list_trash(cache).get("tables/table", []) == []
 
 
+def test_writing_the_first_element_of_a_type_creates_its_group(tiny_sdata):
+    """A store with no shapes has no ``shapes/`` zarr group.
+
+    Renaming into a plain directory leaves the element physically present but
+    invisible to ``read_zarr``, because the consolidation walk never descends
+    into a non-group. Caught by the ROI persistence test, pinned here.
+    """
+    pytest.importorskip("geopandas")
+    import geopandas as gpd
+    from shapely.geometry import Polygon
+    from spatialdata.models import ShapesModel
+
+    cache = Path(tiny_sdata.path)
+    assert not (cache / "shapes").exists()
+
+    gdf = ShapesModel.parse(gpd.GeoDataFrame(geometry=[Polygon([(0, 0), (4, 0), (4, 4)])]))
+    safe_write_element(tiny_sdata, "rois", gdf)
+
+    assert (cache / "shapes" / "zarr.json").exists()
+    assert sorted(_reread(cache).shapes) == ["rois"]
+
+
 def test_safe_delete_element(tiny_sdata, make_table):
     cache = Path(tiny_sdata.path)
     safe_write_element(tiny_sdata, "extra", make_table("X"))

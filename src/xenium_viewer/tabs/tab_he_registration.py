@@ -11,6 +11,7 @@ from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
 from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.zarr_safe import safe_write_element
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -149,10 +150,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 base_cyx.astype(np.uint8), dims=("c", "y", "x"),
                 scale_factors=[2, 2, 2, 2], chunks=(3, 1024, 1024),
             )
-            if "he_image" in sdata.images:
-                del sdata.images["he_image"]
-            sdata.images["he_image"] = parsed
-            sdata.write_element("he_image", overwrite=True)
+            safe_write_element(sdata, "he_image", parsed)
             zarr_path = data_path / "sdata_cached.zarr"
             import zarr as zarr_mod
             store = zarr_mod.open_group(str(zarr_path), mode="r+", use_consolidated=False)

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.zarr_safe import safe_delete_element
 
 from qtpy.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QGridLayout,
@@ -588,7 +589,7 @@ def build_tab(ctx: "ViewerContext"):
         try:
             element = entry.get("element_name")
             if element and ctx.sdata is not None and element in ctx.sdata:
-                ctx.sdata.delete_element_from_disk(element)
+                safe_delete_element(ctx.sdata, element)
         except Exception as e:
             from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog
             _maybe_show_permission_dialog(e, f"delete '{element}' from zarr cache")

@@ -250,6 +250,29 @@ def _assert_not_dask_backed(sdata, live: Path, name: str) -> None:
         )
 
 
+def _ensure_type_group(cache_path: Path, etype: str, stage_store: Path) -> None:
+    """Make sure ``<cache>/<etype>`` is a real zarr group before renaming into it.
+
+    A store built without, say, any shapes has no ``shapes/`` group at all. A
+    plain ``mkdir`` there is not a zarr node, so the consolidation walk never
+    descends into it and the element — although physically present — is
+    invisible to ``read_zarr``. spatialdata creates the type group as part of
+    ``write_element``; since we bypass that, copy the group metadata the staging
+    write just produced.
+    """
+    type_dir = cache_path / etype
+    type_dir.mkdir(parents=True, exist_ok=True)
+    marker = type_dir / "zarr.json"
+    if marker.exists():
+        return
+    staged_marker = stage_store / etype / "zarr.json"
+    if staged_marker.exists():
+        shutil.copy2(staged_marker, marker)
+    else:  # pragma: no cover - upstream layout change
+        import zarr
+        zarr.open_group(str(type_dir), mode="a", use_consolidated=False)
+
+
 def _journal_path(cache_path: Path, uid: str) -> Path:
     return cache_path / JOURNAL_DIR / f"{uid}.json"
 
@@ -359,7 +382,7 @@ def safe_write_element(
             if live.exists():
                 trash.parent.mkdir(parents=True, exist_ok=True)
                 os.rename(live, trash)
-            live.parent.mkdir(parents=True, exist_ok=True)
+            _ensure_type_group(cache_path, etype, stage_store)
             os.rename(stage_element, live)
 
             # 4. Commit.
