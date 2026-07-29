@@ -198,8 +198,20 @@ regardless of the order actions were taken — even across sessions.
 - **Notebook tab** (`tabs/tab_notebook.py`) renders the graph as topo-ordered cells with a
   ⚠ stale badge, an editable free-form cell area, and a "Show DAG" button (`utils/dag_view.py`,
   matplotlib+networkx). `graph_to_mermaid` / `graph_to_dot` give diagram text.
-- **Persistence**: the graph is serialized into `sdata_cached.zarr/viewer_session/` and
-  restored at startup, so a multi-session analysis accumulates into one notebook.
+- **Persistence**: the graph is written to `<data_path>/viewer_cache/prov_graph.json`
+  **on every recorded step** (`_helpers._save_prov_graph`) *and* serialized into
+  `sdata_cached.zarr/viewer_session/` by `save_session` (dataset switch / exit).
+  The sidecar wins on load (`app._load_prov_graph_items`), because the attr is
+  behind whenever the viewer is still open or was killed. Persist the graph
+  wherever an artifact is persisted — the artifacts are written eagerly, and a
+  store holding results whose code is missing is the failure this pairing exists
+  to prevent.
+- **Every clustering needs a `clustering:<key>` node**, because analysis tabs
+  declare `deps=["clustering:<key>"]`. The *producer* records it (Leiden, CNV,
+  Novae, import); `ctx.record_clustering()` is only a backstop, and it records a
+  `read_csv` **only when that CSV actually exists**. A producer that persists a
+  column via `save_clustering_to_adata` without recording a node is a test
+  failure (`tests/test_clustering_recording.py`).
 
 ### Verifying the claim (notebook replay)
 

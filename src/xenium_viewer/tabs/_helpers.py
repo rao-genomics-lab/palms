@@ -9,13 +9,23 @@ import numpy as np
 from qtpy.QtWidgets import QWidget, QVBoxLayout
 from superqt.utils import ensure_main_thread
 
+from xenium_viewer.utils.adata_persistence import CLUSTERING_PREFIX
 from xenium_viewer.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
+from xenium_viewer.utils.reporting import get_logger
 from xenium_viewer.utils.steps import Step, StepExecutor, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
+
+log = get_logger(__name__)
+
+# The provenance graph, written beside the store on every recorded step. The
+# zarr session attr is only written by ``save_session`` (dataset switch / exit),
+# so this is what a mid-session reader — the verification script, the next
+# launch after a crash — should believe.
+PROV_GRAPH_SIDECAR = "prov_graph.json"
 
 
 # Binds ``adata_norm`` rather than mutating ``adata``, so a step that makes its
@@ -289,6 +299,37 @@ def create_shared_helpers(ctx: ViewerContext):
         if sync_fn:
             sync_fn()
         _write_code_file()
+        _save_prov_graph()
+
+    def _save_prov_graph():
+        """Persist the provenance graph as soon as it changes.
+
+        The graph used to reach disk only inside ``save_session``, which runs on
+        a dataset switch or at viewer exit — while the *artifacts* it explains
+        (``clustering_*`` columns, ``uns['rank_genes_groups']``) are persisted
+        the moment they are produced. A session verified, inspected, or killed
+        in between therefore had results on disk whose code was nowhere: measured
+        on a real session, the store held a 16-minute-old three-node graph while
+        the table already carried two Leiden clusterings and a rank-genes result.
+
+        Written as a sidecar rather than into the store: it costs one small
+        atomic file write per recorded step, where updating the zarr group means
+        copying every parquet under ``viewer_session/``. ``save_session`` still
+        writes the attr, and the sidecar takes precedence on load.
+        """
+        graph = state.get("prov_graph")
+        if graph is None or not len(graph) or ctx.data_path is None:
+            return
+        try:
+            from xenium_viewer.utils.adata_persistence import sidecar_write_path
+            from xenium_viewer.utils.zarr_safe import atomic_json
+            atomic_json(sidecar_write_path(ctx, PROV_GRAPH_SIDECAR), graph.to_list())
+        except (OSError, TypeError, ValueError) as e:
+            # Never let a persistence hiccup abort the user's analysis action;
+            # save_session remains the backstop.
+            log.warning("could not persist the provenance graph: %s", e)
+
+    ctx.save_prov_graph = _save_prov_graph
 
     def _record_node(node_id: str, code: str, deps=(), kind: str = ARTIFACT,
                      label: str = None, params: dict = None):
@@ -462,25 +503,60 @@ def create_shared_helpers(ctx: ViewerContext):
     ctx.ensure_normalized = _ensure_normalized
 
     # ── record_clustering ────────────────────────────────────────────────
+    def _clustering_csv(key):
+        """The 10x ``analysis/clustering`` CSV backing *key*, or None.
+
+        Only a clustering that came with the dataset has one. Anything the
+        viewer derived (Leiden, CNV, Novae, an import) does not, and the
+        producer is responsible for recording the code that made it.
+        """
+        root = os.path.join(ctx.data_path, "analysis", "clustering")
+        for dir_name in (f"gene_expression_{key}", key):
+            candidate = os.path.join(root, dir_name, "clusters.csv")
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
     def _record_clustering(key):
-        # If the true producer already recorded this clustering column (the
-        # Leiden tab, a file import, or a prior session), leave it alone — don't
-        # overwrite real code with a CSV loader (and don't flag dependents stale).
+        """Ensure a ``clustering:<key>`` node exists so dependents can name it.
+
+        If the true producer already recorded one (the Leiden tab, the CNV tab,
+        Novae, a file import, or a prior session), leave it alone — don't
+        overwrite real code with a loader, and don't flag dependents stale.
+        """
         graph = state.get("prov_graph")
         if graph is not None and f"clustering:{key}" in graph:
             return
         _record_preamble()
-        dir_name = f"gene_expression_{key}"
-        csv_path = os.path.join(ctx.data_path, "analysis", "clustering", dir_name, "clusters.csv")
-        if not os.path.exists(csv_path):
-            csv_path = os.path.join(ctx.data_path, "analysis", "clustering", key, "clusters.csv")
+        csv_path = _clustering_csv(key)
+        if csv_path is not None:
+            code = (
+                f"\n# Add clustering: {key}\n"
+                f"clust_df = pd.read_csv(r\"{csv_path}\", index_col=0)\n"
+                f"adata.obs[\"{key}\"] = pd.Categorical("
+                f"clust_df.reindex(adata.obs_names).iloc[:, 0].astype(str).values)"
+            )
+        else:
+            # No CSV and no producer node: the column exists only in the viewer's
+            # cache, from a session recorded before its producer recorded code.
+            # Reload it, and say so in the cell — the previous version emitted a
+            # read_csv of this path regardless, so the exported notebook died with
+            # FileNotFoundError on every viewer-derived clustering.
+            cache = os.path.join(ctx.data_path, "sdata_cached.zarr")
+            code = (
+                f"\n# Clustering '{key}' was computed in an earlier session, before its\n"
+                f"# producer recorded code. This RELOADS the stored labels from the\n"
+                f"# viewer's cache — it does not recompute them.\n"
+                f"import zarr\n"
+                f"from anndata.io import read_elem\n"
+                f"_cached_obs = read_elem(zarr.open(r\"{cache}\", mode='r')['tables/table/obs'])\n"
+                f"adata.obs[\"{key}\"] = pd.Categorical(\n"
+                f"    _cached_obs[\"{CLUSTERING_PREFIX}{key}\"].reindex(adata.obs_names).astype(str).values)"
+            )
         _record_node(
             f"clustering:{key}",
-            f"\n# Add clustering: {key}\n"
-            f"clust_df = pd.read_csv(r\"{csv_path}\", index_col=0)\n"
-            f"adata.obs[\"{key}\"] = pd.Categorical("
-            f"clust_df.reindex(adata.obs_names).iloc[:, 0].astype(str).values)",
-            deps=["preamble"],   # reads a CSV into obs; needs no normalisation
+            code,
+            deps=["preamble"],   # puts labels into obs; needs no normalisation
             kind=ARTIFACT,
             label=f"Clustering: {key}",
         )

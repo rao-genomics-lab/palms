@@ -58,6 +58,50 @@
   at that resolution writes the new key *alongside* the old one rather than replacing it.
 
 ### Fixed
+- **Exported notebooks died on any viewer-derived clustering.** `record_clustering` is
+  the backstop that gives a clustering a `clustering:<key>` node so analysis tabs can
+  declare `deps=[...]` on it. It recorded `pd.read_csv(".../analysis/clustering/<key>/
+  clusters.csv")` **whether or not that file existed** — true only for the clusterings
+  10x ships, false for every one the viewer derives. The first replay of a real session
+  against its own dataset died there with `FileNotFoundError`, three cells in.
+
+  The producers now record the code that actually made the column: the CNV tab publishes
+  its `cnv_leiden_res*` labels from `cnv_clusters` (inferCNV) or the subsampled
+  `adata_copykat` (CopyKAT), each propagated CopyKAT column gets its own
+  `clustering:<col>_propagated` node carrying the overlay that used to be a loop hidden
+  inside the extrapolation cell, and Novae records `clustering:novae_domains` — under its
+  old `novae` id nothing could depend on it, and the recorded cell bound
+  `novae_domain` while the viewer stored `novae_domains`. A source guard fails if a new
+  producer persists a clustering without recording a node for it.
+
+  The backstop itself, now reached only for columns from a session recorded before its
+  producer recorded code, emits a *reload* from the viewer's cache and says so in-line —
+  the CopyKAT precedent for code that cannot be the code that ran. It is tested by
+  executing it, not by reading it.
+
+- **The provenance graph reached disk only at exit.** Artifacts were persisted eagerly
+  (`save_clustering_to_adata` writes the column immediately) but the graph explaining
+  them only in `save_session`, which runs on a dataset switch or viewer exit. Measured on
+  a real session: the store held a 16-minute-old three-node graph while the same table
+  already carried two Leiden clusterings, two rank-genes results, an ROI DEG and a
+  neighbourhood enrichment. Anything reading the store mid-session — the verification
+  script, the next launch after a crash — saw results with no code behind them.
+
+  The graph is now written to `viewer_cache/prov_graph.json` on every recorded step (one
+  small atomic write; updating the zarr group would mean copying every parquet under
+  `viewer_session/`). `save_session` still writes the attr, and the sidecar takes
+  precedence on load and in `scripts/verify_notebook.py`, which reports which source it
+  used. Datasets without the sidecar restore from the attr exactly as before.
+
+- **A write-failure dialog could block a process with nobody at the keyboard.**
+  `reporting._surface` guarded the modal only on `QApplication.instance() is None`. A
+  test run, a headless script or CI creates an instance with no event loop and no user,
+  and `QMessageBox.exec_()` then blocks forever with nothing able to dismiss it — it hung
+  the test suite for an hour, silently, as soon as a new fixture created the
+  QApplication before the tests that deliberately inject write failures. The modal is now
+  suppressed when `QT_QPA_PLATFORM` is `offscreen`/`minimal`/`vnc`; the log entry, the
+  failure tally and the non-modal notification are unaffected.
+
 - **Crash-safe zarr cache writes.** The viewer persisted elements with
   `delete_element_from_disk` followed by `write_element`. That is not a metadata
   operation — spatialdata does `del root[element_type][element_name]`, which recursively

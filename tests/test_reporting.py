@@ -162,6 +162,49 @@ def test_reporting_never_raises_without_a_gui(tmp_path):
     report_write_failure(PermissionError("no qt here"), "table")   # must not raise
 
 
+# ── the modal must never block a process with nobody at the keyboard ─────────
+
+@pytest.mark.parametrize("platform,headless", [
+    ("offscreen", True), ("minimal", True), ("vnc", True),
+    ("xcb", False), ("wayland", False), ("", False),
+])
+def test_headless_platforms_are_recognised(monkeypatch, platform, headless):
+    from xenium_viewer.utils.reporting import _headless
+    monkeypatch.setenv("QT_QPA_PLATFORM", platform)
+    assert _headless() is headless
+
+
+def test_no_modal_is_raised_when_qt_is_headless(tmp_path, monkeypatch, qapp):
+    """Regression: this hung the suite for an hour.
+
+    ``QApplication.instance() is not None`` was the only guard, so once a
+    fixture created one before the tests that inject write failures, the
+    permission dialog's ``exec_()`` blocked with no event loop and no human able
+    to dismiss it. The failure must still be logged and notified — only the
+    modal is suppressed.
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    import qtpy.QtWidgets as qtw
+    import xenium_viewer.utils.reporting as reporting
+
+    constructed = []
+
+    class _Tripwire:
+        def __init__(self, *a, **k):
+            constructed.append(True)
+            raise AssertionError("a modal dialog would have blocked here")
+
+    monkeypatch.setattr(qtw, "QMessageBox", _Tripwire)
+    setup_logging(tmp_path)
+
+    reporting._surface("permission", "table", "read-only fs", show_modal=True)
+
+    assert constructed == []
+    # the failure is still recorded — suppressing the modal must not hide it
+    reporting.report_write_failure(PermissionError("read-only fs"), "table")
+    assert failures()[-1]["operation"] == "table"
+
+
 # ── the shim keeps old call sites working ────────────────────────────────────
 
 def test_permission_dialog_shim_routes_to_the_reporter(tmp_path):

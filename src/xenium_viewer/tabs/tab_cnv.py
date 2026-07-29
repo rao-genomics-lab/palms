@@ -621,7 +621,43 @@ def build_tab(ctx: ViewerContext) -> tuple:
         save_clustering_to_adata(ctx, key, series)
         save_cnv_results_to_adata(ctx, result)
         _record_cnv_node(result)
+        _record_cnv_clustering_node(result, key)
         _write_results_text(result, param_change_note)
+
+    def _record_cnv_clustering_node(result, key):
+        """Record ``clustering:<key>`` for the CNV-derived cluster column.
+
+        The CNV node computes these labels on ``adata_cnv`` and binds
+        ``cnv_clusters``; the viewer then publishes them onto the main table
+        with ``save_clustering_to_adata``. Without a node of that id, any tab
+        that later analysed this clustering fell through to the generic
+        ``record_clustering`` fallback, which used to emit a ``read_csv`` of an
+        ``analysis/clustering/`` file that was never written — so the exported
+        notebook failed outright. This is the code the viewer actually ran,
+        expressed against what the CNV cell already bound.
+        """
+        backend = result.get("backend", "infercnv")
+        head = ("\n# Publish the CNV clustering onto the main table\n"
+                "_ids = (adata.obs['cell_id'].values\n"
+                "        if 'cell_id' in adata.obs.columns else adata.obs_names)\n")
+        if backend == "copykat":
+            # CopyKAT leaves its labels on the (subsampled) adata_copykat, so the
+            # column covers only the cells it ran on; the rest stay unlabelled.
+            var = "adata_copykat"
+            body = (
+                f"_ck_ids = ({var}.obs['cell_id'].values\n"
+                f"           if 'cell_id' in {var}.obs.columns else {var}.obs_names)\n"
+                f"_ck = pd.Series({var}.obs[{key!r}].values, index=_ck_ids)\n"
+                f"adata.obs[{key!r}] = pd.Categorical(_ck.reindex(_ids).values)"
+            )
+        else:
+            # The inferCNV cell binds ``cnv_clusters``, indexed by cell_id.
+            body = f"adata.obs[{key!r}] = pd.Categorical(cnv_clusters.reindex(_ids).values)"
+        ctx.record_node(
+            f"clustering:{key}", head + body,
+            deps=[f"cnv:{backend}"],
+            label=f"Clustering: {key}",
+        )
 
     def _result_from_copykat_output(sidecar, adata_cnv):
         cluster_key = sidecar["cluster_key"]
@@ -658,17 +694,28 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"adata.obs['{ref_key}'] = adata.obs['{ref_key}'].astype(str)",
             f"propagate_cnv_labels(adata, {var}, label_keys={keys_repr},",
             f"    method='cluster', cluster_key='{ref_key}', suffix='_propagated', copy=False)",
-            "# Overlay each run cell's real value so its true call/subclone isn't collapsed",
-            "# to the reference-cluster majority (extrapolation only fills the un-run cells):",
-            f"for _k in {list(label_cols)!r}:",
-            f"    _real = {var}.obs[_k].astype(str)",
-            "    _pk = f'{_k}_propagated'",
-            "    adata.obs[_pk] = adata.obs[_pk].astype(str)",
-            "    adata.obs.loc[_real.index, _pk] = _real.values",
             f"# result: adata.obs[{prop_cols!r}] (all cells; un-run empty groups -> 'unknown')",
+            "# Each propagated column is finished off by its own cell below, which",
+            "# overlays the run cells' real values.",
         ]
         ctx.record_node("cnv:copykat_propagated", "\n".join(L), deps=[f"cnv:{backend}"],
                         label="Extrapolate CopyKAT calls (all cells)")
+        # One clustering node per propagated column, rather than a loop hidden
+        # inside the node above: each is a clustering the user can select, so
+        # each needs an id that dependents (rank genes, nhood, ...) can name.
+        for col in label_cols:
+            pkey = f"{col}_propagated"
+            ctx.record_node(
+                f"clustering:{pkey}",
+                f"\n# Overlay each CopyKAT-run cell's real {col!r} so its true call/subclone\n"
+                f"# isn't collapsed to the reference-cluster majority (extrapolation only\n"
+                f"# fills the cells CopyKAT never ran):\n"
+                f"_real = {var}.obs[{col!r}].astype(str)\n"
+                f"adata.obs[{pkey!r}] = adata.obs[{pkey!r}].astype(str)\n"
+                f"adata.obs.loc[_real.index, {pkey!r}] = _real.values",
+                deps=["cnv:copykat_propagated"],
+                label=f"Clustering: {pkey}",
+            )
 
     def _extrapolate_copykat(result):
         """Propagate CopyKAT results from the run subsample to ALL cells.

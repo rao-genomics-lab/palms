@@ -147,15 +147,26 @@ def build_tab(ctx: ViewerContext) -> tuple:
         level = level_slider.value
         n_dom_arg = n_domains if n_domains > 0 else None
         ctx.record_preamble()
+        # Recorded as ``clustering:novae_domains`` — the id of the artifact it
+        # produces. Under the old ``novae`` id nothing could declare a dependency
+        # on these domains, so any tab that analysed them fell through to the
+        # generic clustering fallback and recorded a loader for a CSV that does
+        # not exist. The column is renamed here too: novae writes
+        # ``novae_domain`` (or ``novae_domains_N``), the viewer stores it as
+        # ``novae_domains``, and the recorded cell claimed the former.
         ctx.record_node(
-            "novae",
+            "clustering:novae_domains",
             f"\n# Novae spatial domain inference\n"
             f"import novae\n"
-            f"novae.spatial_neighbors(adata)\n"
+            f"adata_novae = adata.copy()\n"
+            f"novae.spatial_neighbors(adata_novae)\n"
             f"model = novae.Novae.from_pretrained('MICS-Lab/novae-{species}-0')\n"
-            f"model.compute_representations(adata, zero_shot=True)\n"
-            f"model.assign_domains(adata, n_domains={n_dom_arg!r}, level={level})\n"
-            f"# result: adata.obs['novae_domain']",
+            f"model.compute_representations(adata_novae, zero_shot=True)\n"
+            f"model.assign_domains(adata_novae, n_domains={n_dom_arg!r}, level={level})\n"
+            f"# novae's column name varies by version: 'novae_domain', else the last added\n"
+            f"_dom = [c for c in adata_novae.obs.columns if c.startswith('novae_domain')]\n"
+            f"_col = 'novae_domain' if 'novae_domain' in _dom else _dom[-1]\n"
+            f"adata.obs['novae_domains'] = pd.Categorical(adata_novae.obs[_col].values)",
             deps=["preamble"],
             label="Novae spatial domains",
         )

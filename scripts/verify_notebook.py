@@ -48,6 +48,8 @@ from xenium_viewer.utils.prov_graph import ProvGraph  # noqa: E402
 
 CACHE_DIRNAME = "sdata_cached.zarr"
 SESSION_GROUP = "viewer_session"
+SIDECAR_DIRNAME = "viewer_cache"    # utils/adata_persistence.py
+PROV_GRAPH_SIDECAR = "prov_graph.json"
 TABLE_PATH = "tables/table"
 CLUSTERING_PREFIX = "clustering_"   # utils/adata_persistence.py
 DEFAULT_TOP_N = 10
@@ -80,8 +82,26 @@ def cache_path(data_path: Path, explicit: Path | None = None) -> Path:
     return path
 
 
-def read_graph(cache: Path) -> ProvGraph:
-    """Load the provenance graph from the session attrs."""
+def read_graph(data_path: Path, cache: Path) -> tuple[ProvGraph, str]:
+    """Load the provenance graph, sidecar first, session attr second.
+
+    The viewer rewrites ``viewer_cache/prov_graph.json`` on every recorded step;
+    the zarr attr is only written on a dataset switch or at exit. Reading the
+    attr alone measured a graph 16 minutes behind the results sitting in the
+    same store — the replay then "failed" to produce clusterings the recorded
+    session never contained. Returns the graph and which source it came from.
+    """
+    sidecar = data_path / SIDECAR_DIRNAME / PROV_GRAPH_SIDECAR
+    if sidecar.exists():
+        try:
+            items = json.loads(sidecar.read_text())
+        except (OSError, ValueError) as exc:
+            print(f"warning: {sidecar} unreadable ({exc}); falling back to the "
+                  f"session attrs")
+        else:
+            if items:
+                return ProvGraph.from_list(list(items)), str(sidecar)
+
     import zarr
     store = zarr.open(str(cache), mode="r")
     if SESSION_GROUP not in store:
@@ -92,7 +112,7 @@ def read_graph(cache: Path) -> ProvGraph:
             f"{cache}/{SESSION_GROUP} records no provenance graph. Run an "
             f"analysis in the viewer and save the session first."
         )
-    return ProvGraph.from_list(list(items))
+    return ProvGraph.from_list(list(items)), f"{cache}/{SESSION_GROUP} attrs"
 
 
 def read_viewer_obs(cache: Path):
@@ -339,10 +359,10 @@ def main(argv=None) -> int:
 
     data_path = args.data_path.resolve()
     cache = cache_path(data_path, args.cache)
-    graph = read_graph(cache)
+    graph, graph_source = read_graph(data_path, args.cache or cache)
     skipped = comment_only_nodes(graph)
 
-    print(f"Provenance graph: {len(graph)} nodes "
+    print(f"Provenance graph: {len(graph)} nodes from {graph_source} "
           f"({len(skipped)} comment-only, which replay as no-ops)")
 
     if args.work_dir is not None:
@@ -356,6 +376,7 @@ def main(argv=None) -> int:
     report = {
         "data_path": str(data_path),
         "cache": str(cache),
+        "graph_source": graph_source,
         "n_nodes": len(graph),
         "node_ids": graph.topo_sort(),
         "comment_only_nodes": skipped,
@@ -457,6 +478,13 @@ def _print_summary(report: dict, out_path: Path) -> None:
         print(f"  ✗ rank genes: {len(bad)} group(s) differ: {bad}")
     else:
         print(f"  – rank genes: {rank.get('status')}")
+
+    if any(e.get("status") == "not_in_replay" for e in report["clusterings"]):
+        print("\n  Results with no node behind them usually mean the graph on disk "
+              "predates them.\n  It is written on every recorded step to "
+              "viewer_cache/prov_graph.json; a session\n  recorded by an older "
+              "build only reached disk at viewer exit, so close the viewer "
+              "and re-run.")
 
     skipped = report["comment_only_nodes"]
     print(f"\nComment-only nodes skipped on replay: {len(skipped)}")

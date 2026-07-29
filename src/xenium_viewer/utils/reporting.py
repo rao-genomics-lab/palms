@@ -157,6 +157,20 @@ def report_write_failure(exc: BaseException, operation: str = "data",
     _surface(kind, operation, str(exc), show_modal)
 
 
+def _headless() -> bool:
+    """True when Qt is up but nobody can answer a dialog.
+
+    ``QApplication.instance() is not None`` is not enough: a test run, a
+    headless script or CI creates one with no event loop and no human, and
+    ``QMessageBox.exec_()`` then blocks forever with nothing able to dismiss it.
+    That is not hypothetical — it hung the test suite for an hour once a fixture
+    started creating the QApplication before the tests that inject write
+    failures. The notification still fires; only the modal is suppressed.
+    """
+    platform = os.environ.get("QT_QPA_PLATFORM", "").split(":")[0].strip().lower()
+    return platform in {"offscreen", "minimal", "minimalegl", "vnc"}
+
+
 def _surface(kind: str, operation: str, message: str, show_modal: bool) -> None:
     """Hand off to the GUI thread, or do nothing when there is no GUI."""
     try:
@@ -166,6 +180,8 @@ def _surface(kind: str, operation: str, message: str, show_modal: bool) -> None:
         from superqt.utils import ensure_main_thread
     except Exception:
         return
+    if _headless():
+        show_modal = False
 
     @ensure_main_thread
     def _show():

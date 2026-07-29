@@ -692,6 +692,38 @@ def _populate_viewer(viewer, data: dict) -> dict:
     }
 
 
+def _load_prov_graph_items(data_path, session: dict) -> list:
+    """The serialized provenance graph, sidecar first, session attr second.
+
+    Two writers, two cadences: ``_helpers._save_prov_graph`` rewrites the
+    sidecar on every recorded step, while ``save_session`` writes the attr only
+    on a dataset switch or at exit. The sidecar is therefore never *behind* the
+    attr and is usually ahead of it, so it wins whenever it parses. A dataset
+    that predates the sidecar, or one copied without ``viewer_cache/``, still
+    restores from the attr.
+    """
+    from xenium_viewer.tabs._helpers import PROV_GRAPH_SIDECAR
+    from xenium_viewer.utils.adata_persistence import sidecar_dir
+
+    attr_items = session.get("prov_graph") or []
+    if data_path is None:
+        return list(attr_items)
+    sidecar = sidecar_dir(data_path) / PROV_GRAPH_SIDECAR
+    try:
+        items = json.loads(sidecar.read_text())
+    except FileNotFoundError:
+        return list(attr_items)
+    except (OSError, ValueError) as e:
+        print(f"  Provenance sidecar unreadable ({e}); using the session attr.")
+        return list(attr_items)
+    if not isinstance(items, list) or not items:
+        return list(attr_items)
+    if len(items) != len(attr_items):
+        print(f"  Provenance graph: {len(items)} node(s) from {sidecar.name} "
+              f"(session attr had {len(attr_items)})")
+    return items
+
+
 def _snapshot_layers(ctx: ViewerContext) -> dict:
     """Capture napari layer data while Qt objects are still alive.
 
@@ -1049,9 +1081,14 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
             # Restore the reproducible-code provenance graph so the analysis
             # notebook accumulates across sessions (re-derive the flat journal
             # and rewrite analysis.py from the restored graph).
-            if session.get("prov_graph"):
+            # The sidecar is rewritten on every recorded step; the session attr
+            # only by save_session (dataset switch / exit), so it is behind
+            # whenever the last run ended in a crash, a kill, or a still-open
+            # viewer. Prefer the sidecar, fall back to the attr.
+            _prov_items = _load_prov_graph_items(ctx.data_path, session)
+            if _prov_items:
                 from xenium_viewer.utils.prov_graph import ProvGraph, graph_to_cells
-                _g = ProvGraph.from_list(session["prov_graph"])
+                _g = ProvGraph.from_list(_prov_items)
                 ctx.state["prov_graph"] = _g
                 # Re-emit the preamble for THIS launch's data_path (upsert; a
                 # no-op when the path is unchanged).
