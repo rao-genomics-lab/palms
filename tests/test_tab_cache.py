@@ -298,7 +298,7 @@ def test_recovery_restores_registration_state(tiny_sdata):
         "affine_3x3", shape=(3, 3), dtype="float64")
     affine[:] = np.eye(3)
 
-    actions = tab_cache._recover_session_attrs(cache, backup)
+    actions = tab_cache._recover_session_attrs(_ctx(tiny_sdata), cache, backup)
     assert any("session state" in a for a in actions)
     assert any("registration affine" in a for a in actions)
 
@@ -306,6 +306,89 @@ def test_recovery_restores_registration_state(tiny_sdata):
                            use_consolidated=False)
     assert live.attrs["he_filename"] == "slide.tif"
     assert "affine_3x3" in live["he"]
+
+
+def test_recovered_registration_survives_the_reload_that_follows(tiny_sdata):
+    """The reported symptom: images recovered, but not aligned.
+
+    Reloading saves the current session first, and save_session deletes the
+    he/arms groups and rewrites them from ctx.he_state. With an empty he_state
+    that erased the affine recovery had just written. Recovery must hydrate the
+    live state too, not only the disk.
+    """
+    import zarr
+    from xenium_viewer.utils.session import save_session
+
+    cache = Path(tiny_sdata.path)
+    backup = cache.parent / "sdata_cached_corrupt_20260728_222253.zarr"
+    shutil.copytree(cache, backup)
+
+    session = zarr.open_group(str(backup / "viewer_session"), mode="a",
+                              use_consolidated=False)
+    session.attrs.update({"he_filename": "slide.tif", "he_path": "/x/slide.tif"})
+    affine = session.create_group("he").create_array(
+        "affine_3x3", shape=(3, 3), dtype="float64")
+    affine[:] = np.eye(3) * 7
+
+    ctx = _ctx(tiny_sdata)
+    ctx.he_state = {"he_filename": None, "he_path": None, "affine_3x3": None,
+                    "coarse_affine": None, "flip_v": False, "flip_h": False}
+    ctx.arms_state = {}
+    tab_cache._recover_session_attrs(ctx, cache, backup)
+
+    # The in-memory state must carry it, or the next save blanks it out.
+    assert ctx.he_state["he_filename"] == "slide.tif"
+    assert ctx.he_state["affine_3x3"][0][0] == 7.0
+
+    # Now do exactly what reloading does first.
+    save_session(cache, {}, ctx.he_state, {})
+
+    live = zarr.open_group(str(cache / "viewer_session"), mode="r",
+                           use_consolidated=False)
+    assert live.attrs["he_filename"] == "slide.tif"
+    assert np.asarray(live["he"]["affine_3x3"])[0][0] == 7.0
+
+
+def test_recovered_arms_affine_survives_too(tiny_sdata):
+    import zarr
+    from xenium_viewer.utils.session import save_session
+
+    cache = Path(tiny_sdata.path)
+    backup = cache.parent / "sdata_cached_prev_20260101_000000.zarr"
+    shutil.copytree(cache, backup)
+    session = zarr.open_group(str(backup / "viewer_session"), mode="a",
+                              use_consolidated=False)
+    session.attrs.update({"arms_he_filename": "arms.tif",
+                          "arms_affine_3x3": (np.eye(3) * 3).tolist()})
+
+    ctx = _ctx(tiny_sdata)
+    ctx.he_state = {}
+    ctx.arms_state = {"he_filename": None, "affine_3x3": None}
+    tab_cache._recover_session_attrs(ctx, cache, backup)
+    assert ctx.arms_state["affine_3x3"][0][0] == 3.0
+
+    save_session(cache, {}, {}, {"arms_state": ctx.arms_state})
+    live = zarr.open_group(str(cache / "viewer_session"), mode="r",
+                           use_consolidated=False)
+    assert live.attrs["arms_he_filename"] == "arms.tif"
+    assert np.asarray(live["arms"]["affine_3x3"])[0][0] == 3.0
+
+
+def test_recovery_does_not_overwrite_live_state_in_memory(tiny_sdata):
+    """A registration loaded in this session is the newer one."""
+    import zarr
+
+    cache = Path(tiny_sdata.path)
+    backup = cache.parent / "sdata_cached_prev_20260101_000000.zarr"
+    shutil.copytree(cache, backup)
+    zarr.open_group(str(backup / "viewer_session"), mode="a",
+                    use_consolidated=False).attrs["he_filename"] = "old.tif"
+
+    ctx = _ctx(tiny_sdata)
+    ctx.he_state = {"he_filename": "current.tif", "affine_3x3": None}
+    ctx.arms_state = {}
+    tab_cache._recover_session_attrs(ctx, cache, backup)
+    assert ctx.he_state["he_filename"] == "current.tif"
 
 
 def test_recovery_does_not_overwrite_live_session_state(tiny_sdata):
@@ -321,7 +404,7 @@ def test_recovery_does_not_overwrite_live_session_state(tiny_sdata):
     zarr.open_group(str(cache / "viewer_session"), mode="a",
                     use_consolidated=False).attrs["he_filename"] = "current.tif"
 
-    tab_cache._recover_session_attrs(cache, backup)
+    tab_cache._recover_session_attrs(_ctx(tiny_sdata), cache, backup)
     live = zarr.open_group(str(cache / "viewer_session"), mode="r",
                            use_consolidated=False)
     assert live.attrs["he_filename"] == "current.tif"
@@ -331,7 +414,7 @@ def test_recovery_with_no_session_in_the_backup_is_a_no_op(tiny_sdata):
     cache = Path(tiny_sdata.path)
     backup = cache.parent / "sdata_cached_prev_20260101_000000.zarr"
     backup.mkdir()
-    assert tab_cache._recover_session_attrs(cache, backup) == []
+    assert tab_cache._recover_session_attrs(_ctx(tiny_sdata), cache, backup) == []
 
 
 def test_viewer_context_carries_a_reload_hook():

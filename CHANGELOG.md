@@ -88,6 +88,23 @@
   tab and at the three pre-existing sites in `tabs/tab_segmentation.py`, where it had been
   hiding async segmentation-save failures. (`tabs/tab_cache.py`, `tabs/tab_segmentation.py`)
 
+- **Recovered registration was undone by the reload that followed it.** Reloading saves the
+  current session first, as any dataset switch does, and `save_session` deletes the
+  `he`/`arms` groups and rewrites them from `ctx.he_state` — which was still empty, so it
+  erased the affine recovery had just written. The images came back but unaligned.
+  Recovery now hydrates `ctx.he_state` / `ctx.arms_state` in memory as well as on disk, so
+  the pre-reload save writes the recovered values instead of blanking them. Landmarks were
+  never affected — they load from `sdata.shapes`, so importing those elements was already
+  enough. (`tabs/tab_cache.py`)
+
+- **External-image and patch-overlay UI state was blanked on every save with none
+  loaded.** `_snapshot_layers` yields `[]` rather than `None` when nothing is loaded, so
+  the "fall back to the previous value" branch never fired — losing saved contrast,
+  opacity and affine after a recovery, and any time the attrs were written before restore
+  had run. These now fall back on empty too, which is safe because restore is driven by
+  the sdata elements with the attrs used only as decoration: an entry left behind for a
+  removed image is never looked up. (`utils/session.py`)
+
 - **Recovered data was invisible until the dataset was reopened.** Recovery writes
   elements straight into the zarr, so the live SpatialData, the napari layers and every
   tab's widgets knew nothing about them. `app.py`'s dataset-open path is now factored into

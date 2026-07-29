@@ -134,6 +134,29 @@ def test_summary_reports_what_was_saved():
     assert _session_summary({}) == "empty session"
 
 
+def test_ui_residuals_survive_a_save_with_nothing_loaded():
+    """An empty snapshot list means "none loaded now", not "forget them".
+
+    It is empty before restore runs and right after a cache recovery, so
+    overwriting on empty blanked recovered contrast/affine settings.
+    """
+    prev = {"external_images_ui": [{"element_name": "ext_a"}],
+            "patch_overlays_ui": [{"element_name": "patch_b"}]}
+    attrs = _build_session_attrs(**_args(prev_attrs=prev, snapshot={
+        "external_images_ui": [], "patch_overlays_ui": [],
+    }))
+    assert attrs["external_images_ui"] == [{"element_name": "ext_a"}]
+    assert attrs["patch_overlays_ui"] == [{"element_name": "patch_b"}]
+
+
+def test_a_real_ui_snapshot_still_wins():
+    prev = {"external_images_ui": [{"element_name": "old"}]}
+    attrs = _build_session_attrs(**_args(prev_attrs=prev, snapshot={
+        "external_images_ui": [{"element_name": "new"}],
+    }))
+    assert attrs["external_images_ui"] == [{"element_name": "new"}]
+
+
 # ── on-disk behaviour ────────────────────────────────────────────────────────
 
 def test_save_session_roundtrips(tiny_sdata):

@@ -437,7 +437,7 @@ def _recover_whole_cache(ctx, cache_path: Path, backup: Path) -> list[str]:
     # Recovering he_image and its landmarks without this is half a job: the
     # image element would exist while the session still says no H&E is loaded,
     # so nothing would display it.
-    actions += _recover_session_attrs(cache_path, backup)
+    actions += _recover_session_attrs(ctx, cache_path, backup)
 
     # ── Sidecars (CNV caches, DEG tables) ────────────────────────────────
     destination = sidecar_dir(Path(ctx.data_path), create=True)
@@ -468,13 +468,20 @@ _SESSION_KEYS = (
 )
 
 
-def _recover_session_attrs(cache_path: Path, backup: Path) -> list[str]:
+def _recover_session_attrs(ctx, cache_path: Path, backup: Path) -> list[str]:
     """Merge registration and UI state from a backup's viewer_session.
 
-    Only fills keys the live session lacks, and copies the ``he``/``arms``
-    affine arrays if they are missing. Uses plain zarr on both sides, so a
+    Writes to disk **and** hydrates ``ctx.he_state`` / ``ctx.arms_state``. The
+    in-memory half is not optional: reloading the dataset saves the current
+    session first, and ``save_session`` deletes the ``he``/``arms`` groups and
+    rewrites them from ``he_state``. With an empty ``he_state`` that erased the
+    affine we had just recovered — the images came back but unaligned, which is
+    exactly the symptom that exposed this.
+
+    Only fills keys the live session lacks. Uses plain zarr on both sides, so a
     backup whose *store* is unreadable still gives up its session.
     """
+    import numpy as np
     import zarr
 
     from xenium_viewer.utils.zarr_safe import safe_group_update
@@ -497,8 +504,11 @@ def _recover_session_attrs(cache_path: Path, backup: Path) -> list[str]:
         except Exception:
             live_attrs = {}
 
+    def _empty(value) -> bool:
+        return value is None or (isinstance(value, (list, dict, str)) and len(value) == 0)
+
     missing = {k: old_attrs[k] for k in _SESSION_KEYS
-               if old_attrs.get(k) not in (None, [], {}) and live_attrs.get(k) in (None, [], {})}
+               if not _empty(old_attrs.get(k)) and _empty(live_attrs.get(k))}
     affines = [name for name in ("he", "arms")
                if (source / name).is_dir() and not (live_group / name / "affine_3x3").exists()]
     if not missing and not affines:
@@ -518,6 +528,47 @@ def _recover_session_attrs(cache_path: Path, backup: Path) -> list[str]:
                 actions.append(f"session state ({', '.join(sorted(missing))})")
     except Exception as e:
         return [f"viewer_session — FAILED: {e}"]
+
+    # ── Hydrate the live state, or the reload's save will undo all of it ──
+    def _array(group_name: str, array_name: str):
+        path = source / group_name / array_name
+        if not path.exists():
+            return None
+        try:
+            return np.array(zarr.open_array(str(path), mode="r")[:], dtype=np.float64)
+        except Exception:
+            return None
+
+    he_state = getattr(ctx, "he_state", None)
+    if isinstance(he_state, dict):
+        for key, attr in (("he_filename", "he_filename"), ("he_path", "he_path"),
+                          ("he_shape_yx", "he_shape_yx"),
+                          ("flip_v", "flip_v"), ("flip_h", "flip_h")):
+            if _empty(he_state.get(key)) and not _empty(old_attrs.get(attr)):
+                he_state[key] = old_attrs[attr]
+        for key, array_name in (("affine_3x3", "affine_3x3"),
+                                ("coarse_affine", "coarse_affine")):
+            if he_state.get(key) is None:
+                recovered = _array("he", array_name)
+                if recovered is not None:
+                    he_state[key] = recovered
+
+    arms_state = getattr(ctx, "arms_state", None)
+    if isinstance(arms_state, dict):
+        for key, attr in (("he_filename", "arms_he_filename"), ("he_path", "arms_he_path"),
+                          ("he_shape_yx", "arms_he_shape_yx"),
+                          ("flip_v", "arms_flip_v"), ("flip_h", "arms_flip_h"),
+                          ("geojson_path", "arms_geojson_path"),
+                          ("csv_path", "arms_csv_path")):
+            if _empty(arms_state.get(key)) and not _empty(old_attrs.get(attr)):
+                arms_state[key] = old_attrs[attr]
+        if arms_state.get("affine_3x3") is None:
+            recovered = _array("arms", "affine_3x3")
+            if recovered is None and not _empty(old_attrs.get("arms_affine_3x3")):
+                recovered = np.asarray(old_attrs["arms_affine_3x3"], dtype=np.float64)
+            if recovered is not None:
+                arms_state["affine_3x3"] = recovered
+
     return actions
 
 

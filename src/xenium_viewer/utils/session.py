@@ -160,14 +160,16 @@ def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
         attrs["prov_graph"] = None
 
     # ── External images / patch overlays UI residuals ────────────────────
-    ext_ui = snapshot.get("external_images_ui")
-    if ext_ui is None:
-        ext_ui = prev_attrs.get("external_images_ui")
+    # An *empty* list means "none are loaded right now" — which is equally true
+    # before restore has run and immediately after a cache recovery, so it must
+    # not overwrite what is stored. Falling back on empty rather than only on
+    # None is safe because restore is driven by the sdata elements, with these
+    # attrs used only for contrast/opacity/affine: an entry left behind for a
+    # removed image is simply never looked up.
+    ext_ui = snapshot.get("external_images_ui") or prev_attrs.get("external_images_ui")
     attrs["external_images_ui"] = ext_ui or []
 
-    patch_ui = snapshot.get("patch_overlays_ui")
-    if patch_ui is None:
-        patch_ui = prev_attrs.get("patch_overlays_ui")
+    patch_ui = snapshot.get("patch_overlays_ui") or prev_attrs.get("patch_overlays_ui")
     attrs["patch_overlays_ui"] = patch_ui or []
 
     return attrs
