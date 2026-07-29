@@ -15,6 +15,19 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """A QApplication, so widget-building code can be exercised headless.
+
+    Run the suite with QT_QPA_PLATFORM=offscreen; the instance is shared because
+    Qt allows only one per process.
+    """
+    pytest.importorskip("qtpy")
+    from qtpy.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
 @pytest.fixture
 def make_table():
     """Factory for a valid SpatialData table carrying a marker value."""

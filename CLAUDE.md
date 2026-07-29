@@ -63,7 +63,10 @@ def build_tab(ctx: ViewerContext) -> tuple[QWidget, dict]:
     # exports_dict may contain "restore_session" callable
 ```
 
-The 11 tabs cover: Clustering, Cell Coloring, Transcripts, UMAP, ROI Analysis, H&E Registration, Gene Analysis, Ligand-Receptor, Neighborhood Enrichment, Co-occurrence, and ARMS Overlay.
+The tabs are grouped under Cells / Genes / Spatial / Images / Tools. **Tools → Cache**
+(`tabs/tab_cache.py`) exposes the cache health check and repair actions described
+under "Cache safety" below: verify, re-consolidate, recover from a backup, and a
+force rebuild that moves the old cache aside rather than deleting it.
 
 `src/xenium_viewer/tabs/_helpers.py` contains shared utilities (e.g., `StatusProxy`, `make_tab()`).
 

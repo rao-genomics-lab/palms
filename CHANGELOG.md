@@ -64,6 +64,17 @@
   `sc.tl.correlation_matrix`, which does not exist in scanpy. See the 2026-07-28 entry.
 
 ### Added
+- **A Cache tab (Tools → Cache).** The cache was a black box: when it broke, the loader
+  moved it aside and rebuilt from raw, and the only signal was a long wait. The tab shows
+  size, free space, build manifest, write failures this session and the log path, and
+  offers **Verify** (read-only), **Re-consolidate Metadata** (fixes the most common
+  corruption without touching data), **Recover from Backup** (pull elements out of a
+  `.xv_trash` copy or a previous cache the loader kept aside, including CopyKAT sidecars)
+  and **Force Rebuild** (moves the cache aside and rebuilds on the next launch, so the
+  running session is never left pointing at a freed store). All work runs in a
+  `thread_worker` behind `store_lock`, so nothing here can race `_persist_table`, and a
+  test fails if the tab ever gains an `rmtree`. (`tabs/tab_cache.py`, `app.py`)
+
 - **`utils/reporting.py` — a per-dataset log and non-modal error surfacing.** Every write
   failure went to stdout, which a GUI user never reads, and the only dialog was for
   permission errors, shown **once per process** via a module-level flag — so the second
@@ -102,10 +113,10 @@
   `KeyboardInterrupt` that bypasses cleanup the way a `kill -9` does),
   `test_persistence_safety.py` (9), `test_session_persistence.py` (14),
   `test_cache_repair.py` (20), `test_loader_policy.py` (16), `test_sidecar_location.py`
-  (13), `test_reporting.py` (21). Plus source guards that fail if `delete_element_from_disk` is called outside
+  (13), `test_reporting.py` (21), `test_tab_cache.py` (14). Plus source guards that fail if `delete_element_from_disk` is called outside
   `zarr_safe.py`, if `loader.py` `rmtree`s the live cache, or if a sidecar is written into
   the store root, or if a cache write path prints a warning instead of logging it.
-  267 tests pass.
+  281 tests pass.
 
 ## [Unreleased] — 2026-07-28
 
