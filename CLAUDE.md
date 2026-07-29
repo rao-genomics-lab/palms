@@ -26,13 +26,20 @@ xenium-viewer /path/to/xenium/output/ --no-cache
 
 The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
 
-There is a small `pytest` suite in `tests/` covering the codebase's *pure* logic
-(provenance graph, CopyKAT subsampling, registration math, LLM prompt/response parsing,
-patch-size inference, notebook export). Run it with `pytest` from the repo root
-(`[tool.pytest.ini_options]` sets `pythonpath = ["src"]`, so no install is needed).
-GitHub Actions (`.github/workflows/ci.yml`) runs the suite in the full conda env plus a
-fast `ruff` error-only lint gate on every push/PR. The GUI, spatial-analysis, and
-zarr/SpatialData persistence paths have no automated coverage — that testing remains
+There is a `pytest` suite in `tests/` (~280 tests) covering pure logic (provenance graph,
+step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
+the **zarr/SpatialData persistence paths** — crash-safe writes with simulated interrupted
+writes, cache verify/repair, session save, loader cache policy and sidecar locations.
+Several are *source guards* that fail if a fixed bug is reintroduced (calling
+`delete_element_from_disk` outside `zarr_safe.py`, `rmtree`ing the live cache, writing a
+sidecar into the store root, printing a warning instead of logging it).
+
+Run with `pytest` from the repo root (`[tool.pytest.ini_options]` sets
+`pythonpath = ["src"]`, so no install is needed). Tests that touch Qt need
+`env -u DISPLAY QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg`. GitHub Actions
+(`.github/workflows/ci.yml`) runs the suite in the full conda env plus a fast `ruff`
+error-only lint gate (`--select E9,F63,F7,F82`) on every push/PR. The napari GUI proper
+and the spatial-analysis tabs still have no automated coverage — that testing remains
 manual/exploratory.
 
 ## Architecture
@@ -40,7 +47,7 @@ manual/exploratory.
 ### Entry Points & Load Sequence
 
 1. **`src/xenium_viewer/app.py`** — Main entry point (~1300 lines). Validates data dir, orchestrates loading, builds napari viewer with layers, instantiates all managers, creates `ViewerContext`, builds all tab widgets, then restores session. The `main()` function is the `xenium-viewer` console-script entry point.
-2. **`src/xenium_viewer/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness detected via `experiment.xenium` mtime. Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`.
+2. **`src/xenium_viewer/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness comes from a content hash in `.xv_manifest.json` (see "Cache safety"). Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`.
 3. **`src/xenium_viewer/preprocess.py`** — One-time step that splits the transcript parquet into ~480 per-gene feather files for fast per-gene loading (~100ms vs 4–5s). The `main()` function is the `xenium-preprocess` console-script entry point.
 
 ### Central State: ViewerContext
