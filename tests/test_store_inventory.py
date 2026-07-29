@@ -247,6 +247,14 @@ def test_x_umap_is_deletable_but_spatial_is_not(dataset):
         assert nodes["obsm:table/spatial"].deletable is False
 
 
+def test_zarr_metadata_is_never_offered_as_content(dataset):
+    """A group's zarr.json *is* the group; listing it invites deleting it."""
+    keys = set(_by_key(si.build_inventory(dataset.data_path, dataset.cache)))
+    assert not [k for k in keys if k.endswith("/zarr.json")], sorted(
+        k for k in keys if k.endswith("/zarr.json"))
+    assert "session:file/zarr.json" not in keys
+
+
 def test_rank_genes_groupby_is_a_deletable_uns_key(dataset):
     node = _by_key(si.build_inventory(dataset.data_path, dataset.cache))[
         "uns:table/rank_genes_groupby"]
@@ -270,10 +278,29 @@ def test_the_provenance_sidecar_is_blocked(dataset):
     assert "provenance" in node.blocked_reason
 
 
-def test_analysis_py_is_shown_read_only_because_it_is_outside_every_root(dataset):
-    (dataset.data_path / "analysis.py").write_text("# code\n")
+def test_a_dated_provenance_backup_is_blocked_too(dataset):
+    """They exist precisely to survive a graph going wrong."""
+    (dataset.data_path / "viewer_cache"
+     / "prov_graph.backup_20260729_1407.json").write_text("[]")
     node = _by_key(si.build_inventory(dataset.data_path, dataset.cache))[
-        "derived:analysis.py"]
+        "sidecar:prov_graph.backup_20260729_1407.json"]
+    assert node.deletable is False
+
+
+@pytest.mark.parametrize("name", [
+    "analysis.py", "analysis_notebook.ipynb", "plots", "xenium_viewer.log"])
+def test_viewer_output_in_the_dataset_folder_is_not_called_raw(dataset, name):
+    """It is outside every deletable root, but it is not 10x's either — saying
+    "the viewer never modifies it" about the viewer's own log is just false."""
+    target = dataset.data_path / name
+    if name == "plots":
+        target.mkdir()
+        (target / "dotplot.svg").write_text("<svg/>")
+    else:
+        target.write_text("x\n")
+    nodes = _by_key(si.build_inventory(dataset.data_path, dataset.cache))
+    assert f"raw:{name}" not in nodes
+    node = nodes[f"derived:{name}"]
     assert node.deletable is False
     assert "by hand" in node.blocked_reason
 

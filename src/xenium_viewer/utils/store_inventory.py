@@ -68,8 +68,15 @@ TRANSCRIPT_CACHE_DIRNAME = "transcript_cache"
 #: Viewer outputs written into the dataset directory itself. Outside every
 #: deletable root, so they are shown read-only rather than special-cased into
 #: the predicate — a file-level exemption would puncture the containment model
-#: for the sake of two files a few KB long.
-DERIVED_IN_DATA_DIR = ("analysis.py", "analysis_notebook.ipynb")
+#: for the sake of a few small files. Listed here rather than left to the raw
+#: section because calling the viewer's own log "original 10x output, never
+#: modified by the viewer" is simply false.
+DERIVED_IN_DATA_DIR = {
+    "analysis.py": "exported analysis code",
+    "analysis_notebook.ipynb": "exported analysis notebook",
+    "plots": "figures the viewer exported, plus CopyKAT run sentinels",
+    "xenium_viewer.log": "the viewer's own log",
+}
 
 
 class NotDeletable(RuntimeError):
@@ -121,9 +128,16 @@ _SIDECAR_DETAIL = {
 #: attrs on load — so deleting it silently loses every step recorded since the
 #: last session save. Spelled out rather than imported from ``tabs._helpers``,
 #: which owns the constant but pulls in Qt.
-_BLOCKED_SIDECARS = {
-    "prov_graph.json": "the provenance graph — the notebook's source of truth",
-}
+#: Matched as a prefix, so the dated ``prov_graph.backup_*.json`` copies are
+#: protected too — they exist precisely to survive a graph going wrong.
+_BLOCKED_SIDECAR_PREFIX = "prov_graph"
+_BLOCKED_SIDECAR_REASON = "the provenance graph — the notebook's source of truth"
+
+
+def _blocked_sidecar_reason(name: str) -> str:
+    if name.startswith(_BLOCKED_SIDECAR_PREFIX):
+        return _BLOCKED_SIDECAR_REASON
+    return ""
 
 # ── The session-state trap ───────────────────────────────────────────────────
 # ``save_session`` rebuilds viewer_session from ctx.state / ctx.he_state /
@@ -463,6 +477,12 @@ def _uns_obsm_nodes(cache_path: Path, element: str, parent: str) -> list[Node]:
     return nodes
 
 
+#: zarr's own metadata, which is not content and must never be offered — the
+#: group's ``zarr.json`` *is* the group. (v2's markers all start with a dot and
+#: are dropped by the prefix rule below.)
+_ZARR_METADATA = frozenset({"zarr.json"})
+
+
 def _public_entries(directory: Path) -> list[Path]:
     """Entries of *directory* that name real content.
 
@@ -472,7 +492,8 @@ def _public_entries(directory: Path) -> list[Path]:
     """
     try:
         return [p for p in directory.iterdir()
-                if not p.name.startswith(("_", "."))]
+                if not p.name.startswith(("_", "."))
+                and p.name not in _ZARR_METADATA]
     except OSError:
         return []
 
@@ -623,11 +644,12 @@ def _derived_section(data_path: Path, cache_path: Optional[Path]) -> Section:
     # way here: an inventory of a dataset must not bring it into existence.
     sidecar_home = adata_persistence.sidecar_dir(data_path)
     for entry in sorted(_public_entries(sidecar_home)):
-        reason = _BLOCKED_SIDECARS.get(entry.name, "")
+        reason = _blocked_sidecar_reason(entry.name)
         nodes.append(Node(
             key=f"sidecar:{entry.name}",
             kind=SIDECAR,
-            name=f"{adata_persistence.SIDECAR_DIRNAME}/{entry.name}",
+            name=(f"{adata_persistence.SIDECAR_DIRNAME}/{entry.name}"
+                  + ("/" if entry.is_dir() else "")),
             detail=reason or _sidecar_detail(entry.name),
             size_bytes=_entry_size(entry),
             path=entry,
@@ -640,14 +662,16 @@ def _derived_section(data_path: Path, cache_path: Optional[Path]) -> Section:
     # missing rows. They are inside the cache root, hence deletable.
     if cache_path is not None and cache_path.is_dir():
         for name in cache_repair._find_sidecars(cache_path):
+            reason = _blocked_sidecar_reason(name)
             nodes.append(Node(
                 key=f"sidecar:store/{name}",
                 kind=SIDECAR,
                 name=f"{cache_path.name}/{name}",
-                detail=_sidecar_detail(name) or "legacy in-store sidecar",
+                detail=reason or _sidecar_detail(name) or "legacy in-store sidecar",
                 size_bytes=_entry_size(cache_path / name),
                 path=cache_path / name,
-                deletable=True,
+                deletable=not reason,
+                blocked_reason=reason,
                 recoverable=RECOVER_NONE,
             ))
 
@@ -667,15 +691,15 @@ def _derived_section(data_path: Path, cache_path: Optional[Path]) -> Section:
             recoverable=RECOVER_NONE,
         ))
 
-    for name in DERIVED_IN_DATA_DIR:
+    for name, detail in DERIVED_IN_DATA_DIR.items():
         entry = data_path / name
         if not entry.exists():
             continue
         nodes.append(Node(
             key=f"derived:{name}",
             kind=DERIVED,
-            name=name,
-            detail="exported analysis code",
+            name=f"{name}/" if entry.is_dir() else name,
+            detail=detail,
             size_bytes=_entry_size(entry),
             path=entry,
             deletable=False,
@@ -700,7 +724,7 @@ def _sidecar_detail(name: str) -> str:
     if name.startswith("cnv_") and name.endswith("_result.json"):
         backend = name[len("cnv_"):-len("_result.json")]
         return f"CNV run metadata ({backend})"
-    return ""
+    return "viewer output"
 
 
 # ── Section 5: backups and trash ─────────────────────────────────────────────
