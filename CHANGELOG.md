@@ -64,6 +64,30 @@
   `sc.tl.correlation_matrix`, which does not exist in scanpy. See the 2026-07-28 entry.
 
 ### Added
+- **Recovery from a corrupt cache no longer needs the corrupt cache to open.** The first
+  version of "Recover from Backup" called `spatialdata.read_zarr` on the backup — which is
+  by definition a store that failed to read — and died in `_read_table` on an unreadable
+  table, taking the perfectly salvageable shapes, images and clusterings with it. Recovery
+  is now filesystem-level: element directories are self-contained and obs columns are
+  individual zarr arrays, so a broken root index or an unreadable table condemns neither.
+  `cache_repair.salvageable_elements()` and `read_obs_columns()` do the reading;
+  `zarr_safe.safe_import_element()` does the writing, journalled like any other swap.
+  Verified against the reported cache: 12 obs columns (8 clusterings, cluster labels, 3 CNV
+  scores), 6 landmark sets and 3 images recovered from a store spatialdata refuses to open.
+  (`utils/cache_repair.py`, `utils/zarr_safe.py`, `tabs/tab_cache.py`)
+
+- **External images and patch overlays were not counted as user data.** `_detect_user_data`
+  matched a fixed list of element names, but these are named per file
+  (`ext_<filename>`, `ext_<filename>_xenium_lm`, `patch_*`) — so a dataset with a registered
+  PhenoCycler image and its landmarks reported "no user data" and could be rebuilt over
+  without a prompt. Matching is now by prefix/suffix as well as exact name. (`loader.py`)
+
+- **`errored` handlers indexed the exception as an exc_info triple.** napari emits the
+  exception itself, so `exc_info[1]` raised `TypeError` and replaced the real error in the
+  traceback — masking, among other things, the recovery failure above. Fixed in the Cache
+  tab and at the three pre-existing sites in `tabs/tab_segmentation.py`, where it had been
+  hiding async segmentation-save failures. (`tabs/tab_cache.py`, `tabs/tab_segmentation.py`)
+
 - **A Cache tab (Tools → Cache).** The cache was a black box: when it broke, the loader
   moved it aside and rebuilt from raw, and the only signal was a long wait. The tab shows
   size, free space, build manifest, write failures this session and the log path, and
@@ -113,10 +137,10 @@
   `KeyboardInterrupt` that bypasses cleanup the way a `kill -9` does),
   `test_persistence_safety.py` (9), `test_session_persistence.py` (14),
   `test_cache_repair.py` (20), `test_loader_policy.py` (16), `test_sidecar_location.py`
-  (13), `test_reporting.py` (21), `test_tab_cache.py` (14). Plus source guards that fail if `delete_element_from_disk` is called outside
+  (20), `test_reporting.py` (21), `test_tab_cache.py` (18). Plus source guards that fail if `delete_element_from_disk` is called outside
   `zarr_safe.py`, if `loader.py` `rmtree`s the live cache, or if a sidecar is written into
-  the store root, or if a cache write path prints a warning instead of logging it.
-  281 tests pass.
+  the store root, or if a cache write path prints a warning instead of logging it, or if recovery opens a backup as a whole.
+  289 tests pass.
 
 ## [Unreleased] — 2026-07-28
 

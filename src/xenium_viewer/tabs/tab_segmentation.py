@@ -181,9 +181,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
                         f"Custom segmentation loaded and cached: {new_adata.n_obs:,} cells"
                     )
 
-                def _save_error(exc_info):
-                    status.value = f"Custom segmentation loaded (cache failed: {exc_info[1]})"
-                    print(f"Warning: async sdata save failed: {exc_info[1]}")
+                def _save_error(exc):
+                    # napari's `errored` emits the exception itself, not an
+                    # exc_info triple — indexing it raised TypeError and masked
+                    # whatever actually went wrong.
+                    status.value = f"Custom segmentation loaded (cache failed: {exc})"
+                    from xenium_viewer.utils.reporting import report_write_failure
+                    report_write_failure(exc, "custom segmentation")
 
                 save_worker = _save()
                 save_worker.returned.connect(_save_done)
@@ -235,9 +239,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             update_sdata_btn.enabled = True
             status.value = "SpatialData updated on disk."
 
-        def _error(exc_info):
+        def _error(exc):
             update_sdata_btn.enabled = True
-            status.value = f"ERROR updating SpatialData: {exc_info[1]}"
+            status.value = f"ERROR updating SpatialData: {exc}"
 
         w = _run()
         w.returned.connect(_done)

@@ -303,9 +303,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _start(make_worker, on_done, error_prefix):
         worker = make_worker()
 
-        def _failed(exc_info):
-            report_text.setPlainText(f"{error_prefix}: {exc_info[1]}")
-            status.value = f"{error_prefix}: {exc_info[1]}"
+        def _failed(exc):
+            # napari's `errored` emits the exception itself, not an exc_info
+            # triple. Indexing it raised TypeError, which then replaced the real
+            # error in the traceback.
+            import traceback
+            detail = "".join(traceback.format_exception(
+                type(exc), exc, exc.__traceback__))
+            report_text.setPlainText(f"{error_prefix}: {exc}\n\n{detail}")
+            status.value = f"{error_prefix}: {exc}"
             _set_busy(False)
 
         worker.returned.connect(on_done)
@@ -347,49 +353,103 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
 
 def _recover_whole_cache(ctx, cache_path: Path, backup: Path) -> list[str]:
-    """Copy user-generated elements and sidecars out of *backup* into the live cache.
+    """Salvage user-generated data out of *backup* into the live cache.
 
-    Only fills gaps: an element already in the live cache is left alone, because
-    it is the newer of the two.
+    Works entirely at the filesystem level and **never opens the backup as a
+    SpatialData**. A cache worth recovering from is one that failed to open, so
+    anything that starts with ``read_zarr`` on it cannot work: the first attempt
+    at this did exactly that and died in ``_read_table`` on a corrupt table,
+    taking the recoverable shapes and images down with it.
+
+    Element directories are self-contained, and obs columns are individual zarr
+    arrays, so a broken root index or an unreadable table does not condemn what
+    sits beside it. Only gaps are filled — anything already in the live cache is
+    the newer copy and is left alone.
     """
     import shutil
-    import warnings
 
-    import spatialdata
-
-    from xenium_viewer.loader import _detect_user_data
+    from xenium_viewer.loader import (
+        _USER_IMAGE_KEYS, _USER_OBS_PREFIXES, _USER_SHAPE_KEYS, _is_user_element,
+    )
     from xenium_viewer.utils.adata_persistence import sidecar_dir
-    from xenium_viewer.utils.zarr_safe import safe_write_element
+    from xenium_viewer.utils.zarr_safe import safe_import_element
 
     actions: list[str] = []
-    user_data = _detect_user_data(backup)
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        old = spatialdata.read_zarr(str(backup))
-        live = ctx.sdata
+    # ── Whole elements: ROIs, annotations, landmarks, tiles, images ──────
+    for element in cache_repair.salvageable_elements(backup):
+        etype, _, name = element.partition("/")
+        keys = _USER_IMAGE_KEYS if etype == "images" else _USER_SHAPE_KEYS
+        if etype not in ("shapes", "images") or not _is_user_element(name, keys):
+            continue
+        if (cache_path / element).exists():
+            continue                      # live copy is newer
+        try:
+            safe_import_element(cache_path, element, backup / element)
+            actions.append(element)
+        except Exception as e:
+            actions.append(f"{element} — FAILED: {e}")
 
-        for key in user_data["shapes"] + user_data["images"]:
-            if key in live:
+    # ── Clusterings and CNV scores, read column by column ────────────────
+    # The most valuable thing in a broken cache, and the part a whole-store
+    # read can never reach.
+    actions += _recover_obs_columns(ctx, backup, _USER_OBS_PREFIXES)
+
+    # ── Sidecars (CNV caches, DEG tables) ────────────────────────────────
+    destination = sidecar_dir(Path(ctx.data_path), create=True)
+    for pattern in ("*.h5ad", "*.parquet", "cnv_*_result.json"):
+        for source in sorted(list(backup.glob(pattern))
+                             + list((backup.parent / "viewer_cache").glob(pattern))):
+            target = destination / source.name
+            if target.exists():
                 continue
             try:
-                safe_write_element(live, key, old[key])
-                actions.append(key)
+                shutil.copy2(source, target)
+                actions.append(source.name)
             except Exception as e:
-                actions.append(f"{key} — FAILED: {e}")
-
-    # Sidecars live beside the store now; copy any the live dataset lacks.
-    destination = sidecar_dir(Path(ctx.data_path), create=True)
-    for name in user_data["sidecars"]:
-        for source in (backup / name, backup.parent / "viewer_cache" / name):
-            if source.exists() and not (destination / name).exists():
-                try:
-                    shutil.copy2(source, destination / name)
-                    actions.append(name)
-                except Exception as e:
-                    actions.append(f"{name} — FAILED: {e}")
-                break
+                actions.append(f"{source.name} — FAILED: {e}")
 
     if not actions:
         actions.append("nothing to recover — the live cache already has it all")
+    return actions
+
+
+def _recover_obs_columns(ctx, backup: Path, prefixes: tuple) -> list[str]:
+    """Pull clustering / CNV obs columns out of a backup table into the live one."""
+    import numpy as np
+    import pandas as pd
+
+    from xenium_viewer.utils.adata_persistence import _persist_table
+
+    live_adata = getattr(ctx, "adata", None)
+    if live_adata is None:
+        return []
+
+    columns = cache_repair.read_obs_columns(backup, prefixes)
+    if not columns:
+        return []
+
+    live_index = (live_adata.obs["cell_id"].astype(str).to_numpy()
+                  if "cell_id" in live_adata.obs.columns
+                  else live_adata.obs_names.to_numpy().astype(str))
+
+    actions: list[str] = []
+    added = False
+    for name, (index, values) in columns.items():
+        if name in live_adata.obs.columns:
+            continue
+        try:
+            series = pd.Series(list(values), index=[str(i) for i in index])
+            aligned = series.reindex(live_index)
+            if aligned.isna().all():
+                actions.append(f"{name} — skipped (no matching cells)")
+                continue
+            live_adata.obs[name] = pd.Categorical(aligned.astype(str).values)
+            actions.append(f"obs/{name}")
+            added = True
+        except Exception as e:
+            actions.append(f"obs/{name} — FAILED: {e}")
+
+    if added:
+        _persist_table(ctx)
     return actions

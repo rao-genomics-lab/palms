@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 pytest.importorskip("spatialdata")
 pytest.importorskip("qtpy")
 np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 
 from xenium_viewer.tabs import tab_cache  # noqa: E402
 from xenium_viewer.utils import cache_repair  # noqa: E402
@@ -41,7 +42,8 @@ def _quiet():
 
 def _ctx(sdata=None, data_path=None, no_cache=False):
     return SimpleNamespace(
-        sdata=sdata, viewer=None, state={}, no_cache=no_cache,
+        sdata=sdata, adata=(sdata["table"] if sdata is not None else None),
+        viewer=None, state={}, no_cache=no_cache, segmentation_source="xenium",
         data_path=data_path or (Path(sdata.path).parent if sdata else None),
     )
 
@@ -148,7 +150,7 @@ def test_recovering_a_whole_cache_fills_only_the_gaps(tiny_sdata, tmp_path):
     ctx = _ctx(tiny_sdata)
     actions = tab_cache._recover_whole_cache(ctx, cache, backup)
 
-    assert "rois" in actions
+    assert "shapes/rois" in actions
     assert "rois" in _reread(cache).shapes
 
 
@@ -159,6 +161,94 @@ def test_recovering_when_nothing_is_missing_says_so(tiny_sdata):
 
     actions = tab_cache._recover_whole_cache(_ctx(tiny_sdata), cache, backup)
     assert actions == ["nothing to recover — the live cache already has it all"]
+
+
+def test_recovering_from_a_backup_too_broken_to_open(tiny_sdata, tmp_path):
+    """The reported failure: recovery must not require read_zarr on the backup.
+
+    A cache worth recovering from is one that failed to open. The first version
+    called spatialdata.read_zarr on it and died inside _read_table on a corrupt
+    table, taking the perfectly recoverable shapes down with it.
+    """
+    import geopandas as gpd
+    import json as _json
+    from shapely.geometry import Polygon
+    from spatialdata.models import ShapesModel
+
+    cache = Path(tiny_sdata.path)
+    backup = cache.parent / "sdata_cached_corrupt_20260728_222253.zarr"
+    shutil.copytree(cache, backup)
+
+    # Give the backup an ROI worth saving, then break its table the way the
+    # real one was broken: strip the attrs _read_table asserts on.
+    backup_sdata = _reread(backup)
+    gdf = ShapesModel.parse(gpd.GeoDataFrame(geometry=[Polygon([(0, 0), (4, 0), (4, 4)])]))
+    safe_write_element(backup_sdata, "rois", gdf)
+    table_meta = backup / "tables" / "table" / "zarr.json"
+    document = _json.loads(table_meta.read_text())
+    document["attributes"] = {}
+    table_meta.write_text(_json.dumps(document))
+
+    with pytest.raises(Exception):
+        _reread(backup)                       # genuinely unopenable
+
+    actions = tab_cache._recover_whole_cache(_ctx(tiny_sdata), cache, backup)
+
+    assert "shapes/rois" in actions
+    assert "rois" in _reread(cache).shapes
+
+
+def test_clusterings_survive_a_table_anndata_cannot_read(tiny_sdata, tmp_path):
+    """Obs columns are individual zarr arrays, so they outlive the table.
+
+    This is the most valuable thing in a broken cache and the part a
+    whole-store read can never reach.
+    """
+    import json as _json
+
+    cache = Path(tiny_sdata.path)
+    adata = tiny_sdata["table"]
+    adata.obs["clustering_leiden_r1.0"] = pd.Categorical(["0"] * 3 + ["1"] * 3)
+    safe_write_element(tiny_sdata, "table", adata)
+
+    backup = cache.parent / "sdata_cached_corrupt_20260728_222253.zarr"
+    shutil.copytree(cache, backup)
+    table_meta = backup / "tables" / "table" / "zarr.json"
+    document = _json.loads(table_meta.read_text())
+    document["attributes"] = {}
+    table_meta.write_text(_json.dumps(document))
+
+    # Now drop the clustering from the live table, as a rebuild would.
+    del adata.obs["clustering_leiden_r1.0"]
+    safe_write_element(tiny_sdata, "table", adata)
+    assert "clustering_leiden_r1.0" not in _reread(cache)["table"].obs
+
+    ctx = _ctx(tiny_sdata)
+    ctx.adata = tiny_sdata["table"]
+    actions = tab_cache._recover_whole_cache(ctx, cache, backup)
+
+    assert "obs/clustering_leiden_r1.0" in actions
+    restored = _reread(cache)["table"].obs["clustering_leiden_r1.0"]
+    assert list(restored) == ["0", "0", "0", "1", "1", "1"]
+
+
+def test_read_obs_columns_ignores_non_user_columns(tiny_sdata):
+    from xenium_viewer.utils.cache_repair import read_obs_columns
+
+    cache = Path(tiny_sdata.path)
+    found = read_obs_columns(cache, ("clustering_", "cnv_score"))
+    assert found == {}          # the fixture table has none
+
+
+def test_salvageable_elements_works_without_opening_the_store(tiny_sdata):
+    import json as _json
+
+    cache = Path(tiny_sdata.path)
+    root = cache / "zarr.json"
+    root.write_text("{")                      # unopenable
+
+    from xenium_viewer.utils.cache_repair import salvageable_elements
+    assert sorted(salvageable_elements(cache)) == ["labels/lab", "tables/table"]
 
 
 def test_recovering_a_cache_pulls_back_sidecars(tiny_sdata, tmp_path):
@@ -180,8 +270,11 @@ def test_recovering_a_cache_pulls_back_sidecars(tiny_sdata, tmp_path):
 def test_recovery_uses_the_safe_write_path(tiny_sdata):
     """Recovery must not be able to corrupt the cache it is repairing."""
     source = Path(tab_cache.__file__).read_text()
-    assert "safe_write_element" in source
-    assert "write_element(" not in source.replace("safe_write_element(", "")
+    assert "safe_import_element" in source
+    # Recovery must never open the backup as a whole — that is the bug.
+    # (The docstring names read_zarr to explain why; the code must not call it.)
+    assert "read_zarr(" not in source
+    assert "write_element(" not in source.replace("safe_import_element(", "")
 
 
 # ── the guard the whole feature exists for ───────────────────────────────────

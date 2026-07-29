@@ -34,6 +34,20 @@ _USER_SHAPE_KEYS = [
     "arms_xenium_landmarks", "arms_he_landmarks", "arms_tiles", "annotations",
 ]
 _USER_IMAGE_KEYS = ["he_image", "arms_he_image"]
+
+# External images and patch overlays are named per file, so a fixed list cannot
+# see them: a dataset with a registered PhenoCycler image and its landmarks
+# reported "no user data" and could be rebuilt over without a prompt.
+_USER_SHAPE_SUFFIXES = ("_xenium_lm", "_image_lm")
+_USER_ELEMENT_PREFIXES = ("ext_", "patch_")
+
+
+def _is_user_element(name: str, keys: list) -> bool:
+    return (name in keys
+            or name.startswith(_USER_ELEMENT_PREFIXES)
+            or name.endswith(_USER_SHAPE_SUFFIXES))
+
+
 _USER_UNS_KEYS = ["nhood_enrichment", "co_occurrence", "ligrec", "rank_genes_groups"]
 
 # Globs, not literal names: the previous fixed list omitted the CNV caches, so a
@@ -82,12 +96,16 @@ def _detect_user_data(cache_path: Path) -> dict:
         "sidecars": [],
         "has_viewer_session": False,
     }
-    for key in _USER_SHAPE_KEYS:
-        if (cache_path / "shapes" / key).exists():
-            found["shapes"].append(key)
-    for key in _USER_IMAGE_KEYS:
-        if (cache_path / "images" / key).exists():
-            found["images"].append(key)
+    shapes_dir = cache_path / "shapes"
+    if shapes_dir.is_dir():
+        for entry in sorted(shapes_dir.iterdir()):
+            if entry.is_dir() and _is_user_element(entry.name, _USER_SHAPE_KEYS):
+                found["shapes"].append(entry.name)
+    images_dir = cache_path / "images"
+    if images_dir.is_dir():
+        for entry in sorted(images_dir.iterdir()):
+            if entry.is_dir() and _is_user_element(entry.name, _USER_IMAGE_KEYS):
+                found["images"].append(entry.name)
     obs_dir = cache_path / "tables" / "table" / "obs"
     if obs_dir.exists():
         for item in obs_dir.iterdir():
@@ -145,12 +163,17 @@ def _format_user_data_message(user_data: dict) -> str:
         "arms_tile_deg_cache.parquet": "ARMS tile DEG results",
         "adata_norm_cache.h5ad": "Normalized expression cache",
     }
+    seen: set[str] = set()
     for fname in user_data["sidecars"]:
         if fname.startswith("adata_cnv_cache_") or fname.startswith("cnv_"):
             backend = "CopyKAT" if "copykat" in fname else "inferCNV"
             label = f"{backend} CNV results (hours of compute)"
         else:
             label = _sidecar_labels.get(fname, fname)
+        # Several files map to one label (the h5ad and its result JSON).
+        if label in seen:
+            continue
+        seen.add(label)
         lines.append(f"  • {label}")
     return "\n".join(lines)
 

@@ -85,6 +85,46 @@ def test_clusterings_and_rois_still_count(fake_cache):
     assert "ROIs" in _format_user_data_message(user_data)
 
 
+def test_external_images_and_their_landmarks_count_as_user_data(fake_cache):
+    """These are named per file, so the old fixed key list could not see them.
+
+    A dataset with a registered PhenoCycler image reported "no user data" and
+    could be rebuilt over without a prompt.
+    """
+    cache, _ = fake_cache
+    (cache / "images" / "ext_PostXenium5k_region1_ome").mkdir(parents=True)
+    (cache / "shapes" / "ext_PostXenium5k_region1_ome_xenium_lm").mkdir(parents=True)
+
+    user_data = _detect_user_data(cache)
+    assert _has_any_user_data(user_data)
+    assert "ext_PostXenium5k_region1_ome" in user_data["images"]
+    assert "ext_PostXenium5k_region1_ome_xenium_lm" in user_data["shapes"]
+
+
+def test_patch_overlays_count_as_user_data(fake_cache):
+    cache, _ = fake_cache
+    (cache / "shapes" / "patch_tumour_regions").mkdir(parents=True)
+    assert "patch_tumour_regions" in _detect_user_data(cache)["shapes"]
+
+
+def test_pipeline_elements_are_not_mistaken_for_user_data(fake_cache):
+    """cell_circles and morphology_focus are rebuilt from raw, not user work."""
+    cache, _ = fake_cache
+    (cache / "shapes" / "cell_circles").mkdir(parents=True)
+    (cache / "images" / "morphology_focus").mkdir(parents=True)
+    assert not _has_any_user_data(_detect_user_data(cache))
+
+
+def test_one_label_per_cnv_backend_not_per_file(fake_cache):
+    """The h5ad and its result JSON both mean "CopyKAT ran"."""
+    cache, _ = fake_cache
+    (cache / "adata_cnv_cache_copykat.h5ad").write_bytes(b"x")
+    (cache / "cnv_copykat_result.json").write_text("{}")
+
+    message = _format_user_data_message(_detect_user_data(cache))
+    assert message.count("CopyKAT CNV results") == 1
+
+
 # ── staleness ────────────────────────────────────────────────────────────────
 
 def test_without_a_manifest_staleness_is_uncertain(fake_cache):

@@ -414,6 +414,101 @@ def restore_from_trash(cache_path: Path, element: str, backup: Path,
             consolidate(cache_path)
 
 
+def salvageable_elements(backup: Path) -> list[str]:
+    """Element paths in *backup* that look intact, without opening the store.
+
+    Deliberately filesystem-level: a cache worth recovering from is one that
+    failed to open, so anything that starts by reading it whole is useless here.
+    Element directories are self-contained, so a broken root index or an
+    unreadable table does not condemn the shapes and images beside it.
+    """
+    backup = Path(backup)
+    return [e for e in _disk_elements(backup) if not _is_stray(backup, e)]
+
+
+def read_obs_columns(cache_path: Path, prefixes: tuple[str, ...],
+                     table: str = "tables/table") -> dict:
+    """Read user obs columns straight out of zarr, bypassing anndata.
+
+    This is how a clustering survives a table that ``_read_table`` refuses —
+    each obs column is its own zarr array or categorical group, so losing the
+    table's version attr (or anything else at table level) does not lose them.
+    Returns ``{column_name: (index_array, values_array)}``.
+    """
+    import numpy as np
+    import zarr
+
+    cache_path = Path(cache_path)
+    obs_dir = cache_path / table / "obs"
+    if not obs_dir.is_dir():
+        return {}
+
+    def _read(path: Path):
+        """Decode one obs column.
+
+        anndata uses several on-disk encodings and they are not interchangeable:
+        a plain array, a ``categorical`` group of categories+codes, and the
+        ``nullable-*`` groups of values+mask. Assuming "array" silently returned
+        nothing for the nullable index, which made every column unreadable.
+        """
+        marker = path / "zarr.json"
+        if not marker.exists():
+            return None
+        try:
+            document = json.loads(marker.read_text())
+        except (OSError, ValueError):
+            return None
+        encoding = document.get("attributes", {}).get("encoding-type") or ""
+        try:
+            if encoding == "categorical":
+                categories = np.asarray(zarr.open_array(str(path / "categories"), mode="r")[:])
+                codes = np.asarray(zarr.open_array(str(path / "codes"), mode="r")[:])
+                categories = np.asarray(categories.tolist(), dtype=object)
+                out = np.full(len(codes), "", dtype=object)
+                valid = codes >= 0
+                out[valid] = categories[codes[valid]]
+                return out
+            if encoding.startswith("nullable"):
+                values = np.asarray(zarr.open_array(str(path / "values"), mode="r")[:])
+                mask_path = path / "mask"
+                if mask_path.exists():
+                    mask = np.asarray(zarr.open_array(str(mask_path), mode="r")[:])
+                    values = values.astype(object)
+                    values[mask.astype(bool)] = None
+                return values
+            if encoding in ("string-array", "array") or not encoding:
+                values = np.asarray(zarr.open_array(str(path), mode="r")[:])
+                # numpy 2 returns StringDType for string arrays, which several
+                # downstream casts refuse; object dtype behaves everywhere.
+                if values.dtype.kind in ("T", "U", "S", "O"):
+                    values = np.asarray(values.tolist(), dtype=object)
+                return values
+            if document.get("node_type") == "group":
+                # Unknown group encoding — try the conventional payload name.
+                if (path / "values").exists():
+                    return np.asarray(zarr.open_array(str(path / "values"), mode="r")[:])
+                return None
+            return np.asarray(zarr.open_array(str(path), mode="r")[:])
+        except Exception as exc:
+            log.debug("could not read obs column %s: %s", path.name, exc)
+            return None
+
+    index = _read(obs_dir / "_index")
+    if index is None:
+        return {}
+
+    found: dict = {}
+    for entry in sorted(obs_dir.iterdir()):
+        if entry.name.startswith("_") or not entry.is_dir():
+            continue
+        if not entry.name.startswith(prefixes):
+            continue
+        values = _read(entry)
+        if values is not None and len(values) == len(index):
+            found[entry.name] = (index, values)
+    return found
+
+
 def describe_store(cache_path: Path) -> dict:
     """Size and free-space figures for the health panel."""
     cache_path = Path(cache_path)

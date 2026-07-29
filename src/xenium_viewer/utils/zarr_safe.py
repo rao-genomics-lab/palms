@@ -425,6 +425,75 @@ def _heal(cache_path: Path, record: dict, journal: Path, stage_store: Path) -> N
     shutil.rmtree(stage_store, ignore_errors=True)
 
 
+def safe_import_element(cache_path: Path, element: str, source_dir: Path) -> None:
+    """Copy an on-disk element directory from another store into this one.
+
+    Used to recover from a cache that is too damaged to open: element
+    directories are self-contained, so a broken root index or an unreadable
+    *table* does not stop the shapes, images and landmarks beside it from being
+    salvaged. Recovering by reading the whole backup with ``read_zarr`` cannot
+    work — a store that is being recovered from is, by definition, one that
+    failed to read.
+
+    *element* is ``"<type>/<name>"``; the swap is journalled exactly like
+    :func:`safe_write_element`.
+    """
+    cache_path = Path(cache_path)
+    source_dir = Path(source_dir)
+    etype, _, name = element.partition("/")
+    if etype not in ELEMENT_TYPES or not name:
+        raise ZarrSafeError(f"not an element path: {element!r}")
+    if not source_dir.is_dir():
+        raise ZarrSafeError(f"no such element on disk: {source_dir}")
+
+    uid = uuid.uuid4().hex[:12]
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    stage_store = cache_path / STAGING_DIR / f"{name}.{uid}.zarr"
+    stage_element = stage_store / etype / name
+    live = cache_path / etype / name
+    trash = cache_path / TRASH_DIR / etype / f"{name}.{stamp}.{uid}"
+    journal = _journal_path(cache_path, uid)
+
+    # Copy outside the lock — this is the slow part and touches nothing live.
+    stage_element.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, stage_element)
+    source_type_marker = source_dir.parent / "zarr.json"
+    if source_type_marker.exists():
+        shutil.copy2(source_type_marker, stage_element.parent / "zarr.json")
+
+    record = {
+        "version": 1,
+        "op": "write_element",
+        "element_type": etype,
+        "name": name,
+        "live": str(live.relative_to(cache_path)),
+        "stage": str(stage_element.relative_to(cache_path)),
+        "stage_store": str(stage_store.relative_to(cache_path)),
+        "trash": str(trash.relative_to(cache_path)),
+        "created": stamp,
+    }
+    journaled = False
+    try:
+        with store_lock(cache_path):
+            atomic_json(journal, record)
+            journaled = True
+            if live.exists():
+                trash.parent.mkdir(parents=True, exist_ok=True)
+                os.rename(live, trash)
+            _ensure_type_group(cache_path, etype, stage_store)
+            os.rename(stage_element, live)
+            consolidate(cache_path)
+            journal.unlink(missing_ok=True)
+            shutil.rmtree(stage_store, ignore_errors=True)
+            prune_trash(cache_path, etype, name, keep=1)
+    except Exception:
+        if journaled:
+            _heal(cache_path, record, journal, stage_store)
+        else:
+            shutil.rmtree(stage_store, ignore_errors=True)
+        raise
+
+
 def safe_delete_element(sdata, name: str, *, keep_backup: bool = True) -> None:
     """Remove *name* from the store, keeping a backup copy in the trash."""
     cache_path = cache_path_of(sdata)
