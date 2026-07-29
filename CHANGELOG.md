@@ -28,7 +28,9 @@
     package versions, and **the ids of every comment-only node the notebook silently
     skipped**. Those nodes execute fine and do nothing, so no amount of `allow_errors`
     catches them; naming them turns the remaining recording work into a measurement.
-    `--dry-run` produces that list in seconds without replaying.
+    `--dry-run` produces that list in seconds without replaying. A replay that *fails*
+    reports the **node id** that broke, not just nbclient's cell index, along with the
+    timings of every cell that did run.
 
   Supporting: `notebook_export.execute_notebook()` runs a notebook in a throwaway
   kernelspec pointing at `sys.executable`, because the installed `python3` kernelspec

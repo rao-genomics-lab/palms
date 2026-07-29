@@ -144,22 +144,42 @@ def comment_only_nodes(graph: ProvGraph) -> list[str]:
 
 # ── the replay ───────────────────────────────────────────────────────────────
 
-def build_notebook(graph: ProvGraph, work_dir: Path) -> Path:
-    cells = notebook_export.graph_to_cells(graph)
+def build_notebook(graph: ProvGraph, work_dir: Path) -> tuple[Path, list]:
+    """Write the notebook; also return each cell's originating node id.
+
+    The node ids are what makes a failure actionable: nbclient reports a cell
+    index, and "cell 4 failed" says nothing about which recorded step is broken.
+    """
+    from xenium_viewer.utils.prov_graph import graph_to_cells
+    derived = graph_to_cells(graph)
+    node_ids = [cell.node_id for cell in derived]
+    node_ids.append(None)  # the injected dump cell belongs to no node
+    cells = [(cell.cell_type, cell.source) for cell in derived]
     cells.append(("code", _DUMP_CELL.format(out=str(work_dir))))
     nb_path = work_dir / "verify_notebook.ipynb"
     notebook_export.write_notebook(cells, nb_path)
-    return nb_path
+    return nb_path, node_ids
 
 
-def execute(nb_path: Path, data_path: Path, timeout: int) -> tuple[list[dict], float]:
-    """Execute the notebook, returning per-cell timings and total wall-clock.
+def execute(nb_path: Path, data_path: Path, timeout: int,
+            timings: list[dict], node_ids: list, cursor: dict) -> float:
+    """Execute the notebook, appending per-cell timings; return wall-clock.
 
     Runs with the *dataset* as the working directory, matching the environment
-    a user would replay it in.
+    a user would replay it in. *timings* is passed in rather than returned so
+    that a failing run still reports how far it got and how long each completed
+    cell took — a replay that dies on cell 4 of 9 is exactly when that detail
+    matters most. *cursor* is filled in with the failing cell, so the caller can
+    name the node that broke rather than only quoting nbclient's traceback.
+
+    ``on_cell_executed`` fires for the failing cell too, immediately before
+    nbclient raises, so the failure is taken from ``on_cell_error`` and the
+    timing entry it already appended is flagged rather than trusted.
     """
-    timings: list[dict] = []
     started: dict[int, float] = {}
+
+    def node_of(cell_index):
+        return node_ids[cell_index] if cell_index < len(node_ids) else None
 
     def on_start(cell, cell_index, **_):
         started[cell_index] = time.perf_counter()
@@ -171,16 +191,25 @@ def execute(nb_path: Path, data_path: Path, timeout: int) -> tuple[list[dict], f
         source = (cell.source or "").strip().splitlines()
         timings.append({
             "cell": cell_index,
+            "node": node_of(cell_index),
             "seconds": round(time.perf_counter() - begin, 3),
             "first_line": source[0][:100] if source else "",
         })
+
+    def on_error(cell, cell_index, **_):
+        cursor["cell"] = cell_index
+        cursor["node"] = node_of(cell_index)
+        for entry in timings:
+            if entry["cell"] == cell_index:
+                entry["failed"] = True
 
     t0 = time.perf_counter()
     notebook_export.execute_notebook(
         nb_path, cwd=data_path, timeout=timeout,
         on_cell_start=on_start, on_cell_executed=on_executed,
+        on_cell_error=on_error,
     )
-    return timings, round(time.perf_counter() - t0, 3)
+    return round(time.perf_counter() - t0, 3)
 
 
 # ── comparison ───────────────────────────────────────────────────────────────
@@ -334,7 +363,7 @@ def main(argv=None) -> int:
     }
 
     try:
-        nb_path = build_notebook(graph, work_dir)
+        nb_path, node_ids = build_notebook(graph, work_dir)
         print(f"Notebook: {nb_path}")
 
         if args.dry_run:
@@ -352,15 +381,25 @@ def main(argv=None) -> int:
 
         print("Executing in a clean kernel — this replays the whole analysis "
               "from the raw output…")
+        timings: list[dict] = []
+        cursor: dict = {}
         try:
-            timings, total = execute(nb_path, data_path, args.timeout)
+            total = execute(nb_path, data_path, args.timeout, timings, node_ids,
+                            cursor)
         except Exception as exc:           # noqa: BLE001 — reported, not raised
             report["execution"] = {
                 "status": "failed",
+                "failed_node": cursor.get("node"),
+                "failed_cell": cursor.get("cell"),
+                "cells_completed": len([c for c in timings if not c.get("failed")]),
+                "cells": timings,
                 "error": f"{type(exc).__name__}: {exc}",
             }
             args.out.write_text(json.dumps(report, indent=2, default=str))
-            print(f"\nFAILED to execute the notebook: {type(exc).__name__}: {exc}")
+            print(f"\nFAILED at node {cursor.get('node')!r} "
+                  f"(cell {cursor.get('cell')}), after "
+                  f"{report['execution']['cells_completed']} cell(s) ran:")
+            print(f"  {type(exc).__name__}: {str(exc).splitlines()[-1][:300]}")
             if cleanup is not None:
                 print("Re-run with --work-dir to keep the failing notebook.")
             print(f"Report: {args.out}")

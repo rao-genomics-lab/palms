@@ -303,6 +303,45 @@ def test_comment_only_nodes_are_the_ones_that_replay_as_no_ops():
     assert verify_notebook.comment_only_nodes(graph) == ["blank", "he:flip", "viewer:zoom"]
 
 
+def test_a_failing_replay_can_be_traced_back_to_the_node_that_broke(tmp_path):
+    """nbclient reports a cell index; the report has to name the recorded step.
+
+    Markdown label cells shift the numbering, so the mapping is built from the
+    derived cells rather than assumed to be the topo order.
+    """
+    graph = _graph_with([("preamble", "x = 1")])
+    graph.upsert("clustering:k", "y = 2", deps=["preamble"], label="Clustering: k")
+    _nb_path, node_ids = verify_notebook.build_notebook(graph, tmp_path)
+
+    cells = notebook_export.read_notebook(_nb_path)
+    assert len(node_ids) == len(cells)
+    # the markdown header and the code cell both map back to the same node
+    assert node_ids[cells.index(("markdown", "## Clustering: k"))] == "clustering:k"
+    assert node_ids[-1] is None, "the injected dump cell belongs to no node"
+
+
+def test_a_failing_cell_is_reported_against_its_node_and_not_counted_as_run(tmp_path):
+    """Regression: nbclient calls ``on_cell_executed`` for the failing cell too.
+
+    Taking that hook as "succeeded" named no node at all and counted the broken
+    cell among the ones that ran — which is how the first real run of this
+    script reported a `FileNotFoundError` with ``failed_node: None``.
+    """
+    graph = _graph_with([("preamble", "x = 1")])
+    graph.upsert("clustering:missing", 'open("no-such-file-xv-test")', deps=["preamble"])
+    nb_path, node_ids = verify_notebook.build_notebook(graph, tmp_path)
+
+    timings, cursor = [], {}
+    with pytest.raises(Exception):
+        verify_notebook.execute(nb_path, tmp_path, 120, timings, node_ids, cursor)
+
+    assert cursor["node"] == "clustering:missing"
+    assert [c for c in timings if c.get("failed")] == [
+        c for c in timings if c["node"] == "clustering:missing"
+    ]
+    assert [c["node"] for c in timings if not c.get("failed")] == ["preamble"]
+
+
 def test_the_report_flags_a_clustering_the_notebook_never_produced():
     """Silence is the failure mode that matters — a viewer result with no cell
     behind it looks like a pass unless it is named."""

@@ -116,12 +116,18 @@ def execute_notebook(
     timeout: int = 1800,
     on_cell_start: Optional[Callable] = None,
     on_cell_executed: Optional[Callable] = None,
+    on_cell_error: Optional[Callable] = None,
 ):
     """Execute the notebook at *path* in a fresh kernel and return it.
 
     Errors are *not* allowed: the first failing cell raises
     ``nbclient.exceptions.CellExecutionError``. A notebook that cannot run is a
     reproducibility failure, so it must not be swallowed into a stored traceback.
+
+    Note for callers wiring up the hooks: nbclient calls ``on_cell_executed``
+    for a *failing* cell as well, just before it raises — so treating that hook
+    as "this cell succeeded" mis-reports the one cell you most want named. Use
+    ``on_cell_error`` for the failure.
 
     The executed notebook (with outputs) is returned rather than written back;
     callers that want it on disk write it themselves.
@@ -141,6 +147,7 @@ def execute_notebook(
             resources={"metadata": {"path": str(run_dir)}},
             on_cell_start=on_cell_start,
             on_cell_executed=on_cell_executed,
+            on_cell_error=on_cell_error,
         )
         client.execute()
     return nb
