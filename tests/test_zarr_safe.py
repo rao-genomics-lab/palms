@@ -361,7 +361,7 @@ def test_refuses_to_move_a_dask_backed_element(tiny_sdata):
 
 def test_safe_group_update_commits(tiny_sdata):
     cache = Path(tiny_sdata.path)
-    with zarr_safe.safe_group_update(cache, "viewer_session") as group:
+    with zarr_safe.safe_group_update(cache, "viewer_session") as (group, _stage):
         group.attrs["hello"] = "world"
 
     import zarr
@@ -374,11 +374,11 @@ def test_safe_group_update_leaves_the_group_intact_on_failure(tiny_sdata):
     import zarr
 
     cache = Path(tiny_sdata.path)
-    with zarr_safe.safe_group_update(cache, "viewer_session") as group:
+    with zarr_safe.safe_group_update(cache, "viewer_session") as (group, _stage):
         group.attrs["keep"] = "original"
 
     with pytest.raises(RuntimeError, match="boom"):
-        with zarr_safe.safe_group_update(cache, "viewer_session") as group:
+        with zarr_safe.safe_group_update(cache, "viewer_session") as (group, _stage):
             group.attrs["keep"] = "clobbered"
             raise RuntimeError("boom")
 

@@ -27,11 +27,30 @@ Items now stored directly in sdata (via adata_persistence.py):
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import zarr
+
+from xenium_viewer.utils.zarr_safe import safe_group_update
+
+# Attrs written by other code paths and never recomputed here. Carrying every
+# unknown key forward by default (rather than an allow-list) is what keeps them
+# alive: the previous version rebuilt attrs from scratch, so each of these was
+# silently wiped on every clean exit and its migration re-ran at the next
+# launch — including two that themselves rewrote the whole cell table.
+_PRESERVED_ON_SAVE = (
+    "migrated_to_adata",
+    "migrated_landmarks_to_sdata",
+    "migrated_rank_genes_to_adata",
+    "migrated_deg_to_sdata",
+)
+
+# Keys deliberately dropped rather than carried forward. Empty today; kept as
+# the explicit place to retire a key, so the default stays "preserve".
+_TRANSIENT_ATTR_KEYS: frozenset[str] = frozenset()
 
 
 def _write_array(group, name, data):
@@ -39,6 +58,131 @@ def _write_array(group, name, data):
     arr = np.asarray(data, dtype=np.float64)
     ds = group.create_array(name, shape=arr.shape, dtype=arr.dtype)
     ds[:] = arr
+
+
+def _read_prev_attrs(zarr_path: Path) -> dict:
+    """Existing viewer_session attrs, or {} if absent/unreadable."""
+    try:
+        store = zarr.open_group(str(zarr_path), mode="r", use_consolidated=False)
+        if "viewer_session" not in store:
+            return {}
+        return dict(store["viewer_session"].attrs)
+    except Exception:
+        return {}
+
+
+def _json_safe(attrs: dict) -> tuple[dict, list[str]]:
+    """Split *attrs* into what zarr can store and what it cannot.
+
+    A single non-serialisable value used to abort the entire save — after the
+    group had already been destroyed. Dropping the offender and reporting it
+    keeps the rest of the session.
+    """
+    safe: dict = {}
+    dropped: list[str] = []
+    for key, value in attrs.items():
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            dropped.append(key)
+        else:
+            safe[key] = value
+    return safe, dropped
+
+
+def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
+                         prev_attrs: dict) -> dict:
+    """Assemble the session attrs. Pure — no I/O, so it can be tested directly.
+
+    Starts from *prev_attrs* so anything this function does not compute (the
+    migration markers, and any key a future version adds) survives. Computed
+    values always win, including explicit ``None`` — that is how clearing the
+    H&E image actually clears it.
+    """
+    attrs = {k: v for k, v in prev_attrs.items() if k not in _TRANSIENT_ATTR_KEYS}
+
+    # ── ROIs (stored in sdata.shapes['rois']; count kept for legacy reads) ──
+    attrs["roi_count"] = len(snapshot.get("roi_data", []))
+
+    # ── H&E registration ─────────────────────────────────────────────────
+    attrs["he_filename"] = he_state.get("he_filename")
+    attrs["he_path"] = he_state.get("he_path")
+    attrs["he_shape_yx"] = (
+        list(he_state["he_shape_yx"]) if he_state.get("he_shape_yx") else None
+    )
+    attrs["flip_v"] = bool(he_state.get("flip_v", False))
+    attrs["flip_h"] = bool(he_state.get("flip_h", False))
+
+    # ── ARMS overlay ─────────────────────────────────────────────────────
+    # These are also written in real time by tab_arms, so an absent value in
+    # arms_state means "unchanged", not "cleared" — hence the explicit fallback.
+    arms_state = snapshot.get("arms_state", {})
+    attrs["arms_he_filename"] = arms_state.get("he_filename") or prev_attrs.get("arms_he_filename")
+    attrs["arms_he_path"] = arms_state.get("he_path") or prev_attrs.get("arms_he_path")
+    attrs["arms_he_shape_yx"] = (
+        list(arms_state["he_shape_yx"]) if arms_state.get("he_shape_yx")
+        else prev_attrs.get("arms_he_shape_yx")
+    )
+    attrs["arms_flip_v"] = bool(arms_state.get("flip_v", prev_attrs.get("arms_flip_v", False)))
+    attrs["arms_flip_h"] = bool(arms_state.get("flip_h", prev_attrs.get("arms_flip_h", False)))
+    if arms_state.get("affine_3x3") is not None:
+        attrs["arms_affine_3x3"] = np.asarray(
+            arms_state["affine_3x3"], dtype=np.float64).tolist()
+    attrs["arms_geojson_path"] = arms_state.get("geojson_path") or prev_attrs.get("arms_geojson_path")
+    attrs["arms_csv_path"] = arms_state.get("csv_path") or prev_attrs.get("arms_csv_path")
+
+    # ── Cluster labels (per-clustering nested dict) ──────────────────────
+    cluster_labels = state.get("cluster_labels")
+    serialized = {}
+    if cluster_labels and isinstance(cluster_labels, dict):
+        for clust_name, label_dict in cluster_labels.items():
+            if isinstance(label_dict, dict):
+                serialized[clust_name] = {str(k): v for k, v in label_dict.items()}
+    attrs["cluster_labels"] = serialized or None
+
+    # ── Analysis DataFrames (all now persisted into sdata/adata) ─────────
+    attrs["has_rank_genes"] = state.get("rank_genes_df") is not None
+    attrs["rank_genes_groupby"] = state.get("rank_genes_groupby")
+    attrs["has_roi_deg"] = False
+    attrs["has_arms_tile_deg"] = False
+
+    attrs["marker_genes_json"] = state.get("marker_genes_json")
+    attrs["segmentation_source"] = state.get("segmentation_source", "xenium")
+
+    # ── Reproducible-code provenance graph ───────────────────────────────
+    prov = state.get("prov_graph")
+    try:
+        attrs["prov_graph"] = prov.to_list() if prov is not None and len(prov) else None
+    except Exception:
+        attrs["prov_graph"] = None
+
+    # ── External images / patch overlays UI residuals ────────────────────
+    ext_ui = snapshot.get("external_images_ui")
+    if ext_ui is None:
+        ext_ui = prev_attrs.get("external_images_ui")
+    attrs["external_images_ui"] = ext_ui or []
+
+    patch_ui = snapshot.get("patch_overlays_ui")
+    if patch_ui is None:
+        patch_ui = prev_attrs.get("patch_overlays_ui")
+    attrs["patch_overlays_ui"] = patch_ui or []
+
+    return attrs
+
+
+def _session_summary(attrs: dict) -> str:
+    parts = []
+    if attrs.get("roi_count"):
+        parts.append(f"{attrs['roi_count']} ROIs")
+    if attrs.get("he_filename"):
+        parts.append(f"H&E ({attrs['he_filename']})")
+    if attrs.get("cluster_labels"):
+        parts.append(f"{len(attrs['cluster_labels'])} cluster labels")
+    if attrs.get("has_rank_genes"):
+        parts.append("rank genes")
+    if attrs.get("arms_he_filename"):
+        parts.append(f"ARMS ({attrs['arms_he_filename']})")
+    return ", ".join(parts) if parts else "empty session"
 
 
 def save_session(
@@ -65,167 +209,47 @@ def save_session(
         'he_landmarks' (array|None).
     """
     try:
-        store = zarr.open_group(str(zarr_path), mode="r+", use_consolidated=False)
+        # Everything that can fail is done *before* the live group is touched:
+        # the previous version destroyed viewer_session with
+        # create_group(overwrite=True) and only wrote the replacement ~110 lines
+        # later, so one non-serialisable value left an empty group and a printed
+        # warning the user — who had already closed the window — never saw.
+        prev_attrs = _read_prev_attrs(zarr_path)
+        attrs = _build_session_attrs(state, he_state, snapshot, prev_attrs)
+        attrs, dropped = _json_safe(attrs)
+        if dropped:
+            print(f"Warning: session keys could not be serialized and were "
+                  f"dropped: {', '.join(sorted(dropped))}")
 
-        # Clean up parquet files from previous session (not tracked by zarr)
-        session_dir = Path(zarr_path) / "viewer_session"
-        if session_dir.exists():
-            for pq in session_dir.glob("*.parquet"):
-                pq.unlink()
-            # Clean up custom clustering subdirectory
-            clust_dir = session_dir / "clusterings"
-            if clust_dir.exists():
-                for pq in clust_dir.glob("*.parquet"):
+        arms_state = snapshot.get("arms_state", {})
+        with safe_group_update(Path(zarr_path), "viewer_session") as (session, stage):
+            # Parquet sidecars from previous sessions. Removed from *staging*,
+            # so a failure below leaves the originals in place.
+            for pattern in ("*.parquet", "clusterings/*.parquet"):
+                for pq in stage.glob(pattern):
                     pq.unlink()
 
-        # Preserve real-time-saved ARMS attrs before overwrite wipes them
-        _prev_arms_attrs = {}
-        _prev_ext_ui = None
-        _prev_patch_ui = None
-        if "viewer_session" in store:
-            prev = store["viewer_session"].attrs
-            for key in ("arms_he_filename", "arms_he_path", "arms_he_shape_yx",
-                        "arms_affine_3x3", "arms_flip_v", "arms_flip_h",
-                        "arms_geojson_path", "arms_csv_path"):
-                if key in prev and prev[key] is not None:
-                    _prev_arms_attrs[key] = prev[key]
-            if "external_images_ui" in prev:
-                _prev_ext_ui = prev["external_images_ui"]
-            if "patch_overlays_ui" in prev:
-                _prev_patch_ui = prev["patch_overlays_ui"]
+            # The affine subgroups are fully rewritten each save, so clear them
+            # rather than merging into the seeded copy — otherwise a cleared
+            # registration would leave its old affine behind.
+            for sub in ("he", "arms"):
+                if sub in session:
+                    del session[sub]
 
-        session = store.create_group("viewer_session", overwrite=True)
-        attrs = {}
+            he_group = session.create_group("he")
+            if he_state.get("affine_3x3") is not None:
+                _write_array(he_group, "affine_3x3", he_state["affine_3x3"])
+            if he_state.get("coarse_affine") is not None:
+                _write_array(he_group, "coarse_affine", he_state["coarse_affine"])
 
-        # ── ROIs ──────────────────────────────────────────────────────────
-        # ROIs are now persisted to sdata.shapes['rois'] by save_rois_to_sdata()
-        # called from 02_xenium_viewer.py at exit. Keep roi_count attr for
-        # legacy reads and to avoid breaking old zarr session structures.
-        roi_data = snapshot.get("roi_data", [])
-        attrs["roi_count"] = len(roi_data)
+            arms_group = session.create_group("arms")
+            if arms_state.get("affine_3x3") is not None:
+                _write_array(arms_group, "affine_3x3", arms_state["affine_3x3"])
 
-        # ── H&E registration ─────────────────────────────────────────────
-        he_group = session.create_group("he")
+            # Landmarks live in sdata.shapes now (save_landmarks_to_sdata).
+            session.attrs.update(attrs)
 
-        if he_state.get("affine_3x3") is not None:
-            _write_array(he_group, "affine_3x3", he_state["affine_3x3"])
-
-        if he_state.get("coarse_affine") is not None:
-            _write_array(he_group, "coarse_affine", he_state["coarse_affine"])
-
-        # Landmarks are now saved to sdata.shapes via save_landmarks_to_sdata()
-        # (called from tab_he_registration on register/clear events).
-        # No longer written as zarr arrays here.
-
-        attrs["he_filename"] = he_state.get("he_filename")
-        attrs["he_path"] = he_state.get("he_path")
-        attrs["he_shape_yx"] = (
-            list(he_state["he_shape_yx"]) if he_state.get("he_shape_yx") else None
-        )
-        attrs["flip_v"] = bool(he_state.get("flip_v", False))
-        attrs["flip_h"] = bool(he_state.get("flip_h", False))
-
-        # ── ARMS overlay ─────────────────────────────────────────────────
-        arms_state = snapshot.get("arms_state", {})
-        arms_group = session.create_group("arms")
-
-        if arms_state.get("affine_3x3") is not None:
-            _write_array(arms_group, "affine_3x3", arms_state["affine_3x3"])
-
-        # ARMS landmarks are now saved to sdata.shapes via save_landmarks_to_sdata()
-        # (called from tab_arms on register/clear events).
-        # No longer written as zarr arrays here.
-
-        attrs["arms_he_filename"] = arms_state.get("he_filename") or _prev_arms_attrs.get("arms_he_filename")
-        attrs["arms_he_path"] = arms_state.get("he_path") or _prev_arms_attrs.get("arms_he_path")
-        attrs["arms_he_shape_yx"] = (
-            list(arms_state["he_shape_yx"]) if arms_state.get("he_shape_yx")
-            else _prev_arms_attrs.get("arms_he_shape_yx")
-        )
-        attrs["arms_flip_v"] = bool(arms_state.get("flip_v", _prev_arms_attrs.get("arms_flip_v", False)))
-        attrs["arms_flip_h"] = bool(arms_state.get("flip_h", _prev_arms_attrs.get("arms_flip_h", False)))
-        if arms_state.get("affine_3x3") is not None:
-            attrs["arms_affine_3x3"] = np.asarray(arms_state["affine_3x3"], dtype=np.float64).tolist()
-        elif "arms_affine_3x3" in _prev_arms_attrs:
-            attrs["arms_affine_3x3"] = _prev_arms_attrs["arms_affine_3x3"]
-        attrs["arms_geojson_path"] = arms_state.get("geojson_path") or _prev_arms_attrs.get("arms_geojson_path")
-        attrs["arms_csv_path"] = arms_state.get("csv_path") or _prev_arms_attrs.get("arms_csv_path")
-
-        # ── Cluster labels (per-clustering nested dict) ────────────────────
-        cluster_labels = state.get("cluster_labels")
-        if cluster_labels and isinstance(cluster_labels, dict):
-            # Nested dict: {clustering_name: {cluster_id: label}}
-            serialized = {}
-            for clust_name, label_dict in cluster_labels.items():
-                if isinstance(label_dict, dict):
-                    serialized[clust_name] = {str(k): v for k, v in label_dict.items()}
-            attrs["cluster_labels"] = serialized if serialized else None
-        else:
-            attrs["cluster_labels"] = None
-
-        # (Custom clusterings are now saved to adata.obs via adata_persistence)
-
-        # ── Analysis DataFrames ───────────────────────────────────────────
-        session_dir = Path(zarr_path) / "viewer_session"
-
-        # rank_genes — now persisted to adata.uns + sdata.tables['adata_norm']
-        # by save_rank_genes_to_adata(). Keep attrs for legacy reads.
-        attrs["has_rank_genes"] = state.get("rank_genes_df") is not None
-        attrs["rank_genes_groupby"] = state.get("rank_genes_groupby")
-
-        # roi_deg and arms_tile_deg are now saved immediately to sdata
-        # via save_roi_deg_to_sdata / save_arms_tile_deg_to_sdata (called from tabs).
-        attrs["has_roi_deg"] = False
-        attrs["has_arms_tile_deg"] = False
-
-        # (ligrec, nhood, co-occurrence are now saved to adata.uns via adata_persistence)
-
-        # ── Marker genes dict ─────────────────────────────────────────────
-        attrs["marker_genes_json"] = state.get("marker_genes_json")
-
-        # ── Segmentation source ───────────────────────────────────────────
-        attrs["segmentation_source"] = state.get("segmentation_source", "xenium")
-
-        # ── Reproducible-code provenance graph ────────────────────────────
-        # Persisted so the analysis notebook accumulates across sessions.
-        prov = state.get("prov_graph")
-        try:
-            attrs["prov_graph"] = prov.to_list() if prov is not None and len(prov) else None
-        except Exception:
-            attrs["prov_graph"] = None
-
-        # ── External images / patch overlays UI residuals ─────────────────
-        ext_ui = snapshot.get("external_images_ui")
-        if ext_ui is None:
-            ext_ui = _prev_ext_ui
-        attrs["external_images_ui"] = ext_ui or []
-
-        patch_ui = snapshot.get("patch_overlays_ui")
-        if patch_ui is None:
-            patch_ui = _prev_patch_ui
-        attrs["patch_overlays_ui"] = patch_ui or []
-
-        # Write all attrs at once
-        session.attrs.update(attrs)
-
-        # Summary
-        parts = []
-        if attrs["roi_count"] > 0:
-            parts.append(f"{attrs['roi_count']} ROIs")
-        if attrs.get("he_filename"):
-            parts.append(f"H&E ({attrs['he_filename']})")
-        if attrs.get("cluster_labels"):
-            parts.append(f"{len(attrs['cluster_labels'])} cluster labels")
-        if attrs["has_rank_genes"]:
-            parts.append("rank genes")
-        if attrs["has_roi_deg"]:
-            parts.append("ROI DEG")
-        if attrs.get("has_arms_tile_deg"):
-            parts.append("ARMS Tile DEG")
-        if attrs.get("arms_he_filename"):
-            parts.append(f"ARMS ({attrs['arms_he_filename']})")
-        summary = ", ".join(parts) if parts else "empty session"
-        print(f"Session saved: {summary}")
+        print(f"Session saved: {_session_summary(attrs)}")
 
     except Exception as e:
         from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog

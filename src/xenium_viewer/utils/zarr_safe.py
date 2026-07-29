@@ -488,8 +488,10 @@ def safe_group_update(cache_path: Path, group_name: str) -> Iterator[Any]:
     destroyed the group with ``create_group(overwrite=True)`` and only wrote the
     replacement ~110 lines later.
 
-    Yields a zarr group backed by staging, seeded from the current contents so
-    callers that update only part of it keep working. On a clean exit the
+    Yields ``(group, staging_path)``. The group is backed by staging, seeded
+    from the current contents so callers that update only part of it keep
+    working; the path is there for callers that need to touch files zarr does
+    not manage (``viewer_session`` holds parquet sidecars). On a clean exit the
     staging group is swapped in; on an exception the live group is untouched.
     """
     import zarr
@@ -510,7 +512,7 @@ def safe_group_update(cache_path: Path, group_name: str) -> Iterator[Any]:
 
     try:
         group = zarr.open_group(str(stage), mode="a", use_consolidated=False)
-        yield group
+        yield group, stage
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
         raise
