@@ -34,7 +34,35 @@ adata_norm.obs[$groupby] = adata.obs[$groupby].values
 sc.tl.rank_genes_groups(
     adata_norm, groupby=$groupby, method=$method, n_genes=$n_genes,
 )
-rank_df = sc.get.rank_genes_groups_df(adata_norm, group=None)"""
+rank_df = sc.get.rank_genes_groups_df(adata_norm, group=None)
+# Keyed as well as bound. A second ranking rebinds ``rank_df``, and scanpy
+# overwrites ``uns['rank_genes_groups']`` in place, so without this the notebook
+# ends holding only the last clustering's markers — measured on a real session,
+# which ranked two clusterings and could show the genes for one of them.
+rank_results = globals().get('rank_results', {})
+rank_results[$groupby] = rank_df"""
+
+
+def dotplot_code(groupby: str, n_genes: int, dendrogram: bool, fmt: str) -> str:
+    """The recorded dotplot cell.
+
+    ``adata_norm``, not ``adata``: the ranked genes live on the normalised copy
+    (see ``_RANK_GENES_TEMPLATE``). Recorded against ``adata`` this cell died on
+    replay with ``KeyError: 'rank_genes_groups'`` — found by
+    ``scripts/verify_notebook.py``, not by reading it. Module-level so a test can
+    execute the exact string the viewer records.
+    """
+    return (
+        f"\n# Dotplot (n_genes={n_genes}, dendrogram={dendrogram})\n"
+        + (f"sc.tl.dendrogram(adata_norm, groupby=\"{groupby}\")\n"
+           if dendrogram else "")
+        + f"dotplot = sc.pl.rank_genes_groups_dotplot(\n"
+        f"    adata_norm, groupby=\"{groupby}\", n_genes={n_genes},\n"
+        f"    dendrogram={dendrogram}, show=False, return_fig=True,\n"
+        f")\n"
+        f"dotplot.savefig(\"dotplot.{fmt}\", dpi=300, bbox_inches='tight')"
+    )
+
 
 _APP_DIR = Path(__file__).resolve().parent.parent
 _REF_DIR = _APP_DIR / "reference_datasets"
@@ -247,11 +275,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _dp_fmt = ctx.state.get("plot_format", "svg")
         ctx.record_node(
             f"plot:dotplot:{_dp_groupby}",
-            f"\n# Dotplot (n_genes={_dp_n}, dendrogram={_dp_dendro})\n"
-            + (f"sc.tl.dendrogram(adata, groupby=\"{_dp_groupby}\")\n" if _dp_dendro else "")
-            + f"sc.pl.rank_genes_groups_dotplot(adata, n_genes={_dp_n}, "
-            f"dendrogram={_dp_dendro})\nfig = plt.gcf()\n"
-            f"fig.savefig(\"dotplot.{_dp_fmt}\", dpi=300, bbox_inches='tight')",
+            dotplot_code(_dp_groupby, _dp_n, _dp_dendro, _dp_fmt),
             deps=[f"rank_genes:{_dp_groupby}"],
             kind=TERMINAL,
             label="Rank-genes dotplot",
@@ -292,7 +316,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.record_node(
             f"plot:rank_panel:{groupby}",
             f"\n# Rank genes panel plot (n_genes={_rp_n})\n"
-            f"sc.pl.rank_genes_groups(adata, n_genes={_rp_n})",
+            f"sc.pl.rank_genes_groups(adata_norm, n_genes={_rp_n})",
             deps=[f"rank_genes:{groupby}"],
             kind=TERMINAL,
             label="Rank-genes panel plot",
@@ -339,9 +363,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
             f"volcano_dir = Path(\"{os.path.basename(output_dir)}\"); "
             f"volcano_dir.mkdir(parents=True, exist_ok=True)\n"
-            f"_groups = [g for g in adata.obs[\"{groupby}\"].cat.categories if str(g) != '-1']\n"
+            f"_groups = [g for g in adata_norm.obs[\"{groupby}\"].cat.categories if str(g) != '-1']\n"
             f"for _a, _b in itertools.combinations(_groups, 2):\n"
-            f"    _df = run_pairwise_deg(adata, \"{groupby}\", str(_a), str(_b), method=\"{method}\")\n"
+            f"    _df = run_pairwise_deg(adata_norm, \"{groupby}\", str(_a), str(_b), method=\"{method}\")\n"
             f"    _vfig = make_volcano_plot(_df, str(_a), str(_b))\n"
             f"    _vfig.savefig(volcano_dir / f'volcano_{{_a}}_vs_{{_b}}.png', dpi=300)\n"
             f"    plt.close(_vfig)",

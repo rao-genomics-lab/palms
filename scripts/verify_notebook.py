@@ -66,7 +66,16 @@ _verify_out = _Path({out!r})
 # Everything is compared as strings, and an all-string frame is the one thing
 # parquet will always accept out of a real obs table.
 adata.obs.astype(str).to_parquet(_verify_out / "replay_obs.parquet")
-if "rank_df" in globals():
+if "rank_results" in globals() and rank_results:
+    # One frame per clustering ranked, tagged — the notebook rebinds rank_df on
+    # every ranking, so taking that name alone compared whichever ran last
+    # against whichever the viewer happened to store.
+    import pandas as _pd
+    _pd.concat(
+        [_df.assign(groupby=_key) for _key, _df in rank_results.items()],
+        ignore_index=True,
+    ).to_parquet(_verify_out / "replay_rank.parquet")
+elif "rank_df" in globals():
     rank_df.to_parquet(_verify_out / "replay_rank.parquet")
 if "nhood_zscore" in globals():
     _np.save(_verify_out / "replay_nhood.npy", _np.asarray(nhood_zscore))
@@ -82,8 +91,14 @@ def cache_path(data_path: Path, explicit: Path | None = None) -> Path:
     return path
 
 
-def read_graph(data_path: Path, cache: Path) -> tuple[ProvGraph, str]:
+def read_graph(data_path: Path, cache: Path,
+               explicit: Path | None = None) -> tuple[ProvGraph, str]:
     """Load the provenance graph, sidecar first, session attr second.
+
+    *explicit* (``--graph``) overrides both. It exists so a graph can be
+    replayed against its dataset without going through the viewer — including
+    one whose recorded cells have been corrected since the session ran, which
+    is otherwise unmeasurable until the user happens to repeat the action.
 
     The viewer rewrites ``viewer_cache/prov_graph.json`` on every recorded step;
     the zarr attr is only written on a dataset switch or at exit. Reading the
@@ -91,6 +106,9 @@ def read_graph(data_path: Path, cache: Path) -> tuple[ProvGraph, str]:
     same store — the replay then "failed" to produce clusterings the recorded
     session never contained. Returns the graph and which source it came from.
     """
+    if explicit is not None:
+        return ProvGraph.from_list(list(json.loads(explicit.read_text()))), str(explicit)
+
     sidecar = data_path / SIDECAR_DIRNAME / PROV_GRAPH_SIDECAR
     if sidecar.exists():
         try:
@@ -269,6 +287,10 @@ def _align(viewer_obs, replay_obs):
     return left.loc[shared], right.loc[shared], len(shared)
 
 
+# How a missing label renders once cast to str, across pandas/anndata versions.
+_NULL_STRINGS = {"nan", "<NA>", "None", "NaN", "NA", ""}
+
+
 def compare_clusterings(viewer_obs, replay_obs) -> list[dict]:
     from sklearn.metrics import adjusted_rand_score
 
@@ -285,12 +307,24 @@ def compare_clusterings(viewer_obs, replay_obs) -> list[dict]:
                         "did not produce it",
             })
             continue
-        viewer_labels = left[column].astype(str)
-        replay_labels = right[key].astype(str)
-        mask = (viewer_labels != "nan") & (replay_labels != "nan")
-        viewer_labels, replay_labels = viewer_labels[mask], replay_labels[mask]
+        # Unlabelled cells are legitimate — a CNV clustering computed on a
+        # subset is reindexed onto the whole table — so compare where both
+        # sides have a label and report the coverage rather than assuming it.
+        # Mask on the *values*, not on ``astype(str)``: under pandas 3 a null
+        # in a categorical/Arrow column renders as ``<NA>``, not ``nan``, and
+        # the old string test let it through into sklearn ("Input contains NaN").
+        viewer_raw, replay_raw = left[column], right[key]
+        mask = (viewer_raw.notna() & replay_raw.notna()).to_numpy()
+        viewer_labels = viewer_raw[mask].astype(str)
+        replay_labels = replay_raw[mask].astype(str)
+        keep = ~viewer_labels.isin(_NULL_STRINGS) & ~replay_labels.isin(_NULL_STRINGS)
+        viewer_labels, replay_labels = viewer_labels[keep], replay_labels[keep]
         if len(viewer_labels) == 0:
-            results.append({"clustering": key, "status": "empty"})
+            results.append({
+                "clustering": key, "status": "empty",
+                "note": "no cell carries a label on both sides",
+                "n_cells_shared": int(n_shared),
+            })
             continue
         ari = float(adjusted_rand_score(viewer_labels, replay_labels))
         results.append({
@@ -300,18 +334,45 @@ def compare_clusterings(viewer_obs, replay_obs) -> list[dict]:
             "identical_labels": bool((viewer_labels.values == replay_labels.values).all()),
             "n_cells_compared": int(len(viewer_labels)),
             "n_cells_shared": int(n_shared),
+            "n_cells_unlabelled_viewer": int(viewer_raw.isna().sum()),
+            "n_cells_unlabelled_replay": int(replay_raw.isna().sum()),
             "n_clusters_viewer": int(viewer_labels.nunique()),
             "n_clusters_replay": int(replay_labels.nunique()),
         })
     return results
 
 
-def compare_rank_genes(viewer_names: dict, replay_rank, top_n: int) -> dict:
-    """Top-N gene name agreement per group."""
+def compare_rank_genes(viewer_names: dict, replay_rank, top_n: int,
+                       groupby: str | None = None) -> dict:
+    """Top-N gene name agreement per group, for the clustering the viewer stored.
+
+    *groupby* selects the replayed ranking to compare against. The viewer keeps
+    exactly one ``uns['rank_genes_groups']`` — scanpy overwrites it — so a
+    session that ranked two clusterings stores one and the notebook binds the
+    other last. Comparing those two reported every group as "diverged" when
+    nothing had diverged: the genes were right, the group numbering belonged to
+    a different clustering. Selecting by name is what makes the comparison mean
+    anything.
+    """
     if not viewer_names:
         return {"status": "no_viewer_result"}
     if replay_rank is None:
         return {"status": "not_in_replay"}
+
+    if "groupby" in getattr(replay_rank, "columns", []):
+        available = sorted(replay_rank["groupby"].astype(str).unique())
+        if groupby is None:
+            if len(available) > 1:
+                return {"status": "ambiguous_groupby", "replay_groupbys": available,
+                        "note": "the notebook ranked several clusterings and the "
+                                "viewer's stored result names none of them"}
+        elif str(groupby) not in available:
+            return {"status": "different_groupby", "viewer_groupby": str(groupby),
+                    "replay_groupbys": available,
+                    "note": "the notebook never ranked the clustering the viewer "
+                            "stored markers for"}
+        else:
+            replay_rank = replay_rank[replay_rank["groupby"].astype(str) == str(groupby)]
 
     replayed = {
         str(group): list(sub.head(top_n)["names"])
@@ -361,6 +422,9 @@ def main(argv=None) -> int:
                         help="per-cell execution timeout in seconds")
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N,
                         help="how many ranked genes per group to compare")
+    parser.add_argument("--graph", type=Path, default=None,
+                        help="replay this prov_graph.json instead of the "
+                             "dataset's own (sidecar / session attr)")
     parser.add_argument("--dry-run", action="store_true",
                         help="build the notebook and list the comment-only nodes, "
                              "but do not execute it (seconds instead of an hour)")
@@ -368,7 +432,7 @@ def main(argv=None) -> int:
 
     data_path = args.data_path.resolve()
     cache = cache_path(data_path, args.cache)
-    graph, graph_source = read_graph(data_path, args.cache or cache)
+    graph, graph_source = read_graph(data_path, args.cache or cache, args.graph)
     skipped = comment_only_nodes(graph)
     notes = note_nodes(graph)
 
@@ -454,7 +518,8 @@ def main(argv=None) -> int:
         viewer_names, groupby = read_viewer_rank_genes(cache)
 
         report["clusterings"] = compare_clusterings(viewer_obs, replay_obs)
-        report["rank_genes"] = compare_rank_genes(viewer_names, replay_rank, args.top_n)
+        report["rank_genes"] = compare_rank_genes(viewer_names, replay_rank,
+                                                  args.top_n, groupby)
         report["rank_genes"]["groupby"] = groupby
     finally:
         if cleanup is not None:

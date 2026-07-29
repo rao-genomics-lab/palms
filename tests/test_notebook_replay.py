@@ -445,5 +445,86 @@ def test_top_n_gene_agreement_is_order_sensitive():
     assert reordered["groups"]["0"]["n_shared"] == 3
 
 
+# ── the two ways the comparison itself was wrong ─────────────────────────────
+
+def test_cells_without_a_label_are_excluded_rather_than_crashing():
+    """A CNV clustering is computed on a subset and reindexed onto the table.
+
+    The mask tested the *rendered* label against "nan"; under pandas 3 a null in
+    a categorical renders as `<NA>`, so it passed straight through and sklearn
+    died with "Input contains NaN" — after a ten-minute replay, at the last step.
+    """
+    viewer_obs = pd.DataFrame({
+        "clustering_cnv": pd.Categorical(["0", "1", None, "0", None]),
+    })
+    replay_obs = pd.DataFrame({"cnv": pd.Categorical(["0", "1", None, "0", None])})
+
+    (entry,) = verify_notebook.compare_clusterings(viewer_obs, replay_obs)
+
+    assert entry["status"] == "ok"
+    assert entry["ari"] == 1.0
+    assert entry["n_cells_compared"] == 3        # the labelled ones
+    assert entry["n_cells_shared"] == 5
+    assert entry["n_cells_unlabelled_viewer"] == 2
+
+
+def test_a_clustering_labelled_on_neither_side_is_reported_not_scored():
+    viewer_obs = pd.DataFrame({"clustering_k": [None, None]})
+    replay_obs = pd.DataFrame({"k": [None, None]})
+
+    (entry,) = verify_notebook.compare_clusterings(viewer_obs, replay_obs)
+    assert entry["status"] == "empty"
+
+
+def test_ranked_genes_are_compared_against_the_clustering_they_belong_to():
+    """The viewer stores one `uns['rank_genes_groups']`; scanpy overwrites it.
+
+    A session that ranked two clusterings stores one and the notebook binds the
+    other last, so comparing them reported every group as diverged when nothing
+    had: right genes, group numbering from a different clustering. The replayed
+    frame now carries a `groupby` column and the comparison selects on it.
+    """
+    viewer_names = {"0": ["A", "B"], "1": ["C", "D"]}
+    replay = pd.DataFrame({
+        "group": ["0", "0", "1", "1", "0", "0", "1", "1"],
+        "names": ["A", "B", "C", "D", "Z", "Y", "X", "W"],
+        "groupby": ["leiden_r1.0"] * 4 + ["leiden_r0.5"] * 4,
+    })
+
+    matched = verify_notebook.compare_rank_genes(viewer_names, replay, 2,
+                                                 "leiden_r1.0")
+    assert matched["status"] == "ok"
+
+    other = verify_notebook.compare_rank_genes(viewer_names, replay, 2,
+                                               "leiden_r0.5")
+    assert other["status"] == "diverged"
+
+
+def test_a_clustering_the_notebook_never_ranked_is_named_as_such():
+    """Not "diverged" — nothing diverged; the comparison had nothing to compare."""
+    replay = pd.DataFrame({
+        "group": ["0"], "names": ["A"], "groupby": ["leiden_r0.5"],
+    })
+    result = verify_notebook.compare_rank_genes({"0": ["A"]}, replay, 1,
+                                                "leiden_r1.0")
+    assert result["status"] == "different_groupby"
+    assert result["replay_groupbys"] == ["leiden_r0.5"]
+
+
+def test_every_ranking_survives_into_the_notebook():
+    """`rank_df` is rebound by the next ranking; `rank_results` keeps them all.
+
+    Without this the notebook ends holding markers for whichever clustering was
+    ranked last, and the others are simply gone from the replayed state.
+    """
+    namespace = {"rank_df": "first", "rank_results": {"a": "first"}}
+    exec(compile("rank_results = globals().get('rank_results', {})\n"
+                 "rank_results['b'] = 'second'", "<t>", "exec"), namespace)
+
+    assert namespace["rank_results"] == {"a": "first", "b": "second"}
+    assert "rank_results = globals().get('rank_results', {})" in _RANK_GENES_TEMPLATE
+    assert "rank_results[$groupby] = rank_df" in _RANK_GENES_TEMPLATE
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

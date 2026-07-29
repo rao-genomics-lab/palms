@@ -2,6 +2,48 @@
 
 ## [Unreleased] — 2026-07-29
 
+### Fixed (found by replaying a real session)
+- **The exported notebook could not get past the dotplot.** `plot:dotplot:<key>`
+  recorded `sc.pl.rank_genes_groups_dotplot(adata, …)`, but the rank-genes step writes
+  its result to `adata_norm`; the replay died at cell 29 of 39 with
+  `KeyError: 'rank_genes_groups'`. `plot:rank_panel:<key>` had the same bug, and
+  `plot:volcano:<key>` had its silent form — `run_pairwise_deg(adata, …)` runs happily
+  against **raw counts** and returns different genes. All three were written when the
+  viewer normalised `adata` in place and were never updated when `normalize` moved to
+  binding `adata_norm` — exactly the drift `run_step` prevents for migrated steps.
+  Guarded twice now: statically, by a check that no recorded cell passes `adata` to a
+  rank-genes consumer, and by executing the recorded dotplot string against a ranked
+  `adata_norm`.
+
+- **The notebook kept only the last ranking.** Each rank-genes cell rebinds `rank_df`,
+  and scanpy overwrites `uns['rank_genes_groups']` in place, so a session that ranked
+  two clusterings exported markers for one of them. `_RANK_GENES_TEMPLATE` now also
+  writes `rank_results[<groupby>]`, and the verification dumps one tagged frame per
+  clustering.
+
+- **The verification's own comparison was wrong in two ways**, both of which cost a
+  ten-minute replay to discover:
+  - It compared the viewer's stored ranking against whichever `rank_df` the notebook
+    bound last. On a session with two clusterings that meant igraph's 31 groups against
+    leidenalg's 28 — reported as every group "diverged" when nothing had: right genes,
+    group numbering from a different clustering. `compare_rank_genes` now selects the
+    replayed ranking by name and reports `different_groupby` when the notebook never
+    ranked what the viewer stored.
+  - It filtered unlabelled cells by comparing the *rendered* label to `"nan"`. Under
+    pandas 3 a null in a categorical renders `<NA>`, so it passed through into sklearn
+    (`ValueError: Input contains NaN`) — hit on a CNV clustering computed on a subset
+    and reindexed onto the whole table. Now masked on `.notna()`, with the labelled and
+    unlabelled counts in the report so partial coverage reads as what it is.
+
+  Also: `--graph PATH` replays a given `prov_graph.json` against a dataset, which is
+  what makes a corrected recording measurable before the user happens to repeat the
+  action that recorded it.
+
+  Result on the reference dataset (19 nodes, 63,355 cells, 327.8 s): ARI **1.0** with
+  identical labels on all three clusterings — `leiden_igraph_r1.0` (31), 
+  `leiden_leidenalg_r1.0` (28), `cnv_leiden_res0.2` (27 over 12,157 labelled cells) —
+  and top-10 ranked genes identical in all 31 groups.
+
 ### Added
 - **The notebook now records what it was run with.** A replay only reproduces a result
   against the same software, and the recorded code named the functions but never the

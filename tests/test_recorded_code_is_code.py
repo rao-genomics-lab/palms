@@ -21,6 +21,7 @@ Pure ast; no Qt, no imports of the tabs.
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -121,6 +122,42 @@ def test_declared_notes_really_are_comment_only():
         if kind == "NOTE" and code is not None and not _comment_only(code)
     ]
     assert offenders == []
+
+
+# ── the ranked genes live on adata_norm, and only there ──────────────────────
+
+# Everything that reads ``uns['rank_genes_groups']`` back out. The rank-genes
+# step writes it to the *normalised copy*; a cell that names ``adata`` instead
+# either raises KeyError on replay or — worse — silently recomputes on raw
+# counts. Both happened, in three terminals of tab_gene_analysis.
+_RANK_GENES_CONSUMERS = re.compile(
+    r"\b(sc\.tl\.dendrogram|sc\.pl\.rank_genes_groups\w*|"
+    r"sc\.get\.rank_genes_groups_df|run_pairwise_deg)\(\s*adata\b(?!_)"
+)
+
+
+def test_no_recorded_plot_reads_the_ranked_genes_off_raw_adata():
+    """Regression, found by replaying a real session rather than by reading.
+
+    `plot:dotplot:<key>` recorded `sc.pl.rank_genes_groups_dotplot(adata, ...)`
+    and died at cell 29 of 39 with `KeyError: 'rank_genes_groups'`. The panel
+    plot had the same bug; the volcano cell had its silent form — it *runs*,
+    against unnormalised counts, and produces different genes.
+
+    These terminals were written when the viewer normalised `adata` in place,
+    and were not updated when `normalize` moved to binding `adata_norm`. That
+    is precisely the drift `run_step` prevents for migrated steps — these are
+    the ones still on `record_node`.
+    """
+    offenders = [
+        f"{module}:{lineno} {node_id} → {_RANK_GENES_CONSUMERS.search(code).group(0)}"
+        for module, lineno, node_id, code, _kind in _record_node_calls()
+        if code is not None and _RANK_GENES_CONSUMERS.search(code)
+    ]
+    assert offenders == [], (
+        "the ranked genes are on adata_norm; these recorded cells read them "
+        "from adata: " + ", ".join(offenders)
+    )
 
 
 def test_the_known_prose_list_is_still_accurate():
