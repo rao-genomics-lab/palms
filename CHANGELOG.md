@@ -2,6 +2,21 @@
 
 ## [Unreleased] — 2026-07-30
 
+### Fixed
+- **CI could never run a Qt test: `pytest` aborted with a core dump.** The workflow set
+  `MPLBACKEND` but not `QT_QPA_PLATFORM`, and on a runner with no display Qt does not fail
+  when it cannot load the `xcb` platform plugin — it calls `abort()`. The whole run died at
+  the first use of the `qapp` fixture with no test name and no traceback, only
+  `Aborted (core dumped)`. Present since `test_tab_cache.py` was added and invisible
+  because CI runs on PRs and pushes to `main`, and this work has been on feature branches.
+
+  `tests/conftest.py` now chooses `offscreen` (and `Agg`) itself whenever there is no
+  `DISPLAY`, so bare `pytest` works headless for CI, ssh sessions and containers alike; an
+  explicit `QT_QPA_PLATFORM` or a real display still wins. `ci.yml` also sets it, to keep
+  the runner honest about what it needs. The documented
+  `env -u DISPLAY QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg` incantation is no longer
+  required — a requirement that has to be remembered by hand is one CI will forget.
+
 ### Added
 - **Tools → Dataset: see what the dataset holds on disk, and delete the parts the
   viewer created.** A dataset accumulates viewer data in four places nobody can see —

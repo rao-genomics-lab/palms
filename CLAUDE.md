@@ -42,9 +42,14 @@ scanpy/squidpy in the kernel — which is why the fixture is module-scoped. Its 
 substitution is the `preamble` node (h5ad instead of `xenium(data_path)`, since CI has no
 dataset); a test asserts that stays the only one. See "Verifying the claim" below.
 
-Run with `pytest` from the repo root (`[tool.pytest.ini_options]` sets
-`pythonpath = ["src"]`, so no install is needed). Tests that touch Qt need
-`env -u DISPLAY QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg`. GitHub Actions
+Run with plain `pytest` from the repo root (`[tool.pytest.ini_options]` sets
+`pythonpath = ["src"]`, so no install is needed). **No environment variables are
+needed** — `tests/conftest.py` selects `QT_QPA_PLATFORM=offscreen` and
+`MPLBACKEND=Agg` itself when there is no `DISPLAY`, because Qt does not *fail*
+without a platform plugin, it aborts the process: the symptom is
+`Aborted (core dumped)` with no test name, which is what CI reported for months.
+An explicit `QT_QPA_PLATFORM` or a real display still wins, so a desktop run is
+unchanged. GitHub Actions
 (`.github/workflows/ci.yml`) runs the suite in the full conda env plus a fast `ruff`
 error-only lint gate (`--select E9,F63,F7,F82`) on every push/PR. The napari GUI proper
 and the spatial-analysis tabs still have no automated coverage — that testing remains

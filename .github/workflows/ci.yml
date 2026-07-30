@@ -29,6 +29,11 @@ jobs:
       - name: Run test suite
         env:
           MPLBACKEND: Agg            # headless matplotlib; no X server needed
+          QT_QPA_PLATFORM: offscreen # Qt *aborts* without a platform plugin,
+                                     # so an unset value cost a core dump with
+                                     # no test name. tests/conftest.py sets this
+                                     # too; stated here so the runner is honest
+                                     # about what it needs.
         run: pytest
 
   lint:

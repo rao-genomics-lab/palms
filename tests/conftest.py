@@ -6,6 +6,7 @@ can be exercised in CI rather than only by hand on a 30 GB cache.
 """
 from __future__ import annotations
 
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -13,6 +14,17 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# Qt picks its platform plugin when QApplication is constructed, and on a
+# headless box the default (xcb) does not fail — it *aborts the process*. CI
+# reported nothing but "Aborted (core dumped)" with no test name, and a bare
+# `pytest` over ssh did the same. Choosing offscreen up front turns that into a
+# working run; an explicit QT_QPA_PLATFORM or a real display still wins, so this
+# does not change what happens on a desktop.
+if not os.environ.get("QT_QPA_PLATFORM") and not os.environ.get("DISPLAY"):
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+# Same shape of problem: matplotlib's default backend needs a display.
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 
 @pytest.fixture(scope="session")
