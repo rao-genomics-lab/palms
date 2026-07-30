@@ -212,6 +212,31 @@ def _notify(message: str) -> None:
     _show()
 
 
+def _event_loop_running() -> bool:
+    """True when the main thread is actually inside a Qt event loop.
+
+    ``QMessageBox.exec_()`` starts a *nested* event loop and returns only when
+    something dismisses the dialog. In a process where nobody ever called
+    ``app.exec_()`` there is no window manager, no user and no other loop to
+    deliver that click, so it never returns.
+
+    ``QThread.loopLevel()`` is the direct answer — 0 outside any event loop, ≥1
+    inside one — and it is readable from a worker thread about the main thread,
+    which matters because failures are reported from napari workers.
+    """
+    try:
+        from qtpy.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            return False
+        return app.thread().loopLevel() > 0
+    except Exception:  # pragma: no cover - old Qt without loopLevel
+        # Unknown → assume a loop is running. A missed suppression shows a
+        # dialog nobody asked for; a wrong suppression is silence about a
+        # failed save, which is worse.
+        return True
+
+
 def _headless() -> bool:
     """True when Qt is up but nobody can answer a dialog.
 
@@ -221,9 +246,20 @@ def _headless() -> bool:
     That is not hypothetical — it hung the test suite for an hour once a fixture
     started creating the QApplication before the tests that inject write
     failures. The notification still fires; only the modal is suppressed.
+
+    Two independent signals, because the first one alone left the bug live on
+    exactly the machine where it hurts most. ``QT_QPA_PLATFORM`` catches CI and
+    explicitly headless runs — but a developer's desktop *has* a display, so
+    ``conftest.py`` deliberately does not set it, and every such signal stayed
+    unset while `pytest` still had no event loop. `pytest` then hung, for real,
+    in ``test_persistence_safety.py``. The loop-level check is the one that
+    actually describes the precondition: not "is there a screen" but "is anyone
+    processing events".
     """
     platform = os.environ.get("QT_QPA_PLATFORM", "").split(":")[0].strip().lower()
-    return platform in {"offscreen", "minimal", "minimalegl", "vnc"}
+    if platform in {"offscreen", "minimal", "minimalegl", "vnc"}:
+        return True
+    return not _event_loop_running()
 
 
 def _surface(kind: str, operation: str, message: str, show_modal: bool) -> None:
