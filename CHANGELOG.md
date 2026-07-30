@@ -1,5 +1,691 @@
 # Changelog
 
+## [Unreleased] — 2026-07-30
+
+### Fixed
+- **CI could never run a Qt test: `pytest` aborted with a core dump.** The workflow set
+  `MPLBACKEND` but not `QT_QPA_PLATFORM`, and on a runner with no display Qt does not fail
+  when it cannot load the `xcb` platform plugin — it calls `abort()`. The whole run died at
+  the first use of the `qapp` fixture with no test name and no traceback, only
+  `Aborted (core dumped)`. Present since `test_tab_cache.py` was added and invisible
+  because CI runs on PRs and pushes to `main`, and this work has been on feature branches.
+
+  `tests/conftest.py` now chooses `offscreen` (and `Agg`) itself whenever there is no
+  `DISPLAY`, so bare `pytest` works headless for CI, ssh sessions and containers alike; an
+  explicit `QT_QPA_PLATFORM` or a real display still wins. `ci.yml` also sets it, to keep
+  the runner honest about what it needs. The documented
+  `env -u DISPLAY QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg` incantation is no longer
+  required — a requirement that has to be remembered by hand is one CI will forget.
+
+### Added
+- **Tools → Dataset: see what the dataset holds on disk, and delete the parts the
+  viewer created.** A dataset accumulates viewer data in four places nobody can see —
+  `sdata_cached.zarr/`, `viewer_cache/`, `transcript_cache/` and sibling backup stores.
+  Until now the only visibility was a comma-joined `Elements (N): …` line in the Cache
+  tab's report, with no sizes at all, and the only way to remove anything was to delete
+  a registered image or patch overlay from the tab that created it. There was no way to
+  drop a clustering you no longer wanted.
+
+  The new tab is a tree with a size per row: the original 10x output (read-only), every
+  cache element, every obs/uns/obsm key inside the tables, session state, the derived
+  caches, and the backups and trash — where the gigabytes usually are. Ticked rows are
+  deleted through one executor, with a confirmation listing every path, the bytes
+  reclaimed and a `⚠ not recoverable` block. On the reference dataset it scans in 2 s and
+  its section totals match `du`.
+
+  The safety property is structural, not a promise: `store_inventory.deletable_roots()`
+  names the four directories the viewer created, `assert_deletable` refuses anything that
+  does not resolve inside one of them, and a test asserts that over *every* node the
+  inventory produces. Structural elements (`tables/table`, both label rasters,
+  `morphology_focus`, `points/transcripts`) are listed with their sizes but cannot be
+  selected — deleting the table bricks the dataset and the others break Crop Export and
+  Segmentation-revert. Anything unrecognised defaults to not deletable, so an unfamiliar
+  vendor file shows up read-only instead of becoming selectable. `prov_graph.json` and its
+  dated backups are blocked: the sidecar wins over the session attr on load, so deleting
+  it would silently lose every step recorded since the last save.
+
+  Deleting a clustering also drops it from `ctx.clusterings`, which is what the combos
+  actually read — `refresh_clustering_choices` never looks at `adata.obs`, so without that
+  the column was gone from disk and still colouring cells. Deleting session state clears
+  its in-memory mirror, or `save_session` writes it straight back at exit. `transcript_cache/`
+  is offered (a `xenium-preprocess` re-run brings it back) and says so on the row.
+
+  **Deleting a clustering means the whole clustering.** A Leiden run leaves *two* obs
+  columns of the same data — the recorded step writes `adata.obs[$key]` so the notebook
+  reproduces it, and `save_clustering_to_adata` writes `clustering_<key>` for the viewer —
+  plus `cluster_labels_<key>` once you name any clusters. Ticking the clustering now takes
+  all three, listed in the confirmation, instead of leaving an identical copy behind. The
+  bare twin is only ever paired when its `clustering_<name>` exists and the name is not
+  one of the Xenium table's own columns, so no raw column becomes selectable.
+
+## [Unreleased] — 2026-07-29
+
+### Fixed (found by replaying a real session)
+- **The exported notebook could not get past the dotplot.** `plot:dotplot:<key>`
+  recorded `sc.pl.rank_genes_groups_dotplot(adata, …)`, but the rank-genes step writes
+  its result to `adata_norm`; the replay died at cell 29 of 39 with
+  `KeyError: 'rank_genes_groups'`. `plot:rank_panel:<key>` had the same bug, and
+  `plot:volcano:<key>` had its silent form — `run_pairwise_deg(adata, …)` runs happily
+  against **raw counts** and returns different genes. All three were written when the
+  viewer normalised `adata` in place and were never updated when `normalize` moved to
+  binding `adata_norm` — exactly the drift `run_step` prevents for migrated steps.
+  Guarded twice now: statically, by a check that no recorded cell passes `adata` to a
+  rank-genes consumer, and by executing the recorded dotplot string against a ranked
+  `adata_norm`.
+
+- **The notebook kept only the last ranking.** Each rank-genes cell rebinds `rank_df`,
+  and scanpy overwrites `uns['rank_genes_groups']` in place, so a session that ranked
+  two clusterings exported markers for one of them. `_RANK_GENES_TEMPLATE` now also
+  writes `rank_results[<groupby>]`, and the verification dumps one tagged frame per
+  clustering.
+
+- **The verification's own comparison was wrong in two ways**, both of which cost a
+  ten-minute replay to discover:
+  - It compared the viewer's stored ranking against whichever `rank_df` the notebook
+    bound last. On a session with two clusterings that meant igraph's 31 groups against
+    leidenalg's 28 — reported as every group "diverged" when nothing had: right genes,
+    group numbering from a different clustering. `compare_rank_genes` now selects the
+    replayed ranking by name and reports `different_groupby` when the notebook never
+    ranked what the viewer stored.
+  - It filtered unlabelled cells by comparing the *rendered* label to `"nan"`. Under
+    pandas 3 a null in a categorical renders `<NA>`, so it passed through into sklearn
+    (`ValueError: Input contains NaN`) — hit on a CNV clustering computed on a subset
+    and reindexed onto the whole table. Now masked on `.notna()`, with the labelled and
+    unlabelled counts in the report so partial coverage reads as what it is.
+
+  Also: `--graph PATH` replays a given `prov_graph.json` against a dataset, which is
+  what makes a corrected recording measurable before the user happens to repeat the
+  action that recorded it.
+
+  Result on the reference dataset (19 nodes, 63,355 cells, 327.8 s): ARI **1.0** with
+  identical labels on all three clusterings — `leiden_igraph_r1.0` (31), 
+  `leiden_leidenalg_r1.0` (28), `cnv_leiden_res0.2` (27 over 12,157 labelled cells) —
+  and top-10 ranked genes identical in all 31 groups.
+
+### Added
+- **The notebook now records what it was run with.** A replay only reproduces a result
+  against the same software, and the recorded code named the functions but never the
+  versions that answered the call — so a disagreement gave no way to separate a real
+  difference from a scanpy upgrade. An **`environment`** node now opens every exported
+  notebook: the versions present when the analysis was recorded, as a comment block, plus
+  `random.seed(0)` / `np.random.seed(0)` and `sc.logging.print_header()`, so the replay's
+  own versions print directly beneath the recorded ones. It is deliberately *not* an
+  assertion — a version mismatch is information, not a failure.
+
+  It has no dependents by design: an environment change is something to read, not a
+  reason to flag every clustering and DEG table in the session stale. Re-opening a
+  dataset in an unchanged environment leaves the node alone rather than rewriting its
+  timestamp. The CI replay test executes the cell in a clean kernel, since a version pin
+  that raises would be worse than none. (`utils/environment.py`, `tabs/_helpers.py`)
+
+- **Comment-only nodes are now either code or declared as notes.** A recorded node whose
+  cell is a comment replays as a silent no-op — `allow_errors=False` sees a cell that ran
+  fine, the notebook "passes", and the step it claims to document is simply absent. Some
+  of those nodes were real gaps; others were viewer state (the canvas background, an
+  overlay) that has no notebook equivalent at all. Both looked identical to every
+  consumer, so the Tier-2 report's punch list was mostly display state with the real
+  defects buried in it.
+
+  - A new node kind, **`NOTE`**, declares "viewer state, no code equivalent". It renders
+    as markdown in the notebook (marked as such), keeps its comment in the flat
+    `analysis.py`, is labelled in the Notebook tab, and `verify_notebook.py` counts it
+    separately from the punch list. The canvas background, the cluster size filter, the
+    UMAP window, patch and transcript overlays, and crop-export are now notes.
+  - **ROI expression is real code.** `roi_expression:<gene>` — the one node the first
+    Tier-2 run against a real dataset flagged — recorded two lines saying the per-region
+    means were "shown in the viewer". It now runs as a `Step`: shapely point-in-polygon
+    membership (the same idiom as the ROI DEG step), per-region count/mean/median/std/
+    min/max, and pairwise Welch's t-tests with Benjamini-Hochberg correction via
+    `scipy.stats.false_discovery_control`. The tab formats its text from that step's
+    outputs instead of computing them itself, and `export:roi_expression` is now the
+    `to_csv` that writes the file rather than a comment saying one was written.
+  - **H&E/ARMS registration nodes carry their data**: the flips bind
+    `he_flip_vertical`/`he_flip_horizontal`, the coarse alignment records the affine
+    matrix it computed (previously discarded, with only its scale printed), and saving
+    landmarks records the `save_landmarks(...)` call with the points inlined.
+  - **A source guard** (`tests/test_recorded_code_is_code.py`) parses every
+    `ctx.record_node` call site and fails if one records prose where the notebook needs a
+    statement. One known gap remains, listed with its reason: `viewer:transcript_density`
+    computes a 2-D histogram and needs the transcript loader expressed as plain code
+    first.
+
+- **Recorder failures are now visible.** `record_node` degrades rather than aborting when
+  provenance bookkeeping fails — a bug there must never lose the user's analysis — but it
+  announced the degradation with `warnings.warn`, which in a GUI process goes to a
+  terminal nobody reads, and only once per unique message under Python's default filter.
+  What was left behind is exactly the failure this work exists to prevent: a result on
+  screen with no cell that produces it. `reporting.report_recording_failure` now logs with
+  a traceback, keeps the failure for the session tally, and shows a non-modal napari
+  warning naming the node — no dialog, since the analysis itself succeeded.
+
+- **Notebook replay verification — the reproducibility claim, measured.** Until now
+  nothing executed an exported notebook and compared its results to the viewer's. The
+  step executor makes the recorded code *be* the executed code by construction, but
+  whether replaying that code from the raw output reproduces the result is an empirical
+  question, and it was unanswered. Two artifacts now answer it:
+
+  - **`tests/test_notebook_replay.py`** (CI gate, hermetic, ~35 s). Runs the real
+    `Step` templates — Leiden, normalize, rank genes, spatial neighbours, neighbourhood
+    enrichment — over a synthetic AnnData (`replay_adata` in `tests/conftest.py`), exports
+    the provenance graph as a real `.ipynb`, and executes it in a **clean kernel** with
+    `allow_errors=False`. Adjusted Rand index must be exactly **1.0** and the labels
+    identical (ARI alone is blind to relabelling); top-N ranked gene names must match in
+    order; nhood z-scores must be `allclose`. Further tests assert that the notebook's
+    cells are the recorded node sources *verbatim*, so a passing replay cannot be the
+    exporter quietly fixing something up. One documented substitution: the `preamble`
+    node reads an h5ad instead of `spatialdata_io.xenium(data_path)`, which CI has no
+    dataset for — the same preamble exception already documented, and a test asserts it
+    stays the only one.
+  - **`scripts/verify_notebook.py`** (evidence, run against a real dataset). Reads the
+    provenance graph straight out of `<cache>/viewer_session` attrs — no GUI, no napari —
+    replays it against the raw Xenium output with per-cell timing, and emits a JSON
+    report: per-clustering ARI and cluster counts, top-N gene agreement, wall-clock,
+    package versions, and **the ids of every comment-only node the notebook silently
+    skipped**. Those nodes execute fine and do nothing, so no amount of `allow_errors`
+    catches them; naming them turns the remaining recording work into a measurement.
+    `--dry-run` produces that list in seconds without replaying. A replay that *fails*
+    reports the **node id** that broke, not just nbclient's cell index, along with the
+    timings of every cell that did run.
+
+  Supporting: `notebook_export.execute_notebook()` runs a notebook in a throwaway
+  kernelspec pointing at `sys.executable`, because the installed `python3` kernelspec
+  belongs to whichever environment registered it last — routinely the conda base env,
+  which has no scanpy. `nbclient`/`ipykernel` added to `environment.yml` and to a new
+  `test` extra; ruff's CI gate now covers `scripts/` too.
+
+- **Choosable Leiden flavour in the Clustering tab.** `sc.tl.leiden` has two backends —
+  `igraph` (fast) and `leidenalg` (scanpy's historical default, optimising the
+  RBConfiguration objective rather than igraph's modularity). The viewer hard-coded
+  `flavor='igraph'`, so a partition from an existing scanpy pipeline could not be
+  reproduced. A **flavor** dropdown now selects between them, `igraph` remaining the
+  default, alongside an **n_iterations** spinbox that resets to the selected backend's
+  default (`2` for igraph, `-1` — iterate to convergence — for leidenalg). `directed` is
+  derived from the flavour rather than exposed, because scanpy raises on
+  `directed=True` under igraph. All four values are written literally into the recorded
+  step, so the notebook shows exactly which backend produced the labels; the replay test
+  now runs over both flavours, since each is seeded from `random_state`.
+  (`tabs/tab_clustering.py`, `tests/test_clustering_step.py`)
+
+  **Result keys now carry the flavour**: `leiden_igraph_r1.0` / `leiden_leidenalg_r1.0`,
+  so both backends can be run at one resolution and compared instead of one silently
+  overwriting the other. Clusterings computed before this change keep their older
+  `leiden_r{resolution}` keys and still load and appear in every dropdown, but a new run
+  at that resolution writes the new key *alongside* the old one rather than replacing it.
+
+### Fixed
+- **inferCNV failed under pandas 3 with `ArrowInvalid: only handle 1-dimensional
+  arrays`.** infercnvpy's `_running_mean` slices the gene list with a **2-D** index
+  array. Under pandas 3 `var.index.values` is an `ArrowStringArray`, which routes that
+  to pyarrow's `take()` — it accepts only 1-D indices. The recorded template already
+  carried a shim converting `.obs`/`.var` strings to object dtype, and it did nothing:
+  **AnnData re-infers string dtypes when a frame is assigned back**, so with
+  `future.infer_string` at its pandas-3 default the Arrow array landed straight back
+  where it started. The option has to be off across the *assignment*, not just the
+  conversion.
+
+  This is precisely the drift `utils/steps.py` exists to prevent, one level down: the
+  in-process helper `_convert_adata_arrow_strings` had the option toggle, the template's
+  hand-inlined copy of it did not — so the CopyKAT path (which calls the helper) worked
+  while inferCNV (which runs the template) died. `tests/test_cnv_step.py` now *executes*
+  the real shim and asserts the 2-D indexing it exists to enable, restores the global
+  option it changes, and pins it against the helper.
+
+- **Saving the CNV heatmap crashed when the run had few windows.**
+  `chromosome_heatmap(dendrogram=True)` ends in `sc.tl.dendrogram`, which represents
+  cells with `pd.DataFrame(_choose_representation(...))`. Above `settings.N_PCS` (50)
+  columns that representation is a PCA — dense, fine. At or below it, it is `.X` itself,
+  and `pd.DataFrame(csr_matrix)` does not densify: it builds a one-column *object* frame
+  of 1×n row matrices, so the `.groupby().mean()` that follows dies with
+  `TypeError: agg function failed [how->mean,dtype->object]`. The heatmap therefore
+  worked on a wide CNV matrix and crashed on a narrow one. `make_cnv_heatmap` now
+  densifies a narrow sparse `X_cnv` for the duration of the plot and restores the
+  original afterwards, so the live session object is unchanged.
+
+- **A CNV run on a non-human panel produced a result instead of an error.** InSituCNV's
+  default gene-position reference is the infercnvpy Maynard 2020 table, which is human.
+  A mouse panel matches only the symbols spelled identically in both nomenclatures — **8
+  of 5006** on the dataset that surfaced this (`C2`, `C3`, `C6`, `C7`, `F3`, `F8`, `F9`,
+  `H19`). The pipeline ran, clustered those 8 genes into 5 windows and reported CNV
+  clusters; the first sign of trouble came several steps later, as the heatmap crash
+  above. `run_cnv_pipeline` now refuses to continue when under 5% of the panel has
+  coordinates, and says so — naming the counts, and adding that the symbols look like
+  mouse nomenclature when the casing suggests it. Supplying a non-human annotation is
+  not yet wired up (`prepare_cnv_input` accepts `gene_reference`/`gene_reference_path`);
+  until it is, CNV inference is human-only.
+
+- **Exported notebooks died on any viewer-derived clustering.** `record_clustering` is
+  the backstop that gives a clustering a `clustering:<key>` node so analysis tabs can
+  declare `deps=[...]` on it. It recorded `pd.read_csv(".../analysis/clustering/<key>/
+  clusters.csv")` **whether or not that file existed** — true only for the clusterings
+  10x ships, false for every one the viewer derives. The first replay of a real session
+  against its own dataset died there with `FileNotFoundError`, three cells in.
+
+  The producers now record the code that actually made the column: the CNV tab publishes
+  its `cnv_leiden_res*` labels from `cnv_clusters` (inferCNV) or the subsampled
+  `adata_copykat` (CopyKAT), each propagated CopyKAT column gets its own
+  `clustering:<col>_propagated` node carrying the overlay that used to be a loop hidden
+  inside the extrapolation cell, and Novae records `clustering:novae_domains` — under its
+  old `novae` id nothing could depend on it, and the recorded cell bound
+  `novae_domain` while the viewer stored `novae_domains`. A source guard fails if a new
+  producer persists a clustering without recording a node for it.
+
+  The backstop itself, now reached only for columns from a session recorded before its
+  producer recorded code, emits a *reload* from the viewer's cache and says so in-line —
+  the CopyKAT precedent for code that cannot be the code that ran. It is tested by
+  executing it, not by reading it.
+
+- **The provenance graph reached disk only at exit.** Artifacts were persisted eagerly
+  (`save_clustering_to_adata` writes the column immediately) but the graph explaining
+  them only in `save_session`, which runs on a dataset switch or viewer exit. Measured on
+  a real session: the store held a 16-minute-old three-node graph while the same table
+  already carried two Leiden clusterings, two rank-genes results, an ROI DEG and a
+  neighbourhood enrichment. Anything reading the store mid-session — the verification
+  script, the next launch after a crash — saw results with no code behind them.
+
+  The graph is now written to `viewer_cache/prov_graph.json` on every recorded step (one
+  small atomic write; updating the zarr group would mean copying every parquet under
+  `viewer_session/`). `save_session` still writes the attr, and the sidecar takes
+  precedence on load and in `scripts/verify_notebook.py`, which reports which source it
+  used. Datasets without the sidecar restore from the attr exactly as before.
+
+  Three guards, because the first version of this ate a graph twice: writes are gated on
+  `state["prov_graph_restored"]`, which `app.py` sets *after* the session is restored —
+  tabs seed a preamble node while the viewer is still being built, and persisting that
+  replaced a 13-node graph with a one-node stub which the next launch then preferred, so
+  the DAG came up showing only "Setup & data loading". And on load, a sidecar with
+  *fewer* nodes than the attr loses: it is written on every step and the attr only at
+  exit, so it is never legitimately smaller, and nothing in the GUI removes nodes.
+  Finally `save_session` refuses to shrink the stored graph at all — a viewer that came
+  up empty used to write that emptiness over the last remaining copy on exit, which is
+  how the 13-node analysis was lost a second time.
+
+- **A write-failure dialog could block a process with nobody at the keyboard.**
+  `reporting._surface` guarded the modal only on `QApplication.instance() is None`. A
+  test run, a headless script or CI creates an instance with no event loop and no user,
+  and `QMessageBox.exec_()` then blocks forever with nothing able to dismiss it — it hung
+  the test suite for an hour, silently, as soon as a new fixture created the
+  QApplication before the tests that deliberately inject write failures. The modal is now
+  suppressed when `QT_QPA_PLATFORM` is `offscreen`/`minimal`/`vnc`; the log entry, the
+  failure tally and the non-modal notification are unaffected.
+
+- **Crash-safe zarr cache writes.** The viewer persisted elements with
+  `delete_element_from_disk` followed by `write_element`. That is not a metadata
+  operation — spatialdata does `del root[element_type][element_name]`, which recursively
+  unlinks, so the bytes were gone before the replacement started being written. Its own
+  docstring warns "data loss may occur if the execution is interrupted during writing."
+  `_persist_table` ran it on *every* analysis action, so every clustering, DEG run and
+  label edit opened a window in which a kill, a full disk or any exception left the store
+  structurally invalid — and the loader then discarded the whole cache (30 GB on the
+  dataset that prompted this, of which the table is 320 MB).
+
+  `utils/zarr_safe.py` replaces it with stage-then-swap: the new element is written to a
+  throwaway sibling store under `.xv_staging` (live store untouched, so a failure there
+  costs nothing), then journalled and swapped in with two `os.rename` calls. The previous
+  copy moves to `.xv_trash` rather than being deleted. `recover_pending()` finishes or
+  unwinds an interrupted swap at startup, inferring the phase from the filesystem.
+  All 16 delete-then-write call sites now use it, and the store lock covers every writer
+  rather than 3 of ~20. (`utils/zarr_safe.py`, `utils/adata_persistence.py`,
+  `tabs/tab_he_registration.py`, `tabs/tab_arms.py`, `tabs/tab_external_images.py`,
+  `tabs/tab_patch_overlays.py`)
+
+- **Four save functions erased data when a layer was transiently empty.**
+  `save_rois_to_sdata`, `save_annotations_to_sdata`, `save_landmarks_to_sdata` and
+  `save_arms_tiles_to_sdata` deleted the stored element *before* checking whether there
+  was anything to write. A napari layer that was empty for any reason — mid-teardown, a
+  missed snapshot — silently wiped the persisted ROIs, annotations or tiles.
+
+- **Session save destroyed the session it was writing.** `save_session` called
+  `create_group("viewer_session", overwrite=True)` and only wrote the replacement ~110
+  lines later; any exception in between (most plausibly a non-serialisable value reaching
+  `attrs.update`) left an empty group and one printed warning, after the user had closed
+  the window. Attrs are now built and JSON-validated before the group is touched, and the
+  write goes through `safe_group_update`. (`utils/session.py`)
+
+- **Startup migrations re-armed on every launch.** `save_session` rebuilt attrs from
+  scratch, wiping the four `migrated_*` markers each clean exit — so migrations re-ran at
+  the next launch, including two that themselves rewrote the whole cell table. Attrs are
+  now preserve-by-default. (`utils/session.py`)
+
+- **Caches were discarded too readily.** Three paths did it:
+  - an unreadable cache was renamed aside — or `rmtree`'d if the rename failed — with no
+    repair attempt and no check for user data. It now runs `verify`/`repair` first and
+    escalates to restoring a missing element from its backup.
+  - staleness compared `experiment.xenium`'s mtime against the cache *directory* mtime,
+    which only moves when a direct child is added or removed — so `rsync`/`cp -p`/a
+    re-download condemned a good cache. Caches now carry `.xv_manifest.json` with a
+    sha256 of the source. Pre-existing caches keep the mtime check as an *uncertain*
+    hint that prompts rather than rebuilding.
+  - the sidecar list omitted `adata_cnv_cache_*.h5ad`, so a cache whose only user data
+    was a multi-hour CopyKAT run reported "no user data" and was rebuilt with **no dialog
+    at all**.
+
+  Also: `_restore_user_elements` is now a deny-list (CNV scores, `cnv_runs` and
+  `rank_genes_groupby` were dropped even on "Rebuild and restore my data"); the rebuild
+  stages and renames rather than overwriting in place and `rmtree`ing on failure, after a
+  free-space check; and no-dialog no longer means "rebuild" — stale keeps, unopenable
+  raises `CacheLoadAborted` for a clean exit. (`loader.py`, `app.py`)
+
+- **The Marker Genes correlation-matrix button never worked** — it called
+  `sc.tl.correlation_matrix`, which does not exist in scanpy. See the 2026-07-28 entry.
+
+### Added
+- **Recovery from a corrupt cache no longer needs the corrupt cache to open.** The first
+  version of "Recover from Backup" called `spatialdata.read_zarr` on the backup — which is
+  by definition a store that failed to read — and died in `_read_table` on an unreadable
+  table, taking the perfectly salvageable shapes, images and clusterings with it. Recovery
+  is now filesystem-level: element directories are self-contained and obs columns are
+  individual zarr arrays, so a broken root index or an unreadable table condemns neither.
+  `cache_repair.salvageable_elements()` and `read_obs_columns()` do the reading;
+  `zarr_safe.safe_import_element()` does the writing, journalled like any other swap.
+  Verified against the reported cache: 12 obs columns (8 clusterings, cluster labels, 3 CNV
+  scores), 6 landmark sets and 3 images recovered from a store spatialdata refuses to open.
+  (`utils/cache_repair.py`, `utils/zarr_safe.py`, `tabs/tab_cache.py`)
+
+- **External images and patch overlays were not counted as user data.** `_detect_user_data`
+  matched a fixed list of element names, but these are named per file
+  (`ext_<filename>`, `ext_<filename>_xenium_lm`, `patch_*`) — so a dataset with a registered
+  PhenoCycler image and its landmarks reported "no user data" and could be rebuilt over
+  without a prompt. Matching is now by prefix/suffix as well as exact name. (`loader.py`)
+
+- **`errored` handlers indexed the exception as an exc_info triple.** napari emits the
+  exception itself, so `exc_info[1]` raised `TypeError` and replaced the real error in the
+  traceback — masking, among other things, the recovery failure above. Fixed in the Cache
+  tab and at the three pre-existing sites in `tabs/tab_segmentation.py`, where it had been
+  hiding async segmentation-save failures. (`tabs/tab_cache.py`, `tabs/tab_segmentation.py`)
+
+- **Recovered registration was undone by the reload that followed it.** Reloading saves the
+  current session first, as any dataset switch does, and `save_session` deletes the
+  `he`/`arms` groups and rewrites them from `ctx.he_state` — which was still empty, so it
+  erased the affine recovery had just written. The images came back but unaligned.
+  Recovery now hydrates `ctx.he_state` / `ctx.arms_state` in memory as well as on disk, so
+  the pre-reload save writes the recovered values instead of blanking them. Landmarks were
+  never affected — they load from `sdata.shapes`, so importing those elements was already
+  enough. (`tabs/tab_cache.py`)
+
+- **External-image and patch-overlay UI state was blanked on every save with none
+  loaded.** `_snapshot_layers` yields `[]` rather than `None` when nothing is loaded, so
+  the "fall back to the previous value" branch never fired — losing saved contrast,
+  opacity and affine after a recovery, and any time the attrs were written before restore
+  had run. These now fall back on empty too, which is safe because restore is driven by
+  the sdata elements with the attrs used only as decoration: an entry left behind for a
+  removed image is never looked up. (`utils/session.py`)
+
+- **Recovered data was invisible until the dataset was reopened.** Recovery writes
+  elements straight into the zarr, so the live SpatialData, the napari layers and every
+  tab's widgets knew nothing about them. `app.py`'s dataset-open path is now factored into
+  `_load_dataset_into_viewer(path)` and exposed as `ctx.reload_dataset`, so the Cache tab
+  offers a reload as soon as recovery finishes. Recovery also merges the backup's
+  `viewer_session` — H&E/ARMS filenames, flips and affines — for keys the live session
+  lacks: restoring `he_image` and its landmarks without that is half a job, since the
+  element would exist while the session still said no H&E was loaded.
+  (`app.py`, `tabs/tab_cache.py`, `utils/viewer_context.py`)
+
+- **A Cache tab (Tools → Cache).** The cache was a black box: when it broke, the loader
+  moved it aside and rebuilt from raw, and the only signal was a long wait. The tab shows
+  size, free space, build manifest, write failures this session and the log path, and
+  offers **Verify** (read-only), **Re-consolidate Metadata** (fixes the most common
+  corruption without touching data), **Recover from Backup** (pull elements out of a
+  `.xv_trash` copy or a previous cache the loader kept aside, including CopyKAT sidecars)
+  and **Force Rebuild** (moves the cache aside and rebuilds on the next launch, so the
+  running session is never left pointing at a freed store). All work runs in a
+  `thread_worker` behind `store_lock`, so nothing here can race `_persist_table`, and a
+  test fails if the tab ever gains an `rmtree`. (`tabs/tab_cache.py`, `app.py`)
+
+- **`utils/reporting.py` — a per-dataset log and non-modal error surfacing.** Every write
+  failure went to stdout, which a GUI user never reads, and the only dialog was for
+  permission errors, shown **once per process** via a module-level flag — so the second
+  failure and everything after it was invisible. When the cache was being corrupted, the
+  warnings that would have explained it were lost. Now: a rotating
+  `<data_path>/xenium_viewer.log` (2 MB × 3) started before anything can fail;
+  `report_write_failure()` always logs with a traceback, shows a non-modal napari
+  notification marshalled to the GUI thread via `ensure_main_thread` (the old dialog could
+  be constructed from a `thread_worker`, a real Qt violation), and reserves a modal for
+  permission and disk-full errors only — tracked per (dataset, error class), not per
+  process. A running tally (`failure_summary()`) makes failures visible in aggregate
+  without a popup per event. The ~20 `print("Warning: could not ...")` sites in the cache
+  write paths now log, so the file captures them; a source guard fails if any come back.
+  (`utils/reporting.py`, `utils/adata_persistence.py`, `utils/session.py`, `app.py`)
+
+- **`utils/cache_repair.py`** — `verify()` (read-only; parses the root `zarr.json` with
+  `json.loads` rather than `zarr.open`, so it reports on a store too broken to open) and
+  `repair()` (idempotent; replays journals, clears debris, drops stray groups,
+  re-consolidates, and at `FULL` restores an element from its `.xv_trash` backup).
+  Replaces the ad-hoc block in `app.py`, which handled two hard-coded cases and assumed a
+  nested consolidated-metadata layout — zarr 3.1 writes a flat one, so it could not have
+  detected the case it was written for. (`utils/cache_repair.py`, `app.py`)
+
+### Changed
+- **Sidecar analysis outputs moved out of the zarr store root** into
+  `<data_path>/viewer_cache/`. Files in the store root make zarr's hierarchy walk emit a
+  `ZarrUserWarning` each — the most likely source of the reported "several warnings",
+  since `app.py` called `consolidate_metadata` without the filter spatialdata itself uses.
+  It also meant a cache rebuild deleted them, including hours of CopyKAT compute. Readers
+  fall back to the old location, so existing datasets keep working and nothing is migrated
+  eagerly. (`utils/adata_persistence.py`, `tabs/tab_cnv.py`, `loader.py`)
+
+### Tests
+- First coverage the zarr/persistence paths have ever had: `test_zarr_safe.py` (26,
+  including interrupted-write simulation with both a recoverable `OSError` and a
+  `KeyboardInterrupt` that bypasses cleanup the way a `kill -9` does),
+  `test_persistence_safety.py` (9), `test_session_persistence.py` (14),
+  `test_cache_repair.py` (20), `test_loader_policy.py` (16), `test_sidecar_location.py`
+  (20), `test_reporting.py` (21), `test_tab_cache.py` (24). Plus source guards that fail if `delete_element_from_disk` is called outside
+  `zarr_safe.py`, if `loader.py` `rmtree`s the live cache, or if a sidecar is written into
+  the store root, or if a cache write path prints a warning instead of logging it, or if recovery opens a backup as a whole.
+  289 tests pass.
+
+## [Unreleased] — 2026-07-28
+
+### Added
+- **Step executor: the code the GUI runs is now literally the code the notebook
+  records.** New `utils/steps.py` introduces `Step` (a provenance node id, a
+  `string.Template` of plain scverse source, and a dict of literal `params`) plus
+  `StepExecutor`, which renders the template **once** and hands that same string both
+  to `exec` and to `ProvGraph.upsert`. This is the E1 infrastructure for closing the
+  drift between executed and recorded code — the defect that let the GUI run
+  `leidenalg.find_partition(..., seed=42, n_iterations=2)` while the notebook recorded
+  `sc.tl.leiden(..., random_state=0)` (scanpy's default is `n_iterations=-1`), and let
+  the GUI normalise with `target_sum=1e4` while the notebook recorded scanpy's median
+  default. With one rendering there is no second expression to drift.
+
+  The invariant that makes the guarantee hold, and which review must enforce: *a tab
+  callback may never call an analysis function with a widget value — it may only build
+  a `params` dict.*
+
+  Design notes:
+  - `string.Template` (`$name`) rather than `str.format`, so `{...}` dict literals and
+    f-strings inside templates are left alone.
+  - Params are substituted via `repr()` and validated with
+    `ast.literal_eval(repr(v)) == v`, which rejects numpy scalars (whose NumPy-2 repr
+    is `np.float64(1.0)` — not importable in a bare notebook, and not stable across
+    versions), non-finite floats, and objects with a default `<... at 0x...>` repr.
+    `coerce()` is provided for use at the widget boundary. Float noise such as
+    `1.0000000000000002` round-trips exactly and is therefore allowed.
+  - Execution is serialised behind an `RLock` (steps mutate shared namespace state) and
+    proceeds one top-level statement at a time via `ast`, so long steps can report
+    progress while the compiled source stays byte-identical to the recorded source;
+    statement line numbers are preserved so tracebacks point into the recorded cell.
+  - `compile(..., "<step:id>")` puts the step id in the traceback, and failures raise
+    `StepError` naming the step and statement instead of being swallowed.
+  - Recording happens only on success, so a failed step leaves no node claiming an
+    artifact that does not exist.
+  - `free_names()` / `check_step()` provide the template lint: a rendered template must
+    reference only names the namespace guarantees. This is what makes the exactness
+    guarantee auditable rather than merely asserted.
+  - `params` finally becomes meaningful — every node now carries a machine-readable
+    parameter record alongside its source (it was previously populated at exactly one
+    call site and never rendered).
+
+  `tests/test_steps.py` (36 tests) covers the executed-equals-recorded guarantee, param
+  round-tripping for every literal type the GUI can produce, numpy rejection plus
+  coercion, brace survival, free-variable analysis, per-statement progress, failure
+  naming, and the inherited upsert/staleness semantics on re-run with changed params.
+  No existing module imports `steps.py` yet — tabs migrate in E2.
+  (`utils/steps.py`, `tests/test_steps.py`)
+
+- **Leiden clustering migrated onto the step executor — the first analysis whose
+  recorded code is the code that ran.** `tab_clustering.py` now builds a single `Step`
+  from `_leiden_template(use_hvg, do_scale)` and calls `ctx.run_step()`; the separate
+  `_record_leiden_code` branch that hand-wrote a parallel description of the pipeline is
+  gone. `ctx.run_step` / `ctx.executor` are attached in `create_shared_helpers`, with a
+  namespace seeded with `sc`/`sq`/`pd`/`np`/`plt`/`Path`/`data_path`/`sdata`/`adata` so
+  steps operate on the same objects the viewer holds.
+
+  Behaviour changes that follow, all of them fixes:
+  - **Leiden now runs `sc.tl.leiden(flavor='igraph', n_iterations=2, random_state=0)`**
+    instead of `leidenalg.find_partition(..., seed=42)` on a directed graph in a spawned
+    subprocess. `flavor`, `n_iterations` and `random_state` are pinned explicitly because
+    scanpy 1.12 emits a `FutureWarning` that the default backend will become `igraph`
+    (which also requires `directed=False`) — leaving them implicit would silently change
+    clusterings on a scanpy upgrade. **Cluster labels will differ from previous runs**;
+    existing saved clusterings are untouched.
+  - **Both preprocessing branches are now one step**, which starts from `adata_norm`
+    (bound by the `normalize` step below) and works on its own `adata_leiden` copy, so
+    neighbours/Leiden/HVG-subsetting don't mutate the shared normalised object. It
+    declares `deps=["normalize"]`, so the DAG carries a real `normalize -> clustering`
+    edge and the exported notebook normalises exactly once. PCA is recomputed only when
+    HVG selection or scaling changed the feature space; otherwise `adata_norm`'s `X_pca`
+    is what a recomputation would produce anyway.
+  - Flat-journal/notebook-tab updates are bounced to the GUI thread via
+    `superqt.utils.ensure_main_thread`, since steps execute in napari worker threads.
+
+  `tests/test_clustering_step.py` (12 tests) runs the real `normalize` + Leiden pair on
+  synthetic data across all four HVG/scale combinations, asserts recorded source ==
+  executed source, and — the reproducibility claim in miniature — replays the whole
+  topo-sorted graph in a clean namespace and checks the labels match exactly.
+  (`tabs/tab_clustering.py`, `tabs/_helpers.py`, `utils/viewer_context.py`,
+  `tests/test_clustering_step.py`, `CLAUDE.md`)
+
+- **`normalize` and rank genes migrated onto the step executor — the second known
+  divergence closed.** The viewer normalised with `target_sum=1e4`
+  (`gene_analysis.get_normalized_adata`) while the recorded cell said
+  `sc.pp.normalize_total(adata)`, i.e. scanpy's *median* default. Different `X`, so
+  different PCA, neighbours, clusters and DEG. `ctx.ensure_normalized()` replaces the
+  old `record_normalize` + `get_normalized_adata` pair with a single step that records
+  the `target_sum` it uses.
+
+  Two structural fixes come with it:
+  - **`normalize` binds `adata_norm = adata.copy()` instead of mutating `adata`.** The
+    old node was `kind=SETUP`, so it sorted ahead of every artifact node and silently
+    log-normalised the object other cells then copied — an implicit, invisible edge that
+    was wrong whenever the node happened to be absent. Consumers now name `adata_norm`
+    explicitly and declare `deps=["normalize"]`, which is what puts the edge in the DAG.
+  - **Rank genes now ranks on `adata_norm`, not on raw `adata`.** The recorded cell had
+    been `sc.tl.rank_genes_groups(adata, ...)`, correct only when a `normalize` SETUP node
+    happened to be in the graph and had mutated `adata` first. The step declares
+    `deps=["normalize", "clustering:<key>"]` and copies the clustering from `adata.obs`
+    onto `adata_norm.obs`.
+
+  `record_clustering`'s CSV-import node now depends on `preamble` rather than `normalize` —
+  it reads a CSV into `.obs` and never needed normalised values. `ctx.record_normalize` is
+  gone from `ViewerContext`, replaced by `ctx.ensure_normalized`.
+
+  `tests/test_normalize_rank_genes_steps.py` (9 tests) asserts the step reproduces
+  `get_normalized_adata`'s output to `rtol=1e-6`, that `adata` is left untouched, that
+  rank-genes reads `adata_norm`, and that replaying the whole topo-sorted graph in a clean
+  namespace yields an identical `rank_df`.
+  (`tabs/_helpers.py`, `tabs/tab_gene_analysis.py`, `utils/viewer_context.py`,
+  `tests/test_normalize_rank_genes_steps.py`, `CLAUDE.md`)
+
+- **The spatial, marker, correlation and ROI tabs migrated onto the step executor.**
+  Every one of them ran one expression and recorded a different one; each is now a single
+  templated `Step`.
+
+  - **Spatial neighbours** is now `ctx.ensure_spatial_neighbors(k)`, building the graph on
+    `adata_norm`. The old node built it on `adata` while every consumer was handed the
+    normalised copy — so a replayed notebook ran neighbourhood enrichment against an object
+    with no `.obsp` graph on it at all. It also stopped rebuilding `obsm['spatial']` from
+    `x_centroid`/`y_centroid`, columns the Xenium table does not have under those names.
+  - **Neighbourhood enrichment** and **co-occurrence** run on `adata_norm` with that graph.
+  - **Ligand-receptor**: the interaction-database checkboxes reached the notebook only as a
+    `# interactions: OmniPath, LigRecExtra` prose comment, so a replay silently fell back to
+    omnipath's defaults. They are now `InteractionDataset` members reconstructed by name in
+    the recorded source, along with the `CellPhoneDB`-only restriction, `use_raw=False` and
+    `copy=True`.
+  - **Marker genes** recorded *nothing at all* despite being five plain scanpy calls. All
+    five are now `plot:markers:<plot>:<key>` terminals carrying the marker dict and the
+    cluster display labels as literals.
+  - **Gene correlation**: the whole figure is one step, so the scatter the viewer shows is
+    the scatter the notebook draws. The recorded cell previously omitted the annotation box,
+    the *n* in the title, and the cluster filter entirely — a notebook that correlated all
+    cells while the GUI showed a filtered subset. Expression is pulled with `sc.get.obs_df`
+    instead of hand-indexing `.X` and calling `.toarray()`.
+  - **ROI DEG** no longer records a call into `xenium_viewer.utils.gene_analysis`, so the
+    notebook is standalone scverse code: the shapely point-in-polygon assignment and the
+    scanpy DEG are written out in full. `rois` became a real step that binds `roi_polygons`.
+    The cluster filter is recorded as an explicit `obs[key].isin([...])`.
+
+  `tests/test_spatial_roi_steps.py` (28 tests) executes the real templates and replays the
+  recorded graph in a clean namespace; ROI DEG is additionally checked frame-for-frame
+  against `compute_roi_deg`, the implementation it replaces.
+  (`tabs/_helpers.py`, `tabs/tab_nhood.py`, `tabs/tab_co_occurrence.py`, `tabs/tab_ligrec.py`,
+  `tabs/tab_marker_genes.py`, `tabs/tab_gene_correlation.py`, `tabs/tab_roi.py`,
+  `utils/viewer_context.py`, `utils/spatial_analysis.py`, `tests/test_spatial_roi_steps.py`)
+
+- **The inferCNV backend migrated onto the step executor.** `cnv:infercnv` is now a
+  templated step running in-process; the tab builds the result dict from its outputs
+  instead of calling `run_cnv_pipeline`. Three drifts closed: the recorded cell normalised
+  at scanpy's *median* default while the viewer used `target_sum=1e4`, and it dropped both
+  `lfc_clip` (so a replay used infercnvpy's default, not the pipeline's 4.0) and
+  `dendrogram=False`. The pandas-3 PyArrow-string conversion `infercnvpy` needs is inlined
+  as plain pandas, so the notebook no longer imports `xenium_viewer` at all.
+
+  **CopyKAT is deliberately not migrated.** It runs detached, in a second conda env
+  (its R stack needs python 3.11), so no in-process step can be the code that ran. Its
+  node stays on `ctx.record_node` and now says so in the cell itself — it is a
+  reconstruction of that run, not executed source. Its recorded parameters were corrected
+  the same way (`target_sum=1e4`, `dendrogram=False`).
+  `run_cnv_pipeline` is now the CopyKAT path only; `tests/test_cnv_step.py` (11 tests)
+  pins the parameters both sides carry so they cannot drift apart again.
+  (`tabs/tab_cnv.py`, `utils/cnv_analysis.py`, `tests/test_cnv_step.py`)
+
+  **Known remaining divergence:** the annotation-neighbourhood tab records nothing at all —
+  its synthetic virtual cells are sampled from a napari shapes layer the notebook has no
+  access to, which needs E3's spatialdata shapes to resolve. Plot/export **terminals**
+  across the migrated tabs are still on `ctx.record_node`; their code strings were
+  corrected to read the object the artifact now lives on, but the terminal-node policy
+  itself is E4.
+
+### Fixed
+- **Re-running a clustering under an existing key kept the previous run's colors.**
+  `CellColorManager.get_cluster_colors` caches on the series' `name`, which is the
+  clustering key. Re-running Leiden at the same resolution (or re-importing the same
+  file) replaces the series behind that key, but nothing dropped the cache entry — so
+  the raster kept the old color array while the legend and cluster filter were rebuilt
+  from the new assignment. On screen that reads as a clustering that was only *partially*
+  overwritten: cells whose new cluster id happened to match their old one looked right,
+  the rest did not. Compounding it, the Leiden tab named every series `"leiden"`
+  regardless of resolution, so one cache entry served every run at every resolution.
+  Producers now call `color_manager.invalidate_cluster_cache(key)` — a named method
+  replacing the `_cluster_cache.pop()` the CNV and Novae tabs were already doing by
+  hand — and the Leiden series is named for the key it is stored under.
+  `tests/test_cluster_color_cache.py` (7 tests) covers the behaviour and adds a
+  source-level guard that fails if any tab rebinds `ctx.clusterings[key]` without
+  invalidating. (`utils/coloring.py`, `tabs/tab_clustering.py`, `tabs/tab_cnv.py`,
+  `tabs/tab_novae.py`)
+- **The Marker Genes correlation-matrix button never worked.** It called
+  `sc.tl.correlation_matrix`, which does not exist in scanpy — the `AttributeError` was
+  raised inside a worker thread where nothing surfaced it. `sc.pl.correlation_matrix` reads
+  the matrix `sc.tl.dendrogram` computes, so that is what the step now runs. Surfaced by
+  migrating the tab onto the executor, which reports step failures instead of swallowing
+  them. (`tabs/tab_marker_genes.py`)
+- **A dead `_get_adata_norm` in the Marker Genes tab** passed `add_clustering_to_obs` its
+  arguments in the wrong order (`adata_orig` and `clustering_series` swapped). Removed.
+  (`tabs/tab_marker_genes.py`)
+
+### Removed
+- **`spatial_analysis.run_ligrec` and `spatial_analysis.run_co_occurrence`.** One squidpy
+  call each; the templates in the tabs now *are* that call. (`utils/spatial_analysis.py`)
+- **`utils/leiden_worker.py`.** The spawned-subprocess Leiden existed for GUI
+  responsiveness, but it was also the second expression of the algorithm that drifted from
+  the recorded one. scanpy's `igraph` flavor is, per its own warning, "orders of magnitude
+  faster" than `leidenalg`, which removes the motivation. (`utils/leiden_worker.py`,
+  `cnv_copykat_worker.py` docstring reference)
+
+### Changed
+- **`.gitignore`**: added `manuscript/` (preprint drafts and planning notes, kept out of
+  the public repo) and `data/` (untracked local datasets).
+
 ## [Unreleased] — 2026-07-19
 
 ### Fixed

@@ -26,13 +26,33 @@ xenium-viewer /path/to/xenium/output/ --no-cache
 
 The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
 
-There is a small `pytest` suite in `tests/` covering the codebase's *pure* logic
-(provenance graph, CopyKAT subsampling, registration math, LLM prompt/response parsing,
-patch-size inference, notebook export). Run it with `pytest` from the repo root
-(`[tool.pytest.ini_options]` sets `pythonpath = ["src"]`, so no install is needed).
-GitHub Actions (`.github/workflows/ci.yml`) runs the suite in the full conda env plus a
-fast `ruff` error-only lint gate on every push/PR. The GUI, spatial-analysis, and
-zarr/SpatialData persistence paths have no automated coverage — that testing remains
+There is a `pytest` suite in `tests/` (~320 tests) covering pure logic (provenance graph,
+step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
+the **zarr/SpatialData persistence paths** — crash-safe writes with simulated interrupted
+writes, cache verify/repair, session save, loader cache policy and sidecar locations.
+Several are *source guards* that fail if a fixed bug is reintroduced (calling
+`delete_element_from_disk` outside `zarr_safe.py`, `rmtree`ing the live cache, writing a
+sidecar into the store root, printing a warning instead of logging it).
+
+`tests/test_notebook_replay.py` is the end-to-end one: it runs the real `Step` templates
+over a synthetic AnnData, exports the provenance graph as a real `.ipynb`, executes it in
+a **clean kernel** (`nbclient`, `allow_errors=False`), and requires ARI **exactly 1.0** on
+every clustering plus identical top-N ranked genes. It takes ~35 s — most of it importing
+scanpy/squidpy in the kernel — which is why the fixture is module-scoped. Its one
+substitution is the `preamble` node (h5ad instead of `xenium(data_path)`, since CI has no
+dataset); a test asserts that stays the only one. See "Verifying the claim" below.
+
+Run with plain `pytest` from the repo root (`[tool.pytest.ini_options]` sets
+`pythonpath = ["src"]`, so no install is needed). **No environment variables are
+needed** — `tests/conftest.py` selects `QT_QPA_PLATFORM=offscreen` and
+`MPLBACKEND=Agg` itself when there is no `DISPLAY`, because Qt does not *fail*
+without a platform plugin, it aborts the process: the symptom is
+`Aborted (core dumped)` with no test name, which is what CI reported for months.
+An explicit `QT_QPA_PLATFORM` or a real display still wins, so a desktop run is
+unchanged. GitHub Actions
+(`.github/workflows/ci.yml`) runs the suite in the full conda env plus a fast `ruff`
+error-only lint gate (`--select E9,F63,F7,F82`) on every push/PR. The napari GUI proper
+and the spatial-analysis tabs still have no automated coverage — that testing remains
 manual/exploratory.
 
 ## Architecture
@@ -40,7 +60,7 @@ manual/exploratory.
 ### Entry Points & Load Sequence
 
 1. **`src/xenium_viewer/app.py`** — Main entry point (~1300 lines). Validates data dir, orchestrates loading, builds napari viewer with layers, instantiates all managers, creates `ViewerContext`, builds all tab widgets, then restores session. The `main()` function is the `xenium-viewer` console-script entry point.
-2. **`src/xenium_viewer/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness detected via `experiment.xenium` mtime. Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`.
+2. **`src/xenium_viewer/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness comes from a content hash in `.xv_manifest.json` (see "Cache safety"). Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`.
 3. **`src/xenium_viewer/preprocess.py`** — One-time step that splits the transcript parquet into ~480 per-gene feather files for fast per-gene loading (~100ms vs 4–5s). The `main()` function is the `xenium-preprocess` console-script entry point.
 
 ### Central State: ViewerContext
@@ -63,7 +83,21 @@ def build_tab(ctx: ViewerContext) -> tuple[QWidget, dict]:
     # exports_dict may contain "restore_session" callable
 ```
 
-The 11 tabs cover: Clustering, Cell Coloring, Transcripts, UMAP, ROI Analysis, H&E Registration, Gene Analysis, Ligand-Receptor, Neighborhood Enrichment, Co-occurrence, and ARMS Overlay.
+The tabs are grouped under Cells / Genes / Spatial / Images / Tools. **Tools → Cache**
+(`tabs/tab_cache.py`) exposes the cache health check and repair actions described
+under "Cache safety" below: verify, re-consolidate, recover from a backup, and a
+force rebuild that moves the old cache aside rather than deleting it.
+
+**Tools → Dataset** (`tabs/tab_dataset.py`) is the per-item view the Cache tab's
+whole-store report cannot give: a `QTreeWidget` of everything on disk with sizes, and
+checkbox deletion of the parts the viewer created. See "Deleting components" below.
+
+**Anything that changes the zarr behind the viewer's back must call
+`ctx.reload_dataset()`** (bound by `app.py`, rebuilt on every dataset load). The live
+`SpatialData`, the napari layers and every tab's widgets are built from disk once at load
+time and never re-read it, so recovered or externally-written elements stay invisible
+until the whole dataset is reloaded. It is synchronous and tears down every widget —
+never call it from inside a worker that holds a reference to a tab.
 
 `src/xenium_viewer/tabs/_helpers.py` contains shared utilities (e.g., `StatusProxy`, `make_tab()`).
 
@@ -86,24 +120,156 @@ The 11 tabs cover: Clustering, Cell Coloring, Transcripts, UMAP, ROI Analysis, H
 
 Stored in `sdata_cached.zarr/viewer_session/` as zarr arrays and parquet files (plus the code provenance graph as a JSON attr). Auto-saved on relevant actions and restored at startup. Supports zarr v2 and v3.
 
+### Cache safety (`utils/zarr_safe.py`, `utils/cache_repair.py`)
+
+**Never write to the zarr store directly.** Every element write goes through
+`safe_write_element` / `safe_delete_element`, and plain zarr groups through
+`safe_group_update`. These stage the new value in `<cache>/.xv_staging/`, journal the
+operation, then swap it in with two `os.rename` calls; the previous copy is moved to
+`<cache>/.xv_trash/` rather than deleted. `delete_element_from_disk` unlinks the live
+element *before* its replacement exists, so any interruption left the store invalid —
+`tests/test_persistence_safety.py` fails if it is called outside `zarr_safe.py`.
+`recover_pending()` finishes or unwinds an interrupted swap at startup.
+
+`cache_repair.verify()` is read-only and parses the root `zarr.json` with `json.loads`
+(not `zarr.open`), so it works on a store too broken to open; `repair()` only renames,
+clears debris and re-consolidates. `loader.load_sdata` repairs before asking, and
+**never deletes a cache** — every destructive branch is a rename (guarded by a test).
+
+Cache freshness comes from `<cache>/.xv_manifest.json`, a sha256 of `experiment.xenium`.
+Caches without one fall back to an mtime comparison, treated as *uncertain* — it prompts
+rather than rebuilding, since copying a dataset changes mtime without changing content.
+
+**Sidecar analysis outputs** (`adata_norm_cache.h5ad`, `adata_cnv_cache_*.h5ad`,
+`roi_deg_cache.parquet`, `arms_tile_deg_cache.parquet`, `cnv_*_result.json`) live in
+`<data_path>/viewer_cache/`, *not* in the zarr store root — files there make zarr's
+hierarchy walk warn on every consolidation, and a rebuild would delete them. Write via
+`adata_persistence.sidecar_write_path()`; read via `find_sidecar()` / `glob_sidecars()`,
+which fall back to the legacy in-store location for existing datasets.
+
+### Deleting components (`utils/store_inventory.py`, `tabs/tab_dataset.py`)
+
+`store_inventory` is the model behind Tools → Dataset: five `Section`s of `Node`s
+(raw output / cache elements + table contents / session state / derived caches /
+backups & trash), each with a size, a detail and an honest `recoverable` value.
+Filesystem-only and Qt-free like `cache_repair.verify`, so it reports on a store too
+broken to open — and **read-only**, guarded by a test that greps it for every mutating
+call. Two rules carry the safety:
+
+- **`assert_deletable(path, roots, kind=)` is the single choke point.** A path may be
+  removed only if it resolves inside a `deletable_roots()` directory — `sdata_cached.zarr`,
+  `viewer_cache/`, `transcript_cache/`, or a `sdata_cached_*_*.zarr` backup. The raw 10x
+  output is in none of them. A root that *is* or *contains* the dataset directory is
+  refused outright (a `cache_path` of `.` would otherwise make every raw file deletable),
+  and symlinks are resolved before the containment test but never followed when sizing or
+  deleting. `tests/test_store_inventory.py` asserts the **property** over every node the
+  inventory produces, not a list of remembered cases.
+- **Unrecognised defaults to not deletable.** An unknown entry in the dataset directory is
+  raw output; an unknown element or obs column is left alone. The `loader._USER_*`
+  allow-lists decide only the yes cases. `CORE_ELEMENTS` (`tables/table`, both label
+  rasters, `morphology_focus`, `points/transcripts`) are listed with sizes but blocked;
+  so are `prov_graph*.json` and the `prov_graph` session attr.
+
+Table contents (`OBS`/`UNS`/`OBSM`) carry `path=None` on purpose: deleting a column is a
+rewrite of the whole table, so there is no path for an executor to `unlink`.
+
+**A clustering is more than one obs column.** A Leiden run leaves the bare `<key>` (the
+recorded step's `adata.obs[$key] = …`, needed so the notebook reproduces it) *and*
+`clustering_<key>` (`save_clustering_to_adata`), plus `cluster_labels_<key>` once clusters
+are named. `_clustering_twin_of` pairs the bare column with its prefixed one so all of
+them cascade together — otherwise "delete this clustering" left an identical copy. The
+pairing requires the `clustering_<name>` column to exist and the bare name not to be in
+`_STRUCTURAL_OBS`, so no Xenium column becomes selectable.
+
+**In the tree, a blocked row is dimmed, never `setDisabled(True)`.** Qt propagates a
+disabled item down its whole subtree, so disabling `group:tables` and the core
+`tables/table` also greyed out every clustering inside them — i.e. exactly what the tab
+exists to delete. `tests/test_tab_dataset.py` checks the *effective* state through
+ancestors, because a row's own flags do not tell you whether a user can tick it.
+
+The executor (`tab_dataset._apply_deletion`) applies by kind in `Plan` order — **table
+edits first**, backups last. Three things it must not skip, each of which was a real bug:
+`_persist_table` runs **once** per batch; a deleted `clustering_*` column is also popped
+from `ctx.clusterings` / `state["custom_clusterings"]` / `state["cluster_labels"]`
+(`refresh_clustering_choices` reads that dict, *not* `adata.obs`); and a deleted session
+node clears its `store_inventory.SESSION_MEMORY` mirror, or `save_session` writes it back
+at exit. Failures are per node and named in the report — a partly applied batch has to be
+describable, since several of these are irreversible. `_remove_tree` is the only function
+that touches the filesystem, enforced by a test that parses the module.
+
 ### Code Recording (provenance DAG)
 
 User actions are recorded as a **provenance graph** (`utils/prov_graph.py`), the
 single source of truth for reproducible code — `ctx.state["prov_graph"]`. Each step
 is a node with a stable `id` (the artifact it produces), its `code`, its `deps`
-(parent node ids), and a `kind` (`setup` / `artifact` / `terminal`). The notebook is
-*derived* from the graph by topological sort, so it always respects dependencies
-regardless of the order actions were taken — even across sessions.
+(parent node ids), and a `kind` (`setup` / `artifact` / `terminal` / `note`). The
+notebook is *derived* from the graph by topological sort, so it always respects
+dependencies regardless of the order actions were taken — even across sessions.
 
-- **Record with `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
-  in tab callbacks. Re-running a step (same `id`) revises its node in place and flags
-  descendants stale; a missing dependency errors at record time. `ctx.record_code(code, tag)`
-  remains as a thin backward-compat shim. Helper recorders: `record_preamble` (`preamble`
-  node, defines `data_path`), `record_normalize`, `record_clustering` (`clustering:<key>`),
-  `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
+**`note` is the "not code, and not meant to be" kind.** A node whose cell is a
+comment replays as a silent no-op: `allow_errors=False` sees a cell that ran, so a
+missing step and a viewer-state annotation looked identical to every consumer.
+`NOTE` declares the second case — it renders as *markdown* in the notebook, keeps
+its comment in `analysis.py`, is labelled in the Notebook tab, and
+`scripts/verify_notebook.py` counts it apart from the comment-only punch list. Use
+it only for state with no notebook equivalent (canvas background, overlays,
+crop-export). A comment-only node of any other kind is a defect, and
+`tests/test_recorded_code_is_code.py` parses every `record_node` call site and
+fails on one — `viewer:transcript_density` is the single listed exception.
+
+- **Preferred: `ctx.run_step(Step(...))`** (`utils/steps.py`). A `Step` is a node id, a
+  `string.Template` of plain scverse source, and a dict of literal `params`. `run_step`
+  renders the template **once** and hands that same string both to `exec` and to the
+  provenance graph — so the code the GUI runs *is* the code the notebook records, by
+  construction rather than by discipline. **The invariant to enforce in review: a tab
+  callback may never call an analysis function with a widget value; it may only build a
+  `params` dict.** Params are validated with `ast.literal_eval(repr(v)) == v` (use
+  `steps.coerce()` at the widget boundary for numpy scalars); templates use `$name` so
+  `{...}` literals survive; execution is serialised and proceeds statement-by-statement
+  so progress can be reported without changing the compiled source. Failures raise
+  `StepError` naming the step, and nothing is recorded for a step that did not succeed.
+  Migrated so far: **Leiden clustering** (`tab_clustering.py`), **normalize**
+  (`ctx.ensure_normalized()`, which binds `adata_norm` and replaces the old
+  `record_normalize` + `get_normalized_adata` pair), **rank genes**
+  (`tab_gene_analysis.py`), **spatial neighbours**
+  (`ctx.ensure_spatial_neighbors(k)`, which builds the graph on `adata_norm` and
+  replaces `record_spatial_neighbors`), **neighbourhood enrichment**, **co-occurrence**,
+  **ligand-receptor**, **marker-gene plots**, **gene correlation**, **ROI DEG +
+  `rois`**, **ROI expression + its CSV export**, and **inferCNV**. Every expression-based step consumes `adata_norm` and
+  declares `deps=["normalize"]` — never an implicit reliance on `adata` having been
+  normalised in place, which is what made the DAG lie before. Call
+  `ctx.ensure_normalized()` (idempotent) before `ctx.run_step()` in any such step.
+  One documented exception: the `preamble` node records
+  `xenium(data_path)` while the viewer reaches the same objects via the zarr cache.
+  A second documented exception: **CopyKAT** (`cnv:copykat`) stays on `record_node`
+  because it runs detached in the `xenium_viewer_copykat` env — no in-process step can be
+  the code that ran, so its cell says in-line that it is a reconstruction. `run_cnv_pipeline`
+  is now the CopyKAT path only; the inferCNV template must stay in sync with it
+  (`tests/test_cnv_step.py` pins both).
+  Still unmigrated: the **annotation-neighbourhood** tab (records nothing; its synthetic
+  virtual cells are sampled from a napari shapes layer the notebook has no access to —
+  resolving that needs E3's spatialdata shapes). **Plot/export terminals** across the
+  migrated tabs are still on `record_node` — that is fine where the cell is real code
+  (`sc.pl.*`, `to_csv`); what is not fine is a terminal whose cell is prose, which the
+  source guard above now catches.
+- **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
+  in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
+  and executed code could drift. Re-running a step (same `id`) revises its node in place
+  and flags descendants stale; a missing dependency errors at record time.
+  `ctx.record_code(code, tag)` remains as a thin backward-compat shim.
+  Helper recorders: `record_preamble` (`preamble`
+  node, defines `data_path` — and calls `record_environment`, which emits the
+  `environment` node: package versions as a comment block plus seeds and
+  `sc.logging.print_header()`, sorting first and with **no dependents**, so a version
+  change is readable without flagging every result stale), `record_clustering`
+  (`clustering:<key>`), `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
   `nhood:<key>`, `cooccur:<key>`, `ligrec:<key>`, `annotation:<col>`, `rois`, `roi_deg`,
   `cnv:<backend>` (`cnv:infercnv` / `cnv:copykat`); terminals `plot:*`
-  (incl. `plot:cnv_heatmap:<backend>:<key>`) / `export:*` / `viewer:*` / `he:*` / `arms:*`.
+  (incl. `plot:cnv_heatmap:<backend>:<key>`) / `export:*` / `he:*` / `arms:*`;
+  notes `viewer:*` and `crop_export:*`.
+  A recorder that fails (missing dep, cycle) degrades to appending the snippet and
+  reports through `reporting.report_recording_failure` — logged with a traceback and
+  surfaced as a napari warning naming the node, never `warnings.warn`.
 - **Outputs**: a flat `analysis.py` (derived, stable filename) written live, and
   `analysis_notebook.ipynb` (via `utils/notebook_export.py` + nbformat) on session save /
   the Notebook tab's "Export .ipynb". The notebook is code-only and replays from the raw
@@ -111,8 +277,45 @@ regardless of the order actions were taken — even across sessions.
 - **Notebook tab** (`tabs/tab_notebook.py`) renders the graph as topo-ordered cells with a
   ⚠ stale badge, an editable free-form cell area, and a "Show DAG" button (`utils/dag_view.py`,
   matplotlib+networkx). `graph_to_mermaid` / `graph_to_dot` give diagram text.
-- **Persistence**: the graph is serialized into `sdata_cached.zarr/viewer_session/` and
-  restored at startup, so a multi-session analysis accumulates into one notebook.
+- **Persistence**: the graph is written to `<data_path>/viewer_cache/prov_graph.json`
+  **on every recorded step** (`_helpers._save_prov_graph`) *and* serialized into
+  `sdata_cached.zarr/viewer_session/` by `save_session` (dataset switch / exit).
+  The sidecar wins on load (`app._load_prov_graph_items`), because the attr is
+  behind whenever the viewer is still open or was killed. Persist the graph
+  wherever an artifact is persisted — the artifacts are written eagerly, and a
+  store holding results whose code is missing is the failure this pairing exists
+  to prevent.
+- **Every clustering needs a `clustering:<key>` node**, because analysis tabs
+  declare `deps=["clustering:<key>"]`. The *producer* records it (Leiden, CNV,
+  Novae, import); `ctx.record_clustering()` is only a backstop, and it records a
+  `read_csv` **only when that CSV actually exists**. A producer that persists a
+  column via `save_clustering_to_adata` without recording a node is a test
+  failure (`tests/test_clustering_recording.py`).
+
+### Verifying the claim (notebook replay)
+
+`run_step` makes the recorded code equal the executed code *by construction*. Whether
+replaying it reproduces the result is a separate, empirical question — so it is run, at
+two tiers:
+
+- **`tests/test_notebook_replay.py`** — the CI gate, described under "Running the Viewer".
+- **`scripts/verify_notebook.py <dataset> --out report.json`** — the real measurement.
+  Reads the graph out of `<cache>/viewer_session` attrs (zarr only — no GUI, no napari,
+  no SpatialData load), exports the notebook, executes it against the **raw Xenium
+  output** with per-cell timing, and compares the replayed `adata.obs` against the
+  `clustering_*` columns and `uns['rank_genes_groups']` the viewer persisted. The JSON
+  report carries per-clustering ARI, cluster counts, top-N gene agreement, wall-clock,
+  package versions — and **the ids of every comment-only node**, which execute fine and
+  do nothing, so `allow_errors=False` can never catch them. That list is the remaining
+  recording work (Phase 0.3), enumerated by measurement; `note_nodes` is reported beside
+  it and is *not* work — those are the declared viewer-state nodes. `--dry-run` produces
+  both in seconds without replaying.
+
+Both go through `notebook_export.execute_notebook()`, which runs the notebook in a
+throwaway kernelspec pointing at `sys.executable`. Do not switch it to the installed
+`python3` kernelspec: on a conda box that belongs to whichever env registered it last —
+routinely base, which has no scanpy — and the resulting failure would look like a
+reproducibility defect rather than a kernel-discovery one.
 
 ## Key Dependencies
 

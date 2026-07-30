@@ -16,12 +16,53 @@ if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
 from xenium_viewer.utils.gene_analysis import (
-    get_normalized_adata, add_clustering_to_obs, run_rank_genes,
+    add_clustering_to_obs,
     make_rank_genes_dotplot, make_rank_genes_plot, generate_all_volcano_plots,
     run_celltypist_annotation,
     load_reference_h5ad, get_annotation_columns, run_label_transfer,
     run_llm_annotation,
 )
+from xenium_viewer.utils.steps import Step, coerce
+
+# Executed *and* recorded — see utils/steps.py. Reads the clustering from
+# adata.obs (where the clustering cell puts it) and ranks on the normalized
+# copy bound by the "normalize" step, which is what the viewer has always
+# actually done; the previous recorded cell ranked on raw `adata`.
+_RANK_GENES_TEMPLATE = """
+# Rank genes: groupby=$groupby, method=$method, n_genes=$n_genes
+adata_norm.obs[$groupby] = adata.obs[$groupby].values
+sc.tl.rank_genes_groups(
+    adata_norm, groupby=$groupby, method=$method, n_genes=$n_genes,
+)
+rank_df = sc.get.rank_genes_groups_df(adata_norm, group=None)
+# Keyed as well as bound. A second ranking rebinds ``rank_df``, and scanpy
+# overwrites ``uns['rank_genes_groups']`` in place, so without this the notebook
+# ends holding only the last clustering's markers — measured on a real session,
+# which ranked two clusterings and could show the genes for one of them.
+rank_results = globals().get('rank_results', {})
+rank_results[$groupby] = rank_df"""
+
+
+def dotplot_code(groupby: str, n_genes: int, dendrogram: bool, fmt: str) -> str:
+    """The recorded dotplot cell.
+
+    ``adata_norm``, not ``adata``: the ranked genes live on the normalised copy
+    (see ``_RANK_GENES_TEMPLATE``). Recorded against ``adata`` this cell died on
+    replay with ``KeyError: 'rank_genes_groups'`` — found by
+    ``scripts/verify_notebook.py``, not by reading it. Module-level so a test can
+    execute the exact string the viewer records.
+    """
+    return (
+        f"\n# Dotplot (n_genes={n_genes}, dendrogram={dendrogram})\n"
+        + (f"sc.tl.dendrogram(adata_norm, groupby=\"{groupby}\")\n"
+           if dendrogram else "")
+        + f"dotplot = sc.pl.rank_genes_groups_dotplot(\n"
+        f"    adata_norm, groupby=\"{groupby}\", n_genes={n_genes},\n"
+        f"    dendrogram={dendrogram}, show=False, return_fig=True,\n"
+        f")\n"
+        f"dotplot.savefig(\"dotplot.{fmt}\", dpi=300, bbox_inches='tight')"
+    )
+
 
 _APP_DIR = Path(__file__).resolve().parent.parent
 _REF_DIR = _APP_DIR / "reference_datasets"
@@ -138,12 +179,32 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
         _clustering_series = ctx.clusterings[clustering_key]
 
+        # The step declares clustering:<key> as a dependency, so the node must
+        # exist first. Recorded on the GUI thread — it writes analysis.py and
+        # refreshes the Notebook tab.
+        ctx.record_clustering(clustering_key)
+        # Mirror the clustering onto adata.obs, which is where the recorded
+        # clustering cell puts it and where the rank-genes step reads it from.
+        add_clustering_to_obs(_adata, _adata, _clustering_series, clustering_key)
+
+        step = Step(
+            id=f"rank_genes:{clustering_key}",
+            template=_RANK_GENES_TEMPLATE,
+            params={
+                "groupby": clustering_key,
+                "method": method,
+                "n_genes": coerce(n_genes),
+            },
+            deps=["normalize", f"clustering:{clustering_key}"],
+            label=f"Rank genes: {clustering_key}",
+            outputs=["rank_df", "adata_norm"],
+        )
+
         @thread_worker
         def _run():
-            adata_norm = get_normalized_adata(_adata)
-            add_clustering_to_obs(adata_norm, _adata, _clustering_series, clustering_key)
-            df = run_rank_genes(adata_norm, clustering_key, method=method, n_genes=n_genes)
-            return df, adata_norm, clustering_key
+            ctx.ensure_normalized()          # binds adata_norm, records "normalize"
+            outputs = ctx.run_step(step)     # executes exactly what it records
+            return outputs["rank_df"], outputs["adata_norm"], clustering_key
 
         worker = _run()
         timer, _ = attach_spinner(
@@ -175,18 +236,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_results_text.setPlainText(preview)
         ga_status.value = f"Rank genes done: {len(df)} results ({clustering_key}, {ga_method_widget.value})"
 
-        _rg_method = state.get("_rg_method", "wilcoxon")
-        _rg_n = state.get("_rg_n_genes", 25)
-        ctx.record_clustering(clustering_key)
-        ctx.record_node(
-            f"rank_genes:{clustering_key}",
-            f"\n# Rank genes: method={_rg_method}, groupby={clustering_key}, n_genes={_rg_n}\n"
-            f"sc.tl.rank_genes_groups(adata, groupby=\"{clustering_key}\", "
-            f"method=\"{_rg_method}\", n_genes={_rg_n})\n"
-            f"rank_df = sc.get.rank_genes_groups_df(adata, group=None)",
-            deps=[f"clustering:{clustering_key}"],
-            label=f"Rank genes: {clustering_key}",
-        )
+        # Recording happened inside ctx.run_step(), which recorded the source it ran.
 
     def on_show_dotplot():
         adata_norm = state.get("rank_genes_adata_norm")
@@ -225,11 +275,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _dp_fmt = ctx.state.get("plot_format", "svg")
         ctx.record_node(
             f"plot:dotplot:{_dp_groupby}",
-            f"\n# Dotplot (n_genes={_dp_n}, dendrogram={_dp_dendro})\n"
-            + (f"sc.tl.dendrogram(adata, groupby=\"{_dp_groupby}\")\n" if _dp_dendro else "")
-            + f"sc.pl.rank_genes_groups_dotplot(adata, n_genes={_dp_n}, "
-            f"dendrogram={_dp_dendro})\nfig = plt.gcf()\n"
-            f"fig.savefig(\"dotplot.{_dp_fmt}\", dpi=300, bbox_inches='tight')",
+            dotplot_code(_dp_groupby, _dp_n, _dp_dendro, _dp_fmt),
             deps=[f"rank_genes:{_dp_groupby}"],
             kind=TERMINAL,
             label="Rank-genes dotplot",
@@ -270,7 +316,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.record_node(
             f"plot:rank_panel:{groupby}",
             f"\n# Rank genes panel plot (n_genes={_rp_n})\n"
-            f"sc.pl.rank_genes_groups(adata, n_genes={_rp_n})",
+            f"sc.pl.rank_genes_groups(adata_norm, n_genes={_rp_n})",
             deps=[f"rank_genes:{groupby}"],
             kind=TERMINAL,
             label="Rank-genes panel plot",
@@ -317,9 +363,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
             f"volcano_dir = Path(\"{os.path.basename(output_dir)}\"); "
             f"volcano_dir.mkdir(parents=True, exist_ok=True)\n"
-            f"_groups = [g for g in adata.obs[\"{groupby}\"].cat.categories if str(g) != '-1']\n"
+            f"_groups = [g for g in adata_norm.obs[\"{groupby}\"].cat.categories if str(g) != '-1']\n"
             f"for _a, _b in itertools.combinations(_groups, 2):\n"
-            f"    _df = run_pairwise_deg(adata, \"{groupby}\", str(_a), str(_b), method=\"{method}\")\n"
+            f"    _df = run_pairwise_deg(adata_norm, \"{groupby}\", str(_a), str(_b), method=\"{method}\")\n"
             f"    _vfig = make_volcano_plot(_df, str(_a), str(_b))\n"
             f"    _vfig.savefig(volcano_dir / f'volcano_{{_a}}_vs_{{_b}}.png', dpi=300)\n"
             f"    plt.close(_vfig)",
@@ -406,7 +452,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         @thread_worker
         def _run():
-            adata_norm = get_normalized_adata(_adata)
+            # The same adata_norm every other analysis uses, rather than a second
+            # normalised copy from get_normalized_adata's id()-keyed cache. The
+            # CellTypist call itself is not a Step: what gets recorded is the
+            # resolved cluster→label mapping, not the model run (see below).
+            adata_norm = ctx.ensure_normalized()
             cell_predictions, cell_confidence = run_celltypist_annotation(adata_norm, model_name)
             return cell_predictions, cell_confidence, clustering_key
 

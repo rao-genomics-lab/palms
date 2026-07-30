@@ -12,8 +12,10 @@ Returns a SpatialData object with:
 """
 
 import os
+import shutil
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -32,8 +34,40 @@ _USER_SHAPE_KEYS = [
     "arms_xenium_landmarks", "arms_he_landmarks", "arms_tiles", "annotations",
 ]
 _USER_IMAGE_KEYS = ["he_image", "arms_he_image"]
+
+# External images and patch overlays are named per file, so a fixed list cannot
+# see them: a dataset with a registered PhenoCycler image and its landmarks
+# reported "no user data" and could be rebuilt over without a prompt.
+_USER_SHAPE_SUFFIXES = ("_xenium_lm", "_image_lm")
+_USER_ELEMENT_PREFIXES = ("ext_", "patch_")
+
+
+def _is_user_element(name: str, keys: list) -> bool:
+    return (name in keys
+            or name.startswith(_USER_ELEMENT_PREFIXES)
+            or name.endswith(_USER_SHAPE_SUFFIXES))
+
+
 _USER_UNS_KEYS = ["nhood_enrichment", "co_occurrence", "ligrec", "rank_genes_groups"]
-_SIDECAR_FILES = ["roi_deg_cache.parquet", "arms_tile_deg_cache.parquet", "adata_norm_cache.h5ad"]
+
+# Globs, not literal names: the previous fixed list omitted the CNV caches, so a
+# cache whose only user data was a multi-hour CopyKAT run reported "no user
+# data" and was rebuilt with no dialog at all.
+_SIDECAR_PATTERNS = [
+    "roi_deg_cache.parquet",
+    "arms_tile_deg_cache.parquet",
+    "adata_norm_cache.h5ad",
+    "adata_cnv_cache_*.h5ad",
+    "cnv_*_result.json",
+]
+
+# obs columns that exist only because the user ran something.
+_USER_OBS_PREFIXES = ("clustering_", "cluster_labels_", "cnv_score", "copykat_leiden_res")
+
+
+class CacheLoadAborted(RuntimeError):
+    """The user chose to quit rather than rebuild a cache."""
+
 
 _SHAPE_LABELS = {
     "rois": "ROIs",
@@ -62,12 +96,16 @@ def _detect_user_data(cache_path: Path) -> dict:
         "sidecars": [],
         "has_viewer_session": False,
     }
-    for key in _USER_SHAPE_KEYS:
-        if (cache_path / "shapes" / key).exists():
-            found["shapes"].append(key)
-    for key in _USER_IMAGE_KEYS:
-        if (cache_path / "images" / key).exists():
-            found["images"].append(key)
+    shapes_dir = cache_path / "shapes"
+    if shapes_dir.is_dir():
+        for entry in sorted(shapes_dir.iterdir()):
+            if entry.is_dir() and _is_user_element(entry.name, _USER_SHAPE_KEYS):
+                found["shapes"].append(entry.name)
+    images_dir = cache_path / "images"
+    if images_dir.is_dir():
+        for entry in sorted(images_dir.iterdir()):
+            if entry.is_dir() and _is_user_element(entry.name, _USER_IMAGE_KEYS):
+                found["images"].append(entry.name)
     obs_dir = cache_path / "tables" / "table" / "obs"
     if obs_dir.exists():
         for item in obs_dir.iterdir():
@@ -81,9 +119,14 @@ def _detect_user_data(cache_path: Path) -> dict:
     obsm_dir = cache_path / "tables" / "table" / "obsm"
     if obsm_dir.exists() and (obsm_dir / "X_umap").exists():
         found["has_obsm_umap"] = True
-    for fname in _SIDECAR_FILES:
-        if (cache_path / fname).exists():
-            found["sidecars"].append(fname)
+    # Sidecars now live beside the store, where a cache rebuild cannot touch
+    # them; the in-store location is still scanned so pre-existing datasets
+    # still count them as data at stake.
+    sidecar_home = cache_path.parent / "viewer_cache"
+    for pattern in _SIDECAR_PATTERNS:
+        found["sidecars"].extend(sorted(p.name for p in cache_path.glob(pattern)))
+        found["sidecars"].extend(sorted(p.name for p in sidecar_home.glob(pattern)))
+    found["sidecars"] = sorted(set(found["sidecars"]))
     if (cache_path / "viewer_session").exists():
         found["has_viewer_session"] = True
     return found
@@ -120,48 +163,58 @@ def _format_user_data_message(user_data: dict) -> str:
         "arms_tile_deg_cache.parquet": "ARMS tile DEG results",
         "adata_norm_cache.h5ad": "Normalized expression cache",
     }
+    seen: set[str] = set()
     for fname in user_data["sidecars"]:
-        lines.append(f"  • {_sidecar_labels.get(fname, fname)}")
+        if fname.startswith("adata_cnv_cache_") or fname.startswith("cnv_"):
+            backend = "CopyKAT" if "copykat" in fname else "inferCNV"
+            label = f"{backend} CNV results (hours of compute)"
+        else:
+            label = _sidecar_labels.get(fname, fname)
+        # Several files map to one label (the h5ad and its result JSON).
+        if label in seen:
+            continue
+        seen.add(label)
+        lines.append(f"  • {label}")
     return "\n".join(lines)
 
 
-def _ask_rebuild_preference(user_data: dict) -> str:
-    """Show a Qt dialog asking what to do when a stale cache has user data.
+def _ask_rebuild_preference(user_data: dict, certain: bool = True) -> str:
+    """Ask what to do about a stale cache. Returns 'restore', 'rebuild' or 'keep'.
 
-    Returns 'restore', 'rebuild', or 'keep'.
-    Falls back to 'rebuild' if called from a non-main thread or if Qt is absent.
+    Without a way to prompt this now returns 'keep' rather than 'rebuild'. The
+    old default silently discarded a cache — potentially 30 GB and hours of CNV
+    compute — whenever the dialog was unavailable, including on any background
+    thread. Keeping is recoverable; rebuilding is not.
     """
-    import threading
-    if threading.current_thread() is not threading.main_thread():
-        print(
-            "Warning: zarr cache is stale and contains user data, but running in a "
-            "background thread — rebuilding without restoring."
-        )
-        return "rebuild"
-    try:
-        from qtpy.QtWidgets import QApplication, QMessageBox
-    except Exception:
-        print("Warning: zarr cache is stale and contains user data (no Qt for dialog). Rebuilding.")
-        return "rebuild"
-    app = QApplication.instance()
-    if app is None:
-        print("Warning: zarr cache is stale and contains user data (no Qt app). Rebuilding.")
-        return "rebuild"
+    message_box = _qt_message_box()
+    if message_box is None:
+        print("Warning: zarr cache looks stale and contains user data, but there "
+              "is no way to ask. Keeping the existing cache — delete it by hand "
+              "to force a rebuild.")
+        return "keep"
 
     summary = _format_user_data_message(user_data)
-    msg = QMessageBox()
-    msg.setWindowTitle("Zarr Cache Needs Rebuilding")
+    reason = (
+        "experiment.xenium has changed since the cache was built."
+        if certain else
+        "experiment.xenium is newer than the cache. This cache predates content\n"
+        "checking, so the comparison is a file timestamp — which copying or\n"
+        "re-downloading the dataset also changes, even when nothing differs."
+    )
+    msg = message_box()
+    msg.setWindowTitle("Zarr Cache May Need Rebuilding")
     msg.setText(
-        "experiment.xenium has been modified since the cache was last built.\n\n"
+        f"{reason}\n\n"
         "Your cache contains user-generated data:\n"
         f"{summary}\n\n"
+        "Rebuilding re-reads the raw Xenium files and can take a long time.\n"
         "What would you like to do?"
     )
-    msg.setIcon(QMessageBox.Warning)
-    restore_btn = msg.addButton("Rebuild and restore my data", QMessageBox.AcceptRole)
-    msg.addButton("Rebuild without restoring", QMessageBox.DestructiveRole)
-    keep_btn = msg.addButton("Keep existing cache", QMessageBox.RejectRole)
-    msg.setDefaultButton(restore_btn)
+    msg.setIcon(message_box.Warning)
+    restore_btn = msg.addButton("Rebuild and restore my data", message_box.AcceptRole)
+    msg.addButton("Rebuild without restoring", message_box.DestructiveRole)
+    keep_btn = msg.addButton("Keep existing cache", message_box.RejectRole)
+    msg.setDefaultButton(keep_btn if not certain else restore_btn)
     msg.exec_()
 
     clicked = msg.clickedButton()
@@ -171,6 +224,98 @@ def _ask_rebuild_preference(user_data: dict) -> str:
         return "keep"
     else:
         return "rebuild"
+
+
+def _qt_message_box():
+    """Return a usable QMessageBox class, or None when we cannot prompt."""
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return None
+    try:
+        from qtpy.QtWidgets import QApplication, QMessageBox
+    except Exception:
+        return None
+    return QMessageBox if QApplication.instance() is not None else None
+
+
+def _ask_corrupt_cache(error: Exception, report, user_data: dict) -> str:
+    """Ask what to do about a cache that will not open even after repair.
+
+    Returns 'restore', 'rebuild' or 'quit'. Never returns a destructive default:
+    with no way to prompt we raise instead, because the previous behaviour —
+    silently rebuilding 30 GB — is the thing being fixed.
+    """
+    summary = _format_user_data_message(user_data)
+    detail = (
+        f"The zarr cache could not be opened:\n  {error}\n\n"
+        f"{report.summary()}\n"
+    )
+    message_box = _qt_message_box()
+    if message_box is None:
+        raise CacheLoadAborted(
+            f"{detail}\nThe cache contains user-generated data:\n{summary}\n\n"
+            "Refusing to rebuild it without confirmation. Re-run with a GUI to "
+            "choose, or move the cache aside yourself to force a rebuild."
+            if _has_any_user_data(user_data) else
+            f"{detail}\nRe-run with a GUI to choose how to proceed."
+        )
+
+    msg = message_box()
+    msg.setWindowTitle("Zarr Cache Could Not Be Opened")
+    msg.setText(
+        "The zarr cache could not be opened, and automatic repair did not fix it.\n\n"
+        + (f"Your cache contains user-generated data:\n{summary}\n\n"
+           if _has_any_user_data(user_data) else "")
+        + "Rebuilding re-reads the raw Xenium files and can take a long time.\n"
+          "The existing cache will be kept aside either way — nothing is deleted."
+    )
+    msg.setDetailedText(detail)
+    msg.setIcon(message_box.Warning)
+    restore_btn = msg.addButton("Rebuild and restore my data", message_box.AcceptRole)
+    msg.addButton("Rebuild without restoring", message_box.DestructiveRole)
+    quit_btn = msg.addButton("Quit", message_box.RejectRole)
+    msg.setDefaultButton(restore_btn)
+    msg.exec_()
+
+    clicked = msg.clickedButton()
+    if clicked is restore_btn:
+        return "restore"
+    if clicked is quit_btn:
+        return "quit"
+    return "rebuild"
+
+
+def _open_cache(cache_path: Path):
+    """Open the cache, repairing first and escalating if that is not enough.
+
+    Returns the SpatialData, or raises the last read error. Repair is attempted
+    before *and* after a plain read because the common corruption — an element
+    present on disk but absent from the consolidated metadata — makes the read
+    fail while costing nothing to fix.
+    """
+    import spatialdata
+
+    from xenium_viewer.utils import cache_repair
+
+    report = cache_repair.verify(cache_path)
+    if not report.ok:
+        result = cache_repair.repair(cache_path, report, level=cache_repair.AUTO)
+        for action in result.actions:
+            print(f"  Cache: {action}")
+
+    try:
+        return spatialdata.read_zarr(str(cache_path))
+    except Exception as first_error:
+        # Still broken. If a previous version of a missing element is sitting in
+        # the trash, putting it back is strictly better than discarding 30 GB.
+        report = cache_repair.verify(cache_path)
+        if report.missing_on_disk and report.repairable:
+            print("  Cache: attempting to restore missing elements from backups...")
+            result = cache_repair.repair(cache_path, report, level=cache_repair.FULL)
+            for action in result.actions:
+                print(f"  Cache: {action}")
+            return spatialdata.read_zarr(str(cache_path))
+        raise first_error
 
 
 def _restore_user_elements(old_sdata, sdata, user_data: dict) -> list[str]:
@@ -196,37 +341,110 @@ def _restore_user_elements(old_sdata, sdata, user_data: dict) -> list[str]:
     if "table" in old_sdata.tables and "table" in sdata.tables:
         old_adata = old_sdata["table"]
         new_adata = sdata["table"]
-        user_obs_cols = [
-            c for c in old_adata.obs.columns
-            if c.startswith("clustering_") or c.startswith("cluster_labels_")
-        ]
-        for col in user_obs_cols:
+
+        # Deny-list, not allow-list. The previous version restored only
+        # clustering_*/cluster_labels_* obs and four named uns keys, so CNV
+        # scores, CNV run metadata and the rank-genes groupby were silently
+        # dropped even when the user explicitly chose "restore my data".
+        # Anything a freshly-built table does not already have is, by
+        # definition, something the user's session added.
+        for col in old_adata.obs.columns:
+            if col in new_adata.obs.columns and not col.startswith(_USER_OBS_PREFIXES):
+                continue
             try:
                 new_adata.obs[col] = old_adata.obs[col].reindex(new_adata.obs.index)
                 if col.startswith("clustering_"):
                     restored.append(col)
             except Exception as e:
                 print(f"  Warning: could not restore obs column '{col}': {e}")
-        for key in user_data["uns_keys"]:
-            if key in old_adata.uns:
-                try:
-                    new_adata.uns[key] = old_adata.uns[key]
-                    restored.append(f"uns/{key}")
-                except Exception as e:
-                    print(f"  Warning: could not restore uns['{key}']: {e}")
-        if user_data["has_obsm_umap"] and "X_umap" in old_adata.obsm:
+
+        for key in old_adata.uns:
+            if key in new_adata.uns:
+                continue
             try:
-                if len(old_adata.obsm["X_umap"]) == len(new_adata.obs):
-                    new_adata.obsm["X_umap"] = old_adata.obsm["X_umap"]
-                    restored.append("UMAP coordinates")
+                new_adata.uns[key] = old_adata.uns[key]
+                restored.append(f"uns/{key}")
             except Exception as e:
-                print(f"  Warning: could not restore UMAP coordinates: {e}")
+                print(f"  Warning: could not restore uns['{key}']: {e}")
+
+        for key in old_adata.obsm:
+            if key in new_adata.obsm:
+                continue
+            try:
+                if len(old_adata.obsm[key]) == len(new_adata.obs):
+                    new_adata.obsm[key] = old_adata.obsm[key]
+                    restored.append("UMAP coordinates" if key == "X_umap" else f"obsm/{key}")
+            except Exception as e:
+                print(f"  Warning: could not restore obsm['{key}']: {e}")
     return restored
+
+
+# ─── Cache freshness ────────────────────────────────────────────────────────
+
+def _source_fingerprint(experiment_path: Path) -> dict:
+    """Content hash of experiment.xenium — a few KB of JSON, so this is free."""
+    import hashlib
+    data = experiment_path.read_bytes()
+    return {
+        "source": experiment_path.name,
+        "source_sha256": hashlib.sha256(data).hexdigest(),
+        "source_size": len(data),
+    }
+
+
+def write_manifest(cache_path: Path, experiment_path: Path) -> None:
+    """Record what this cache was built from, so staleness can be exact."""
+    from datetime import datetime, timezone
+
+    from xenium_viewer.utils.zarr_safe import MANIFEST_FILE, atomic_json
+
+    manifest = {"built_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        import spatialdata
+        import zarr as _zarr
+        manifest["spatialdata_version"] = spatialdata.__version__
+        manifest["zarr_version"] = _zarr.__version__
+    except Exception:
+        pass
+    try:
+        manifest.update(_source_fingerprint(experiment_path))
+    except OSError:
+        return          # no source to fingerprint; leave the cache unstamped
+    try:
+        atomic_json(cache_path / MANIFEST_FILE, manifest)
+    except OSError as e:
+        print(f"  Warning: could not write cache manifest: {e}")
+
+
+def _is_cache_stale(cache_path: Path, experiment_path: Path) -> tuple[bool, bool]:
+    """Return ``(stale, certain)``.
+
+    The old rule compared ``experiment.xenium``'s mtime against the *directory*
+    mtime of the cache. Directory mtime only moves when a direct child is
+    added or removed, while ``rsync``/``cp -p``/re-downloading the dataset bumps
+    the source — so perfectly good caches were condemned. When a manifest is
+    present the answer comes from a content hash and is exact; without one
+    (every cache built before this change) the mtime comparison survives only as
+    an uncertain hint, and the caller must ask rather than rebuild silently.
+    """
+    from xenium_viewer.utils.cache_repair import read_manifest
+
+    if not experiment_path.exists():
+        return False, True
+
+    manifest = read_manifest(cache_path)
+    if manifest and manifest.get("source_sha256"):
+        try:
+            current = _source_fingerprint(experiment_path)
+        except OSError:
+            return False, True
+        return current["source_sha256"] != manifest["source_sha256"], True
+
+    return experiment_path.stat().st_mtime > cache_path.stat().st_mtime, False
 
 
 def _copy_sidecars_and_session(backup_path: Path, cache_path: Path, user_data: dict) -> None:
     """Copy sidecar files and viewer_session zarr group from backup to new cache."""
-    import shutil
     for fname in user_data.get("sidecars", []):
         src = backup_path / fname
         dst = cache_path / fname
@@ -304,7 +522,6 @@ def load_sdata(
     -------
     spatialdata.SpatialData
     """
-    import shutil
     from datetime import datetime
 
     cache_path = path / "sdata_cached.zarr"
@@ -326,60 +543,64 @@ def load_sdata(
 
     # Try loading from zarr cache if it exists and is fresh
     if use_cache and cache_path.exists():
-        cache_fresh = True
-        if experiment_path.exists():
-            cache_mtime = cache_path.stat().st_mtime
-            exp_mtime = experiment_path.stat().st_mtime
-            if exp_mtime > cache_mtime:
-                cache_fresh = False
+        stale, certain = _is_cache_stale(cache_path, experiment_path)
+        user_data = _detect_user_data(cache_path)
+        preference = None
 
-        if cache_fresh:
-            import spatialdata
+        if stale:
+            if not certain and not _has_any_user_data(user_data):
+                # Pre-manifest cache, mtime-only signal, nothing to lose:
+                # rebuilding is cheap insurance and stamps a manifest.
+                print("Zarr cache may be stale (no manifest; experiment.xenium is "
+                      "newer). Rebuilding...")
+            elif not certain:
+                print("Zarr cache may be stale — the check is a file timestamp, "
+                      "which a copy or re-download also changes.")
+                preference = _ask_rebuild_preference(user_data, certain=False)
+            else:
+                preference = (_ask_rebuild_preference(user_data)
+                              if _has_any_user_data(user_data) else "rebuild")
+                if preference == "rebuild":
+                    print("Zarr cache is stale (experiment.xenium has changed). "
+                          "Rebuilding...")
+
+        if not stale or preference == "keep":
             print(f"Loading SpatialData from zarr cache: {cache_path}")
             try:
-                sdata = spatialdata.read_zarr(str(cache_path))
+                sdata = _open_cache(cache_path)
                 print("SpatialData loaded from cache.")
+                if preference == "keep":
+                    # They chose to keep it, so stop asking: stamp the manifest
+                    # against the source as it stands now.
+                    write_manifest(cache_path, experiment_path)
+                elif not certain:
+                    write_manifest(cache_path, experiment_path)
                 print(sdata)
                 return sdata
             except Exception as e:
-                # Cache is unreadable — preserve it so the user can recover data,
-                # then rebuild from raw Xenium files.
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                corrupt_dest = cache_path.with_name(f"sdata_cached_corrupt_{timestamp}.zarr")
-                try:
-                    shutil.move(str(cache_path), str(corrupt_dest))
-                    print(
-                        f"Warning: zarr cache is corrupt ({e}).\n"
-                        f"Corrupt cache preserved at:\n  {corrupt_dest}\n"
-                        "You may be able to recover data from it manually.\n"
-                        "Rebuilding cache from raw Xenium files..."
-                    )
-                except Exception:
-                    shutil.rmtree(cache_path, ignore_errors=True)
-                    print(f"Warning: zarr cache is corrupt ({e}). Deleted, rebuilding...")
-        else:
-            # Stale cache: check whether it contains user-generated data.
-            user_data = _detect_user_data(cache_path)
-            if _has_any_user_data(user_data):
-                preference = _ask_rebuild_preference(user_data)
-                if preference == "keep":
-                    import spatialdata
-                    print("Using existing cache (stale, kept at user request).")
-                    sdata = spatialdata.read_zarr(str(cache_path))
-                    print(sdata)
-                    return sdata
-                elif preference == "restore":
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    backup_path = cache_path.with_name(f"sdata_cached_backup_{timestamp}.zarr")
-                    shutil.move(str(cache_path), str(backup_path))
-                    print(
-                        f"Old cache backed up to:\n  {backup_path}\n"
-                        "Rebuilding cache and restoring user data..."
-                    )
-                else:
-                    print("Rebuilding cache without restoring user data...")
-            else:
-                print("Zarr cache is stale (experiment.xenium is newer). Rebuilding...")
+                from xenium_viewer.utils import cache_repair
+                choice = _ask_corrupt_cache(e, cache_repair.verify(cache_path), user_data)
+                if choice == "quit":
+                    raise CacheLoadAborted(
+                        "Cancelled at the user's request; the cache was left untouched."
+                    ) from e
+                preference = choice
+
+        if preference == "restore":
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = cache_path.with_name(f"sdata_cached_backup_{timestamp}.zarr")
+            shutil.move(str(cache_path), str(backup_path))
+            print(f"Old cache moved aside to:\n  {backup_path}\n"
+                  "Rebuilding cache and restoring user data...")
+        elif preference == "rebuild":
+            # Never overwrite in place and never delete: the old rebuild path
+            # wrote over the live cache and rmtree'd it if the write failed,
+            # which is unrecoverable. Moving aside costs a rename.
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            kept_aside = cache_path.with_name(f"sdata_cached_prev_{timestamp}.zarr")
+            shutil.move(str(cache_path), str(kept_aside))
+            print(f"Previous cache kept at:\n  {kept_aside}\n"
+                  "Rebuilding without restoring user data...")
 
     from spatialdata_io import xenium
 
@@ -422,25 +643,65 @@ def load_sdata(
             )
             backup_path = None  # keep backup; don't delete later
 
-    # Write zarr cache for next time
+    # Write zarr cache for next time — into a staging directory, then rename.
+    # Writing straight to cache_path with overwrite=True meant a failure part
+    # way through destroyed the only copy, and the old error handler then
+    # rmtree'd whatever was left.
     if use_cache:
+        staging = cache_path.with_name(".sdata_cached__building.zarr")
+        shutil.rmtree(staging, ignore_errors=True)
         try:
+            _check_free_space(path, backup_path)
             _convert_arrow_strings(sdata)
             print(f"Writing zarr cache to {cache_path} ...")
-            sdata.write(str(cache_path), overwrite=True)
-            print("Zarr cache written.")
-            # Copy sidecar files and viewer_session from backup into the new cache.
+            sdata.write(str(staging))
+            write_manifest(staging, experiment_path)
             if backup_path is not None:
-                _copy_sidecars_and_session(backup_path, cache_path, user_data)
+                _copy_sidecars_and_session(backup_path, staging, user_data)
+            if cache_path.exists():
+                # Should be unreachable — every path that gets here moved the
+                # old cache aside already. Move rather than delete anyway: the
+                # whole point is that nothing removes a cache irreversibly.
+                displaced = cache_path.with_name(
+                    f"sdata_cached_prev_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zarr")
+                shutil.move(str(cache_path), str(displaced))
+                print(f"  Existing cache moved to {displaced.name}")
+            os.rename(staging, cache_path)
+            print("Zarr cache written.")
+            if backup_path is not None:
                 shutil.rmtree(str(backup_path), ignore_errors=True)
                 print("Cache rebuild and data restoration complete.")
         except Exception as e:
-            shutil.rmtree(cache_path, ignore_errors=True)
+            shutil.rmtree(staging, ignore_errors=True)
             print(f"Warning: could not write zarr cache: {e}")
             if backup_path is not None:
-                print(f"Backup preserved at:\n  {backup_path}")
+                print(f"Your previous cache is preserved at:\n  {backup_path}")
 
     return sdata
+
+
+def _check_free_space(path: Path, backup_path: Optional[Path]) -> None:
+    """Refuse to start a rebuild that cannot finish.
+
+    A rebuild writes a full second copy before the old one is released, so on a
+    nearly-full disk it can fail part way — which used to take the original with
+    it. Estimating from the preserved copy is the best signal available.
+    """
+    reference = backup_path
+    if reference is None:
+        candidates = sorted(path.glob("sdata_cached_prev_*.zarr"), reverse=True)
+        reference = candidates[0] if candidates else None
+    if reference is None or not reference.exists():
+        return
+    from xenium_viewer.utils.cache_repair import describe_store, human_bytes
+
+    needed = describe_store(reference)["size_bytes"]
+    free = shutil.disk_usage(path).free
+    if free < needed * 1.1:
+        raise OSError(
+            f"not enough free space to rebuild the cache: about "
+            f"{human_bytes(needed)} needed, {human_bytes(free)} free"
+        )
 
 
 def load_umap(path: Path):

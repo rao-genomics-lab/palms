@@ -28,3 +28,9 @@ sdata_cached.zarr/
 # Large reference datasets (only metadata/JSON is checked in)
 reference_datasets/*.h5ad
 reference_datasets/raw/
+
+# Manuscript drafts and planning notes (kept out of the public repo)
+manuscript/
+
+# Untracked local data
+data/

@@ -9,10 +9,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from xenium_viewer.utils.prov_graph import ProvGraph, SETUP, ARTIFACT, TERMINAL
+from xenium_viewer.utils.prov_graph import ProvGraph, SETUP, ARTIFACT, TERMINAL, NOTE
 
-_FILL = {SETUP: "#dCE8ff", ARTIFACT: "#dcf3dc", TERMINAL: "#eeeeee"}
-_EDGE = {SETUP: "#4477cc", ARTIFACT: "#3a3", TERMINAL: "#999999"}
+_FILL = {SETUP: "#dCE8ff", ARTIFACT: "#dcf3dc", TERMINAL: "#eeeeee",
+         NOTE: "#fff6e5"}
+_EDGE = {SETUP: "#4477cc", ARTIFACT: "#3a3", TERMINAL: "#999999",
+         NOTE: "#cc9933"}
 
 
 def _wrap(text: str, width: int = 22) -> str:
@@ -83,6 +85,7 @@ def render_dag(graph: ProvGraph, path: Optional[str | Path] = None):
         Patch(facecolor=_FILL[SETUP], edgecolor=_EDGE[SETUP], label="setup"),
         Patch(facecolor=_FILL[ARTIFACT], edgecolor=_EDGE[ARTIFACT], label="artifact"),
         Patch(facecolor=_FILL[TERMINAL], edgecolor=_EDGE[TERMINAL], label="terminal (plot/export)"),
+        Patch(facecolor=_FILL[NOTE], edgecolor=_EDGE[NOTE], label="note (viewer state)"),
         Patch(facecolor="white", edgecolor="#cc6600", linewidth=2.4, label="stale"),
     ]
     ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.9)

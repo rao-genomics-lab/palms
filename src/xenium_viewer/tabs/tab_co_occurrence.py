@@ -13,10 +13,20 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
+from xenium_viewer.utils.steps import Step, StepError, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
+
+
+# Executed and recorded from one string. The old recorded cell ran on `adata`
+# (raw counts, and it rebuilt obsm['spatial'] by hand from x_centroid/y_centroid)
+# while the viewer ran on the normalised copy.
+_COOCCUR_TEMPLATE = """
+# Co-occurrence: $cluster_key (interval=$interval)
+adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
+sq.gr.co_occurrence(adata_norm, cluster_key=$cluster_key, interval=$interval)"""
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -108,8 +118,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     co_status = StatusProxy(ctx.viewer)
     co_progress = make_progress_bar()
 
-    from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
-    from xenium_viewer.utils.spatial_analysis import run_co_occurrence, make_co_occurrence_plot
+    from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+    from xenium_viewer.utils.spatial_analysis import make_co_occurrence_plot
 
     def on_run_co_occurrence():
         co_status.value = "Running co-occurrence analysis..."
@@ -120,18 +130,41 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["_co_params"] = {"interval": interval}
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
+        # The clustering must exist as a node, and in adata.obs, before a step
+        # can declare it as a dependency and read it. Both on the GUI thread.
+        ctx.record_clustering(clustering_key)
+        add_clustering_to_obs(_adata, _adata, ctx.clusterings[clustering_key], clustering_key)
+
+        step = Step(
+            id=f"cooccur:{clustering_key}",
+            template=_COOCCUR_TEMPLATE,
+            params={"cluster_key": clustering_key, "interval": coerce(interval)},
+            deps=[f"clustering:{clustering_key}"],
+            kind=ARTIFACT,
+            label=f"Co-occurrence: {clustering_key}",
+            outputs=["adata_norm"],
+        )
+
         _progress = [None]  # filled after worker is created
 
         @thread_worker
         def _run():
-            adata_norm = get_normalized_adata(_adata)
-            add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
-            adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
-            with qt_tqdm_context(_progress[0], "Co-occurrence: "):
-                result = run_co_occurrence(adata_norm, clustering_key, interval=interval)
-            result['_adata_norm'] = adata_norm
-            result['_cluster_key'] = clustering_key
-            return result
+            ctx.ensure_normalized()
+            try:
+                with qt_tqdm_context(_progress[0], "Co-occurrence: "):
+                    adata_norm = ctx.run_step(step)["adata_norm"]
+            except StepError as e:
+                return {'occ': np.array([]), 'interval': np.array([]),
+                        'clusters': [], 'warning': str(e)}
+            uns = adata_norm.uns[f'{clustering_key}_co_occurrence']
+            return {
+                'occ': np.array(uns['occ']),
+                'interval': np.array(uns['interval']),
+                'clusters': list(adata_norm.obs[clustering_key].cat.categories.astype(str)),
+                'warning': None,
+                '_adata_norm': adata_norm,
+                '_cluster_key': clustering_key,
+            }
 
         worker = _run()
         _progress[0], state['_progress_timer'] = attach_tqdm_progress(
@@ -179,21 +212,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         co_plot_button.enabled = True
         co_export_button.enabled = True
 
-        _co_ck = result.get('_cluster_key', '')
-        _co_iv = state.get("_co_params", {}).get("interval", 50)
-        _co_sel = _get_co_selected_clusters()
-        ctx.record_clustering(_co_ck)
-        ctx.record_node(
-            f"cooccur:{_co_ck}",
-            f"\n# Co-occurrence (interval={_co_iv})\n"
-            "adata.obsm['spatial'] = adata.obsm.get('spatial', "
-            "np.column_stack([adata.obs['x_centroid'], adata.obs['y_centroid']]))\n"
-            f"sq.gr.co_occurrence(adata, cluster_key=\"{_co_ck}\", "
-            f"interval={_co_iv})"
-            + (f"\n# cluster_subset={_co_sel}" if _co_sel else ""),
-            deps=[f"clustering:{_co_ck}"],
-            label=f"Co-occurrence: {_co_ck}",
-        )
+        # Recording happened inside ctx.run_step(), which recorded the source it ran.
 
     def on_show_co_plot():
         result = state.get("co_result")
@@ -227,7 +246,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             ctx.record_node(
                 f"plot:cooccur:{_co_ck}",
                 f"\n# Co-occurrence plot\n"
-                f"sq.pl.co_occurrence(adata, cluster_key=\"{_co_ck}\""
+                f"sq.pl.co_occurrence(adata_norm, cluster_key=\"{_co_ck}\""
                 + (f", clusters={subplot_clusters}" if subplot_clusters else "")
                 + ")\n"
                 + (f"# filter_targets={target_filter}\n" if target_filter else "")
@@ -278,9 +297,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.record_node(
             f"export:cooccur:{_co_ck}",
             f"\n# Export co-occurrence data\n"
-            f"_res = adata.uns[\"{_co_ck}_co_occurrence\"]\n"
+            f"_res = adata_norm.uns[\"{_co_ck}_co_occurrence\"]\n"
             f"_occ, _iv = _res[\"occ\"], _res[\"interval\"]\n"
-            f"_cats = list(adata.obs[\"{_co_ck}\"].cat.categories)\n"
+            f"_cats = list(adata_norm.obs[\"{_co_ck}\"].cat.categories)\n"
             f"_rows = [\n"
             f"    {{\"source_cluster\": s, \"target_cluster\": t, "
             f"\"distance\": _iv[k + 1], \"co_occurrence\": _occ[i, j, k]}}\n"

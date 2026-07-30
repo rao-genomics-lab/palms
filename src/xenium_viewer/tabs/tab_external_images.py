@@ -23,6 +23,7 @@ from superqt import QDoubleRangeSlider
 from napari.qt.threading import thread_worker
 
 from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.zarr_safe import safe_delete_element
 from xenium_viewer.tabs._helpers import make_tab
 from xenium_viewer.utils.registration import load_multichannel_pyramid, compute_landmark_affine
 from xenium_viewer.utils.composite import (
@@ -704,12 +705,12 @@ def build_tab(ctx: "ViewerContext"):
         try:
             element = entry.get("element_name")
             if element and ctx.sdata is not None and element in ctx.sdata:
-                ctx.sdata.delete_element_from_disk(element)
+                safe_delete_element(ctx.sdata, element)
             # Also remove landmarks from sdata
             for suffix in ("_xenium_lm", "_image_lm"):
                 lm_name = f"{element}{suffix}"
                 if lm_name in ctx.sdata:
-                    ctx.sdata.delete_element_from_disk(lm_name)
+                    safe_delete_element(ctx.sdata, lm_name)
         except Exception as e:
             print(f"  Warning: could not delete from sdata: {e}")
         list_widget.takeItem(row)

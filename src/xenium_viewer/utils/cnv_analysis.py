@@ -26,6 +26,8 @@ can judge result quality and retune if needed.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -34,6 +36,51 @@ from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clusteri
 from xenium_viewer.utils.adata_persistence import _convert_adata_arrow_strings
 
 CNV_REFERENCE_OBS_KEY = "cnv_reference"
+
+# Below this share of the panel mapping to genomic coordinates, the run cannot
+# mean anything: inferCNV infers copy number from *neighbouring genes along a
+# chromosome*, so a handful of scattered genes gives a few windows of noise.
+MIN_MAPPED_GENE_FRACTION = 0.05
+
+
+class GeneMappingError(RuntimeError):
+    """Raised when almost none of the panel has genomic coordinates."""
+
+
+def check_gene_mapping(n_mapped: int, n_total: int, var_names=None) -> None:
+    """Fail loudly when the panel barely matches the gene-position reference.
+
+    InSituCNV's default reference is the infercnvpy Maynard 2020 table, which is
+    **human**. A mouse panel matches only the symbols that happen to be spelled
+    identically in both nomenclatures — 8 of 5006 on the dataset that prompted
+    this check (``C2``, ``C3``, ``C6``, ``C7``, ``F3``, ``F8``, ``F9``, ``H19``).
+    The pipeline ran, clustered and produced a result anyway; the first sign
+    anything was wrong came several steps later, when saving the heatmap crashed
+    because 8 genes made too few windows for the dendrogram's PCA path.
+
+    Detecting a species mismatch by name casing is a heuristic, so it only
+    sharpens the message — the *decision* is the mapped fraction.
+    """
+    if n_total <= 0 or n_mapped >= max(1, n_total * MIN_MAPPED_GENE_FRACTION):
+        return
+
+    hint = ""
+    if var_names is not None:
+        names = [str(n) for n in list(var_names)[:200]]
+        title_case = sum(1 for n in names if n[:1].isupper() and n[1:].islower())
+        if names and title_case > len(names) * 0.5:
+            hint = (
+                "\n\nThe panel's gene symbols look like mouse nomenclature "
+                "(e.g. 'A1cf'), and the default gene-position reference is human. "
+                "A mouse annotation table is needed — one with gene_name, "
+                "chromosome, start and end columns."
+            )
+    raise GeneMappingError(
+        f"Only {n_mapped} of {n_total} panel genes have genomic coordinates "
+        f"({n_mapped / n_total:.1%}). CNV inference reads copy number from runs "
+        f"of neighbouring genes along each chromosome, so a result built from "
+        f"this many genes would be noise rather than a weak signal.{hint}"
+    )
 
 
 def _patch_matplotlib_cm_compat() -> None:
@@ -68,6 +115,11 @@ def run_cnv_pipeline(
     copykat_output_dir: str | None = None,
 ) -> dict:
     """Run the InSituCNV pipeline on ``adata`` (raw counts expected in ``.X``).
+
+    Now used only by the **CopyKAT** path (``cnv_copykat_worker.py``), which runs
+    detached in a second conda env. The inferCNV path in ``tabs/tab_cnv.py`` is a
+    templated ``Step`` instead, so the code the viewer executes is the code the
+    notebook records — keep the two in sync when changing either.
 
     Parameters
     ----------
@@ -172,6 +224,7 @@ def run_cnv_pipeline(
         copy=False,
     )
     n_genes_mapped = adata_work.n_vars
+    check_gene_mapping(n_genes_mapped, n_genes_total, adata.var_names)
 
     # infercnvpy does numpy-style fancy indexing on var_names/var columns,
     # which breaks on pandas 3.0's PyArrow-backed string dtype (the same
@@ -282,12 +335,46 @@ def make_cnv_heatmap(adata_cnv, groupby: str):
     import infercnvpy as cnv
     import matplotlib.pyplot as plt
 
-    # Heatmap settings match the insituCNV-copykat fork's plot_chromosome_heatmap
-    # (dendrogram + a fixed ±0.4 CNV colour range), used for both backends.
-    cnv.pl.chromosome_heatmap(
-        adata_cnv, groupby=groupby, dendrogram=True, vmin=-0.4, vmax=0.4, show=False
-    )
+    with _dense_cnv_for_dendrogram(adata_cnv):
+        # Heatmap settings match the insituCNV-copykat fork's plot_chromosome_heatmap
+        # (dendrogram + a fixed ±0.4 CNV colour range), used for both backends.
+        cnv.pl.chromosome_heatmap(
+            adata_cnv, groupby=groupby, dendrogram=True, vmin=-0.4, vmax=0.4, show=False
+        )
     return plt.gcf()
+
+
+@contextmanager
+def _dense_cnv_for_dendrogram(adata_cnv):
+    """Densify a *narrow* sparse ``X_cnv`` for the duration of the plot.
+
+    ``chromosome_heatmap(dendrogram=True)`` ends in ``sc.tl.dendrogram``, which
+    calls ``pd.DataFrame(_choose_representation(...))``. When the CNV matrix has
+    no more columns than ``settings.N_PCS`` (50), that representation is ``.X``
+    itself rather than a PCA — and ``pd.DataFrame(csr_matrix)`` does not densify:
+    it builds a one-column *object* frame whose entries are 1×n row matrices, so
+    the following ``.groupby().mean()`` dies with
+
+        TypeError: agg function failed [how->mean,dtype->object]
+
+    A run with few CNV windows therefore crashed on save while a wide one
+    worked, because the wide one took the PCA branch. Densifying is cheap
+    precisely when it is needed (≤50 columns), and the original sparse matrix is
+    put back afterwards so nothing downstream sees a changed object.
+    """
+    from scanpy import settings
+    from scipy.sparse import issparse
+
+    original = adata_cnv.obsm.get("X_cnv")
+    narrow = (original is not None and issparse(original)
+              and original.shape[1] <= settings.N_PCS)
+    if narrow:
+        adata_cnv.obsm["X_cnv"] = original.toarray()
+    try:
+        yield
+    finally:
+        if narrow:
+            adata_cnv.obsm["X_cnv"] = original
 
 
 # CopyKAT needs some normal cells to seed its diploid baseline, but not many —

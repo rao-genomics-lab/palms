@@ -18,9 +18,113 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
+from xenium_viewer.utils.steps import Step, coerce
 
 _BACKEND_LABELS = {"infercnv": "inferCNV", "copykat": "CopyKAT"}
+
+
+# inferCNV runs in-process, so it is a real Step: one string, executed and
+# recorded. The old recorded cell had drifted in three places — it normalised at
+# scanpy's median default rather than the target_sum=1e4 the viewer used, and it
+# dropped `lfc_clip` and `dendrogram=False`.
+#
+# CopyKAT is *not* migrated: it runs detached, in a second conda env, so no
+# in-process step can be the code that ran. Its node stays on record_node and is
+# labelled as a description of that run rather than as executed source.
+_CNV_HEAD = """
+# CNV inference (inferCNV): reference $reference_clustering
+from insitucnv.tl import (
+    prepare_cnv_input, compute_cnv_neighbors, cluster_cnv_resolutions, run_infercnv,
+)
+
+adata_cnv = adata.copy()"""
+
+_CNV_SUBSET = """
+# limit the analysis to the selected cell types plus the reference population
+adata_cnv = adata_cnv[
+    adata_cnv.obs[$reference_clustering].astype(str).isin($include)
+].copy()"""
+
+_CNV_PREPARE = """
+adata_cnv.obs[$reference_obs_key] = adata_cnv.obs[$reference_clustering].values
+_raw_counts = adata_cnv.X.copy()
+sc.pp.normalize_total(adata_cnv, target_sum=1e4)
+sc.pp.log1p(adata_cnv)
+sc.pp.pca(adata_cnv)
+sc.pp.neighbors(adata_cnv, n_neighbors=$n_neighbors)
+adata_cnv.layers['raw_counts'] = _raw_counts
+
+adata_cnv = prepare_cnv_input(
+    adata_cnv, raw_layer='raw_counts', smoothing_neighbors=$smoothing_neighbors,
+    add_gene_positions=True, drop_unmapped_genes=True, copy=False,
+)"""
+
+# pandas 3 backs strings with PyArrow arrays, which do not support the
+# numpy-style fancy indexing infercnvpy does on var_names / var columns:
+# `_running_mean` slices the gene list with a *2-D* index array, and
+# ArrowStringArray routes that to pyarrow's take(), which raises
+# "ArrowInvalid: only handle 1-dimensional arrays".
+#
+# `future.infer_string` must be off across the *assignment*, not just the
+# conversion: AnnData re-infers string dtypes when a frame is assigned to
+# .obs/.var, so converting to object and assigning it back under the default
+# option leaves the Arrow array exactly where it was. This mirrors
+# adata_persistence._convert_adata_arrow_strings, which run_cnv_pipeline uses —
+# the two must stay identical (tests/test_cnv_step.py).
+_CNV_ARROW_SHIM = """
+_old_infer = pd.options.future.infer_string
+pd.options.future.infer_string = False
+try:
+    for _attr in ('obs', 'var'):
+        _df = getattr(adata_cnv, _attr).copy()
+        if pd.api.types.is_string_dtype(_df.index):
+            _df.index = pd.Index(_df.index.to_numpy(dtype=object))
+        for _col in _df.columns:
+            if isinstance(_df[_col].dtype, pd.CategoricalDtype):
+                _cats = _df[_col].cat.categories
+                if pd.api.types.is_string_dtype(_cats):
+                    _df[_col] = _df[_col].cat.rename_categories(
+                        dict(zip(_cats, _cats.astype(object)))
+                    )
+            elif pd.api.types.is_string_dtype(_df[_col]):
+                _df[_col] = _df[_col].to_numpy(dtype=object)
+        setattr(adata_cnv, _attr, _df)
+finally:
+    pd.options.future.infer_string = _old_infer"""
+
+_CNV_TAIL = """
+run_infercnv(
+    adata_cnv, reference_key=$reference_obs_key,
+    reference_categories=$reference_categories,
+    window_size=$window_size, step=$step, lfc_clip=$lfc_clip,
+    calculate_gene_values=True, copy=False,
+)
+compute_cnv_neighbors(adata_cnv, copy=False)
+cnv_cluster_keys = cluster_cnv_resolutions(
+    adata_cnv, [$resolution], key_prefix='cnv_leiden_res',
+    dendrogram=False, copy=False,
+)
+
+_cnv_ids = (adata_cnv.obs['cell_id'].values
+            if 'cell_id' in adata_cnv.obs.columns else adata_cnv.obs_names)
+cnv_clusters = pd.Series(
+    adata_cnv.obs[cnv_cluster_keys[0]].values,
+    index=_cnv_ids, name=cnv_cluster_keys[0],
+)
+_X_cnv = adata_cnv.obsm['X_cnv']
+cnv_score = pd.Series(
+    np.abs(_X_cnv.toarray() if hasattr(_X_cnv, 'toarray') else np.asarray(_X_cnv)).mean(axis=1),
+    index=_cnv_ids, name='cnv_score',
+)"""
+
+
+def _cnv_template(subset: bool) -> str:
+    parts = [_CNV_HEAD]
+    if subset:
+        parts.append(_CNV_SUBSET)
+    parts += [_CNV_PREPARE, _CNV_ARROW_SHIM, _CNV_TAIL]
+    return "".join(parts)
 
 
 def _backend_label(backend: str) -> str:
@@ -376,53 +480,61 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # ── Provenance + status helpers ─────────────────────────────────────
     def _record_cnv_node(result):
+        """Record the CopyKAT run.
+
+        inferCNV is not recorded here — it runs through ``ctx.run_step``, which
+        records the source it executed. CopyKAT cannot: it runs detached, in a
+        second conda env (``xenium_viewer_copykat``), because its R stack needs
+        python 3.11. No in-process step can be the code that ran, so this node is
+        a *reconstruction* of that run rather than executed source, and it is
+        labelled as such in the notebook.
+        """
         backend = result.get("backend", "infercnv")
+        if backend != "copykat":
+            return
         ref_name = result["reference_clustering_name"]
         ctx.record_clustering(ref_name)
         p = result["params"]
         ref_obs = result["reference_obs_key"]
         ref_repr = repr(result["reference_categories"])
-        var = f"adata_{backend}"
+        var = "adata_copykat"
         analyze_cats = result.get("analyze_categories") or []
-        eng_import = "run_copykat" if backend == "copykat" else "run_infercnv"
         L = [
-            f"\n# CNV inference ({_backend_label(backend)})",
-            f"from insitucnv.tl import prepare_cnv_input, compute_cnv_neighbors, cluster_cnv_resolutions, {eng_import}",
-            f"import scanpy as sc",
+            "\n# CNV inference (CopyKAT)",
+            "# NOTE: the viewer ran this in a detached process in the",
+            "# 'xenium_viewer_copykat' conda env (R + rpy2 need python 3.11), so",
+            "# unlike every other cell this is a reconstruction of that run.",
+            "from insitucnv.tl import prepare_cnv_input, compute_cnv_neighbors, cluster_cnv_resolutions, run_copykat",
+            "import scanpy as sc",
             f"{var} = adata.copy()",
         ]
         if analyze_cats:
             include_repr = repr(sorted(set(analyze_cats) | set(result["reference_categories"])))
             L.append(f"{var} = {var}[{var}.obs['{ref_name}'].astype(str).isin({include_repr})].copy()"
                      f"  # limit to selected cell types + reference")
-        if backend == "copykat":
-            max_cells = result.get("max_cells") or p.get("max_cells") or result.get("n_cells")
-            L.append(f"if {var}.n_obs > {max_cells}: {var} = sc.pp.subsample({var}, n_obs={max_cells}, "
-                     f"random_state=0, copy=True)  # CopyKAT is slow — subsample")
+        max_cells = result.get("max_cells") or p.get("max_cells") or result.get("n_cells")
+        L.append(f"if {var}.n_obs > {max_cells}: {var} = sc.pp.subsample({var}, n_obs={max_cells}, "
+                 f"random_state=0, copy=True)  # CopyKAT is slow — subsample")
         L += [
             f"{var}.obs['{ref_obs}'] = {var}.obs['{ref_name}']  # reference clustering",
             f"{var}.layers['raw_counts'] = {var}.X.copy()",
-            f"sc.pp.normalize_total({var}); sc.pp.log1p({var}); sc.pp.pca({var})",
+            f"sc.pp.normalize_total({var}, target_sum=1e4); sc.pp.log1p({var}); sc.pp.pca({var})",
             f"sc.pp.neighbors({var}, n_neighbors={p['n_neighbors']})",
             f"{var} = prepare_cnv_input({var}, raw_layer='raw_counts', smoothing_neighbors="
             f"{p['smoothing_neighbors']}, add_gene_positions=True, drop_unmapped_genes=True, copy=False)",
         ]
-        if backend == "copykat":
-            n_cores = p.get("n_cores", 1)
-            L.append(f"run_copykat({var}, reference_key='{ref_obs}', reference_categories={ref_repr}, "
-                     f"input_layer='M', n_cores={n_cores}, copy=False)  # fork defaults (genome hg20, win_size 25, ...)")
-            prefix = "copykat_leiden_res"
-        else:
-            L.append(f"run_infercnv({var}, reference_key='{ref_obs}', reference_categories={ref_repr}, "
-                     f"window_size={p['window_size']}, step={p['step']}, calculate_gene_values=True, copy=False)")
-            prefix = "cnv_leiden_res"
+        n_cores = p.get("n_cores", 1)
+        L.append(f"run_copykat({var}, reference_key='{ref_obs}', reference_categories={ref_repr}, "
+                 f"input_layer='M', n_cores={n_cores}, copy=False)  # fork defaults (genome hg20, win_size 25, ...)")
+        prefix = "copykat_leiden_res"
         L += [
             f"compute_cnv_neighbors({var}, copy=False)",
-            f"cluster_cnv_resolutions({var}, {result['resolutions']!r}, key_prefix='{prefix}', copy=False)",
+            f"cluster_cnv_resolutions({var}, {result['resolutions']!r}, key_prefix='{prefix}', "
+            f"dendrogram=False, copy=False)",
             f"# result: {var}.obs[{result['cluster_keys']!r}]",
         ]
-        ctx.record_node(f"cnv:{backend}", "\n".join(L), deps=[f"clustering:{ref_name}"],
-                        label=f"CNV inference ({_backend_label(backend)})")
+        ctx.record_node("cnv:copykat", "\n".join(L), deps=[f"clustering:{ref_name}"],
+                        label="CNV inference (CopyKAT)")
 
     def _write_results_text(result, note=""):
         backend = result.get("backend", "infercnv")
@@ -488,7 +600,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["cnv_result"] = result  # alias to the most-recently-updated backend
 
         # Register the new clustering(s) so Cell Coloring lists them.
-        ctx.color_manager._cluster_cache.pop(key, None)
+        ctx.color_manager.invalidate_cluster_cache(key)
         ctx.clusterings[key] = series
         state.setdefault("custom_clusterings", {})[key] = series
         ctx.refresh_clustering_choices()
@@ -524,7 +636,43 @@ def build_tab(ctx: ViewerContext) -> tuple:
         save_clustering_to_adata(ctx, key, series)
         save_cnv_results_to_adata(ctx, result)
         _record_cnv_node(result)
+        _record_cnv_clustering_node(result, key)
         _write_results_text(result, param_change_note)
+
+    def _record_cnv_clustering_node(result, key):
+        """Record ``clustering:<key>`` for the CNV-derived cluster column.
+
+        The CNV node computes these labels on ``adata_cnv`` and binds
+        ``cnv_clusters``; the viewer then publishes them onto the main table
+        with ``save_clustering_to_adata``. Without a node of that id, any tab
+        that later analysed this clustering fell through to the generic
+        ``record_clustering`` fallback, which used to emit a ``read_csv`` of an
+        ``analysis/clustering/`` file that was never written — so the exported
+        notebook failed outright. This is the code the viewer actually ran,
+        expressed against what the CNV cell already bound.
+        """
+        backend = result.get("backend", "infercnv")
+        head = ("\n# Publish the CNV clustering onto the main table\n"
+                "_ids = (adata.obs['cell_id'].values\n"
+                "        if 'cell_id' in adata.obs.columns else adata.obs_names)\n")
+        if backend == "copykat":
+            # CopyKAT leaves its labels on the (subsampled) adata_copykat, so the
+            # column covers only the cells it ran on; the rest stay unlabelled.
+            var = "adata_copykat"
+            body = (
+                f"_ck_ids = ({var}.obs['cell_id'].values\n"
+                f"           if 'cell_id' in {var}.obs.columns else {var}.obs_names)\n"
+                f"_ck = pd.Series({var}.obs[{key!r}].values, index=_ck_ids)\n"
+                f"adata.obs[{key!r}] = pd.Categorical(_ck.reindex(_ids).values)"
+            )
+        else:
+            # The inferCNV cell binds ``cnv_clusters``, indexed by cell_id.
+            body = f"adata.obs[{key!r}] = pd.Categorical(cnv_clusters.reindex(_ids).values)"
+        ctx.record_node(
+            f"clustering:{key}", head + body,
+            deps=[f"cnv:{backend}"],
+            label=f"Clustering: {key}",
+        )
 
     def _result_from_copykat_output(sidecar, adata_cnv):
         cluster_key = sidecar["cluster_key"]
@@ -561,17 +709,28 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"adata.obs['{ref_key}'] = adata.obs['{ref_key}'].astype(str)",
             f"propagate_cnv_labels(adata, {var}, label_keys={keys_repr},",
             f"    method='cluster', cluster_key='{ref_key}', suffix='_propagated', copy=False)",
-            "# Overlay each run cell's real value so its true call/subclone isn't collapsed",
-            "# to the reference-cluster majority (extrapolation only fills the un-run cells):",
-            f"for _k in {list(label_cols)!r}:",
-            f"    _real = {var}.obs[_k].astype(str)",
-            "    _pk = f'{_k}_propagated'",
-            "    adata.obs[_pk] = adata.obs[_pk].astype(str)",
-            "    adata.obs.loc[_real.index, _pk] = _real.values",
             f"# result: adata.obs[{prop_cols!r}] (all cells; un-run empty groups -> 'unknown')",
+            "# Each propagated column is finished off by its own cell below, which",
+            "# overlays the run cells' real values.",
         ]
         ctx.record_node("cnv:copykat_propagated", "\n".join(L), deps=[f"cnv:{backend}"],
                         label="Extrapolate CopyKAT calls (all cells)")
+        # One clustering node per propagated column, rather than a loop hidden
+        # inside the node above: each is a clustering the user can select, so
+        # each needs an id that dependents (rank genes, nhood, ...) can name.
+        for col in label_cols:
+            pkey = f"{col}_propagated"
+            ctx.record_node(
+                f"clustering:{pkey}",
+                f"\n# Overlay each CopyKAT-run cell's real {col!r} so its true call/subclone\n"
+                f"# isn't collapsed to the reference-cluster majority (extrapolation only\n"
+                f"# fills the cells CopyKAT never ran):\n"
+                f"_real = {var}.obs[{col!r}].astype(str)\n"
+                f"adata.obs[{pkey!r}] = adata.obs[{pkey!r}].astype(str)\n"
+                f"adata.obs.loc[_real.index, {pkey!r}] = _real.values",
+                deps=["cnv:copykat_propagated"],
+                label=f"Clustering: {pkey}",
+            )
 
     def _extrapolate_copykat(result):
         """Propagate CopyKAT results from the run subsample to ALL cells.
@@ -631,7 +790,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             common = real.index.intersection(series.index)
             series.loc[common] = real.loc[common]
             n_filled = int(series.index.difference(common).size)
-            ctx.color_manager._cluster_cache.pop(pkey, None)
+            ctx.color_manager.invalidate_cluster_cache(pkey)
             ctx.clusterings[pkey] = series
             state.setdefault("custom_clusterings", {})[pkey] = series
             save_clustering_to_adata(ctx, pkey, series)
@@ -707,24 +866,74 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # ── Run dispatch ────────────────────────────────────────────────────
     def _run_infercnv(reference_key, reference_ids, analyze_categories):
+        from xenium_viewer.utils.cnv_analysis import (
+            CNV_REFERENCE_OBS_KEY, _patch_matplotlib_cm_compat,
+        )
+        from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+
         _adata = ctx.adata
-        reference_series = ctx.clusterings[reference_key]
+        n_genes_total = _adata.n_vars
+        reference_categories = [str(c) for c in reference_ids]
+        analyze_cats = [str(c) for c in analyze_categories] if analyze_categories else []
+
+        # The reference clustering must exist as a node, and in adata.obs, before
+        # the step can declare it as a dependency and read it. Both on the GUI thread.
+        ctx.record_clustering(reference_key)
+        add_clustering_to_obs(_adata, _adata, ctx.clusterings[reference_key], reference_key)
+
         params = dict(
-            reference_clustering_name=reference_key,
             n_neighbors=cnv_n_neighbors.value,
             smoothing_neighbors=cnv_smoothing_neighbors.value,
             window_size=cnv_window_size.value,
             step=cnv_step.value,
+            lfc_clip=4.0,
             resolution=cnv_resolution.value,
-            analyze_categories=analyze_categories,
+            n_cores=1,
         )
+        step_params = {
+            "reference_clustering": reference_key,
+            "reference_obs_key": CNV_REFERENCE_OBS_KEY,
+            "reference_categories": reference_categories,
+            **{k: coerce(v) for k, v in params.items() if k != "n_cores"},
+        }
+        if analyze_cats:
+            step_params["include"] = sorted(set(analyze_cats) | set(reference_categories))
+
+        step = Step(
+            id="cnv:infercnv",
+            template=_cnv_template(bool(analyze_cats)),
+            params=step_params,
+            deps=[f"clustering:{reference_key}"],
+            kind=ARTIFACT,
+            label="CNV inference (inferCNV)",
+            outputs=["adata_cnv", "cnv_cluster_keys", "cnv_clusters", "cnv_score"],
+        )
+
         gen = ctx.dataset_generation
         run_button.enabled = False
 
         @thread_worker
         def _run():
-            from xenium_viewer.utils.cnv_analysis import run_cnv_pipeline
-            return run_cnv_pipeline(_adata, reference_series, reference_ids, backend="infercnv", **params)
+            _patch_matplotlib_cm_compat()
+            out = ctx.run_step(step)
+            adata_cnv = out["adata_cnv"]
+            cluster_key = out["cnv_cluster_keys"][0]
+            return {
+                "adata_cnv": adata_cnv,
+                "cluster_key": cluster_key,
+                "cluster_series": out["cnv_clusters"],
+                "cnv_score": out["cnv_score"],
+                "n_genes_total": int(n_genes_total),
+                "n_genes_mapped": int(adata_cnv.n_vars),
+                "n_windows": int(adata_cnv.obsm["X_cnv"].shape[1]),
+                "n_cells": int(adata_cnv.n_obs),
+                "backend": "infercnv",
+                "reference_obs_key": CNV_REFERENCE_OBS_KEY,
+                "reference_clustering_name": reference_key,
+                "reference_categories": reference_categories,
+                "analyze_categories": analyze_cats,
+                "params": params,
+            }
 
         worker = _run()
         _timer, _ = attach_spinner(
@@ -780,7 +989,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         X = sub.X
         subset = _ad.AnnData(X=(X.copy() if hasattr(X, "copy") else X), obs=obs, var=var)
 
-        cache_dir = Path(ctx.sdata.path)
+        # Beside the zarr store, not inside it. The detached worker writes here
+        # while the GUI is live; files in the store root make zarr's hierarchy
+        # walk warn on every consolidation, and a cache rebuild would delete
+        # hours of CopyKAT compute along with the cache.
+        from xenium_viewer.utils.adata_persistence import sidecar_dir
+        cache_dir = sidecar_dir(ctx.data_path, create=True)
         plots_dir = Path(ctx.data_path) / "plots"
         plots_dir.mkdir(parents=True, exist_ok=True)
         input_h5ad = cache_dir / "cnv_copykat_input.h5ad"
@@ -911,7 +1125,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         cnv_status.value = f"Building {_backend_label(backend)} heatmap ({_key_to_res_label(cluster_key)})..."
         heatmap_button.enabled = False
         safe = re.sub(r"[^0-9A-Za-z._-]", "_", cluster_key)
-        var = f"adata_{backend}"
+        # inferCNV binds adata_cnv (the step's own name); the CopyKAT
+        # reconstruction node still uses adata_copykat.
+        var = "adata_cnv" if backend == "infercnv" else "adata_copykat"
 
         @thread_worker
         def _build():

@@ -11,13 +11,55 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
+from xenium_viewer.utils.steps import Step, StepError, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
-from xenium_viewer.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
-from xenium_viewer.utils.spatial_analysis import compute_spatial_neighbors, run_ligrec, make_ligrec_plot
+from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+from xenium_viewer.utils.spatial_analysis import make_ligrec_plot
+
+
+# Executed and recorded from one string. Two things the old recorded cell got
+# wrong: it ran on raw `adata` rather than the normalised copy the viewer passed
+# to squidpy, and it relegated the interaction-database selection to a prose
+# comment, so a replay silently used omnipath's defaults. The checkboxes now
+# reach the notebook as `InteractionDataset` members reconstructed by name.
+_LIGREC_TEMPLATE_HEAD = """
+# Ligand-receptor: $cluster_key (n_perms=$n_perms)
+from omnipath.constants import InteractionDataset
+
+adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
+interactions_params = {}"""
+
+_LIGREC_TEMPLATE_INCLUDE = """
+interactions_params['include'] = tuple(
+    InteractionDataset[_n] for _n in $include
+)"""
+
+_LIGREC_TEMPLATE_RESOURCES = """
+interactions_params['resources'] = $resources"""
+
+_LIGREC_TEMPLATE_TAIL = """
+ligrec_res = sq.gr.ligrec(
+    adata_norm, cluster_key=$cluster_key, n_perms=$n_perms,
+    threshold=$threshold, seed=$seed, use_raw=False, copy=True,
+    transmitter_params={'categories': 'ligand'},
+    receiver_params={'categories': 'receptor'},
+    interactions_params=interactions_params,
+)"""
+
+
+def _ligrec_template(has_include: bool, has_resources: bool) -> str:
+    """Assemble the L-R template for the selected interaction databases."""
+    parts = [_LIGREC_TEMPLATE_HEAD]
+    if has_include:
+        parts.append(_LIGREC_TEMPLATE_INCLUDE)
+    if has_resources:
+        parts.append(_LIGREC_TEMPLATE_RESOURCES)
+    parts.append(_LIGREC_TEMPLATE_TAIL)
+    return "".join(parts)
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -89,32 +131,63 @@ def build_tab(ctx: ViewerContext) -> tuple:
         }
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        from omnipath.constants import InteractionDataset
+        # Enum *names*, not the members: params must render as literals, and
+        # the template reconstructs them via ``InteractionDataset[name]``.
         include = []
         if lr_ds_omnipath.isChecked():
-            include.append(InteractionDataset.OMNIPATH)
+            include.append("OMNIPATH")
         if lr_ds_ligrecextra.isChecked():
-            include.append(InteractionDataset.LIGREC_EXTRA)
+            include.append("LIGREC_EXTRA")
         if lr_ds_pathwayextra.isChecked():
-            include.append(InteractionDataset.PATHWAY_EXTRA)
+            include.append("PATHWAY_EXTRA")
         if lr_ds_kinaseextra.isChecked():
-            include.append(InteractionDataset.KINASE_EXTRA)
-        interactions_params = {"include": tuple(include)} if include else {}
-        if lr_cpdb_only.isChecked():
-            interactions_params["resources"] = "CellPhoneDB"
+            include.append("KINASE_EXTRA")
+        resources = "CellPhoneDB" if lr_cpdb_only.isChecked() else None
+
+        # The clustering must exist as a node, and in adata.obs, before a step
+        # can declare it as a dependency and read it. Both on the GUI thread.
+        ctx.record_clustering(clustering_key)
+        add_clustering_to_obs(_adata, _adata, ctx.clusterings[clustering_key], clustering_key)
+
+        params = {
+            "cluster_key": clustering_key,
+            "n_perms": coerce(n_perms),
+            "threshold": 0.01,
+            "seed": 42,
+        }
+        if include:
+            params["include"] = include
+        if resources is not None:
+            params["resources"] = resources
+
+        step = Step(
+            id=f"ligrec:{clustering_key}",
+            template=_ligrec_template(bool(include), resources is not None),
+            params=params,
+            deps=[f"clustering:{clustering_key}", "spatial_neighbors"],
+            kind=ARTIFACT,
+            label=f"Ligand-receptor: {clustering_key}",
+            outputs=["ligrec_res"],
+        )
 
         _progress = [None]  # filled after worker is created
 
         @thread_worker
         def _run():
-            adata_norm = get_normalized_adata(_adata)
-            add_clustering_to_obs(adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key)
-            adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
-            compute_spatial_neighbors(adata_norm, n_neighs=n_neighs)
-            with qt_tqdm_context(_progress[0], "L-R permutations: "):
-                result = run_ligrec(adata_norm, clustering_key, n_perms=n_perms,
-                                    interactions_params=interactions_params)
-            return result
+            ctx.ensure_spatial_neighbors(n_neighs)   # implies ensure_normalized()
+            try:
+                with qt_tqdm_context(_progress[0], "L-R permutations: "):
+                    res = ctx.run_step(step)["ligrec_res"]
+            except StepError as e:
+                import pandas as _pd
+                return {'means': _pd.DataFrame(), 'pvalues': _pd.DataFrame(),
+                        'warning': str(e)}
+            warning = None
+            if res['means'].shape[0] == 0:
+                warning = ("No ligand-receptor interactions found. "
+                           "The 480-gene Xenium panel may not contain enough L-R pairs.")
+            return {'means': res['means'], 'pvalues': res['pvalues'],
+                    'warning': warning}
 
         worker = _run()
         _progress[0], state['_progress_timer'] = attach_tqdm_progress(
@@ -166,25 +239,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         lr_export_means_button.enabled = not means.empty
         lr_export_pvals_button.enabled = not pvalues.empty
 
-        _lr_p = state.get("_lr_params", {})
-        _lr_ck = _lr_p.get("clustering_key", "")
-        _lr_np = _lr_p.get("n_perms", 1000)
-        _lr_nn = _lr_p.get("n_neighs", 6)
-        ctx.record_clustering(_lr_ck)
-        _lr_idesc = _lr_p.get("interactions_desc", "")
-        ctx.record_node(
-            f"ligrec:{_lr_ck}",
-            f"\n# Ligand-receptor analysis (n_perms={_lr_np})\n"
-            f"# interactions: {_lr_idesc}\n"
-            f"sq.gr.ligrec(\n"
-            f"    adata, cluster_key=\"{_lr_ck}\", n_perms={_lr_np},\n"
-            f"    threshold=0.01, seed=42,\n"
-            f"    transmitter_params={{\"categories\": \"ligand\"}},\n"
-            f"    receiver_params={{\"categories\": \"receptor\"}},\n"
-            f")",
-            deps=[f"clustering:{_lr_ck}"],
-            label=f"Ligand-receptor: {_lr_ck}",
-        )
+        # Recording happened inside ctx.run_step(), which recorded the source it ran.
 
     def on_show_lr_plot():
         result = state.get("ligrec_result")
@@ -215,8 +270,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             ctx.record_node(
                 f"plot:ligrec:{_lr_ck}",
                 f"\n# L-R dotplot (pvalue_threshold={pval_thresh})\n"
-                f"sq.pl.ligrec(adata, cluster_key=\"{_lr_ck}\", "
-                f"pvalue_threshold={pval_thresh}"
+                f"sq.pl.ligrec(ligrec_res, pvalue_threshold={pval_thresh}"
                 + (f", source_groups={groups}, target_groups={groups}" if groups else "")
                 + f")\nfig = plt.gcf()\n"
                 + f"fig.savefig(\"ligrec.{_lr_fmt}\", dpi=300, bbox_inches='tight')",
@@ -242,7 +296,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.record_node(
             f"export:ligrec_means:{_lr_ck}",
             f"\n# Export L-R means\n"
-            f"adata.uns[\"{_lr_ck}_ligrec\"][\"means\"].to_csv(\"{os.path.basename(path)}\")",
+            f"ligrec_res[\"means\"].to_csv(\"{os.path.basename(path)}\")",
             deps=[f"ligrec:{_lr_ck}"],
             kind=TERMINAL,
             label="Export L-R means",
@@ -263,7 +317,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.record_node(
             f"export:ligrec_pvalues:{_lr_ck}",
             f"\n# Export L-R p-values\n"
-            f"adata.uns[\"{_lr_ck}_ligrec\"][\"pvalues\"].to_csv(\"{os.path.basename(path)}\")",
+            f"ligrec_res[\"pvalues\"].to_csv(\"{os.path.basename(path)}\")",
             deps=[f"ligrec:{_lr_ck}"],
             kind=TERMINAL,
             label="Export L-R p-values",

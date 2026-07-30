@@ -7,13 +7,48 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from qtpy.QtWidgets import QWidget, QVBoxLayout
+from superqt.utils import ensure_main_thread
 
+from xenium_viewer.utils.adata_persistence import CLUSTERING_PREFIX
 from xenium_viewer.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
+from xenium_viewer.utils.environment import environment_code, same_environment
+from xenium_viewer.utils.reporting import get_logger, report_recording_failure
+from xenium_viewer.utils.steps import Step, StepExecutor, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
+
+log = get_logger(__name__)
+
+# The provenance graph, written beside the store on every recorded step. The
+# zarr session attr is only written by ``save_session`` (dataset switch / exit),
+# so this is what a mid-session reader — the verification script, the next
+# launch after a crash — should believe.
+PROV_GRAPH_SIDECAR = "prov_graph.json"
+
+
+# Binds ``adata_norm`` rather than mutating ``adata``, so a step that makes its
+# own copy cannot end up normalising twice. Mirrors what the viewer has always
+# actually run (``utils.gene_analysis.get_normalized_adata``) — including the
+# ``target_sum=1e4`` the old recorded cell omitted.
+_NORMALIZE_TEMPLATE = """
+# Normalized copy used by expression-based analyses
+adata_norm = adata.copy()
+sc.pp.normalize_total(adata_norm, target_sum=1e4)
+sc.pp.log1p(adata_norm)
+sc.pp.pca(adata_norm)"""
+
+
+# Built on ``adata_norm`` rather than ``adata``: every consumer of the spatial
+# graph (nhood enrichment, co-occurrence, ligrec) works on the normalised copy,
+# and squidpy stores the graph in ``.obsp`` of whichever object it was given.
+# The old recorded cell built it on ``adata`` — so the notebook's consumers read
+# a graph that did not exist on the object they were passed.
+_SPATIAL_NEIGHBORS_TEMPLATE = """
+# Spatial neighbor graph (k=$n_neighs)
+sq.gr.spatial_neighbors(adata_norm, coord_type='generic', n_neighs=$n_neighs)"""
 
 
 # ── magicgui ComboBox default helper ─────────────────────────────────────────
@@ -265,6 +300,45 @@ def create_shared_helpers(ctx: ViewerContext):
         if sync_fn:
             sync_fn()
         _write_code_file()
+        _save_prov_graph()
+
+    def _save_prov_graph():
+        """Persist the provenance graph as soon as it changes.
+
+        The graph used to reach disk only inside ``save_session``, which runs on
+        a dataset switch or at viewer exit — while the *artifacts* it explains
+        (``clustering_*`` columns, ``uns['rank_genes_groups']``) are persisted
+        the moment they are produced. A session verified, inspected, or killed
+        in between therefore had results on disk whose code was nowhere: measured
+        on a real session, the store held a 16-minute-old three-node graph while
+        the table already carried two Leiden clusterings and a rank-genes result.
+
+        Written as a sidecar rather than into the store: it costs one small
+        atomic file write per recorded step, where updating the zarr group means
+        copying every parquet under ``viewer_session/``. ``save_session`` still
+        writes the attr, and the sidecar takes precedence on load.
+
+        Gated on ``prov_graph_restored``, which ``app.py`` sets once the session
+        has been restored. Tabs seed a preamble node while the viewer is still
+        being built — writing at that point replaced a 13-node graph on disk
+        with a one-node stub, which the next launch then preferred over the
+        session attr, and the DAG came up empty.
+        """
+        graph = state.get("prov_graph")
+        if not state.get("prov_graph_restored"):
+            return
+        if graph is None or not len(graph) or ctx.data_path is None:
+            return
+        try:
+            from xenium_viewer.utils.adata_persistence import sidecar_write_path
+            from xenium_viewer.utils.zarr_safe import atomic_json
+            atomic_json(sidecar_write_path(ctx, PROV_GRAPH_SIDECAR), graph.to_list())
+        except (OSError, TypeError, ValueError) as e:
+            # Never let a persistence hiccup abort the user's analysis action;
+            # save_session remains the backstop.
+            log.warning("could not persist the provenance graph: %s", e)
+
+    ctx.save_prov_graph = _save_prov_graph
 
     def _record_node(node_id: str, code: str, deps=(), kind: str = ARTIFACT,
                      label: str = None, params: dict = None):
@@ -286,15 +360,80 @@ def create_shared_helpers(ctx: ViewerContext):
                          label=label, params=params)
         except (KeyError, CycleError) as e:
             # Never let a recorder bug abort the user's analysis action; degrade
-            # to appending the snippet so the code isn't silently lost.
-            import warnings
-            warnings.warn(f"record_node({node_id!r}): {e}")
+            # to appending the snippet so the code isn't silently lost — but say
+            # so, because from here on the notebook is incomplete.
+            report_recording_failure(node_id, e)
             _emit_flat(code)
             return
         if prev_code != code:  # new node, or revised → show the (new) code
             _emit_flat(code)
 
     ctx.record_node = _record_node
+
+    # ── run_step (the executed-code-is-recorded-code path) ───────────────
+    @ensure_main_thread
+    def _emit_flat_main_thread(code: str):
+        _emit_flat(code)
+
+    def _get_executor():
+        """Lazily build the StepExecutor, sharing the session's ProvGraph.
+
+        The namespace mirrors the exported notebook's globals, seeded with the
+        objects the viewer already loaded. Note the one documented divergence:
+        the ``preamble`` node records ``xenium(data_path)``, but the viewer
+        reaches the same objects via the zarr cache rather than re-reading the
+        raw output. Every *other* step executes exactly what it records.
+        """
+        if ctx.executor is None:
+            import matplotlib.pyplot as plt
+            import numpy as _np
+            import pandas as pd
+            import scanpy as sc
+            import squidpy as sq
+            from pathlib import Path as _Path
+
+            graph = state.setdefault("prov_graph", ProvGraph())
+            ctx.executor = StepExecutor(
+                namespace={
+                    "sc": sc, "sq": sq, "pd": pd, "np": _np, "plt": plt,
+                    "Path": _Path,
+                    "data_path": ctx.data_path,
+                    "sdata": ctx.sdata,
+                    "adata": ctx.adata,
+                },
+                graph=graph,
+            )
+        return ctx.executor
+
+    def _run_step(step: Step, progress=None) -> dict:
+        """Execute *step* and record the same source, then sync viewer state.
+
+        Returns the step's declared outputs. Raises ``StepError`` on failure —
+        callers surface it rather than swallowing it, so a broken step is
+        visible instead of producing a node for an artifact that never existed.
+        """
+        executor = _get_executor()
+        # Keep the namespace pointed at the live objects: a dataset reload
+        # rebinds ctx.adata/ctx.sdata without going through the executor.
+        if executor.ns.get("adata") is not ctx.adata:
+            executor.ns["adata"] = ctx.adata
+        if executor.ns.get("sdata") is not ctx.sdata:
+            executor.ns["sdata"] = ctx.sdata
+
+        outputs = executor.run(step, progress=progress)
+
+        # A step may rebind rather than mutate (``adata = adata[:, mask]``);
+        # follow it so the GUI and the notebook stay on the same object.
+        if executor.ns.get("adata") is not ctx.adata:
+            ctx.adata = executor.ns["adata"]
+
+        if state.get("record_code"):
+            # Steps run in napari worker threads; the flat journal writes a file
+            # and refreshes the Notebook tab widget, so bounce it to the GUI thread.
+            _emit_flat_main_thread(step.render())
+        return outputs
+
+    ctx.run_step = _run_step
 
     # ── record_code (backward-compat shim) ───────────────────────────────
     def _record_code(code: str, tag: str = None):
@@ -315,8 +454,31 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.record_code = _record_code
 
+    # ── record_environment ───────────────────────────────────────────────
+    def _record_environment():
+        """Record what the analysis is being run with.
+
+        A separate node from ``preamble``, and deliberately one with **no
+        dependents**: an environment that differs between recording and replay
+        is something to read, not a reason to flag every downstream result
+        stale. It has no deps either, so it sorts first among the setup nodes
+        (ties break on id, and ``environment`` < ``preamble``).
+        """
+        code = state.get("_environment_code")
+        if code is None:
+            code = state["_environment_code"] = environment_code()
+        graph = state.get("prov_graph")
+        previous = graph.get("environment") if graph is not None else None
+        if previous is not None and same_environment(previous.code, code):
+            return                       # same versions — keep the original stamp
+        _record_node("environment", code, kind=SETUP,
+                     label="Environment & seeds")
+
+    ctx.record_environment = _record_environment
+
     # ── record_preamble ──────────────────────────────────────────────────
     def _record_preamble():
+        _record_environment()
         _record_node(
             "preamble",
             "import scanpy as sc\n"
@@ -337,64 +499,132 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.record_preamble = _record_preamble
 
-    # ── record_normalize ─────────────────────────────────────────────────
-    def _record_normalize():
+    # ── ensure_normalized ────────────────────────────────────────────────
+    def _ensure_normalized():
+        """Run the ``normalize`` step if needed and return ``adata_norm``.
+
+        Replaces the old ``record_normalize`` + ``get_normalized_adata`` pair,
+        which had drifted: the GUI normalised with ``target_sum=1e4`` while the
+        recorded cell used scanpy's median default.
+
+        The step binds a *copy* rather than mutating ``adata`` in place. The old
+        node was ``kind=SETUP``, so it sorted ahead of every artifact node and
+        silently log-normalised the object other cells then copied — a notebook
+        containing both it and a self-contained step could double-normalise.
+        Consumers now name ``adata_norm`` explicitly.
+
+        Idempotent: re-running is skipped while the source ``adata`` is unchanged,
+        since the step has already been executed and recorded.
+        """
+        executor = _get_executor()
+        if (state.get("_norm_src_id") == id(ctx.adata)
+                and "adata_norm" in executor.ns):
+            return executor.ns["adata_norm"]
         _record_preamble()
-        _record_node(
-            "normalize",
-            "\n# Normalize, log-transform, PCA\n"
-            "sc.pp.normalize_total(adata)\n"
-            "sc.pp.log1p(adata)\n"
-            "sc.pp.pca(adata)",
+        outputs = _run_step(Step(
+            id="normalize",
+            template=_NORMALIZE_TEMPLATE,
             deps=["preamble"],
             kind=SETUP,
             label="Normalize, log-transform, PCA",
-        )
+            outputs=["adata_norm"],
+        ))
+        state["_norm_src_id"] = id(ctx.adata)
+        return outputs["adata_norm"]
 
-    ctx.record_normalize = _record_normalize
+    ctx.ensure_normalized = _ensure_normalized
 
     # ── record_clustering ────────────────────────────────────────────────
+    def _clustering_csv(key):
+        """The 10x ``analysis/clustering`` CSV backing *key*, or None.
+
+        Only a clustering that came with the dataset has one. Anything the
+        viewer derived (Leiden, CNV, Novae, an import) does not, and the
+        producer is responsible for recording the code that made it.
+        """
+        root = os.path.join(ctx.data_path, "analysis", "clustering")
+        for dir_name in (f"gene_expression_{key}", key):
+            candidate = os.path.join(root, dir_name, "clusters.csv")
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
     def _record_clustering(key):
-        # If the true producer already recorded this clustering column (the
-        # Leiden tab, a file import, or a prior session), leave it alone — don't
-        # overwrite real code with a CSV loader (and don't flag dependents stale).
+        """Ensure a ``clustering:<key>`` node exists so dependents can name it.
+
+        If the true producer already recorded one (the Leiden tab, the CNV tab,
+        Novae, a file import, or a prior session), leave it alone — don't
+        overwrite real code with a loader, and don't flag dependents stale.
+        """
         graph = state.get("prov_graph")
         if graph is not None and f"clustering:{key}" in graph:
             return
-        _record_normalize()
-        dir_name = f"gene_expression_{key}"
-        csv_path = os.path.join(ctx.data_path, "analysis", "clustering", dir_name, "clusters.csv")
-        if not os.path.exists(csv_path):
-            csv_path = os.path.join(ctx.data_path, "analysis", "clustering", key, "clusters.csv")
+        _record_preamble()
+        csv_path = _clustering_csv(key)
+        if csv_path is not None:
+            code = (
+                f"\n# Add clustering: {key}\n"
+                f"clust_df = pd.read_csv(r\"{csv_path}\", index_col=0)\n"
+                f"adata.obs[\"{key}\"] = pd.Categorical("
+                f"clust_df.reindex(adata.obs_names).iloc[:, 0].astype(str).values)"
+            )
+        else:
+            # No CSV and no producer node: the column exists only in the viewer's
+            # cache, from a session recorded before its producer recorded code.
+            # Reload it, and say so in the cell — the previous version emitted a
+            # read_csv of this path regardless, so the exported notebook died with
+            # FileNotFoundError on every viewer-derived clustering.
+            cache = os.path.join(ctx.data_path, "sdata_cached.zarr")
+            code = (
+                f"\n# Clustering '{key}' was computed in an earlier session, before its\n"
+                f"# producer recorded code. This RELOADS the stored labels from the\n"
+                f"# viewer's cache — it does not recompute them.\n"
+                f"import zarr\n"
+                f"from anndata.io import read_elem\n"
+                f"_cached_obs = read_elem(zarr.open(r\"{cache}\", mode='r')['tables/table/obs'])\n"
+                f"adata.obs[\"{key}\"] = pd.Categorical(\n"
+                f"    _cached_obs[\"{CLUSTERING_PREFIX}{key}\"].reindex(adata.obs_names).astype(str).values)"
+            )
         _record_node(
             f"clustering:{key}",
-            f"\n# Add clustering: {key}\n"
-            f"clust_df = pd.read_csv(r\"{csv_path}\", index_col=0)\n"
-            f"adata.obs[\"{key}\"] = pd.Categorical("
-            f"clust_df.reindex(adata.obs_names).iloc[:, 0].astype(str).values)",
-            deps=["normalize"],
+            code,
+            deps=["preamble"],   # puts labels into obs; needs no normalisation
             kind=ARTIFACT,
             label=f"Clustering: {key}",
         )
 
     ctx.record_clustering = _record_clustering
 
-    # ── record_spatial_neighbors ─────────────────────────────────────────
-    def _record_spatial_neighbors(n_neighs):
-        _record_preamble()
-        _record_node(
-            "spatial_neighbors",
-            f"\n# Compute spatial neighbors (k={n_neighs})\n"
-            "adata.obsm['spatial'] = adata.obsm.get('spatial', "
-            "np.column_stack([adata.obs['x_centroid'], adata.obs['y_centroid']]))\n"
-            f"sq.gr.spatial_neighbors(adata, n_neighs={n_neighs}, coord_type=\"generic\")",
-            deps=["preamble"],
-            kind=ARTIFACT,
-            params={"n_neighs": n_neighs},
-            label="Spatial neighbors",
-        )
+    # ── ensure_spatial_neighbors ─────────────────────────────────────────
+    def _ensure_spatial_neighbors(n_neighs):
+        """Build the spatial graph on ``adata_norm`` if needed, and record it.
 
-    ctx.record_spatial_neighbors = _record_spatial_neighbors
+        Replaces ``record_spatial_neighbors``, which recorded a graph built on
+        ``adata`` while the viewer built one on the normalised copy the analyses
+        were actually handed — so a replayed notebook ran nhood/co-occurrence
+        against an object with no ``.obsp`` graph on it.
+
+        Idempotent per ``(adata_norm, n_neighs)``. Re-running with a different
+        ``n_neighs`` upserts the node and flags its dependents stale, which is
+        the intended semantics.
+        """
+        n_neighs = coerce(n_neighs)
+        _ensure_normalized()
+        executor = _get_executor()
+        cache_key = (id(executor.ns.get("adata_norm")), n_neighs)
+        if state.get("_spatial_neighbors_key") == cache_key:
+            return
+        _run_step(Step(
+            id="spatial_neighbors",
+            template=_SPATIAL_NEIGHBORS_TEMPLATE,
+            params={"n_neighs": n_neighs},
+            deps=["normalize"],
+            kind=ARTIFACT,
+            label="Spatial neighbors",
+        ))
+        state["_spatial_neighbors_key"] = cache_key
+
+    ctx.ensure_spatial_neighbors = _ensure_spatial_neighbors
 
     # ── auto_save_plot ───────────────────────────────────────────────────
     def _auto_save_plot(fig, stem: str) -> str:

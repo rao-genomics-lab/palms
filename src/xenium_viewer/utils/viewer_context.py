@@ -66,13 +66,28 @@ class ViewerContext:
     mg_clustering_widget: Any = None      # marker genes tab
     cnv_clustering_widget: Any = None     # CNV tab — reference-population picker
 
+    # ── Step execution (attached by create_shared_helpers) ───────────────────
+    # ``executor`` is the StepExecutor whose namespace mirrors the exported
+    # notebook's globals; ``run_step`` runs a Step through it and performs the
+    # recorder side-effects. Prefer ``run_step`` over ``record_node`` in new
+    # code — it is what makes the executed and recorded source identical.
+    executor: Any = None
+    run_step: Any = None
+
+    # Reloads the open dataset from disk, rebuilding layers, managers and every
+    # tab widget. Attached by app.py. Needed when something changes the zarr
+    # store behind the viewer's back — the Cache tab's recovery writes elements
+    # straight into it, so nothing in memory knows they exist until this runs.
+    reload_dataset: Any = None
+
     # ── Shared helper callables (attached by create_shared_helpers) ──────────
     record_code: Any = None
     record_node: Any = None
     record_preamble: Any = None
-    record_normalize: Any = None
+    record_environment: Any = None  # versions + seeds; recorded with the preamble
+    ensure_normalized: Any = None   # runs the "normalize" step, returns adata_norm
+    ensure_spatial_neighbors: Any = None  # runs the "spatial_neighbors" step on adata_norm
     record_clustering: Any = None
-    record_spatial_neighbors: Any = None
     refresh_clustering_choices: Any = None
     auto_save_plot: Any = None
     repopulate_cluster_checkboxes: Any = None

@@ -10,10 +10,144 @@ from magicgui.widgets import ComboBox, CheckBox, PushButton
 from qtpy.QtWidgets import QTextEdit, QFileDialog, QLabel as QtLabel
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, make_progress_bar
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import ARTIFACT, SETUP, TERMINAL
+from xenium_viewer.utils.steps import Step, StepError, coerce
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
+
+
+# The drawn polygons are inlined as literals so the notebook reproduces them
+# without the viewer's zarr cache. ``rois`` is a SETUP node: it binds a constant.
+_ROIS_TEMPLATE = """
+# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)
+roi_polygons = [np.array(_p) for _p in $polygons]"""
+
+
+# ROI DEG, executed and recorded from one string. The old recorded cell called
+# ``xenium_viewer.utils.gene_analysis.compute_roi_deg`` — so the notebook needed
+# this package installed and the reader could not see what it did. It is plain
+# shapely + scanpy, so it is now written out in full. (E3 replaces the
+# point-in-polygon block with ``spatialdata.polygon_query``.)
+_ROI_DEG_HEAD = """
+# ROI differential expression (method=$method)
+from shapely import contains_xy
+from shapely.geometry import Polygon
+
+centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
+roi_region = np.full(adata.n_obs, '', dtype=object)"""
+
+_ROI_DEG_FILTER = """
+# Cluster filter: cells must be inside an ROI *and* in the selected clusters
+cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()"""
+
+_ROI_DEG_LOOP_HEAD = """
+for _i, _poly_yx in enumerate(roi_polygons):
+    _poly = Polygon(_poly_yx[:, ::-1])
+    if not _poly.is_valid:
+        _poly = _poly.buffer(0)
+    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])"""
+
+_ROI_DEG_LOOP_FILTER = """
+    _inside = _inside & cluster_mask"""
+
+_ROI_DEG_TAIL = """
+    roi_region[_inside] = f'Region {_i + 1}'
+
+roi_adata = adata[roi_region != ''].copy()
+roi_adata.obs['roi_region'] = pd.Categorical(roi_region[roi_region != ''])
+sc.pp.normalize_total(roi_adata, target_sum=1e4)
+sc.pp.log1p(roi_adata)
+sc.tl.rank_genes_groups(
+    roi_adata, 'roi_region', method=$method, reference='rest', key_added=$method,
+)
+roi_deg_df = sc.get.rank_genes_groups_df(roi_adata, group=None, key=$method)"""
+
+
+# Per-region expression of one gene. This used to record two comment lines
+# saying the numbers were "shown in the viewer" — a cell that replays as a
+# silent no-op, which ``allow_errors=False`` can never catch. The same shapely
+# membership test as the DEG step above, then the statistics the tab prints.
+_ROI_EXPR_HEAD = """
+# ROI expression of $gene, per drawn region
+from shapely import contains_xy
+from shapely.geometry import Polygon
+from itertools import combinations
+from scipy import stats
+
+centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
+_x = adata[:, $gene].X
+_expr = np.asarray(_x.todense() if hasattr(_x, 'todense') else _x).ravel()
+_cell_ids = (adata.obs['cell_id'].to_numpy() if 'cell_id' in adata.obs
+             else adata.obs_names.to_numpy())"""
+
+_ROI_EXPR_FILTER = """
+# Cluster filter: cells must be inside an ROI *and* in the selected clusters
+cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()"""
+
+_ROI_EXPR_LOOP_HEAD = """
+_rows = []
+for _i, _poly_yx in enumerate(roi_polygons):
+    _poly = Polygon(_poly_yx[:, ::-1])
+    if not _poly.is_valid:
+        _poly = _poly.buffer(0)
+    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])"""
+
+_ROI_EXPR_LOOP_FILTER = """
+    _inside = _inside & cluster_mask"""
+
+_ROI_EXPR_TAIL = """
+    _idx = np.where(_inside)[0]
+    _rows.append(pd.DataFrame({
+        'region_id': _i + 1,
+        'cell_id': _cell_ids[_idx],
+        'x_centroid_um': adata.obsm['spatial'][_idx, 0],
+        'y_centroid_um': adata.obsm['spatial'][_idx, 1],
+        'expression': _expr[_idx],
+    }))
+
+roi_expr_cells = pd.concat(_rows, ignore_index=True)
+roi_expr_stats = (
+    roi_expr_cells.groupby('region_id')['expression']
+    .agg(['count', 'mean', 'median', 'std', 'min', 'max'])
+    .reindex(range(1, len(roi_polygons) + 1))
+)
+roi_expr_stats['count'] = roi_expr_stats['count'].fillna(0).astype(int)
+
+# Pairwise Welch's t-tests between regions, Benjamini-Hochberg corrected
+_groups = [(_r, _g['expression'].to_numpy())
+           for _r, _g in roi_expr_cells.groupby('region_id') if len(_g) >= 2]
+_tests = []
+for (_r1, _e1), (_r2, _e2) in combinations(_groups, 2):
+    _t, _p = stats.ttest_ind(_e1, _e2, equal_var=False)
+    _tests.append({'region_1': _r1, 'region_2': _r2, 't': _t, 'p': _p})
+roi_expr_tests = pd.DataFrame(_tests, columns=['region_1', 'region_2', 't', 'p'])
+roi_expr_tests['p_adj'] = (
+    stats.false_discovery_control(roi_expr_tests['p'], method='bh')
+    if len(roi_expr_tests) > 1 else roi_expr_tests['p']
+)"""
+
+
+def _roi_expr_template(filtered: bool) -> str:
+    parts = [_ROI_EXPR_HEAD]
+    if filtered:
+        parts.append(_ROI_EXPR_FILTER)
+    parts.append(_ROI_EXPR_LOOP_HEAD)
+    if filtered:
+        parts.append(_ROI_EXPR_LOOP_FILTER)
+    parts.append(_ROI_EXPR_TAIL)
+    return "".join(parts)
+
+
+def _roi_deg_template(filtered: bool) -> str:
+    parts = [_ROI_DEG_HEAD]
+    if filtered:
+        parts.append(_ROI_DEG_FILTER)
+    parts.append(_ROI_DEG_LOOP_HEAD)
+    if filtered:
+        parts.append(_ROI_DEG_LOOP_FILTER)
+    parts.append(_ROI_DEG_TAIL)
+    return "".join(parts)
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -31,26 +165,24 @@ def build_tab(ctx: ViewerContext) -> tuple:
     roi_deg_progress = make_progress_bar()
 
     def _record_rois():
-        """Record the drawn ROI polygons as an inlined `roi_polygons` node so
-        the notebook reproduces them without the viewer's zarr cache."""
+        """Bind and record ``roi_polygons`` from the drawn shapes."""
         polygons = ctx.roi_layer.data if ctx.roi_layer is not None else []
         if len(polygons) == 0:
             return
-        arrs = ",\n    ".join(
-            f"np.array({np.round(np.asarray(p), 2).tolist()})" for p in polygons
-        )
-        ctx.record_node(
-            "rois",
-            "\n# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)\n"
-            f"roi_polygons = [\n    {arrs},\n]",
+        ctx.record_preamble()
+        ctx.run_step(Step(
+            id="rois",
+            template=_ROIS_TEMPLATE,
+            params={"polygons": [
+                np.round(np.asarray(p), 2).tolist() for p in polygons
+            ]},
             deps=["preamble"],
+            kind=SETUP,
             label=f"ROI polygons ({len(polygons)})",
-        )
+            outputs=["roi_polygons"],
+        ))
 
     def on_calculate_roi():
-        from shapely.geometry import Polygon as ShapelyPolygon
-        from shapely import contains_xy
-
         gene = ctx.gene_widget.value
         if gene is None:
             roi_text.setPlainText("No gene selected.")
@@ -61,156 +193,101 @@ def build_tab(ctx: ViewerContext) -> tuple:
             roi_text.setPlainText("No ROI polygons drawn.\nUse the Shapes layer to draw polygons.")
             return
 
-        adata = ctx.color_manager.adata
-        gene_idx = adata.var_names.get_loc(gene)
-        X = adata.X
-        if hasattr(X, "toarray"):
-            expr = np.asarray(X[:, gene_idx].toarray()).ravel().astype(np.float32)
-        else:
-            expr = np.asarray(X[:, gene_idx]).ravel().astype(np.float32)
+        # The polygons must be bound before the step, which reads them.
+        _record_rois()
 
         use_filter = ctx.filter_check.value
-        cluster_mask = None
+        deps = ["rois"]
+        params = {"gene": gene, "pixel_size": coerce(ctx.pixel_size)}
         filter_desc = ""
         if use_filter:
             clustering_key = ctx.clustering_widget.value
             selected_ids = ctx.get_selected_cluster_ids()
-            cluster_series = ctx.clusterings[clustering_key]
-            if 'cell_id' in adata.obs.columns:
-                cell_ids_arr = adata.obs['cell_id'].values
-                clusters_aligned = cluster_series.reindex(cell_ids_arr)
-            else:
-                clusters_aligned = cluster_series.reindex(adata.obs_names)
-            cluster_mask = ctx.make_cluster_mask(clusters_aligned.values, selected_ids)
+            ctx.record_clustering(clustering_key)
+            from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+            add_clustering_to_obs(ctx.adata, ctx.adata,
+                                  ctx.clusterings[clustering_key], clustering_key)
+            params["clustering"] = clustering_key
+            params["selected"] = sorted({str(i) for i in selected_ids})
+            deps.append(f"clustering:{clustering_key}")
             filter_desc = f" ({clustering_key} clusters: {sorted(selected_ids)})"
 
-        from scipy import stats
-        from itertools import combinations
+        try:
+            out = ctx.run_step(Step(
+                id=f"roi_expression:{gene}",
+                template=_roi_expr_template(use_filter),
+                params=params,
+                deps=deps,
+                kind=ARTIFACT,
+                label=f"ROI expression: {gene}",
+                outputs=["roi_expr_cells", "roi_expr_stats", "roi_expr_tests"],
+            ))
+        except StepError as e:
+            roi_text.setPlainText(str(e))
+            status_label.value = f"ROI expression failed: {e}"
+            roi_export_button.enabled = False
+            return
+
+        cells, stats_df, tests = (out["roi_expr_cells"], out["roi_expr_stats"],
+                                  out["roi_expr_tests"])
+        state["roi_expr_cells"] = cells
+        state["roi_gene"] = gene
 
         lines = [f"Gene: {gene}{filter_desc}", ""]
-        roi_results = []
-        region_exprs = []
-
-        for i, poly_yx in enumerate(polygons):
-            poly_xy = poly_yx[:, ::-1]
-            shapely_poly = ShapelyPolygon(poly_xy)
-            if not shapely_poly.is_valid:
-                shapely_poly = shapely_poly.buffer(0)
-
-            inside = contains_xy(shapely_poly, ctx.centroids_yx[:, 1], ctx.centroids_yx[:, 0])
-            if cluster_mask is not None:
-                inside = inside & cluster_mask
-            inside_idx = np.where(inside)[0]
-            n_cells = len(inside_idx)
-
-            if n_cells == 0:
-                lines.append(f"Region {i+1}: 0 cells")
-                region_exprs.append((i + 1, np.array([], dtype=np.float32)))
-            else:
-                region_expr = expr[inside_idx]
+        for region_id, row in stats_df.iterrows():
+            if row["count"] == 0:
+                lines.append(f"Region {region_id}: 0 cells")
+                continue
+            lines.append(
+                f"Region {region_id}: {int(row['count'])} cells, "
+                f"mean={row['mean']:.2f}, median={row['median']:.2f}, "
+                f"std={row['std']:.2f}, min={row['min']:.0f}, max={row['max']:.0f}"
+            )
+        if len(tests):
+            lines += ["", "── Pairwise Welch's t-tests ──"]
+            corrected = len(tests) > 1
+            for row in tests.itertuples():
+                sig = " *" if (row.p_adj if corrected else row.p) < 0.05 else ""
+                adj = f", p_adj(BH)={row.p_adj:.2e}" if corrected else ""
                 lines.append(
-                    f"Region {i+1}: {n_cells} cells, "
-                    f"mean={region_expr.mean():.2f}, "
-                    f"median={np.median(region_expr):.2f}, "
-                    f"std={region_expr.std():.2f}, "
-                    f"min={region_expr.min():.0f}, "
-                    f"max={region_expr.max():.0f}"
+                    f"  Region {row.region_1} vs {row.region_2}: "
+                    f"t={row.t:.3f}, p={row.p:.2e}{adj}{sig}"
                 )
-                region_exprs.append((i + 1, region_expr))
-
-            for idx in inside_idx:
-                x_um = ctx.centroids_yx[idx, 1] * ctx.pixel_size
-                y_um = ctx.centroids_yx[idx, 0] * ctx.pixel_size
-                cell_id = adata.obs['cell_id'].values[idx] if 'cell_id' in adata.obs.columns else str(idx)
-                roi_results.append({
-                    "region_id": i + 1,
-                    "cell_id": cell_id,
-                    "x_centroid_um": x_um,
-                    "y_centroid_um": y_um,
-                    "expression": expr[idx],
-                })
-
-        # Significance testing
-        testable = [(r, e) for r, e in region_exprs if len(e) >= 2]
-        pairs = list(combinations(testable, 2))
-        if pairs:
-            lines.append("")
-            lines.append("── Pairwise Welch's t-tests ──")
-            raw_pvals = []
-            pair_labels = []
-            for (r1, e1), (r2, e2) in pairs:
-                t_stat, p_val = stats.ttest_ind(e1, e2, equal_var=False)
-                raw_pvals.append(p_val)
-                pair_labels.append((r1, r2, t_stat, p_val))
-
-            n_tests = len(raw_pvals)
-            if n_tests > 1:
-                sorted_idx = np.argsort(raw_pvals)
-                adjusted = np.empty(n_tests, dtype=np.float64)
-                for rank_pos, orig_idx in enumerate(sorted_idx):
-                    adjusted[orig_idx] = raw_pvals[orig_idx] * n_tests / (rank_pos + 1)
-                adjusted_sorted = adjusted[sorted_idx]
-                for j in range(n_tests - 2, -1, -1):
-                    adjusted_sorted[j] = min(adjusted_sorted[j], adjusted_sorted[j + 1])
-                adjusted[sorted_idx] = adjusted_sorted
-                adjusted = np.minimum(adjusted, 1.0)
-
-                for k, (r1, r2, t_stat, p_raw) in enumerate(pair_labels):
-                    p_adj = adjusted[k]
-                    sig = " *" if p_adj < 0.05 else ""
-                    lines.append(
-                        f"  Region {r1} vs {r2}: t={t_stat:.3f}, "
-                        f"p={p_raw:.2e}, p_adj(BH)={p_adj:.2e}{sig}"
-                    )
-                lines.append(f"  ({n_tests} comparisons, Benjamini-Hochberg correction)")
-            else:
-                r1, r2, t_stat, p_val = pair_labels[0]
-                sig = " *" if p_val < 0.05 else ""
-                lines.append(
-                    f"  Region {r1} vs {r2}: t={t_stat:.3f}, p={p_val:.2e}{sig}"
-                )
+            if corrected:
+                lines.append(f"  ({len(tests)} comparisons, "
+                             f"Benjamini-Hochberg correction)")
 
         roi_text.setPlainText("\n".join(lines))
-        state["roi_results"] = roi_results
-        state["roi_gene"] = gene
-        n_regions = len(polygons)
-        _record_rois()
-        ctx.record_node(
-            f"roi_expression:{gene}",
-            f"\n# ROI expression analysis: gene '{gene}' across {n_regions} region(s){filter_desc}\n"
-            f"# Per-region mean expression is shown in the viewer; ROI polygons are in roi_polygons.",
-            deps=["rois"],
-            kind=TERMINAL,
-            label=f"ROI expression: {gene}",
-        )
-        roi_export_button.enabled = len(roi_results) > 0
+        roi_export_button.enabled = len(cells) > 0
 
     def on_export_csv():
-        results = state.get("roi_results", [])
-        if not results:
+        cells = state.get("roi_expr_cells")
+        gene = state.get("roi_gene", "gene")
+        if cells is None or not len(cells):
             return
-        import csv
         path, _ = QFileDialog.getSaveFileName(
-            None, "Export ROI Data", f"roi_{state.get('roi_gene', 'gene')}.csv",
-            "CSV Files (*.csv)",
+            None, "Export ROI Data", f"roi_{gene}.csv", "CSV Files (*.csv)",
         )
         if not path:
             return
-        with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["region_id", "cell_id", "x_centroid_um", "y_centroid_um", "expression"])
-            writer.writeheader()
-            writer.writerows(results)
-        status_label.value = f"Exported {len(results)} cells to {path}"
-        _record_rois()
-        ctx.record_node(
-            "export:roi_expression",
-            f"\n# Export ROI per-cell expression\n"
-            f"# (region_id, cell_id, centroid, expression for each cell inside an ROI)\n"
-            f"# saved from the viewer to {os.path.basename(path)}",
-            deps=["rois"],
-            kind=TERMINAL,
-            label="Export ROI expression",
-        )
+        # Written *by* the recorded code rather than beside it: the notebook's
+        # cell is the statement that produced the file the user has. The full
+        # path is recorded, not the basename — a cell that writes somewhere
+        # other than where the export went would be a lie about what ran.
+        try:
+            ctx.run_step(Step(
+                id="export:roi_expression",
+                template="\n# Export ROI per-cell expression of $gene\n"
+                         "roi_expr_cells.to_csv($path, index=False)",
+                params={"gene": gene, "path": os.fspath(path)},
+                deps=[f"roi_expression:{gene}"],
+                kind=TERMINAL,
+                label="Export ROI expression",
+            ))
+        except StepError as e:
+            status_label.value = f"Export failed: {e}"
+            return
+        status_label.value = f"Exported {len(cells)} cells to {path}"
 
     roi_calc_button.clicked.connect(on_calculate_roi)
     roi_export_button.clicked.connect(on_export_csv)
@@ -228,8 +305,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     roi_deg_export_button = PushButton(label="Export DEG CSV...", enabled=False)
     roi_volcano_button = PushButton(label="Save Volcano Plot(s)...", enabled=False)
 
-    from xenium_viewer.utils.gene_analysis import compute_roi_deg
-
     def on_roi_deg():
         polygons = ctx.roi_layer.data if ctx.roi_layer is not None else []
         if len(polygons) < 2:
@@ -240,77 +315,66 @@ def build_tab(ctx: ViewerContext) -> tuple:
         roi_deg_button.enabled = False
         gen = ctx.dataset_generation
 
+        # The polygons must be bound before the DEG step, which reads them.
+        _record_rois()
+
         use_filter = roi_deg_filter_check.value
-        cluster_mask = None
+        deps = ["rois"]
+        params = {
+            "method": roi_deg_method_widget.value,
+            "pixel_size": coerce(ctx.pixel_size),
+        }
+        clustering_key = None
         if use_filter:
             clustering_key = ctx.clustering_widget.value
             selected_ids = ctx.get_selected_cluster_ids()
-            cluster_series = ctx.clusterings[clustering_key]
-            _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
-            if 'cell_id' in _adata.obs.columns:
-                clusters_aligned = cluster_series.reindex(_adata.obs['cell_id'].values)
-            else:
-                clusters_aligned = cluster_series.reindex(_adata.obs_names)
-            cluster_mask = ctx.make_cluster_mask(clusters_aligned.values, selected_ids)
+            ctx.record_clustering(clustering_key)
+            from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+            add_clustering_to_obs(ctx.adata, ctx.adata,
+                                  ctx.clusterings[clustering_key], clustering_key)
+            params["clustering"] = clustering_key
+            params["selected"] = sorted({str(i) for i in selected_ids})
+            deps.append(f"clustering:{clustering_key}")
 
-        method = roi_deg_method_widget.value
-        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+        step = Step(
+            id="roi_deg",
+            template=_roi_deg_template(use_filter),
+            params=params,
+            deps=deps,
+            kind=ARTIFACT,
+            label="ROI differential expression",
+            outputs=["roi_deg_df", "roi_adata"],
+        )
 
         @thread_worker
         def _run():
-            return compute_roi_deg(
-                _adata, ctx.centroids_yx, polygons, ctx.pixel_size,
-                cluster_mask=cluster_mask, method=method,
-            )
-
-        _use_filter = use_filter
-        _selected_ids = selected_ids if use_filter else None
+            try:
+                out = ctx.run_step(step)
+            except StepError as e:
+                import pandas as _pd
+                return _pd.DataFrame(), None, str(e)
+            return out["roi_deg_df"], out["roi_adata"], None
 
         worker = _run()
-        worker.returned.connect(lambda df: _on_roi_deg_ready(df, gen, _use_filter, _selected_ids))
+        worker.returned.connect(lambda r: _on_roi_deg_ready(r, gen))
         roi_deg_progress.setVisible(True)
         worker.finished.connect(lambda: roi_deg_progress.setVisible(False))
         worker.start()
 
-    def _on_roi_deg_ready(result, _gen, _use_filter, _selected_ids):
+    def _on_roi_deg_ready(result, _gen):
         if ctx.dataset_generation != _gen:
             return  # dataset reloaded while worker ran
-        df, adata_norm = result
+        df, adata_norm, error = result
         state["roi_deg_df"] = df
         state["roi_deg_adata_norm"] = adata_norm
         roi_deg_button.enabled = True
-        if not df.empty:
-            _record_rois()
-            _deps = ["rois"]
-            filter_line = ""
-            if _use_filter:
-                clustering_key = ctx.clustering_widget.value
-                ctx.record_clustering(clustering_key)
-                _deps.append(f"clustering:{clustering_key}")
-                filter_line = (
-                    f"\n# cluster filter (clustering='{clustering_key}', "
-                    f"clusters={sorted(_selected_ids)})\n"
-                    f"# cells must be inside an ROI AND in the selected clusters\n"
-                    f"cluster_series = adata.obs[{clustering_key!r}]\n"
-                    f"clusters_aligned = cluster_series.reindex(adata.obs['cell_id'].values)\n"
-                    f"cluster_mask = np.isin(clusters_aligned.values, {sorted(_selected_ids)})\n"
-                )
-            ctx.record_node(
-                "roi_deg",
-                f"\n# ROI differential expression\n"
-                f"import json\n"
-                f"from xenium_viewer.utils.gene_analysis import compute_roi_deg\n"
-                f"pixel_size = float(json.load(open(data_path / 'experiment.xenium'))['pixel_size'])\n"
-                f"centroids_yx = adata.obsm['spatial'][:, ::-1] / pixel_size  # µm→px, xy→yx\n"
-                f"{filter_line}"
-                f"roi_deg_df, roi_adata_norm = compute_roi_deg(\n"
-                f"    adata, centroids_yx, roi_polygons, pixel_size,\n"
-                f"    method={roi_deg_method_widget.value!r},\n"
-                f"    cluster_mask={'cluster_mask' if _use_filter else 'None'},\n"
-                f")",
-                deps=_deps,
-                label="ROI differential expression",
-            )
+        # Recording happened inside ctx.run_step(), which recorded the source it ran.
+        if error:
+            roi_deg_text.setPlainText(error)
+            roi_deg_status.value = f"DEG failed: {error}"
+            roi_deg_export_button.enabled = False
+            roi_volcano_button.enabled = False
+            return
         if df.empty:
             roi_deg_text.setPlainText("No significant results or insufficient cells in ROIs.")
             roi_deg_status.value = "DEG: no results"

@@ -306,6 +306,8 @@ def _build_control_panel(ctx: ViewerContext):
     from xenium_viewer.tabs.tab_external_images import build_tab as build_external_images_tab
     from xenium_viewer.tabs.tab_patch_overlays import build_tab as build_patch_overlays_tab
     from xenium_viewer.tabs.tab_crop_dataset import build_tab as build_crop_dataset_tab
+    from xenium_viewer.tabs.tab_dataset import build_tab as build_dataset_tab
+    from xenium_viewer.tabs.tab_cache import build_tab as build_cache_tab
 
     # ── Build Cell Coloring first (creates cross-tab widgets) ────────────
     coloring_widget, coloring_exports = build_cell_coloring_tab(ctx)
@@ -352,6 +354,8 @@ def _build_control_panel(ctx: ViewerContext):
     ext_img_widget, ext_img_exports = build_external_images_tab(ctx)
     patch_widget, patch_exports = build_patch_overlays_tab(ctx)
     crop_widget, crop_exports = build_crop_dataset_tab(ctx)
+    dataset_widget, dataset_exports = build_dataset_tab(ctx)
+    cache_widget, cache_exports = build_cache_tab(ctx)
 
     # ── Mouse hover: show cluster ID in status bar ───────────────────────
     if ctx.cell_labels_layer is not None:
@@ -431,6 +435,8 @@ def _build_control_panel(ctx: ViewerContext):
     tools_tabs.addTab(seg_widget,      "Segmentation")
     tools_tabs.addTab(crop_widget,     "Crop Dataset")
     tools_tabs.addTab(notebook_widget, "Notebook")
+    tools_tabs.addTab(dataset_widget,  "Dataset")
+    tools_tabs.addTab(cache_widget,    "Cache")
 
     for _group in (cells_tabs, genes_tabs, spatial_tabs, images_tabs, tools_tabs):
         _group.setTabPosition(QTabWidget.South)
@@ -449,6 +455,7 @@ def _build_control_panel(ctx: ViewerContext):
         lr_exports, nhood_exports, co_exports, cnv_exports, novae_exports, arms_exports, corr_exports,
         notebook_exports, annot_exports, annot_nhood_exports, annot_dist_exports,
         seg_exports, ext_img_exports, patch_exports, crop_exports,
+        dataset_exports, cache_exports,
     ]
 
     def restore_session(session):
@@ -466,48 +473,34 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
     Returns a dict with: pixel_size, sdata, adata, umap_df, clusterings,
     label_to_obs, gene_names, clustering_names, color_manager, transcript_loader.
     """
+    # Start the per-dataset log before anything can fail. Write failures used to
+    # go only to stdout, which a GUI user never reads — so when the cache was
+    # being corrupted, the warnings that would have explained it were lost.
+    from xenium_viewer.utils.reporting import reset_failures, setup_logging
+    reset_failures()
+    log_file = setup_logging(data_path)
+    if log_file is not None:
+        print(f"Logging to {log_file}")
+
     pixel_size = _read_pixel_size(data_path)
     print(f"Pixel size: {pixel_size} um/px")
 
-    # Repair zarr store if consolidated metadata is out of sync with disk.
-    # A brief bug wrote adata_norm to sdata.tables without spatialdata_attrs,
-    # which corrupted the consolidated_metadata in zarr.json even after the
-    # directory was deleted, making sdata["table"] inaccessible on reload.
+    # Finish any write interrupted by a crash, and fix bookkeeping that no
+    # longer matches disk, before anything tries to open the store. This
+    # generalises an earlier fix that only knew about tables/table and a stray
+    # tables/adata_norm; utils/cache_repair diffs the whole consolidated
+    # metadata against the filesystem, and repairs without discarding.
     if not no_cache:
         zarr_cache = data_path / "sdata_cached.zarr"
         if zarr_cache.exists():
-            import shutil, json, zarr as _zarr
-            # Remove any stray adata_norm directory
-            bad_adata_norm = zarr_cache / "tables" / "adata_norm"
-            need_consolidate = bad_adata_norm.exists()
-            if need_consolidate:
-                shutil.rmtree(bad_adata_norm, ignore_errors=True)
-                print("  Removed invalid tables/adata_norm from zarr store")
-
-            # Also detect stale consolidated metadata: tables/table/ exists on
-            # disk but is absent from the inline zarr.json consolidated_metadata.
-            if not need_consolidate:
-                table_dir = zarr_cache / "tables" / "table"
-                zarr_json = zarr_cache / "zarr.json"
-                if table_dir.exists() and zarr_json.exists():
-                    try:
-                        root = json.loads(zarr_json.read_text())
-                        tables_cm = (root.get("consolidated_metadata", {})
-                                         .get("metadata", {})
-                                         .get("tables", {})
-                                         .get("consolidated_metadata", {})
-                                         .get("metadata", {}))
-                        if "table" not in tables_cm:
-                            need_consolidate = True
-                    except Exception:
-                        pass
-
-            if need_consolidate:
-                try:
-                    _zarr.consolidate_metadata(str(zarr_cache))
-                    print("  Rebuilt zarr consolidated metadata")
-                except Exception as e:
-                    print(f"  Warning: could not consolidate zarr metadata: {e}")
+            from xenium_viewer.utils import cache_repair
+            report = cache_repair.verify(zarr_cache)
+            if not report.ok:
+                result = cache_repair.repair(zarr_cache, report)
+                for action in result.actions:
+                    print(f"  Cache: {action}")
+                for failure in result.failures:
+                    print(f"  Cache warning: {failure}")
 
     loader_mod = _loader_mod
 
@@ -701,6 +694,48 @@ def _populate_viewer(viewer, data: dict) -> dict:
         "morph_full_shape_yx": morph_full_shape_yx,
         "centroids_yx": centroids_yx,
     }
+
+
+def _load_prov_graph_items(data_path, session: dict) -> list:
+    """The serialized provenance graph, sidecar first, session attr second.
+
+    Two writers, two cadences: ``_helpers._save_prov_graph`` rewrites the
+    sidecar on every recorded step, while ``save_session`` writes the attr only
+    on a dataset switch or at exit. The sidecar is therefore never *behind* the
+    attr and is usually ahead of it, so it wins whenever it parses. A dataset
+    that predates the sidecar, or one copied without ``viewer_cache/``, still
+    restores from the attr.
+    """
+    from xenium_viewer.tabs._helpers import PROV_GRAPH_SIDECAR
+    from xenium_viewer.utils.adata_persistence import sidecar_dir
+
+    attr_items = session.get("prov_graph") or []
+    if data_path is None:
+        return list(attr_items)
+    sidecar = sidecar_dir(data_path) / PROV_GRAPH_SIDECAR
+    try:
+        items = json.loads(sidecar.read_text())
+    except FileNotFoundError:
+        return list(attr_items)
+    except (OSError, ValueError) as e:
+        print(f"  Provenance sidecar unreadable ({e}); using the session attr.")
+        return list(attr_items)
+    if not isinstance(items, list) or not items:
+        return list(attr_items)
+    if len(items) < len(attr_items):
+        # The sidecar is written on every recorded step and the attr only at
+        # exit, so the sidecar is never legitimately *smaller*. If it is,
+        # something wrote a partial graph (see prov_graph_restored) and the attr
+        # is the better record — losing an analysis to a stale file is the one
+        # outcome worth being conservative about. Nothing in the GUI removes
+        # nodes, so a smaller graph is never a deliberate edit.
+        print(f"  Provenance sidecar has {len(items)} node(s) but the session "
+              f"attr has {len(attr_items)}; using the session attr.")
+        return list(attr_items)
+    if len(items) != len(attr_items):
+        print(f"  Provenance graph: {len(items)} node(s) from {sidecar.name} "
+              f"(session attr had {len(attr_items)})")
+    return items
 
 
 def _snapshot_layers(ctx: ViewerContext) -> dict:
@@ -938,6 +973,9 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     ctx.state = _make_initial_state(data["gene_names"], data["clustering_names"])
     ctx.he_state = _make_initial_he_state()
     ctx.arms_state = _make_initial_arms_state()
+    # Bound here rather than once at startup because every reload builds a new
+    # ViewerContext; the callable itself lives in _app and outlives them all.
+    ctx.reload_dataset = _app.get("reload_current_dataset")
 
     # Remove old dock widget if present
     if _app["dock_widget"] is not None:
@@ -1057,9 +1095,14 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
             # Restore the reproducible-code provenance graph so the analysis
             # notebook accumulates across sessions (re-derive the flat journal
             # and rewrite analysis.py from the restored graph).
-            if session.get("prov_graph"):
+            # The sidecar is rewritten on every recorded step; the session attr
+            # only by save_session (dataset switch / exit), so it is behind
+            # whenever the last run ended in a crash, a kill, or a still-open
+            # viewer. Prefer the sidecar, fall back to the attr.
+            _prov_items = _load_prov_graph_items(ctx.data_path, session)
+            if _prov_items:
                 from xenium_viewer.utils.prov_graph import ProvGraph, graph_to_cells
-                _g = ProvGraph.from_list(session["prov_graph"])
+                _g = ProvGraph.from_list(_prov_items)
                 ctx.state["prov_graph"] = _g
                 # Re-emit the preamble for THIS launch's data_path (upsert; a
                 # no-op when the path is unchanged).
@@ -1090,6 +1133,13 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         if sdata_cluster_labels:
             partial_session['cluster_labels'] = sdata_cluster_labels
         restore_fn(partial_session)
+
+    # Only now may the graph be written back. Everything above this line runs
+    # with whatever the tabs seeded — at minimum the preamble emitted during
+    # construction — and persisting *that* would overwrite the session's real
+    # graph with a one-node stub, which the next launch would then prefer.
+    ctx.state["prov_graph_restored"] = True
+    ctx.save_prov_graph()
 
     viewer.title = f"Xenium Viewer — {data_path.name}"
 
@@ -1234,41 +1284,33 @@ def run_viewer(data_path=None, no_cache: bool = False):
                 except Exception:
                     pass
 
-    # ── Open Dataset callback ────────────────────────────────────────────────
-    def _on_open_dataset():
+    # ── Open / reload dataset ────────────────────────────────────────────────
+    def _load_dataset_into_viewer(new_path: Path) -> bool:
+        """Tear down the current dataset and load *new_path* in its place.
+
+        Passing the dataset already open reloads it, which is how the Cache tab
+        makes recovered elements visible: they were written straight into the
+        zarr, so the in-memory sdata, the layers and the tab widgets know
+        nothing about them until everything is rebuilt from disk.
+
+        Returns True if a dataset was loaded.
+        """
         nonlocal ctx
-        from qtpy.QtWidgets import QFileDialog, QMessageBox
+        from qtpy.QtWidgets import QMessageBox
 
         if _app["reload_in_progress"]:
-            return
+            return False
 
         running = _running_bg_jobs()
         if running:
             choice = _ask_close_bg(running)
             if choice == "cancel":
-                return
+                return False
             if choice == "stop":
                 _kill_bg_jobs(running)
         _app["reload_in_progress"] = True
 
         try:
-            new_path_str = QFileDialog.getExistingDirectory(
-                None, "Select Xenium Output Directory"
-            )
-            if not new_path_str:
-                return
-
-            new_path = Path(new_path_str)
-
-            if not (new_path / "experiment.xenium").exists():
-                QMessageBox.warning(
-                    None,
-                    "Invalid Directory",
-                    f"No experiment.xenium found in:\n{new_path}\n\n"
-                    "Please select a valid Xenium output directory.",
-                )
-                return
-
             print(f"\nOpening dataset: {new_path}")
 
             if ctx is not None:
@@ -1373,12 +1415,34 @@ def run_viewer(data_path=None, no_cache: bool = False):
                     "Dataset Load Error",
                     f"Failed to load dataset:\n{new_path}\n\nError:\n{exc}",
                 )
-                return
+                return False
 
             print(f"Dataset opened: {new_path.name}")
+            return True
 
         finally:
             _app["reload_in_progress"] = False
+
+    def _on_open_dataset():
+        from qtpy.QtWidgets import QFileDialog, QMessageBox
+
+        if _app["reload_in_progress"]:
+            return
+        new_path_str = QFileDialog.getExistingDirectory(
+            None, "Select Xenium Output Directory"
+        )
+        if not new_path_str:
+            return
+        new_path = Path(new_path_str)
+        if not (new_path / "experiment.xenium").exists():
+            QMessageBox.warning(
+                None,
+                "Invalid Directory",
+                f"No experiment.xenium found in:\n{new_path}\n\n"
+                "Please select a valid Xenium output directory.",
+            )
+            return
+        _load_dataset_into_viewer(new_path)
 
     # ── Preprocess Dataset callback ──────────────────────────────────────────
     def _on_preprocess_dataset():
@@ -1459,6 +1523,21 @@ def run_viewer(data_path=None, no_cache: bool = False):
     create_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset)
     create_view_menu(viewer, _app)
 
+    # Let tabs reload the open dataset. The Cache tab needs it: recovered
+    # elements are written straight into the zarr, so nothing in memory — the
+    # sdata, the layers, the clustering combo boxes — knows they exist until
+    # everything is rebuilt from disk. Rebound on every reload because
+    # _do_full_init returns a fresh ViewerContext.
+    def _reload_current_dataset() -> bool:
+        current = ctx.data_path if ctx is not None else None
+        if current is None:
+            return False
+        return _load_dataset_into_viewer(Path(current))
+
+    # Registered before the first _do_full_init below, so every ViewerContext
+    # ever built picks it up from _app.
+    _app["reload_current_dataset"] = _reload_current_dataset
+
     # ── Warn on close if a detached CopyKAT job is still running ─────────────
     # aboutToQuit fires too late to veto, so filter the window's Close event.
     from qtpy.QtCore import QObject as _QObject, QEvent as _QEvent
@@ -1524,7 +1603,14 @@ def run_viewer(data_path=None, no_cache: bool = False):
 def main():
     """Console-script entry point — parses argv and launches the viewer."""
     data_path, no_cache = _parse_args()
-    run_viewer(data_path, no_cache=no_cache)
+    from xenium_viewer.loader import CacheLoadAborted
+    try:
+        run_viewer(data_path, no_cache=no_cache)
+    except CacheLoadAborted as e:
+        # The user declined to rebuild, or we had no way to ask. Exiting
+        # quietly is the point: the cache is left exactly as it was.
+        print(f"\n{e}")
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QListWidget, QHBoxLayout, QWidget, QLabel
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
-from xenium_viewer.utils.prov_graph import TERMINAL
+from xenium_viewer.utils.prov_graph import NOTE, TERMINAL
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -92,7 +92,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "viewer:transcript_overlay",
             f"\n# Display transcript overlay (viewer)\n"
             f"# genes={genes}, qv_threshold={qv_slider.value}, {len(points):,} spots total",
-            deps=["preamble"], kind=TERMINAL, label="Transcript overlay",
+            deps=["preamble"], kind=NOTE, label="Transcript overlay",
         )
         apply_transcripts_button.enabled = True
 
