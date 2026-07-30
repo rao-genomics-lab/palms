@@ -6,7 +6,7 @@ from magicgui.widgets import ComboBox, PushButton, CheckBox
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.steps import Step
-from xenium_viewer.utils.step_templates import builtin_assemble
+from xenium_viewer.utils.step_templates import builtin_assemble, step_template as _resolved
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -125,7 +125,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id="plot:gene_correlation",
-            template=_gene_corr_template(norm, filtered),
+            **_resolved(TEMPLATE_ID, _gene_corr_blocks(norm, filtered)),
             params=params,
             deps=deps,
             kind=TERMINAL,

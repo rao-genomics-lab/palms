@@ -11,7 +11,7 @@ from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
-from xenium_viewer.utils.step_templates import builtin_assemble
+from xenium_viewer.utils.step_templates import builtin_assemble, step_template as _resolved
 from xenium_viewer.utils.steps import Step, coerce
 
 if TYPE_CHECKING:
@@ -194,7 +194,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         key = params["key"]
         step = Step(
             id=f"clustering:{key}",
-            template=_leiden_template(use_hvg, do_scale),
+            **_resolved(TEMPLATE_ID, _leiden_blocks(use_hvg, do_scale)),
             params=params,
             deps=["normalize"],
             kind=ARTIFACT,

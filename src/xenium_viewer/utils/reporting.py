@@ -191,6 +191,46 @@ def recording_failures() -> list[dict]:
     return list(_recording_failures)
 
 
+#: Template ids already reported this session, so a rejected override warns once
+#: rather than on every step that resolves it.
+_template_rejections: dict[str, list] = {}
+
+
+def report_template_rejected(template_id: str, problems) -> None:
+    """Surface a customised template that could not be trusted, and was skipped.
+
+    The failure mode this exists to prevent is not a crash — it is a user who
+    edited a template, believes their edit is in effect, and is silently getting
+    the shipped one. That produces numbers they will attribute to their own
+    method. So it is said out loud, once per template per session, and kept for
+    the Templates tab's badge and the health line.
+
+    Deliberately *not* fatal: a bad file in a config directory must never stop
+    the viewer launching, or the user has no way in to fix it.
+    """
+    if template_id in _template_rejections:
+        return
+    listed = [str(p) for p in problems]
+    _template_rejections[template_id] = listed
+    _log.warning("ignoring customised template %r:\n  %s",
+                 template_id, "\n  ".join(listed) or "(no detail)")
+    first = listed[0] if listed else "it did not validate"
+    _notify(
+        f"Your customised template '{template_id}' was not used — {first} "
+        f"The shipped version ran instead. See Tools → Templates."
+    )
+
+
+def template_rejections() -> dict:
+    """Customised templates skipped this session, keyed by template id."""
+    return dict(_template_rejections)
+
+
+def clear_template_rejections() -> None:
+    """Forget rejections so a re-saved template can report again."""
+    _template_rejections.clear()
+
+
 def _notify(message: str) -> None:
     """Non-modal napari warning, on the GUI thread; a no-op with no GUI."""
     try:
@@ -318,6 +358,11 @@ def failure_summary() -> str:
         # the one place a user goes looking for "did anything go wrong?".
         summary += (f" {len(_recording_failures)} step(s) could not be recorded "
                     f"— see the log.")
+    if _template_rejections:
+        # "Did anything go wrong?" has to include "is the code you customised
+        # actually the code that ran?".
+        summary += (f" {len(_template_rejections)} customised template(s) were "
+                    f"skipped — see Tools → Templates.")
     return summary
 
 
@@ -326,6 +371,7 @@ def reset_failures() -> None:
     _failures.clear()
     _recording_failures.clear()
     _modal_shown.clear()
+    _template_rejections.clear()
 
 
 def open_log_file() -> bool:

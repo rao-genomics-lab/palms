@@ -15,7 +15,7 @@ from xenium_viewer.utils.prov_graph import (
 )
 from xenium_viewer.utils.environment import environment_code, same_environment
 from xenium_viewer.utils.reporting import get_logger, report_recording_failure
-from xenium_viewer.utils.step_templates import builtin_text, check_base_namespace
+from xenium_viewer.utils.step_templates import builtin_spec, builtin_text, check_base_namespace, step_template as _resolved
 from xenium_viewer.utils.steps import Step, StepExecutor, coerce
 
 if TYPE_CHECKING:
@@ -525,7 +525,7 @@ def create_shared_helpers(ctx: ViewerContext):
         _record_preamble()
         outputs = _run_step(Step(
             id="normalize",
-            template=_NORMALIZE_TEMPLATE,
+            **_resolved("normalize", list(builtin_spec("normalize").blocks)),
             deps=["preamble"],
             kind=SETUP,
             label="Normalize, log-transform, PCA",
@@ -618,7 +618,7 @@ def create_shared_helpers(ctx: ViewerContext):
             return
         _run_step(Step(
             id="spatial_neighbors",
-            template=_SPATIAL_NEIGHBORS_TEMPLATE,
+            **_resolved("spatial_neighbors", list(builtin_spec("spatial_neighbors").blocks)),
             params={"n_neighs": n_neighs},
             deps=["normalize"],
             kind=ARTIFACT,

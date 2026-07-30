@@ -10,12 +10,21 @@ in isolation — the same discipline as ``utils.steps`` and ``utils.prov_graph``
 """
 
 from xenium_viewer.utils.step_templates.loader import (
+    TEMPLATE_PATH_ENV,
+    ResolvedTemplate,
     TemplateError,
-    builtin_spec,
     builtin_assemble,
     builtin_ids,
+    builtin_spec,
     builtin_text,
+    clear_cache,
     parse_template,
+    resolve,
+    resolved_text,
+    step_template,
+    search_path,
+    set_overrides_enabled,
+    user_template_dir,
 )
 from xenium_viewer.utils.step_templates.namespace import (
     EXECUTOR_BASE_NAMES,
@@ -27,18 +36,44 @@ from xenium_viewer.utils.step_templates.spec import (
     ParamSpec,
     TemplateSpec,
 )
+from xenium_viewer.utils.step_templates.validate import (
+    ERROR,
+    WARNING,
+    Problem,
+    placeholders,
+    validate,
+)
 
 __all__ = [
+    # namespace
     "EXECUTOR_BASE_NAMES",
     "NamespaceMismatch",
     "check_base_namespace",
+    # spec
     "BlockSpec",
     "ParamSpec",
     "TemplateSpec",
+    # loader — builtin scope only, never sees an override
     "TemplateError",
-    "builtin_spec",
     "builtin_assemble",
     "builtin_ids",
+    "builtin_spec",
     "builtin_text",
     "parse_template",
+    # loader — full resolution, overrides included
+    "TEMPLATE_PATH_ENV",
+    "ResolvedTemplate",
+    "clear_cache",
+    "resolve",
+    "resolved_text",
+    "step_template",
+    "search_path",
+    "set_overrides_enabled",
+    "user_template_dir",
+    # validation
+    "ERROR",
+    "WARNING",
+    "Problem",
+    "placeholders",
+    "validate",
 ]

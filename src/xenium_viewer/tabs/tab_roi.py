@@ -12,7 +12,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, make_progress_bar
 from xenium_viewer.utils.prov_graph import ARTIFACT, SETUP, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
-from xenium_viewer.utils.step_templates import builtin_assemble, builtin_text
+from xenium_viewer.utils.step_templates import builtin_assemble, builtin_spec, builtin_text, step_template as _resolved
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -93,7 +93,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.record_preamble()
         ctx.run_step(Step(
             id="rois",
-            template=_ROIS_TEMPLATE,
+            **_resolved("roi.polygons", list(builtin_spec("roi.polygons").blocks)),
             params={"polygons": [
                 np.round(np.asarray(p), 2).tolist() for p in polygons
             ]},
@@ -136,7 +136,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         try:
             out = ctx.run_step(Step(
                 id=f"roi_expression:{gene}",
-                template=_roi_expr_template(use_filter),
+                **_resolved(ROI_EXPR_TEMPLATE_ID, _roi_blocks(use_filter)),
                 params=params,
                 deps=deps,
                 kind=ARTIFACT,
@@ -198,7 +198,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         try:
             ctx.run_step(Step(
                 id="export:roi_expression",
-                template=builtin_text(ROI_EXPORT_TEMPLATE_ID),
+                **_resolved(ROI_EXPORT_TEMPLATE_ID, list(builtin_spec(ROI_EXPORT_TEMPLATE_ID).blocks)),
                 params={"gene": gene, "path": os.fspath(path)},
                 deps=[f"roi_expression:{gene}"],
                 kind=TERMINAL,
@@ -258,7 +258,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id="roi_deg",
-            template=_roi_deg_template(use_filter),
+            **_resolved(ROI_DEG_TEMPLATE_ID, _roi_blocks(use_filter)),
             params=params,
             deps=deps,
             kind=ARTIFACT,

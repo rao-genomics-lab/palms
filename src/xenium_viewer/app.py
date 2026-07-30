@@ -99,7 +99,18 @@ def _parse_args():
         "--no-cache", action="store_true",
         help="Skip zarr cache, load from raw Xenium output",
     )
+    parser.add_argument(
+        "--no-user-templates", action="store_true",
+        help="Ignore customised analysis templates and run the shipped ones",
+    )
     args = parser.parse_args()
+
+    # Applied before anything resolves a template. This is the first thing to
+    # try when a result is in doubt, so it must not require finding and moving
+    # files — "run it again with --no-user-templates" has to be a one-liner.
+    if args.no_user_templates:
+        from xenium_viewer.utils.step_templates import set_overrides_enabled
+        set_overrides_enabled(False)
 
     if args.data_dir:
         data_path = Path(args.data_dir)

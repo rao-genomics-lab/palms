@@ -3,6 +3,55 @@
 ## [Unreleased] — 2026-07-30
 
 ### Added
+- **Analysis templates can now be customised, per user.** An edited template is used both
+  by the GUI and by the recorded notebook — which needs no special machinery, because the
+  Step system already renders one string and hands it to both.
+
+  Overrides live in `~/.config/xenium-viewer/templates/*.tmpl` (`platformdirs`, so
+  `XDG_CONFIG_HOME` is respected) and are **resolved per block**. That is the load-bearing
+  choice, not a tidiness one: most of a fork is text the user never touched, so those blocks
+  keep tracking the shipped template and a later fix to them still reaches everyone who
+  customised a *different* part. Whole-file override would freeze the entire template at the
+  version it was forked from, which is how someone quietly stops receiving a correctness fix.
+  Saving writes only the blocks that actually differ, so this is the default rather than
+  something the user has to think about.
+
+  **Nothing is trusted without validation** (`step_templates/validate.py`, which promotes
+  `check_step`/`free_names` from test-only helpers to a production gate). Per legal assembly:
+  it must render, parse, read only names the executor guarantees or the template declares,
+  bind every output it claims, and leave frozen blocks alone. The check weighted most heavily
+  is that **a required param the template no longer mentions is a hard stop** — that template
+  would run, report success, and silently ignore a setting the user chose, which is far worse
+  than a crash. Explicitly *not* a security boundary, and the module says so: a user can
+  already run arbitrary Python in the Notebook tab.
+
+  **A refused override is loud and never fatal.** It is skipped, the shipped template runs, a
+  napari warning fires once per template per session, the Cache tab's health line mentions it,
+  and Tools → Templates badges it `✕ not used`. A broken file must not make the viewer
+  unlaunchable — the user would have no way in to fix it. Two off switches, both load-bearing
+  rather than conveniences: `--no-user-templates` (the first thing to try when a result is in
+  doubt) and `XENIUM_VIEWER_TEMPLATE_PATH` (which `tests/conftest.py` empties, so a
+  developer's own customisations can never change what the suite asserts).
+
+  Every step now carries `template_id` / `template_origin` / `template_hash` into the
+  provenance graph, so a reader can tell a stock run from a customised one — which rendered
+  source alone cannot show.
+
+  Tools → Templates gained the editing half: **Default (read-only) beside Yours (editable)**,
+  with Validate, Save & Activate, and Revert. **Save never refuses.** Refusing to write would
+  send the user to an external editor and out of the feedback loop; what is gated is
+  *activation*, and that needs no special mechanism — an invalid file on disk is simply
+  rejected by the resolver, which falls back and says so.
+
+  Three bugs found while building this, each by a test rather than in review: the header
+  parser treated an unindented prose line as a continuation of the field above it (so a saved
+  override's own explanatory comment was appended to `schema-version` and failed to parse);
+  the frozen-block annotation was written onto the block-marker line, where anything after the
+  name *is* the name, so editing the CNV Arrow shim silently created a new block instead of
+  the protected one; and saving resolved its destination independently of reading, so the tab
+  tests wrote into the real `~/.config`. Writes now derive their destination from the same
+  search path reads use, so a write cannot land where the reader does not look.
+
 - **Tools → Templates: see what an analysis button will run, before running it.**
   The source a step executes was only ever recoverable *after* the fact, from the Notebook
   tab. The text itself lived in 14 private module constants — seven of them assembled by a

@@ -23,7 +23,7 @@ from xenium_viewer.utils.gene_analysis import (
     run_llm_annotation,
 )
 from xenium_viewer.utils.steps import Step, coerce
-from xenium_viewer.utils.step_templates import builtin_text
+from xenium_viewer.utils.step_templates import builtin_spec, builtin_text, step_template as _resolved
 
 # Executed *and* recorded — see utils/steps.py. Reads the clustering from
 # adata.obs (where the clustering cell puts it) and ranks on the normalized
@@ -178,7 +178,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id=f"rank_genes:{clustering_key}",
-            template=_RANK_GENES_TEMPLATE,
+            **_resolved("genes.rank_genes", list(builtin_spec("genes.rank_genes").blocks)),
             params={
                 "groupby": clustering_key,
                 "method": method,

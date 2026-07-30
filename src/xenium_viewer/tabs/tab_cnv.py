@@ -20,7 +20,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, coerce
-from xenium_viewer.utils.step_templates import builtin_assemble, builtin_spec
+from xenium_viewer.utils.step_templates import builtin_assemble, builtin_spec, step_template as _resolved
 
 _BACKEND_LABELS = {"infercnv": "inferCNV", "copykat": "CopyKAT"}
 
@@ -847,7 +847,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id="cnv:infercnv",
-            template=_cnv_template(bool(analyze_cats)),
+            **_resolved(CNV_TEMPLATE_ID, _cnv_blocks(bool(analyze_cats))),
             params=step_params,
             deps=[f"clustering:{reference_key}"],
             kind=ARTIFACT,

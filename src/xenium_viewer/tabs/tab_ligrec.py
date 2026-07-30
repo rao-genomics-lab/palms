@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
 from xenium_viewer.utils.spatial_analysis import make_ligrec_plot
-from xenium_viewer.utils.step_templates import builtin_assemble
+from xenium_viewer.utils.step_templates import builtin_assemble, step_template as _resolved
 
 
 # Executed and recorded from one string. Two things the old recorded cell got
@@ -145,7 +145,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id=f"ligrec:{clustering_key}",
-            template=_ligrec_template(bool(include), resources is not None),
+            **_resolved(TEMPLATE_ID, _ligrec_blocks(bool(include), resources is not None)),
             params=params,
             deps=[f"clustering:{clustering_key}", "spatial_neighbors"],
             kind=ARTIFACT,

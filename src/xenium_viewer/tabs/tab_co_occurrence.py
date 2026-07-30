@@ -15,7 +15,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
-from xenium_viewer.utils.step_templates import builtin_text
+from xenium_viewer.utils.step_templates import builtin_spec, builtin_text, step_template as _resolved
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -135,7 +135,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id=f"cooccur:{clustering_key}",
-            template=_COOCCUR_TEMPLATE,
+            **_resolved("spatial.cooccur", list(builtin_spec("spatial.cooccur").blocks)),
             params={"cluster_key": clustering_key, "interval": coerce(interval)},
             deps=[f"clustering:{clustering_key}"],
             kind=ARTIFACT,

@@ -12,7 +12,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
-from xenium_viewer.utils.step_templates import builtin_text
+from xenium_viewer.utils.step_templates import builtin_spec, builtin_text, step_template as _resolved
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -70,7 +70,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id=f"nhood:{clustering_key}",
-            template=_NHOOD_TEMPLATE,
+            **_resolved("spatial.nhood", list(builtin_spec("spatial.nhood").blocks)),
             params={
                 "cluster_key": clustering_key,
                 "uns_key": f"{clustering_key}_nhood_enrichment",

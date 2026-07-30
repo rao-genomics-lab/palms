@@ -247,11 +247,28 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   template × every declared assembly (40 renderings), which is where the five hand-written
   `check_step` calls became a registry-wide gate.
 
-  **Tools → Templates** (`tabs/tab_templates.py`) is the read-only view of that registry:
-  contract, shipped source per block, and a live preview of the exact string that would be
-  `exec`'d — rendered via `Step.render()`, and using the owning tab's real widget values when
-  it registers a provider in `ctx.state["template_preview_params"]` (see `_leiden_params` in
-  `tab_clustering.py`, the single expression both the run and the preview call).
+  **Users can override a template**, per user, in `~/.config/xenium-viewer/templates/*.tmpl`
+  — **resolved per block**, so blocks the user did not touch keep tracking the shipped
+  template and still receive upstream fixes. `loader.resolve()` never raises and never
+  returns nothing: an invalid override is skipped, the builtin is used, and the problems ride
+  along on the `ResolvedTemplate` for the GUI to surface (plus a once-per-session napari
+  warning via `reporting.report_template_rejected`). Call sites use
+  `step_template(id, blocks)`, which returns the text **and** its provenance stamp together
+  — a stamp fetched separately could describe a different resolution than the text it labels.
+  `validate.py` is the gate; the check that matters most is that a **required param the
+  template no longer mentions is a hard stop**, because that template runs, succeeds, and
+  silently ignores the user's setting. Two off switches: `--no-user-templates` and
+  `XENIUM_VIEWER_TEMPLATE_PATH` (emptied by `tests/conftest.py`, so a dev's own overrides
+  never change what the suite asserts). Saving derives its destination from the same search
+  path reading uses, so a write cannot land where the reader does not look.
+
+  **Tools → Templates** (`tabs/tab_templates.py`) shows the contract, **Default (read-only)
+  beside Yours (editable)**, a live preview of the exact string that would be `exec`'d —
+  rendered via `Step.render()` with the owning tab's real widget values when it registers a
+  provider in `ctx.state["template_preview_params"]` (see `_leiden_params` in
+  `tab_clustering.py`, the single expression both the run and the preview call) — plus
+  Validate / Save / Revert and a problems list. **Save never refuses**; activation is what is
+  gated, and an invalid file is simply rejected by the resolver.
 
   Three rules that exist because each was once broken:
   **(a) A template may only reference `EXECUTOR_BASE_NAMES`** (`utils/step_templates/namespace.py`:
