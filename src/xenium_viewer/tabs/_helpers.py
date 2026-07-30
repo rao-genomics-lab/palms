@@ -15,6 +15,7 @@ from xenium_viewer.utils.prov_graph import (
 )
 from xenium_viewer.utils.environment import environment_code, same_environment
 from xenium_viewer.utils.reporting import get_logger, report_recording_failure
+from xenium_viewer.utils.step_templates import builtin_text, check_base_namespace
 from xenium_viewer.utils.steps import Step, StepExecutor, coerce
 
 if TYPE_CHECKING:
@@ -29,16 +30,17 @@ log = get_logger(__name__)
 PROV_GRAPH_SIDECAR = "prov_graph.json"
 
 
+# Template text now lives in ``utils/step_templates/builtin/*.tmpl``. These
+# bindings go through ``builtin_text``, which reads only the shipped files and
+# never consults an override path — so the tests that pin template text stay
+# immune to a developer's own customisations by construction rather than by
+# remembering to isolate them.
+#
 # Binds ``adata_norm`` rather than mutating ``adata``, so a step that makes its
 # own copy cannot end up normalising twice. Mirrors what the viewer has always
 # actually run (``utils.gene_analysis.get_normalized_adata``) — including the
 # ``target_sum=1e4`` the old recorded cell omitted.
-_NORMALIZE_TEMPLATE = """
-# Normalized copy used by expression-based analyses
-adata_norm = adata.copy()
-sc.pp.normalize_total(adata_norm, target_sum=1e4)
-sc.pp.log1p(adata_norm)
-sc.pp.pca(adata_norm)"""
+_NORMALIZE_TEMPLATE = builtin_text("normalize")
 
 
 # Built on ``adata_norm`` rather than ``adata``: every consumer of the spatial
@@ -46,9 +48,7 @@ sc.pp.pca(adata_norm)"""
 # and squidpy stores the graph in ``.obsp`` of whichever object it was given.
 # The old recorded cell built it on ``adata`` — so the notebook's consumers read
 # a graph that did not exist on the object they were passed.
-_SPATIAL_NEIGHBORS_TEMPLATE = """
-# Spatial neighbor graph (k=$n_neighs)
-sq.gr.spatial_neighbors(adata_norm, coord_type='generic', n_neighs=$n_neighs)"""
+_SPATIAL_NEIGHBORS_TEMPLATE = builtin_text("spatial_neighbors")
 
 
 # ── magicgui ComboBox default helper ─────────────────────────────────────────
@@ -393,16 +393,18 @@ def create_shared_helpers(ctx: ViewerContext):
             from pathlib import Path as _Path
 
             graph = state.setdefault("prov_graph", ProvGraph())
-            ctx.executor = StepExecutor(
-                namespace={
-                    "sc": sc, "sq": sq, "pd": pd, "np": _np, "plt": plt,
-                    "Path": _Path,
-                    "data_path": ctx.data_path,
-                    "sdata": ctx.sdata,
-                    "adata": ctx.adata,
-                },
-                graph=graph,
-            )
+            base_namespace = {
+                "sc": sc, "sq": sq, "pd": pd, "np": _np, "plt": plt,
+                "Path": _Path,
+                "data_path": ctx.data_path,
+                "sdata": ctx.sdata,
+                "adata": ctx.adata,
+            }
+            # The declared set is what template validation checks against, so a
+            # name added here and not there (or vice versa) is caught now rather
+            # than as a NameError when someone replays the notebook.
+            check_base_namespace(base_namespace)
+            ctx.executor = StepExecutor(namespace=base_namespace, graph=graph)
         return ctx.executor
 
     def _run_step(step: Step, progress=None) -> dict:

@@ -65,6 +65,7 @@ def _step(key=None, use_hvg=False, do_scale=False, n_pcs=10, flavor="igraph",
         },
         deps=["normalize"],
         label=f"Clustering: {key}",
+        outputs=["leiden_labels"],
     )
 
 
@@ -76,6 +77,45 @@ def _run(step, adata):
         ex.run(_normalize_step())
         ex.run(step)
     return ex
+
+
+def test_the_step_hands_back_the_labels_it_declared():
+    """The tab reads labels from the returned outputs, not from ctx.adata.obs.
+
+    Reading them back off ``adata`` worked only while the executor namespace and
+    ``ctx.adata`` were the same object — an invariant maintained by hand in
+    ``_run_step``, and invisible to anyone editing the template. Declaring the
+    output moves the check into ``StepExecutor``, which raises if the template
+    stops binding the name.
+    """
+    adata = _adata()
+    step = _step()
+    ex = StepExecutor(namespace={"sc": sc, "adata": adata})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ex.run(_normalize_step())
+        outputs = ex.run(step)
+
+    labels = outputs["leiden_labels"]
+    assert list(labels) == list(adata.obs[step.params["key"]])
+    assert labels.nunique() >= 2
+
+
+def test_a_template_that_stops_binding_the_labels_fails_loudly():
+    """The point of the declared output: silent breakage becomes a StepError."""
+    from xenium_viewer.utils.steps import StepError
+
+    adata = _adata()
+    step = _step()
+    # A user edit that drops the last line — the analysis still "works", but the
+    # tab would previously have read a stale or missing obs column.
+    step.template = step.template.rsplit("\n", 1)[0]
+    ex = StepExecutor(namespace={"sc": sc, "adata": adata})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ex.run(_normalize_step())
+        with pytest.raises(StepError, match="leiden_labels"):
+            ex.run(step)
 
 
 @pytest.mark.parametrize("flavor", LEIDEN_FLAVORS)

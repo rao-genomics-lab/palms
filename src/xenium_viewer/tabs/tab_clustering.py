@@ -11,6 +11,7 @@ from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
+from xenium_viewer.utils.step_templates import builtin_assemble
 from xenium_viewer.utils.steps import Step, coerce
 
 if TYPE_CHECKING:
@@ -30,30 +31,12 @@ if TYPE_CHECKING:
 # It still works on its own ``adata_leiden`` copy, so that neighbours/leiden
 # (and any HVG subsetting) don't mutate the shared ``adata_norm`` that
 # rank-genes and the other expression analyses read.
-_LEIDEN_TEMPLATE_HEAD = """
-# Leiden clustering ($key)
-adata_leiden = adata_norm.copy()"""
-
-_LEIDEN_TEMPLATE_HVG = """
-sc.pp.highly_variable_genes(adata_leiden, n_top_genes=$n_top_genes, flavor='seurat')
-adata_leiden = adata_leiden[:, adata_leiden.var.highly_variable].copy()"""
-
-_LEIDEN_TEMPLATE_SCALE = """
-sc.pp.scale(adata_leiden, max_value=10)"""
-
-# PCA is recomputed only when the gene set or scaling changed; otherwise the
-# X_pca carried over from `normalize` is exactly what we would recompute.
-_LEIDEN_TEMPLATE_PCA = """
-sc.pp.pca(adata_leiden)"""
-
-_LEIDEN_TEMPLATE_TAIL = """
-sc.pp.neighbors(adata_leiden, n_neighbors=$n_neighbors, n_pcs=$n_pcs)
-sc.tl.leiden(
-    adata_leiden, resolution=$resolution, key_added=$key,
-    flavor=$flavor, n_iterations=$n_iterations, directed=$directed,
-    random_state=$random_state,
-)
-adata.obs[$key] = adata_leiden.obs[$key].values"""
+# Text in ``step_templates/builtin/clustering.leiden.tmpl``; the blocks are
+# named there and *selected* here, because which preprocessing runs is what the
+# checkboxes mean. PCA is recomputed only when the gene set or scaling changed;
+# otherwise the X_pca carried over from `normalize` is exactly what we would
+# recompute.
+TEMPLATE_ID = "clustering.leiden"
 
 # scanpy's two Leiden backends. `igraph` is orders of magnitude faster;
 # `leidenalg` is scanpy's historical default and gives a different partition
@@ -71,17 +54,24 @@ FLAVOR_DEFAULTS = {                # flavour -> (n_iterations, directed)
 }
 
 
+def _leiden_blocks(use_hvg: bool, do_scale: bool) -> list[str]:
+    """Which blocks the selected preprocessing options call for."""
+    return (
+        ["head"]
+        + (["hvg"] if use_hvg else [])
+        + (["scale"] if do_scale else [])
+        + (["pca"] if use_hvg or do_scale else [])
+        + ["tail"]
+    )
+
+
 def _leiden_template(use_hvg: bool, do_scale: bool) -> str:
-    """Assemble the Leiden template for the selected preprocessing options."""
-    parts = [_LEIDEN_TEMPLATE_HEAD]
-    if use_hvg:
-        parts.append(_LEIDEN_TEMPLATE_HVG)
-    if do_scale:
-        parts.append(_LEIDEN_TEMPLATE_SCALE)
-    if use_hvg or do_scale:
-        parts.append(_LEIDEN_TEMPLATE_PCA)
-    parts.append(_LEIDEN_TEMPLATE_TAIL)
-    return "".join(parts)
+    """The *shipped* Leiden template for these options.
+
+    Reads builtin text only. Tests pin this; the tab callback uses it too, until
+    override resolution exists.
+    """
+    return builtin_assemble(TEMPLATE_ID, _leiden_blocks(use_hvg, do_scale))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -163,43 +153,59 @@ def build_tab(ctx: ViewerContext) -> tuple:
         # Recording happened inside ctx.run_step(), which recorded the very
         # source it executed — there is nothing to re-describe here.
 
-    def on_run_leiden():
-        n_neighbors = leiden_n_neighbors.value
-        n_pcs = leiden_n_pcs.value
+    def _leiden_params() -> dict:
+        """The params for a run with the widgets as they stand right now.
+
+        Shared with the Templates tab's preview, so what that pane shows is
+        rendered from the same dict the run would use — a second expression of
+        "the current settings" is exactly the kind of drift ``Step`` exists to
+        rule out.
+
+        The flavour is part of the key: the two backends produce genuinely
+        different partitions, so at one resolution they must coexist rather than
+        overwrite each other.
+        """
+        flavor = leiden_flavor.value
         resolution = leiden_resolution.value
+        return {
+            "key": f"leiden_{flavor}_r{resolution}",
+            "resolution": coerce(resolution),
+            "n_neighbors": coerce(leiden_n_neighbors.value),
+            "n_pcs": coerce(leiden_n_pcs.value),
+            "n_top_genes": coerce(leiden_n_hvgs.value),
+            "flavor": flavor,
+            "n_iterations": coerce(leiden_n_iterations.value),
+            "directed": FLAVOR_DEFAULTS[flavor][1],
+            "random_state": 0,
+        }
+
+    ctx.state.setdefault("template_preview_params", {})[TEMPLATE_ID] = _leiden_params
+
+    def on_run_leiden():
         use_hvg = leiden_hvg_check.value
         do_scale = leiden_scale_check.value
-        n_hvgs = leiden_n_hvgs.value
-        flavor = leiden_flavor.value
-        n_iterations = leiden_n_iterations.value
-        directed = FLAVOR_DEFAULTS[flavor][1]
         leiden_run_button.enabled = False
         leiden_status.value = "Running Leiden clustering..."
         gen = ctx.dataset_generation
 
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        # The flavour is part of the key: the two backends produce genuinely
-        # different partitions, so at one resolution they must coexist rather
-        # than overwrite each other.
-        key = f"leiden_{flavor}_r{resolution}"
+        params = _leiden_params()
+        key = params["key"]
         step = Step(
             id=f"clustering:{key}",
             template=_leiden_template(use_hvg, do_scale),
-            params={
-                "key": key,
-                "resolution": coerce(resolution),
-                "n_neighbors": coerce(n_neighbors),
-                "n_pcs": coerce(n_pcs),
-                "n_top_genes": coerce(n_hvgs),
-                "flavor": flavor,
-                "n_iterations": coerce(n_iterations),
-                "directed": directed,
-                "random_state": 0,
-            },
+            params=params,
             deps=["normalize"],
             kind=ARTIFACT,
             label=f"Clustering: {key}",
+            # The labels come back through the declared-output contract rather
+            # than by reading ctx.adata.obs and trusting that the executor
+            # namespace still points at the same object. StepExecutor raises if
+            # the template does not bind this name, so a template edit that
+            # stops producing labels fails loudly instead of handing back
+            # whatever obs column happened to be there from a previous run.
+            outputs=["leiden_labels"],
         )
 
         @thread_worker
@@ -212,9 +218,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
             yield "Running Leiden clustering..."
             # One call: this executes exactly the source it records.
-            ctx.run_step(step)
+            labels = ctx.run_step(step)["leiden_labels"]
 
-            labels = _adata.obs[key]
             cell_ids = (_adata.obs['cell_id'].values
                         if 'cell_id' in _adata.obs.columns else _adata.obs_names)
             # Named for the key it is stored under, not "leiden": the color
@@ -223,11 +228,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
             series = pd.Series(
                 labels.astype(int).values, index=cell_ids, name=key,
             )
+            # The summary reports the params that were actually recorded, read
+            # back off the step rather than from a second set of locals.
             return {
                 "key": key, "series": series, "n_clusters": series.nunique(),
-                "resolution": resolution, "n_neighbors": n_neighbors,
-                "n_pcs": n_pcs, "flavor": flavor, "n_iterations": n_iterations,
-                "use_hvg": use_hvg, "do_scale": do_scale, "n_hvgs": n_hvgs,
+                "resolution": params["resolution"],
+                "n_neighbors": params["n_neighbors"],
+                "n_pcs": params["n_pcs"], "flavor": params["flavor"],
+                "n_iterations": params["n_iterations"],
+                "use_hvg": use_hvg, "do_scale": do_scale,
+                "n_hvgs": params["n_top_genes"],
             }
 
         worker = _run()

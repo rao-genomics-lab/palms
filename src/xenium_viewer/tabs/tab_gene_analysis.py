@@ -23,24 +23,13 @@ from xenium_viewer.utils.gene_analysis import (
     run_llm_annotation,
 )
 from xenium_viewer.utils.steps import Step, coerce
+from xenium_viewer.utils.step_templates import builtin_text
 
 # Executed *and* recorded — see utils/steps.py. Reads the clustering from
 # adata.obs (where the clustering cell puts it) and ranks on the normalized
 # copy bound by the "normalize" step, which is what the viewer has always
 # actually done; the previous recorded cell ranked on raw `adata`.
-_RANK_GENES_TEMPLATE = """
-# Rank genes: groupby=$groupby, method=$method, n_genes=$n_genes
-adata_norm.obs[$groupby] = adata.obs[$groupby].values
-sc.tl.rank_genes_groups(
-    adata_norm, groupby=$groupby, method=$method, n_genes=$n_genes,
-)
-rank_df = sc.get.rank_genes_groups_df(adata_norm, group=None)
-# Keyed as well as bound. A second ranking rebinds ``rank_df``, and scanpy
-# overwrites ``uns['rank_genes_groups']`` in place, so without this the notebook
-# ends holding only the last clustering's markers — measured on a real session,
-# which ranked two clusterings and could show the genes for one of them.
-rank_results = globals().get('rank_results', {})
-rank_results[$groupby] = rank_df"""
+_RANK_GENES_TEMPLATE = builtin_text("genes.rank_genes")
 
 
 def dotplot_code(groupby: str, n_genes: int, dendrogram: bool, fmt: str) -> str:

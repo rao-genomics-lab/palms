@@ -12,6 +12,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
+from xenium_viewer.utils.step_templates import builtin_text
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -21,13 +22,7 @@ if TYPE_CHECKING:
 # It runs on ``adata_norm`` with the spatial graph the ``spatial_neighbors``
 # step built on that same object; the old recorded cell called
 # ``sq.gr.nhood_enrichment(adata, ...)`` on raw, graph-less counts.
-_NHOOD_TEMPLATE = """
-# Neighborhood enrichment: $cluster_key (n_perms=$n_perms)
-adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
-sq.gr.nhood_enrichment(
-    adata_norm, cluster_key=$cluster_key, n_perms=$n_perms, seed=$seed,
-)
-nhood_zscore = adata_norm.uns[$uns_key]['zscore']"""
+_NHOOD_TEMPLATE = builtin_text("spatial.nhood")
 
 
 def build_tab(ctx: ViewerContext) -> tuple:

@@ -2,7 +2,101 @@
 
 ## [Unreleased] — 2026-07-30
 
+### Added
+- **Tools → Templates: see what an analysis button will run, before running it.**
+  The source a step executes was only ever recoverable *after* the fact, from the Notebook
+  tab. The text itself lived in 14 private module constants — seven of them assembled by a
+  private function keyed on booleans — so there was no way to ask what a step takes, what it
+  binds, or what it would run with the settings currently on screen.
+
+  Template text now lives in `utils/step_templates/builtin/*.tmpl`: a header declaring the
+  contract (`params`, `requires`, `outputs`, `assemblies`) and one or more named blocks.
+  Everything structural is a comment, so a `.tmpl` is valid Python and the Notebook tab's
+  syntax highlighter works on it unchanged. **The call site still owns which blocks are
+  selected** — the branch structure is what the widgets mean — while the registry owns their
+  text.
+
+  The new tab shows the contract, the shipped source per block, and a live preview of the
+  exact string that would be `exec`'d. The preview is not a reconstruction: it calls
+  `Step.render()`, the same method the executor calls, with the owning tab's real widget
+  values where the tab registers a provider. Leiden's `_leiden_params()` is now the single
+  expression of "the current settings" that both the run and the preview read.
+
+  The migration is provably text-preserving: all 47 template variants were compared against
+  the previous constants and 43 are byte-identical, the other 4 differing only by the
+  `leiden_labels` line added below. `tests/test_template_registry.py` then applies the
+  `check_step` lint — which had existed since the Step system landed but was only ever called
+  from five hand-written tests — to every template in every declared assembly, 40 renderings:
+  each must parse, read only names the executor guarantees or the template declares, bind every
+  output it claims, and never reach back into `xenium_viewer`. It immediately found one real
+  contract error: `markers` was declared required, but `sc.pl.correlation_matrix` ignores
+  `var_names`, so that assembly never referenced it.
+
+### Changed
+- **Groundwork for user-configurable analysis templates (Phase 0).** No user-visible
+  feature yet; four preparatory changes that each stand on their own, ahead of moving the
+  14 private template constants into a registry.
+
+  - `EXECUTOR_BASE_NAMES` (`utils/step_templates/namespace.py`) now declares the names a
+    template may reach for without binding them. `_get_executor` builds its dict and
+    validates it against that declaration, so the set template validation checks against
+    and the set the executor actually provides cannot drift — a name added to one and not
+    the other would pass validation and then fail as a `NameError` on replay, in a clean
+    kernel, long after the fact.
+
+  - **Two templates no longer smuggle a fake `$token` past `Template.substitute`.** The
+    gene-correlation tail carried `$n_suffix` and the marker-plot tail `$dpi_kwarg`, each
+    stripped by `str.replace` *before* `Step` saw the text. Neither could ever become a
+    real param — `$n_suffix` sits inside an f-string, where `repr('')` renders as `''` and
+    breaks the literal — so they were load-bearing punctuation that looked exactly like
+    parameters, and they hid those templates from the one check that validates a template
+    against its declared params. Both are now whole-line block variants. All 26 assembled
+    variants are byte-identical to before; a source guard fails if the idiom returns.
+
+  - **The Leiden step declares its output.** It previously declared none, and the tab read
+    the labels back off `ctx.adata.obs`, which worked only while the executor namespace and
+    `ctx.adata` were the same object — an invariant maintained by hand and invisible to
+    anyone editing the template. The template now binds `leiden_labels` and the tab reads
+    the returned dict, so a template that stops producing labels raises `StepError` instead
+    of silently handing back whatever obs column was left from a previous run.
+
+  - `ProvNode` and `Step` gained `template_id` / `template_origin` / `template_hash`.
+    `code` still records what actually ran, so replay is unaffected; the fields let a
+    *reader* tell a stock run from a customised one, which rendered source cannot show.
+    Old `prov_graph.json` sidecars and zarr session attrs load unchanged (every field but
+    `id`/`code` is read with a default) and register as `builtin`. Template metadata is
+    deliberately excluded from the staleness comparison — it describes where the same code
+    came from, so changing it must not flag downstream results.
+
 ### Fixed
+- **`pytest` hung forever on any machine with a display.** The suite stalled in
+  `test_persistence_safety.py::test_a_failed_persist_leaves_the_table_readable` and never
+  returned. `reporting._headless()` decided "nobody can answer a dialog" from
+  `QT_QPA_PLATFORM` alone — but `conftest.py` deliberately leaves that unset when there is
+  a `DISPLAY`, so on a developer desktop every signal it looked at was clear while the
+  process still had no Qt event loop. `QMessageBox.exec_()` starts a *nested* event loop
+  and returns when something dismisses the dialog; with no window manager and no user,
+  nothing ever did. It needed any earlier test to have created the `QApplication`, which is
+  why the file passed in isolation and why CI (no `DISPLAY` → `offscreen` → modal already
+  suppressed) never saw it. The bug outlived the `_headless()` docstring that describes
+  exactly this failure.
+
+  `_headless()` is now the OR of two independent signals: the platform check, plus
+  `_event_loop_running()` — `QThread.loopLevel() > 0` on the main thread, which is readable
+  from a worker and is the direct answer to the question that actually matters ("is anyone
+  processing events", not "is there a screen"). An unexpected Qt error assumes a loop *is*
+  running: a needless dialog beats silence about a save that did not happen. Three tests
+  cover it, including one that runs a real `exec_()` to prove the check does not simply
+  always say "no loop" — which would have suppressed every modal in the real GUI.
+
+- **The Notebook tab presented hand-edited cells as the recorded provenance.**
+  `_reconcile_edits` folded a user's edit of a graph cell into `node.code` at export time
+  **without executing it**, so the exported notebook showed never-run source in the place
+  where every other node guarantees the code that produced the artifact. The node is now
+  marked `hand-edited` and its `template_hash` cleared. The logic moved to a module-level
+  `reconcile_edits(graph, cells)` so it is tested against a real graph rather than
+  reproduced in the test.
+
 - **CI could never run a Qt test: `pytest` aborted with a core dump.** The workflow set
   `MPLBACKEND` but not `QT_QPA_PLATFORM`, and on a runner with no display Qt does not fail
   when it cannot load the `xcb` platform plugin — it calls `abort()`. The whole run died at

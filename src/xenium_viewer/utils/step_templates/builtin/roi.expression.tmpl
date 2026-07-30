@@ -1,0 +1,67 @@
+# xenium-viewer template
+# id: roi.expression
+# schema-version: 1
+# assemblies: head+loop_head+tail | head+filter+loop_head+loop_filter+tail
+# doc: Per-region expression of one gene, with pairwise Welch tests.
+# requires: np, pd, adata, roi_polygons
+# outputs: roi_expr_cells, roi_expr_stats, roi_expr_tests
+# params: gene:str, pixel_size:float, clustering:str?, selected:list?
+
+#--- block head
+# ROI expression of $gene, per drawn region
+from shapely import contains_xy
+from shapely.geometry import Polygon
+from itertools import combinations
+from scipy import stats
+
+centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
+_x = adata[:, $gene].X
+_expr = np.asarray(_x.todense() if hasattr(_x, 'todense') else _x).ravel()
+_cell_ids = (adata.obs['cell_id'].to_numpy() if 'cell_id' in adata.obs
+             else adata.obs_names.to_numpy())
+
+#--- block filter
+# Cluster filter: cells must be inside an ROI *and* in the selected clusters
+cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()
+
+#--- block loop_head
+_rows = []
+for _i, _poly_yx in enumerate(roi_polygons):
+    _poly = Polygon(_poly_yx[:, ::-1])
+    if not _poly.is_valid:
+        _poly = _poly.buffer(0)
+    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])
+
+#--- block loop_filter
+    _inside = _inside & cluster_mask
+
+#--- block tail
+    _idx = np.where(_inside)[0]
+    _rows.append(pd.DataFrame({
+        'region_id': _i + 1,
+        'cell_id': _cell_ids[_idx],
+        'x_centroid_um': adata.obsm['spatial'][_idx, 0],
+        'y_centroid_um': adata.obsm['spatial'][_idx, 1],
+        'expression': _expr[_idx],
+    }))
+
+roi_expr_cells = pd.concat(_rows, ignore_index=True)
+roi_expr_stats = (
+    roi_expr_cells.groupby('region_id')['expression']
+    .agg(['count', 'mean', 'median', 'std', 'min', 'max'])
+    .reindex(range(1, len(roi_polygons) + 1))
+)
+roi_expr_stats['count'] = roi_expr_stats['count'].fillna(0).astype(int)
+
+# Pairwise Welch's t-tests between regions, Benjamini-Hochberg corrected
+_groups = [(_r, _g['expression'].to_numpy())
+           for _r, _g in roi_expr_cells.groupby('region_id') if len(_g) >= 2]
+_tests = []
+for (_r1, _e1), (_r2, _e2) in combinations(_groups, 2):
+    _t, _p = stats.ttest_ind(_e1, _e2, equal_var=False)
+    _tests.append({'region_1': _r1, 'region_2': _r2, 't': _t, 'p': _p})
+roi_expr_tests = pd.DataFrame(_tests, columns=['region_1', 'region_2', 't', 'p'])
+roi_expr_tests['p_adj'] = (
+    stats.false_discovery_control(roi_expr_tests['p'], method='bh')
+    if len(roi_expr_tests) > 1 else roi_expr_tests['p']
+)

@@ -1,0 +1,10 @@
+# xenium-viewer template
+# id: spatial_neighbors
+# schema-version: 1
+# doc: Spatial neighbour graph, built on the normalised copy.
+# requires: sq, adata_norm
+# params: n_neighs:int
+
+#--- block main
+# Spatial neighbor graph (k=$n_neighs)
+sq.gr.spatial_neighbors(adata_norm, coord_type='generic', n_neighs=$n_neighs)

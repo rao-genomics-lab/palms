@@ -1,0 +1,42 @@
+# xenium-viewer template
+# id: roi.deg
+# schema-version: 1
+# assemblies: head+loop_head+tail | head+filter+loop_head+loop_filter+tail
+# doc: Differential expression between drawn ROI regions.
+# requires: sc, np, pd, adata, roi_polygons
+# outputs: roi_deg_df, roi_adata
+# params: method:str, pixel_size:float, clustering:str?, selected:list?
+
+#--- block head
+# ROI differential expression (method=$method)
+from shapely import contains_xy
+from shapely.geometry import Polygon
+
+centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
+roi_region = np.full(adata.n_obs, '', dtype=object)
+
+#--- block filter
+# Cluster filter: cells must be inside an ROI *and* in the selected clusters
+cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()
+
+#--- block loop_head
+for _i, _poly_yx in enumerate(roi_polygons):
+    _poly = Polygon(_poly_yx[:, ::-1])
+    if not _poly.is_valid:
+        _poly = _poly.buffer(0)
+    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])
+
+#--- block loop_filter
+    _inside = _inside & cluster_mask
+
+#--- block tail
+    roi_region[_inside] = f'Region {_i + 1}'
+
+roi_adata = adata[roi_region != ''].copy()
+roi_adata.obs['roi_region'] = pd.Categorical(roi_region[roi_region != ''])
+sc.pp.normalize_total(roi_adata, target_sum=1e4)
+sc.pp.log1p(roi_adata)
+sc.tl.rank_genes_groups(
+    roi_adata, 'roi_region', method=$method, reference='rest', key_added=$method,
+)
+roi_deg_df = sc.get.rank_genes_groups_df(roi_adata, group=None, key=$method)

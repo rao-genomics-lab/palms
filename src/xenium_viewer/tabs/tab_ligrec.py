@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
 from xenium_viewer.utils.spatial_analysis import make_ligrec_plot
+from xenium_viewer.utils.step_templates import builtin_assemble
 
 
 # Executed and recorded from one string. Two things the old recorded cell got
@@ -26,40 +27,22 @@ from xenium_viewer.utils.spatial_analysis import make_ligrec_plot
 # to squidpy, and it relegated the interaction-database selection to a prose
 # comment, so a replay silently used omnipath's defaults. The checkboxes now
 # reach the notebook as `InteractionDataset` members reconstructed by name.
-_LIGREC_TEMPLATE_HEAD = """
-# Ligand-receptor: $cluster_key (n_perms=$n_perms)
-from omnipath.constants import InteractionDataset
 
-adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
-interactions_params = {}"""
 
-_LIGREC_TEMPLATE_INCLUDE = """
-interactions_params['include'] = tuple(
-    InteractionDataset[_n] for _n in $include
-)"""
 
-_LIGREC_TEMPLATE_RESOURCES = """
-interactions_params['resources'] = $resources"""
 
-_LIGREC_TEMPLATE_TAIL = """
-ligrec_res = sq.gr.ligrec(
-    adata_norm, cluster_key=$cluster_key, n_perms=$n_perms,
-    threshold=$threshold, seed=$seed, use_raw=False, copy=True,
-    transmitter_params={'categories': 'ligand'},
-    receiver_params={'categories': 'receptor'},
-    interactions_params=interactions_params,
-)"""
+
+TEMPLATE_ID = "spatial.ligrec"
+
+
+def _ligrec_blocks(has_include: bool, has_resources: bool) -> list[str]:
+    """The databases blocks appear only when something is actually selected."""
+    return (["head"] + (["include"] if has_include else [])
+            + (["resources"] if has_resources else []) + ["tail"])
 
 
 def _ligrec_template(has_include: bool, has_resources: bool) -> str:
-    """Assemble the L-R template for the selected interaction databases."""
-    parts = [_LIGREC_TEMPLATE_HEAD]
-    if has_include:
-        parts.append(_LIGREC_TEMPLATE_INCLUDE)
-    if has_resources:
-        parts.append(_LIGREC_TEMPLATE_RESOURCES)
-    parts.append(_LIGREC_TEMPLATE_TAIL)
-    return "".join(parts)
+    return builtin_assemble(TEMPLATE_ID, _ligrec_blocks(has_include, has_resources))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:

@@ -1,0 +1,34 @@
+# xenium-viewer template
+# id: spatial.ligrec
+# schema-version: 1
+# assemblies: head+tail | head+resources+tail | head+include+tail |
+#          head+include+resources+tail
+# doc: Ligand-receptor permutation test (omnipath resources).
+# requires: sq, adata, adata_norm
+# outputs: ligrec_res
+# params: cluster_key:str, n_perms:int, threshold:float, seed:int,
+#         include:list?, resources:list?
+
+#--- block head
+# Ligand-receptor: $cluster_key (n_perms=$n_perms)
+from omnipath.constants import InteractionDataset
+
+adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
+interactions_params = {}
+
+#--- block include
+interactions_params['include'] = tuple(
+    InteractionDataset[_n] for _n in $include
+)
+
+#--- block resources
+interactions_params['resources'] = $resources
+
+#--- block tail
+ligrec_res = sq.gr.ligrec(
+    adata_norm, cluster_key=$cluster_key, n_perms=$n_perms,
+    threshold=$threshold, seed=$seed, use_raw=False, copy=True,
+    transmitter_params={'categories': 'ligand'},
+    receiver_params={'categories': 'receptor'},
+    interactions_params=interactions_params,
+)

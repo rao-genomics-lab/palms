@@ -15,6 +15,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
+from xenium_viewer.utils.step_templates import builtin_text
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -23,10 +24,7 @@ if TYPE_CHECKING:
 # Executed and recorded from one string. The old recorded cell ran on `adata`
 # (raw counts, and it rebuilt obsm['spatial'] by hand from x_centroid/y_centroid)
 # while the viewer ran on the normalised copy.
-_COOCCUR_TEMPLATE = """
-# Co-occurrence: $cluster_key (interval=$interval)
-adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
-sq.gr.co_occurrence(adata_norm, cluster_key=$cluster_key, interval=$interval)"""
+_COOCCUR_TEMPLATE = builtin_text("spatial.cooccur")
 
 
 def build_tab(ctx: ViewerContext) -> tuple:

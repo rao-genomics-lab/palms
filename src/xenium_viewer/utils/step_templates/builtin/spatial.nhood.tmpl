@@ -1,0 +1,14 @@
+# xenium-viewer template
+# id: spatial.nhood
+# schema-version: 1
+# doc: Squidpy neighbourhood enrichment z-scores.
+# requires: sq, adata, adata_norm
+# params: cluster_key:str, uns_key:str, n_perms:int, seed:int
+
+#--- block main
+# Neighborhood enrichment: $cluster_key (n_perms=$n_perms)
+adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
+sq.gr.nhood_enrichment(
+    adata_norm, cluster_key=$cluster_key, n_perms=$n_perms, seed=$seed,
+)
+nhood_zscore = adata_norm.uns[$uns_key]['zscore']

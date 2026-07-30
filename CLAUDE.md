@@ -49,7 +49,11 @@ needed** — `tests/conftest.py` selects `QT_QPA_PLATFORM=offscreen` and
 without a platform plugin, it aborts the process: the symptom is
 `Aborted (core dumped)` with no test name, which is what CI reported for months.
 An explicit `QT_QPA_PLATFORM` or a real display still wins, so a desktop run is
-unchanged. GitHub Actions
+unchanged. On a desktop the platform stays unset, which is why
+`reporting._headless()` does not rely on it alone: it also checks
+`QThread.loopLevel()`, since a `pytest` process has a `QApplication` but no event
+loop, and a modal `exec_()` there blocks forever with nothing to dismiss it.
+GitHub Actions
 (`.github/workflows/ci.yml`) runs the suite in the full conda env plus a fast `ruff`
 error-only lint gate (`--select E9,F63,F7,F82`) on every push/PR. The napari GUI proper
 and the spatial-analysis tabs still have no automated coverage — that testing remains
@@ -112,6 +116,7 @@ never call it from inside a worker that holds a reference to a tab.
 | `transcript_index.py` | Per-gene feather loader |
 | `session.py` | Zarr-based session persistence (ROIs, H&E/ARMS registration, clusterings, DEG results, provenance graph) |
 | `prov_graph.py` | Provenance DAG for reproducible code — nodes/deps, upsert+staleness, topo-sort, cells/script/mermaid/dot rendering |
+| `step_templates/` | The text of every analysis template, as `builtin/*.tmpl`. `spec.py` (TemplateSpec/BlockSpec/ParamSpec), `loader.py` (parse + `builtin_*`), `namespace.py` (`EXECUTOR_BASE_NAMES`) |
 | `notebook_export.py` | Build/write/read `.ipynb` (nbformat) from the graph |
 | `dag_view.py` | Matplotlib+networkx render of the provenance DAG |
 | `umap_widget.py` | Separate linked napari window for UMAP scatter |
@@ -228,6 +233,49 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   `{...}` literals survive; execution is serialised and proceeds statement-by-statement
   so progress can be reported without changing the compiled source. Failures raise
   `StepError` naming the step, and nothing is recorded for a step that did not succeed.
+
+  **Template text lives in `utils/step_templates/builtin/*.tmpl`, not in the tab modules.**
+  A template is an ordered dict of *named blocks*; the `.tmpl` header declares the contract
+  (`params`, `requires`, `outputs`, `assemblies`, `frozen-blocks`) and everything structural
+  is a comment, so the file is valid Python. **The call site owns which blocks are selected;
+  the registry owns their text** — the branch structure *is* what the widgets mean
+  (`use_hvg or do_scale` → the `pca` block), so selection stays in Python. The tab modules'
+  private constants (`_leiden_template`, `_NORMALIZE_TEMPLATE`, …) still exist, bound through
+  `builtin_text`/`builtin_assemble`, which read only shipped files via `importlib.resources`
+  and cannot see an override path — that is what keeps the six template-pinning test modules
+  passing unchanged. `tests/test_template_registry.py` runs the `check_step` lint over every
+  template × every declared assembly (40 renderings), which is where the five hand-written
+  `check_step` calls became a registry-wide gate.
+
+  **Tools → Templates** (`tabs/tab_templates.py`) is the read-only view of that registry:
+  contract, shipped source per block, and a live preview of the exact string that would be
+  `exec`'d — rendered via `Step.render()`, and using the owning tab's real widget values when
+  it registers a provider in `ctx.state["template_preview_params"]` (see `_leiden_params` in
+  `tab_clustering.py`, the single expression both the run and the preview call).
+
+  Three rules that exist because each was once broken:
+  **(a) A template may only reference `EXECUTOR_BASE_NAMES`** (`utils/step_templates/namespace.py`:
+  `sc sq pd np plt Path data_path sdata adata`) plus names a declared dependency binds.
+  `_get_executor` calls `check_base_namespace` on the dict it built, so the set validation
+  checks against and the set execution provides cannot drift — a name in one and not the
+  other passes validation and then fails as a `NameError` on replay, in a clean kernel.
+  **(b) Results come back through declared `outputs`, not by reading `ctx.adata` afterwards.**
+  Reading back worked only while the executor namespace and `ctx.adata` were the same object;
+  `StepExecutor` raises if the template does not bind a declared output, so a template edit
+  that stops producing a result fails loudly instead of returning stale state. Leiden binds
+  `leiden_labels` for exactly this reason.
+  **(c) No template may carry a `$token` that is not a declared param.**
+  `Template.substitute` (not `safe_substitute`) is the only thing checking a template against
+  its params, so stripping a fake token with `str.replace` before `Step` sees it hides the
+  template from that check. Two did (`$n_suffix`, `$dpi_kwarg`); both are now whole-line block
+  variants, and `tests/test_template_placeholders.py` is a source guard against the idiom
+  returning.
+
+  `ProvNode`/`Step` also carry `template_id` / `template_origin` / `template_hash`.
+  `code` still records what ran, so replay is unaffected; the fields let a reader tell a stock
+  run from a customised or hand-edited one. They are excluded from `upsert`'s staleness
+  comparison on purpose — they describe where the *same* code came from.
+
   Migrated so far: **Leiden clustering** (`tab_clustering.py`), **normalize**
   (`ctx.ensure_normalized()`, which binds `adata_norm` and replaces the old
   `record_normalize` + `get_normalized_adata` pair), **rank genes**

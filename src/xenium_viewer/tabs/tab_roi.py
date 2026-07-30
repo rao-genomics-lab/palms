@@ -12,6 +12,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, make_progress_bar
 from xenium_viewer.utils.prov_graph import ARTIFACT, SETUP, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
+from xenium_viewer.utils.step_templates import builtin_assemble, builtin_text
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -19,9 +20,7 @@ if TYPE_CHECKING:
 
 # The drawn polygons are inlined as literals so the notebook reproduces them
 # without the viewer's zarr cache. ``rois`` is a SETUP node: it binds a constant.
-_ROIS_TEMPLATE = """
-# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)
-roi_polygons = [np.array(_p) for _p in $polygons]"""
+_ROIS_TEMPLATE = builtin_text("roi.polygons")
 
 
 # ROI DEG, executed and recorded from one string. The old recorded cell called
@@ -29,125 +28,47 @@ roi_polygons = [np.array(_p) for _p in $polygons]"""
 # this package installed and the reader could not see what it did. It is plain
 # shapely + scanpy, so it is now written out in full. (E3 replaces the
 # point-in-polygon block with ``spatialdata.polygon_query``.)
-_ROI_DEG_HEAD = """
-# ROI differential expression (method=$method)
-from shapely import contains_xy
-from shapely.geometry import Polygon
 
-centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
-roi_region = np.full(adata.n_obs, '', dtype=object)"""
 
-_ROI_DEG_FILTER = """
-# Cluster filter: cells must be inside an ROI *and* in the selected clusters
-cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()"""
 
-_ROI_DEG_LOOP_HEAD = """
-for _i, _poly_yx in enumerate(roi_polygons):
-    _poly = Polygon(_poly_yx[:, ::-1])
-    if not _poly.is_valid:
-        _poly = _poly.buffer(0)
-    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])"""
 
-_ROI_DEG_LOOP_FILTER = """
-    _inside = _inside & cluster_mask"""
-
-_ROI_DEG_TAIL = """
-    roi_region[_inside] = f'Region {_i + 1}'
-
-roi_adata = adata[roi_region != ''].copy()
-roi_adata.obs['roi_region'] = pd.Categorical(roi_region[roi_region != ''])
-sc.pp.normalize_total(roi_adata, target_sum=1e4)
-sc.pp.log1p(roi_adata)
-sc.tl.rank_genes_groups(
-    roi_adata, 'roi_region', method=$method, reference='rest', key_added=$method,
-)
-roi_deg_df = sc.get.rank_genes_groups_df(roi_adata, group=None, key=$method)"""
 
 
 # Per-region expression of one gene. This used to record two comment lines
 # saying the numbers were "shown in the viewer" — a cell that replays as a
 # silent no-op, which ``allow_errors=False`` can never catch. The same shapely
 # membership test as the DEG step above, then the statistics the tab prints.
-_ROI_EXPR_HEAD = """
-# ROI expression of $gene, per drawn region
-from shapely import contains_xy
-from shapely.geometry import Polygon
-from itertools import combinations
-from scipy import stats
 
-centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
-_x = adata[:, $gene].X
-_expr = np.asarray(_x.todense() if hasattr(_x, 'todense') else _x).ravel()
-_cell_ids = (adata.obs['cell_id'].to_numpy() if 'cell_id' in adata.obs
-             else adata.obs_names.to_numpy())"""
 
-_ROI_EXPR_FILTER = """
-# Cluster filter: cells must be inside an ROI *and* in the selected clusters
-cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()"""
 
-_ROI_EXPR_LOOP_HEAD = """
-_rows = []
-for _i, _poly_yx in enumerate(roi_polygons):
-    _poly = Polygon(_poly_yx[:, ::-1])
-    if not _poly.is_valid:
-        _poly = _poly.buffer(0)
-    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])"""
 
-_ROI_EXPR_LOOP_FILTER = """
-    _inside = _inside & cluster_mask"""
 
-_ROI_EXPR_TAIL = """
-    _idx = np.where(_inside)[0]
-    _rows.append(pd.DataFrame({
-        'region_id': _i + 1,
-        'cell_id': _cell_ids[_idx],
-        'x_centroid_um': adata.obsm['spatial'][_idx, 0],
-        'y_centroid_um': adata.obsm['spatial'][_idx, 1],
-        'expression': _expr[_idx],
-    }))
 
-roi_expr_cells = pd.concat(_rows, ignore_index=True)
-roi_expr_stats = (
-    roi_expr_cells.groupby('region_id')['expression']
-    .agg(['count', 'mean', 'median', 'std', 'min', 'max'])
-    .reindex(range(1, len(roi_polygons) + 1))
-)
-roi_expr_stats['count'] = roi_expr_stats['count'].fillna(0).astype(int)
 
-# Pairwise Welch's t-tests between regions, Benjamini-Hochberg corrected
-_groups = [(_r, _g['expression'].to_numpy())
-           for _r, _g in roi_expr_cells.groupby('region_id') if len(_g) >= 2]
-_tests = []
-for (_r1, _e1), (_r2, _e2) in combinations(_groups, 2):
-    _t, _p = stats.ttest_ind(_e1, _e2, equal_var=False)
-    _tests.append({'region_1': _r1, 'region_2': _r2, 't': _t, 'p': _p})
-roi_expr_tests = pd.DataFrame(_tests, columns=['region_1', 'region_2', 't', 'p'])
-roi_expr_tests['p_adj'] = (
-    stats.false_discovery_control(roi_expr_tests['p'], method='bh')
-    if len(roi_expr_tests) > 1 else roi_expr_tests['p']
-)"""
+
+
+
+ROI_EXPR_TEMPLATE_ID = "roi.expression"
+ROI_DEG_TEMPLATE_ID = "roi.deg"
+ROI_EXPORT_TEMPLATE_ID = "roi.export_expression"
+
+
+def _roi_blocks(filtered: bool) -> list[str]:
+    """Both ROI templates share the same two filter injection points.
+
+    The cluster mask is built once before the loop and applied inside it, so a
+    filtered run selects two blocks rather than one.
+    """
+    return (["head"] + (["filter"] if filtered else [])
+            + ["loop_head"] + (["loop_filter"] if filtered else []) + ["tail"])
 
 
 def _roi_expr_template(filtered: bool) -> str:
-    parts = [_ROI_EXPR_HEAD]
-    if filtered:
-        parts.append(_ROI_EXPR_FILTER)
-    parts.append(_ROI_EXPR_LOOP_HEAD)
-    if filtered:
-        parts.append(_ROI_EXPR_LOOP_FILTER)
-    parts.append(_ROI_EXPR_TAIL)
-    return "".join(parts)
+    return builtin_assemble(ROI_EXPR_TEMPLATE_ID, _roi_blocks(filtered))
 
 
 def _roi_deg_template(filtered: bool) -> str:
-    parts = [_ROI_DEG_HEAD]
-    if filtered:
-        parts.append(_ROI_DEG_FILTER)
-    parts.append(_ROI_DEG_LOOP_HEAD)
-    if filtered:
-        parts.append(_ROI_DEG_LOOP_FILTER)
-    parts.append(_ROI_DEG_TAIL)
-    return "".join(parts)
+    return builtin_assemble(ROI_DEG_TEMPLATE_ID, _roi_blocks(filtered))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -277,8 +198,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         try:
             ctx.run_step(Step(
                 id="export:roi_expression",
-                template="\n# Export ROI per-cell expression of $gene\n"
-                         "roi_expr_cells.to_csv($path, index=False)",
+                template=builtin_text(ROI_EXPORT_TEMPLATE_ID),
                 params={"gene": gene, "path": os.fspath(path)},
                 deps=[f"roi_expression:{gene}"],
                 kind=TERMINAL,

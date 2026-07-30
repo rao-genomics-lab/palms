@@ -6,6 +6,7 @@ from magicgui.widgets import ComboBox, PushButton, CheckBox
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.steps import Step
+from xenium_viewer.utils.step_templates import builtin_assemble
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -18,49 +19,18 @@ if TYPE_CHECKING:
 #
 # Expression is pulled with ``sc.get.obs_df`` rather than indexing ``.X`` and
 # calling ``.toarray()`` by hand — same values, and it is the idiomatic accessor.
-_GENE_CORR_HEAD = """
-# Gene correlation ($norm_label): $gene_a vs $gene_b
-from scipy.stats import pearsonr, spearmanr"""
 
-_GENE_CORR_EXPR = {
-    "Raw counts": """
-_expr = sc.get.obs_df(adata, keys=[$gene_a, $gene_b])
-x = _expr[$gene_a].to_numpy(dtype='float32')
-y = _expr[$gene_b].to_numpy(dtype='float32')""",
-    "Fraction of total": """
-_expr = sc.get.obs_df(adata, keys=[$gene_a, $gene_b])
-_totals = np.asarray(adata.X.sum(axis=1)).ravel().astype('float64')
-_totals[_totals == 0] = 1
-x = (_expr[$gene_a].to_numpy() / _totals).astype('float32')
-y = (_expr[$gene_b].to_numpy() / _totals).astype('float32')""",
-    "Log1p(CPM)": """
-_expr = sc.get.obs_df(adata_norm, keys=[$gene_a, $gene_b])
-x = _expr[$gene_a].to_numpy(dtype='float32')
-y = _expr[$gene_b].to_numpy(dtype='float32')""",
-}
 
-_GENE_CORR_FILTER = """
-_sel = adata.obs[$clustering].astype(str).isin($selected).to_numpy()
-x, y = x[_sel], y[_sel]"""
 
-_GENE_CORR_TAIL = """
-pr, pp = pearsonr(x, y)
-sr, sp = spearmanr(x, y)
-_p = lambda p: f'{p:.2e}' if p < 0.001 else f'{p:.4f}'
 
-fig, ax = plt.subplots(figsize=(5, 5))
-ax.scatter(x, y, s=1, alpha=0.3, rasterized=True, color='#1f77b4')
-ax.set_xlabel($xlabel)
-ax.set_ylabel($ylabel)
-ax.set_title($title_prefix + f'  [n={len(x):,}$n_suffix]')
-ax.text(
-    0.03, 0.97,
-    f'Pearson  r = {pr:.3f}, p = {_p(pp)}\\nSpearman \\u03c1 = {sr:.3f}, p = {_p(sp)}',
-    transform=ax.transAxes, va='top', ha='left', fontsize=9,
-    bbox={'boxstyle': 'round,pad=0.3', 'fc': 'white', 'alpha': 0.7},
-)
-fig.tight_layout()
-fig.savefig($path, dpi=300, bbox_inches='tight')"""
+# The "(filtered)" note used to be spliced in by ``str.replace``-ing a fake
+# ``$n_suffix`` token out of the tail before Step saw it. It cannot be a real
+# param — it sits *inside* an f-string, where ``repr('')`` would render as ``''``
+# and break the literal — so the whole title line is a variant instead. That
+# also removes a trap: a stray ``$n_suffix`` surviving into a template is a hard
+# ``StepError`` from ``Template.substitute``, with a message that names a param
+# no call site has ever declared.
+
 
 _NORM_LABELS = {
     "Raw counts": "raw counts",
@@ -69,14 +39,26 @@ _NORM_LABELS = {
 }
 
 
+TEMPLATE_ID = "genes.correlation"
+
+#: Widget label -> the ``expr.*`` block in the .tmpl that reads expression that
+#: way. Three genuinely different expressions, not three parameterisations of
+#: one — raw counts and fraction-of-total read ``adata``, log1p(CPM) reads
+#: ``adata_norm``, which is why the step's deps differ too.
+_EXPR_BLOCK = {
+    "Raw counts": "expr.raw",
+    "Fraction of total": "expr.fraction",
+    "Log1p(CPM)": "expr.log1p_cpm",
+}
+
+
+def _gene_corr_blocks(norm: str, filtered: bool) -> list[str]:
+    return (["head", _EXPR_BLOCK[norm]] + (["filter"] if filtered else [])
+            + ["stats", "title.filtered" if filtered else "title.plain", "tail"])
+
+
 def _gene_corr_template(norm: str, filtered: bool) -> str:
-    parts = [_GENE_CORR_HEAD, _GENE_CORR_EXPR[norm]]
-    if filtered:
-        parts.append(_GENE_CORR_FILTER)
-    parts.append(_GENE_CORR_TAIL.replace(
-        "$n_suffix", " (filtered)" if filtered else "",
-    ))
-    return "".join(parts)
+    return builtin_assemble(TEMPLATE_ID, _gene_corr_blocks(norm, filtered))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:

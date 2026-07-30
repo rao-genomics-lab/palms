@@ -57,6 +57,21 @@ NOTES_MARKER = "Viewer state"
 # Sort priority among nodes that become ready simultaneously in the topo sort.
 _KIND_ORDER = {SETUP: 0, ARTIFACT: 1, TERMINAL: 2, NOTE: 3}
 
+# ── Where a node's code came from ────────────────────────────────────────────
+# ``code`` always records what actually ran, so replay is correct whatever this
+# says. What it adds is the ability for a *reader* to tell a stock run from a
+# customised one — which a verification report has to be able to state, and
+# which the code alone cannot, since a customised template renders to source
+# that looks entirely ordinary.
+TEMPLATE_BUILTIN = "builtin"          # the template as shipped
+TEMPLATE_USER = "user"                # a user override, in full
+TEMPLATE_BLENDED = "user+builtin"     # some blocks overridden, the rest shipped
+TEMPLATE_HAND_EDITED = "hand-edited"  # typed into a notebook cell, not re-run
+
+TEMPLATE_ORIGINS = (
+    TEMPLATE_BUILTIN, TEMPLATE_USER, TEMPLATE_BLENDED, TEMPLATE_HAND_EDITED,
+)
+
 
 @dataclass
 class ProvNode:
@@ -69,6 +84,14 @@ class ProvNode:
     params: dict = field(default_factory=dict)
     stale: bool = False                  # an upstream input changed after this ran
     seq: int = 0                         # insertion order, for deterministic sort
+    # Provenance of the *template*, not of the rendered code. ``template_hash``
+    # is taken over the template text before substitution: hashing ``code``
+    # would add nothing, since ``code`` is already stored verbatim, whereas
+    # hashing the template is what lets a reader say "this is stock
+    # clustering.leiden" by comparing against the shipped hash.
+    template_id: Optional[str] = None
+    template_origin: str = TEMPLATE_BUILTIN
+    template_hash: Optional[str] = None
 
 
 @dataclass
@@ -113,6 +136,9 @@ class ProvGraph:
         kind: str = ARTIFACT,
         label: Optional[str] = None,
         params: Optional[dict] = None,
+        template_id: Optional[str] = None,
+        template_origin: Optional[str] = None,
+        template_hash: Optional[str] = None,
     ) -> ProvNode:
         """Insert a node, or revise it in place if ``node_id`` already exists.
 
@@ -143,12 +169,21 @@ class ProvGraph:
 
         existing = self._nodes.get(node_id)
         if existing is not None:
+            # Template metadata deliberately stays out of this comparison: it
+            # describes where the same code came from, so a change to it must
+            # not mark descendants stale. Only code/deps/kind invalidate.
             unchanged = existing.code == code and existing.deps == deps \
                 and existing.kind == kind
             if label is not None:
                 existing.label = label
             if params is not None:
                 existing.params = dict(params)
+            if template_id is not None:
+                existing.template_id = template_id
+            if template_origin is not None:
+                existing.template_origin = template_origin
+            if template_hash is not None:
+                existing.template_hash = template_hash
             if unchanged:
                 return existing
             existing.code = code
@@ -162,6 +197,9 @@ class ProvGraph:
         node = ProvNode(
             id=node_id, code=code, deps=deps, kind=kind,
             label=label, params=dict(params or {}), seq=self._counter,
+            template_id=template_id,
+            template_origin=template_origin or TEMPLATE_BUILTIN,
+            template_hash=template_hash,
         )
         self._nodes[node_id] = node
         return node
@@ -265,12 +303,24 @@ class ProvGraph:
                 "id": n.id, "code": n.code, "deps": list(n.deps),
                 "kind": n.kind, "label": n.label, "params": n.params,
                 "stale": n.stale, "seq": n.seq,
+                "template_id": n.template_id,
+                "template_origin": n.template_origin,
+                "template_hash": n.template_hash,
             }
             for n in sorted(self._nodes.values(), key=lambda n: n.seq)
         ]
 
     @classmethod
     def from_list(cls, items: list[dict]) -> "ProvGraph":
+        """Rebuild a graph from :meth:`to_list`.
+
+        Every field but ``id`` and ``code`` is read with a default, so a graph
+        written before a field existed loads with that field's default rather
+        than raising — which is what lets an old ``prov_graph.json`` or zarr
+        session attr survive an upgrade. Keys are enumerated rather than
+        splatted, so the reverse also holds: an *older* viewer ignores fields it
+        does not know about instead of failing on them.
+        """
         g = cls()
         max_seq = 0
         for it in items:
@@ -279,6 +329,11 @@ class ProvGraph:
                 kind=it.get("kind", ARTIFACT), label=it.get("label"),
                 params=dict(it.get("params", {})), stale=bool(it.get("stale", False)),
                 seq=int(it.get("seq", 0)),
+                template_id=it.get("template_id"),
+                # A graph recorded before templates could be customised is stock
+                # by definition — there was no way for it not to be.
+                template_origin=it.get("template_origin") or TEMPLATE_BUILTIN,
+                template_hash=it.get("template_hash"),
             )
             g._nodes[node.id] = node
             max_seq = max(max_seq, node.seq)

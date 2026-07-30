@@ -1,0 +1,35 @@
+# xenium-viewer template
+# id: clustering.leiden
+# schema-version: 1
+# assemblies: head+tail | head+scale+pca+tail | head+hvg+pca+tail |
+#          head+hvg+scale+pca+tail
+# doc: Leiden community detection on a copy of the normalised data.
+# requires: sc, adata, adata_norm
+# outputs: leiden_labels
+# params: key:str, resolution:float, n_neighbors:int, n_pcs:int,
+#         n_top_genes:int?, flavor:str, n_iterations:int, directed:bool,
+#         random_state:int
+
+#--- block head
+# Leiden clustering ($key)
+adata_leiden = adata_norm.copy()
+
+#--- block hvg
+sc.pp.highly_variable_genes(adata_leiden, n_top_genes=$n_top_genes, flavor='seurat')
+adata_leiden = adata_leiden[:, adata_leiden.var.highly_variable].copy()
+
+#--- block scale
+sc.pp.scale(adata_leiden, max_value=10)
+
+#--- block pca
+sc.pp.pca(adata_leiden)
+
+#--- block tail
+sc.pp.neighbors(adata_leiden, n_neighbors=$n_neighbors, n_pcs=$n_pcs)
+sc.tl.leiden(
+    adata_leiden, resolution=$resolution, key_added=$key,
+    flavor=$flavor, n_iterations=$n_iterations, directed=$directed,
+    random_state=$random_state,
+)
+adata.obs[$key] = adata_leiden.obs[$key].values
+leiden_labels = adata.obs[$key]

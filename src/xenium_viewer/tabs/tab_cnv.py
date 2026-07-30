@@ -20,6 +20,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, coerce
+from xenium_viewer.utils.step_templates import builtin_assemble, builtin_spec
 
 _BACKEND_LABELS = {"infercnv": "inferCNV", "copykat": "CopyKAT"}
 
@@ -32,33 +33,8 @@ _BACKEND_LABELS = {"infercnv": "inferCNV", "copykat": "CopyKAT"}
 # CopyKAT is *not* migrated: it runs detached, in a second conda env, so no
 # in-process step can be the code that ran. Its node stays on record_node and is
 # labelled as a description of that run rather than as executed source.
-_CNV_HEAD = """
-# CNV inference (inferCNV): reference $reference_clustering
-from insitucnv.tl import (
-    prepare_cnv_input, compute_cnv_neighbors, cluster_cnv_resolutions, run_infercnv,
-)
 
-adata_cnv = adata.copy()"""
 
-_CNV_SUBSET = """
-# limit the analysis to the selected cell types plus the reference population
-adata_cnv = adata_cnv[
-    adata_cnv.obs[$reference_clustering].astype(str).isin($include)
-].copy()"""
-
-_CNV_PREPARE = """
-adata_cnv.obs[$reference_obs_key] = adata_cnv.obs[$reference_clustering].values
-_raw_counts = adata_cnv.X.copy()
-sc.pp.normalize_total(adata_cnv, target_sum=1e4)
-sc.pp.log1p(adata_cnv)
-sc.pp.pca(adata_cnv)
-sc.pp.neighbors(adata_cnv, n_neighbors=$n_neighbors)
-adata_cnv.layers['raw_counts'] = _raw_counts
-
-adata_cnv = prepare_cnv_input(
-    adata_cnv, raw_layer='raw_counts', smoothing_neighbors=$smoothing_neighbors,
-    add_gene_positions=True, drop_unmapped_genes=True, copy=False,
-)"""
 
 # pandas 3 backs strings with PyArrow arrays, which do not support the
 # numpy-style fancy indexing infercnvpy does on var_names / var columns:
@@ -72,59 +48,29 @@ adata_cnv = prepare_cnv_input(
 # option leaves the Arrow array exactly where it was. This mirrors
 # adata_persistence._convert_adata_arrow_strings, which run_cnv_pipeline uses —
 # the two must stay identical (tests/test_cnv_step.py).
-_CNV_ARROW_SHIM = """
-_old_infer = pd.options.future.infer_string
-pd.options.future.infer_string = False
-try:
-    for _attr in ('obs', 'var'):
-        _df = getattr(adata_cnv, _attr).copy()
-        if pd.api.types.is_string_dtype(_df.index):
-            _df.index = pd.Index(_df.index.to_numpy(dtype=object))
-        for _col in _df.columns:
-            if isinstance(_df[_col].dtype, pd.CategoricalDtype):
-                _cats = _df[_col].cat.categories
-                if pd.api.types.is_string_dtype(_cats):
-                    _df[_col] = _df[_col].cat.rename_categories(
-                        dict(zip(_cats, _cats.astype(object)))
-                    )
-            elif pd.api.types.is_string_dtype(_df[_col]):
-                _df[_col] = _df[_col].to_numpy(dtype=object)
-        setattr(adata_cnv, _attr, _df)
-finally:
-    pd.options.future.infer_string = _old_infer"""
 
-_CNV_TAIL = """
-run_infercnv(
-    adata_cnv, reference_key=$reference_obs_key,
-    reference_categories=$reference_categories,
-    window_size=$window_size, step=$step, lfc_clip=$lfc_clip,
-    calculate_gene_values=True, copy=False,
-)
-compute_cnv_neighbors(adata_cnv, copy=False)
-cnv_cluster_keys = cluster_cnv_resolutions(
-    adata_cnv, [$resolution], key_prefix='cnv_leiden_res',
-    dendrogram=False, copy=False,
-)
 
-_cnv_ids = (adata_cnv.obs['cell_id'].values
-            if 'cell_id' in adata_cnv.obs.columns else adata_cnv.obs_names)
-cnv_clusters = pd.Series(
-    adata_cnv.obs[cnv_cluster_keys[0]].values,
-    index=_cnv_ids, name=cnv_cluster_keys[0],
-)
-_X_cnv = adata_cnv.obsm['X_cnv']
-cnv_score = pd.Series(
-    np.abs(_X_cnv.toarray() if hasattr(_X_cnv, 'toarray') else np.asarray(_X_cnv)).mean(axis=1),
-    index=_cnv_ids, name='cnv_score',
-)"""
+
+CNV_TEMPLATE_ID = "genes.cnv_infercnv"
+
+
+def _cnv_blocks(subset: bool) -> list[str]:
+    # arrow_shim is frozen in the .tmpl: its byte identity with
+    # adata_persistence._convert_adata_arrow_strings is pinned by a test, and no
+    # validation gate could warn a user that editing it breaks on pandas 3.
+    return (["head"] + (["subset"] if subset else [])
+            + ["prepare", "arrow_shim", "tail"])
 
 
 def _cnv_template(subset: bool) -> str:
-    parts = [_CNV_HEAD]
-    if subset:
-        parts.append(_CNV_SUBSET)
-    parts += [_CNV_PREPARE, _CNV_ARROW_SHIM, _CNV_TAIL]
-    return "".join(parts)
+    return builtin_assemble(CNV_TEMPLATE_ID, _cnv_blocks(subset))
+
+
+#: The pandas-3 Arrow workaround on its own. Named because its byte identity
+#: with ``adata_persistence._convert_adata_arrow_strings`` is an invariant a
+#: test executes and pins — two implementations of one conversion that must not
+#: drift. Marked non-editable in the .tmpl for the same reason.
+_CNV_ARROW_SHIM = builtin_spec(CNV_TEMPLATE_ID).blocks["arrow_shim"].text
 
 
 def _backend_label(backend: str) -> str:

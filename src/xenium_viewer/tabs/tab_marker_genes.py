@@ -12,6 +12,7 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.steps import Step, StepError
+from xenium_viewer.utils.step_templates import builtin_assemble
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -27,43 +28,33 @@ _PLACEHOLDER = '''\
 # plotting calls. It is now templated like the rest: the marker dict and the
 # display labels reach the notebook as literals, so a replay reproduces the
 # figure rather than a differently-grouped approximation of it.
-_MARKER_PLOT_HEAD = """
-# $plot_name: $groupby
-adata_norm.obs[$groupby] = adata.obs[$groupby].values"""
 
-_MARKER_PLOT_RELABEL = """
-adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)"""
 
 # sc.pl.correlation_matrix is the one that needs its statistic computed first,
 # and the one that ignores var_names.
-_MARKER_PLOT_CALLS = {
-    "dotplot": "\nsc.pl.dotplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)",
-    "heatmap": "\nsc.pl.heatmap(adata_norm, var_names=$markers, groupby=$groupby, show=False)",
-    "matrixplot": "\nsc.pl.matrixplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)",
-    "tracksplot": "\nsc.pl.tracksplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)",
-    # sc.tl.correlation_matrix does not exist (and has not for some time) — the
-    # correlation button raised AttributeError inside the worker thread, where
-    # nothing surfaced it. sc.pl.correlation_matrix reads the matrix that
-    # sc.tl.dendrogram computes into uns[f'dendrogram_{groupby}'].
-    "correlation_matrix": (
-        "\nsc.tl.dendrogram(adata_norm, $groupby)"
-        "\nsc.pl.correlation_matrix(adata_norm, $groupby, show=False)"
-    ),
-}
 
-_MARKER_PLOT_TAIL = """
-plt.gcf().savefig($path, bbox_inches='tight'$dpi_kwarg)"""
+# Raster formats get an explicit dpi; SVG does not, where it means nothing.
+# This used to splice ``, dpi=150`` in by ``str.replace``-ing a fake
+# ``$dpi_kwarg`` token out of the tail before Step saw it — a token that is not
+# a param, and whose escape into a template would raise ``StepError`` naming a
+# param no call site declares. Two whole-line variants instead.
+
+
+TEMPLATE_ID = "genes.marker_plot"
+
+#: Plot types the tab offers; each is one ``call.*`` block in the .tmpl file.
+MARKER_PLOTS = ("dotplot", "heatmap", "matrixplot", "tracksplot",
+                "correlation_matrix")
+
+
+def _marker_plot_blocks(plot_name: str, relabel: bool, dpi: bool) -> list[str]:
+    return (["head"] + (["relabel"] if relabel else [])
+            + [f"call.{plot_name}"] + ["save.dpi" if dpi else "save.plain"])
 
 
 def _marker_plot_template(plot_name: str, relabel: bool, dpi: bool) -> str:
-    parts = [_MARKER_PLOT_HEAD]
-    if relabel:
-        parts.append(_MARKER_PLOT_RELABEL)
-    parts.append(_MARKER_PLOT_CALLS[plot_name])
-    parts.append(_MARKER_PLOT_TAIL.replace(
-        "$dpi_kwarg", ", dpi=150" if dpi else "",
-    ))
-    return "".join(parts)
+    return builtin_assemble(
+        TEMPLATE_ID, _marker_plot_blocks(plot_name, relabel, dpi))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
