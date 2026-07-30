@@ -34,3 +34,8 @@ manuscript/
 
 # Untracked local data
 data/
+
+# Notebook-replay reports (scripts/verify_notebook.py --out): a measurement of
+# one dataset on one machine, not a build artefact worth versioning
+report.json
+verify_report.json
