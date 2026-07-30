@@ -23,7 +23,15 @@ from typing import TYPE_CHECKING
 from magicgui.widgets import PushButton
 from napari.qt.threading import thread_worker
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QLabel, QMessageBox, QTextEdit, QTreeWidget, QTreeWidgetItem
+from qtpy.QtGui import QBrush, QPalette
+from qtpy.QtWidgets import (
+    QApplication,
+    QLabel,
+    QMessageBox,
+    QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
+)
 
 from xenium_viewer.tabs._helpers import (
     StatusProxy,
@@ -113,44 +121,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             stack += [item.child(i) for i in range(item.childCount())]
         return found
 
-    def _add_node(node, parent_item, restore: set[str]) -> QTreeWidgetItem:
-        item = QTreeWidgetItem(parent_item)
-        item.setText(0, _display_name(node))
-        item.setText(1, human_bytes(node.size_bytes) if node.size_bytes else "")
-        item.setText(2, node.detail or node.blocked_reason)
-        item.setData(0, Qt.UserRole, node.key)
-        if node.deletable:
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(
-                0, Qt.Checked if node.key in restore else Qt.Unchecked)
-            if node.recoverable == store_inventory.RECOVER_NONE:
-                item.setToolTip(0, "Not recoverable — no copy is kept.")
-        else:
-            # Disabled rather than merely uncheckable: the reason is in the
-            # Detail column, and a greyed row reads as "not yours to remove".
-            item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
-            item.setDisabled(True)
-            if node.blocked_reason:
-                item.setToolTip(0, node.blocked_reason)
-        return item
-
     def _populate(sections, restore: set[str]):
-        tree.clear()
-        for section in sections:
-            section_item = QTreeWidgetItem(tree)
-            section_item.setText(0, section.title)
-            section_item.setText(1, human_bytes(section.total_bytes)
-                                 if section.total_bytes else "")
-            section_item.setText(2, section.note)
-            section_item.setFirstColumnSpanned(False)
-            font = section_item.font(0)
-            font.setBold(True)
-            section_item.setFont(0, font)
-            items: dict[str, QTreeWidgetItem] = {}
-            for node in section.nodes:
-                parent_item = items.get(node.parent, section_item)
-                items[node.key] = _add_node(node, parent_item, restore)
-            section_item.setExpanded(True)
+        _populate_tree(tree, sections, restore)
 
     def _refresh_header(sections=None):
         cache_path = _cache_path(ctx)
@@ -334,6 +306,73 @@ def _display_name(node) -> str:
                      store_inventory.OBSM):
         return f"{node.kind.lower()}  {node.name}"
     return node.name
+
+
+def _dim_brush():
+    """The palette's disabled-text colour, so dimming follows the napari theme."""
+    app = QApplication.instance()
+    if app is None:
+        return None
+    return QBrush(app.palette().color(QPalette.Disabled, QPalette.Text))
+
+
+def _add_node(tree_parent, node, restore: set[str]) -> QTreeWidgetItem:
+    item = QTreeWidgetItem(tree_parent)
+    item.setText(0, _display_name(node))
+    item.setText(1, human_bytes(node.size_bytes) if node.size_bytes else "")
+    item.setText(2, node.detail or node.blocked_reason)
+    item.setData(0, Qt.UserRole, node.key)
+    if node.deletable:
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(0, Qt.Checked if node.key in restore else Qt.Unchecked)
+        if node.recoverable == store_inventory.RECOVER_NONE:
+            item.setToolTip(0, "Not recoverable — no copy is kept.")
+    else:
+        item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
+        # Dimmed, never setDisabled(True): Qt propagates a disabled item down
+        # its whole subtree, so blocking `group:tables` and `tables/table` also
+        # greyed out every clustering underneath them — the one thing this tab
+        # exists to let you delete. Group headings keep normal text; only real
+        # blocked rows are dimmed, since for them it means "not yours to remove".
+        if node.kind != store_inventory.GROUP:
+            brush = _dim_brush()
+            if brush is not None:
+                for column in range(3):
+                    item.setForeground(column, brush)
+        if node.blocked_reason:
+            item.setToolTip(0, node.blocked_reason)
+    return item
+
+
+def _populate_tree(tree, sections, restore: set[str]) -> None:
+    """Render *sections* as a three-level tree, restoring previous check state."""
+    tree.clear()
+    for section in sections:
+        section_item = QTreeWidgetItem(tree)
+        section_item.setText(0, section.title)
+        section_item.setText(1, human_bytes(section.total_bytes)
+                             if section.total_bytes else "")
+        section_item.setText(2, section.note)
+        font = section_item.font(0)
+        font.setBold(True)
+        section_item.setFont(0, font)
+
+        items: dict[str, QTreeWidgetItem] = {}
+        for node in section.nodes:
+            parent_item = items.get(node.parent, section_item)
+            items[node.key] = _add_node(parent_item, node, restore)
+
+        # Open the path to anything actionable. Clusterings sit three levels
+        # down, under a blocked table, and a user should not have to go hunting
+        # for the rows they came here to tick.
+        for node in section.nodes:
+            if not node.deletable:
+                continue
+            item = items[node.key].parent()
+            while item is not None:
+                item.setExpanded(True)
+                item = item.parent()
+        section_item.setExpanded(True)
 
 
 # ── The executor ─────────────────────────────────────────────────────────────

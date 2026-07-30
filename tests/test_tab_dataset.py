@@ -84,6 +84,115 @@ def test_the_tab_does_not_scan_at_build_time(qapp, tiny_sdata):
     assert "_dataset_worker" not in ctx.state
 
 
+# ── the tree ─────────────────────────────────────────────────────────────────
+
+def _rows(tree):
+    """Every row keyed by node key, with the item itself."""
+    from qtpy.QtCore import Qt as _Qt
+    found = {}
+    stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+    while stack:
+        item = stack.pop()
+        key = item.data(0, _Qt.UserRole)
+        if key:
+            found[key] = item
+        stack += [item.child(i) for i in range(item.childCount())]
+    return found
+
+
+def _usable(item):
+    """Can a user actually tick this row?
+
+    Qt renders a child of a disabled item as disabled and refuses to check it,
+    so the row's own flags are not the answer — every ancestor has to be enabled
+    too. Testing only `item.flags()` is what let the original bug through.
+    """
+    from qtpy.QtCore import Qt as _Qt
+    if not (item.flags() & _Qt.ItemIsUserCheckable):
+        return False
+    while item is not None:
+        if not (item.flags() & _Qt.ItemIsEnabled):
+            return False
+        item = item.parent()
+    return True
+
+
+def _built_tree(qapp, ctx):
+    """A populated tree, parentless so the test's reference keeps it alive."""
+    from qtpy.QtWidgets import QTreeWidget
+    tree = QTreeWidget()
+    tree.setColumnCount(3)
+    sections = si.build_inventory(
+        Path(ctx.data_path), tab_dataset._cache_path(ctx))
+    tab_dataset._populate_tree(tree, sections, set())
+    return tree, sections
+
+
+def test_a_clustering_under_the_blocked_table_is_still_tickable(qapp, loaded):
+    """The regression: blocking tables/table must not disable what is inside it.
+
+    Qt propagates a disabled item down its whole subtree, so setDisabled on the
+    core table greyed out every clustering under it — leaving the tab unable to
+    do the one thing it was built for.
+    """
+    tree, _ = _built_tree(qapp, loaded)
+    rows = _rows(tree)
+
+    assert not _usable(rows["element:tables/table"]), "the table stays unselectable"
+    for key in ("obs:table/clustering_leiden_r1.0",
+                "obs:table/cluster_labels_leiden_r1.0",
+                "uns:table/rank_genes_groupby"):
+        assert _usable(rows[key]), f"{key} must be tickable"
+
+
+def test_every_deletable_node_is_tickable_in_the_tree(qapp, loaded):
+    """The property, at the UI layer: the model and the tree must agree."""
+    tree, sections = _built_tree(qapp, loaded)
+    rows = _rows(tree)
+    for section in sections:
+        for node in section.nodes:
+            item = rows[node.key]
+            assert _usable(item) == node.deletable, (
+                f"{node.key}: model says deletable={node.deletable}, "
+                f"tree says {_usable(item)}")
+
+
+def test_ticking_a_row_is_what_the_plan_reads(qapp, loaded):
+    """End to end through the widget: check a box, get that node in the plan."""
+    from qtpy.QtCore import Qt as _Qt
+    tree, sections = _built_tree(qapp, loaded)
+    rows = _rows(tree)
+    rows["obs:table/clustering_leiden_r1.0"].setCheckState(0, _Qt.Checked)
+
+    checked = {key for key, item in _rows(tree).items()
+               if item.checkState(0) == _Qt.Checked}
+    assert checked == {"obs:table/clustering_leiden_r1.0"}
+    plan = si.plan_deletion(sections, checked)
+    assert {n.name for n in plan.nodes} == {
+        "clustering_leiden_r1.0", "cluster_labels_leiden_r1.0"}
+
+
+def test_the_path_to_a_deletable_row_is_expanded(qapp, loaded):
+    """Clusterings are three levels down; nobody should have to go hunting."""
+    tree, _ = _built_tree(qapp, loaded)
+    rows = _rows(tree)
+    item = rows["obs:table/clustering_leiden_r1.0"].parent()
+    while item is not None:
+        assert item.isExpanded(), f"{item.text(0)} should be expanded"
+        item = item.parent()
+
+
+def test_a_blocked_row_is_dimmed_rather_than_disabled(qapp, loaded):
+    tree, _ = _built_tree(qapp, loaded)
+    rows = _rows(tree)
+    table = rows["element:tables/table"]
+    from qtpy.QtCore import Qt as _Qt
+    assert table.flags() & _Qt.ItemIsEnabled, (
+        "a blocked row must stay enabled, or Qt disables its children too")
+    assert not (table.flags() & _Qt.ItemIsUserCheckable)
+    assert table.foreground(0).color() == tab_dataset._dim_brush().color()
+
+
 # ── the executor ─────────────────────────────────────────────────────────────
 
 @pytest.fixture

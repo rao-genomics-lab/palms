@@ -168,6 +168,20 @@ call. Two rules carry the safety:
 Table contents (`OBS`/`UNS`/`OBSM`) carry `path=None` on purpose: deleting a column is a
 rewrite of the whole table, so there is no path for an executor to `unlink`.
 
+**A clustering is more than one obs column.** A Leiden run leaves the bare `<key>` (the
+recorded step's `adata.obs[$key] = …`, needed so the notebook reproduces it) *and*
+`clustering_<key>` (`save_clustering_to_adata`), plus `cluster_labels_<key>` once clusters
+are named. `_clustering_twin_of` pairs the bare column with its prefixed one so all of
+them cascade together — otherwise "delete this clustering" left an identical copy. The
+pairing requires the `clustering_<name>` column to exist and the bare name not to be in
+`_STRUCTURAL_OBS`, so no Xenium column becomes selectable.
+
+**In the tree, a blocked row is dimmed, never `setDisabled(True)`.** Qt propagates a
+disabled item down its whole subtree, so disabling `group:tables` and the core
+`tables/table` also greyed out every clustering inside them — i.e. exactly what the tab
+exists to delete. `tests/test_tab_dataset.py` checks the *effective* state through
+ancestors, because a row's own flags do not tell you whether a user can tick it.
+
 The executor (`tab_dataset._apply_deletion`) applies by kind in `Plan` order — **table
 edits first**, backups last. Three things it must not skip, each of which was a real bug:
 `_persist_table` runs **once** per batch; a deleted `clustering_*` column is also popped

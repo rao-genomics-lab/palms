@@ -35,6 +35,14 @@
   its in-memory mirror, or `save_session` writes it straight back at exit. `transcript_cache/`
   is offered (a `xenium-preprocess` re-run brings it back) and says so on the row.
 
+  **Deleting a clustering means the whole clustering.** A Leiden run leaves *two* obs
+  columns of the same data — the recorded step writes `adata.obs[$key]` so the notebook
+  reproduces it, and `save_clustering_to_adata` writes `clustering_<key>` for the viewer —
+  plus `cluster_labels_<key>` once you name any clusters. Ticking the clustering now takes
+  all three, listed in the confirmation, instead of leaving an identical copy behind. The
+  bare twin is only ever paired when its `clustering_<name>` exists and the name is not
+  one of the Xenium table's own columns, so no raw column becomes selectable.
+
 ## [Unreleased] — 2026-07-29
 
 ### Fixed (found by replaying a real session)

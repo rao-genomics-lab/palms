@@ -214,6 +214,45 @@ def test_obs_clusterings_are_deletable_and_carry_a_cluster_count(dataset):
     assert node.parent == "element:tables/table"
 
 
+def test_the_bare_twin_a_leiden_run_leaves_is_deletable_with_its_clustering(dataset):
+    """A clustering is two obs columns, so deleting one must take both.
+
+    The recorded step writes adata.obs[$key]; save_clustering_to_adata writes
+    clustering_<key>. Offering only the prefixed one left an identical copy.
+    """
+    from xenium_viewer.utils import zarr_safe as zs
+    adata = dataset.sdata["table"]
+    adata.obs["leiden_igraph_r1.0"] = adata.obs["clustering_leiden_r1.0"]
+    adata.obs["clustering_leiden_igraph_r1.0"] = adata.obs["clustering_leiden_r1.0"]
+    zs.safe_write_element(dataset.sdata, "table", adata)
+
+    sections = si.build_inventory(dataset.data_path, dataset.cache)
+    twin = _by_key(sections)["obs:table/leiden_igraph_r1.0"]
+    assert twin.deletable is True
+    assert "clustering_leiden_igraph_r1.0" in twin.detail
+
+    plan = si.plan_deletion(sections, ["obs:table/clustering_leiden_igraph_r1.0"])
+    assert "obs:table/leiden_igraph_r1.0" in {n.key for n in plan.nodes}
+    assert "obs:table/leiden_igraph_r1.0" in {n.key for n in plan.added}
+
+
+def test_a_bare_column_with_no_clustering_twin_stays_blocked(dataset):
+    """The pairing must not make ordinary Xenium columns selectable."""
+    nodes = _by_key(si.build_inventory(dataset.data_path, dataset.cache))
+    assert nodes["obs:table/region"].deletable is False
+    assert nodes["obs:table/marker"].deletable is False
+
+
+def test_a_structural_column_is_never_paired_even_if_named_like_one(dataset):
+    from xenium_viewer.utils import zarr_safe as zs
+    adata = dataset.sdata["table"]
+    # A user who names a clustering "region" must not lose the real column.
+    adata.obs["clustering_region"] = adata.obs["clustering_leiden_r1.0"]
+    zs.safe_write_element(dataset.sdata, "table", adata)
+    nodes = _by_key(si.build_inventory(dataset.data_path, dataset.cache))
+    assert nodes["obs:table/region"].deletable is False
+
+
 def test_a_structural_obs_column_is_not_deletable(dataset):
     node = _by_key(si.build_inventory(dataset.data_path, dataset.cache))[
         "obs:table/region"]

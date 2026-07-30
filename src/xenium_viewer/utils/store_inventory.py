@@ -115,6 +115,31 @@ _OBS_DETAIL = {
     "copykat_leiden_res": "CopyKAT clustering",
 }
 
+#: Columns the Xenium loader itself produces. Never paired as a clustering twin
+#: (below), however a clustering happens to be named.
+_STRUCTURAL_OBS = frozenset({
+    "region", "instance_id", "cell_id", "cell_labels", "z_level",
+    "transcript_counts", "control_probe_counts", "control_codeword_counts",
+    "unassigned_codeword_counts", "deprecated_codeword_counts",
+    "genomic_control_counts", "total_counts", "cell_area", "nucleus_area",
+    "nucleus_count", "segmentation_method",
+})
+
+
+def _clustering_twin_of(column: str, columns: set[str]) -> str:
+    """The ``clustering_<column>`` this bare column is the raw half of, or "".
+
+    A Leiden run leaves *two* obs columns of the same data: the recorded step
+    writes ``adata.obs[$key]`` so the notebook reproduces it, and
+    ``save_clustering_to_adata`` writes ``clustering_<key>`` for the viewer.
+    Offering only the prefixed one meant "delete this clustering" left an
+    identical copy behind — so the bare twin is deletable, and cascades with it.
+    """
+    if column in _STRUCTURAL_OBS or column.startswith(loader._USER_OBS_PREFIXES):
+        return ""
+    twin = f"{adata_persistence.CLUSTERING_PREFIX}{column}"
+    return twin if twin in columns else ""
+
 # ── Sidecars ─────────────────────────────────────────────────────────────────
 _SIDECAR_DETAIL = {
     "adata_norm_cache.h5ad": "normalised expression · recomputed on demand",
@@ -426,8 +451,10 @@ def _obs_nodes(cache_path: Path, element: str, parent: str) -> list[Node]:
     if not obs_dir.is_dir():
         return []
     counts = _cluster_counts(cache_path, element)
+    entries = sorted(_public_entries(obs_dir))
+    columns = {e.name for e in entries}
     nodes: list[Node] = []
-    for entry in sorted(_public_entries(obs_dir)):
+    for entry in entries:
         column = entry.name
         deletable = column.startswith(loader._USER_OBS_PREFIXES)
         detail = ""
@@ -437,6 +464,10 @@ def _obs_nodes(cache_path: Path, element: str, parent: str) -> list[Node]:
                 break
         if column in counts:
             detail = f"{counts[column]} clusters"
+        twin = _clustering_twin_of(column, columns)
+        if twin:
+            deletable = True
+            detail = f"the raw scanpy output behind {twin}"
         nodes.append(Node(
             key=f"obs:{table}/{column}",
             kind=OBS,
@@ -807,7 +838,10 @@ def _cascade_candidates(node: Node) -> tuple[str, ...]:
     if node.kind == OBS and node.name.startswith(adata_persistence.CLUSTERING_PREFIX):
         table = node.key.partition(":")[2].partition("/")[0]
         suffix = node.name[len(adata_persistence.CLUSTERING_PREFIX):]
-        return (f"obs:{table}/{adata_persistence.CLUSTER_LABELS_PREFIX}{suffix}",)
+        # The typed-in names, and the bare twin a Leiden run leaves behind.
+        # _link_cascades drops whichever of these does not exist.
+        return (f"obs:{table}/{adata_persistence.CLUSTER_LABELS_PREFIX}{suffix}",
+                f"obs:{table}/{suffix}")
     return ()
 
 
