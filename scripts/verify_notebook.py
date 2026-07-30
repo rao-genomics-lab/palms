@@ -196,6 +196,37 @@ def note_nodes(graph: ProvGraph) -> list[str]:
     return [nid for nid in graph.topo_sort() if graph.get(nid).kind == NOTE]
 
 
+def template_provenance(graph: ProvGraph) -> dict:
+    """Which steps ran shipped templates, and which did not.
+
+    A verification report exists to let someone else believe a result. Replay
+    agreement alone does not establish that the pipeline was the standard one —
+    a customised template reproduces perfectly and is still not what the
+    shipped viewer does. So the report says, explicitly, whether every step came
+    from stock text.
+    """
+    from xenium_viewer.utils.prov_graph import TEMPLATE_BUILTIN
+
+    steps = []
+    for node_id in graph.topo_sort():
+        node = graph.get(node_id)
+        if node is None:
+            continue
+        steps.append({
+            "node": node_id,
+            "template_id": node.template_id,
+            "origin": node.template_origin,
+            "template_hash": node.template_hash,
+        })
+    customised = [s for s in steps if s["origin"] != TEMPLATE_BUILTIN]
+    return {
+        "stock_templates": not customised,
+        "n_customised": len(customised),
+        "customised": customised,
+        "steps": steps,
+    }
+
+
 # ── the replay ───────────────────────────────────────────────────────────────
 
 def build_notebook(graph: ProvGraph, work_dir: Path) -> tuple[Path, list]:
@@ -435,10 +466,14 @@ def main(argv=None) -> int:
     graph, graph_source = read_graph(data_path, args.cache or cache, args.graph)
     skipped = comment_only_nodes(graph)
     notes = note_nodes(graph)
+    templates = template_provenance(graph)
 
     print(f"Provenance graph: {len(graph)} nodes from {graph_source} "
           f"({len(skipped)} comment-only, which replay as no-ops; "
           f"{len(notes)} viewer-state notes, which are not code by design)")
+    if not templates["stock_templates"]:
+        print(f"  ⚠ {templates['n_customised']} step(s) used CUSTOMISED templates, "
+              f"not the shipped ones — this is not the stock pipeline")
 
     if args.work_dir is not None:
         work_dir = args.work_dir.resolve()
@@ -456,6 +491,7 @@ def main(argv=None) -> int:
         "node_ids": graph.topo_sort(),
         "comment_only_nodes": skipped,
         "note_nodes": notes,
+        "templates": templates,
         "versions": package_versions(),
     }
 
@@ -555,6 +591,17 @@ def _print_summary(report: dict, out_path: Path) -> None:
         print(f"  ✗ rank genes: {len(bad)} group(s) differ: {bad}")
     else:
         print(f"  – rank genes: {rank.get('status')}")
+
+    templates = report.get("templates") or {}
+    if templates.get("stock_templates") is False:
+        print(f"  ⚠ {templates['n_customised']} of {len(templates['steps'])} "
+              f"step(s) used customised templates — replay agreement does not "
+              f"make this the stock pipeline:")
+        for step in templates["customised"]:
+            print(f"      {step['node']}  ({step['origin']}"
+                  f"{', ' + step['template_id'] if step['template_id'] else ''})")
+    elif templates:
+        print(f"  ✓ all {len(templates['steps'])} step(s) used shipped templates")
 
     if any(e.get("status") == "not_in_replay" for e in report["clusterings"]):
         print("\n  Results with no node behind them usually mean the graph on disk "

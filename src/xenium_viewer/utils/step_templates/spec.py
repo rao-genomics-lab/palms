@@ -62,6 +62,10 @@ class BlockSpec:
     text: str
     editable: bool = True
 
+    def hash(self) -> str:
+        """sha256 of this block's text, for fork bookkeeping."""
+        return hashlib.sha256(self.text.encode()).hexdigest()
+
 
 @dataclass(frozen=True)
 class TemplateSpec:

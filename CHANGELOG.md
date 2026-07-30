@@ -3,6 +3,37 @@
 ## [Unreleased] — 2026-07-30
 
 ### Added
+- **A customised template survives an upgrade, and says when it needs a second look.**
+  This is the `dpkg` conffile problem, and most of it turned out to be already solved by the
+  shape of the storage rather than by logic: an override records *only* the blocks the user
+  changed, so every other block resolves against whatever the current release ships. The
+  "unmodified file, replace silently" case `dpkg` has to detect **cannot arise here** — there
+  is nothing to detect, and no prompt to dismiss.
+
+  What is left is the genuinely hard case: a block the user *did* change whose shipped version
+  has since changed too. `overrides.json` records the hash of the **shipped** text each block
+  was forked from — of the shipped text, not the user's, because the question a later release
+  must answer is "has the thing they diverged from moved?". The edit still applies; silently
+  reverting someone's method would be far worse. But it is badged `⚠ review`, with a two-way
+  diff of theirs against the new default and a **Take new default** button that updates only
+  the blocks that moved, leaving their other customisations intact. Saving again is itself the
+  act of reviewing, and clears the flag. No three-way auto-merge: its conflict markers land in
+  Python source, where a stray `<<<<<<<` is a syntax error rather than a visible annotation.
+
+  A conflict that no longer *validates* — a release drops a param the forked block still
+  references — is deactivated outright rather than flagged, since there is nothing to review.
+  A corrupt or missing manifest costs the warning, not the override: losing bookkeeping must
+  not lose the user's work.
+
+- **Customisation is visible downstream, not just in the tab.** The exported notebook gains
+  one markdown banner at the top when any step used a non-shipped template, naming the steps,
+  their template ids and hashes — because a customised template renders to code that looks
+  entirely ordinary, so the source alone cannot tell a reader this is not the stock pipeline.
+  `hand-edited` is called out separately as the one origin whose code may not describe what
+  produced the result. `scripts/verify_notebook.py` gains a `templates` section with per-step
+  origin and hash plus a top-level `stock_templates` bool, and prints it: replay agreement
+  proves reproducibility, not that the pipeline was the standard one.
+
 - **Analysis templates can now be customised, per user.** An edited template is used both
   by the GUI and by the recorded notebook — which needs no special machinery, because the
   Step system already renders one string and hands it to both.

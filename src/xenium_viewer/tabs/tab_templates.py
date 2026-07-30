@@ -18,6 +18,7 @@ by the same construction that makes the recorded code equal the executed code.
 
 from __future__ import annotations
 
+import difflib
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -149,6 +150,33 @@ def _preview(ctx: ViewerContext, spec, assembly) -> str:
         return f"# could not render this template:\n# {exc}"
 
 
+def _diff_text(resolved) -> str:
+    """Yours vs the new shipped text, for the blocks that moved.
+
+    Two-way, not three-way. A real merge would put conflict markers into Python
+    source that the user then has to un-mangle by hand, in a language where a
+    stray ``<<<<<<<`` is a syntax error rather than a visible annotation. Seeing
+    both versions and choosing is the honest amount of help.
+    """
+    if not resolved.stale_blocks:
+        return ("# The shipped template's contract changed (schema-version).\n"
+                "# Re-check the parameters in the Contract pane above.")
+    chunks = []
+    for name in resolved.stale_blocks:
+        # splitlines() without keepends, and lineterm="": block text has no
+        # trailing newline, so keepends left the final '-' and '+' lines
+        # concatenated on one line — in the pane whose whole job is showing the
+        # user which line changed.
+        diff = difflib.unified_diff(
+            resolved.spec.blocks[name].text.splitlines(),
+            resolved.builtin.blocks[name].text.splitlines(),
+            fromfile=f"yours/{name}", tofile=f"new default/{name}",
+            n=3, lineterm="",
+        )
+        chunks.append("\n".join(diff).rstrip())
+    return "\n\n".join(chunks)
+
+
 def check_edit(template_id: str, text: str) -> list:
     """Validate an edited body without saving it. Returns Problems.
 
@@ -206,6 +234,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
     validate_button = QPushButton("Validate")
     save_button = QPushButton("Save && Activate")
     revert_button = QPushButton("Revert to default")
+    # Only meaningful while a review is pending; shown by _on_selection.
+    take_button = QPushButton("Take new default for changed blocks")
+    take_button.setVisible(False)
     status = QLabel("")
     status.setWordWrap(True)
 
@@ -215,6 +246,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         resolved = resolve(template_id)
         if resolved.rejected:
             return "✕ not used"
+        if resolved.needs_review:
+            return "⚠ review"
         if resolved.is_customised:
             return f"● customised ({len(resolved.changed_blocks())})"
         return ""
@@ -269,13 +302,25 @@ def build_tab(ctx: ViewerContext) -> tuple:
         contract.setPlainText(_contract_text(builtin))
         source.setPlainText(blocks_to_text(builtin))
         editor.setPlainText(blocks_to_text(resolved.spec))
-        preview.setPlainText(_preview(ctx, resolved.spec, resolved.spec.assemblies[0]))
-
         _show_problems(resolved.problems)
+        take_button.setVisible(resolved.needs_review)
         if resolved.rejected:
             status.setText(
                 "⚠ This customised template was NOT used — the shipped version "
                 "ran instead. Fix the problems below and save again."
+            )
+        elif resolved.needs_review:
+            what = []
+            if resolved.stale_blocks:
+                what.append(f"block(s) {', '.join(resolved.stale_blocks)} changed")
+            if resolved.schema_moved:
+                what.append("its contract changed")
+            status.setText(
+                f"⚠ Your customisation is still active, but the shipped template "
+                f"has moved on since you forked it ({'; '.join(what)}). The "
+                f"update may be a fix your edit is now shadowing — see the diff "
+                f"below, then either take the new default or save again to "
+                f"confirm you have reviewed it."
             )
         elif resolved.is_customised:
             status.setText(
@@ -284,6 +329,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
             )
         else:
             status.setText("Shipped template, unmodified.")
+
+        if resolved.needs_review:
+            preview_label.setText("Diff — yours vs the new default")
+            preview.setPlainText(_diff_text(resolved))
+        else:
+            preview_label.setText("Preview — what would run")
+            preview.setPlainText(
+                _preview(ctx, resolved.spec, resolved.spec.assemblies[0]))
 
     def _on_validate():
         template_id = current["id"]
@@ -334,10 +387,34 @@ def build_tab(ctx: ViewerContext) -> tuple:
         status.setText("Reverted to the shipped template." if removed
                        else "Already the shipped template.")
 
+    def _on_take_new():
+        """Drop the customisation of the blocks that moved, keeping the rest.
+
+        Deliberately not "revert everything": a user with three customised
+        blocks who accepts the new version of one should not silently lose the
+        other two.
+        """
+        template_id = current["id"]
+        if not template_id:
+            return
+        resolved = resolve(template_id)
+        if not resolved.stale_blocks:
+            return
+        blocks = {name: block.text for name, block in resolved.spec.blocks.items()}
+        for name in resolved.stale_blocks:
+            blocks[name] = resolved.builtin.blocks[name].text
+        save_override(template_id, blocks)
+        _populate(keep=template_id)
+        status.setText(
+            f"Took the new default for {', '.join(resolved.stale_blocks)}; "
+            f"your other customisations are unchanged."
+        )
+
     tree.itemSelectionChanged.connect(_on_selection)
     validate_button.clicked.connect(_on_validate)
     save_button.clicked.connect(_on_save)
     revert_button.clicked.connect(_on_revert)
+    take_button.clicked.connect(_on_take_new)
     _populate()
 
     right = QWidget()
@@ -359,7 +436,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         side_by_side.addWidget(holder)
 
     buttons = QHBoxLayout()
-    for button in (validate_button, save_button, revert_button):
+    for button in (validate_button, save_button, revert_button, take_button):
         buttons.addWidget(button)
     buttons.addStretch()
     button_bar = QWidget()
@@ -368,7 +445,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     lower = QWidget()
     lower_layout = QVBoxLayout()
     lower_layout.setContentsMargins(0, 0, 0, 0)
-    lower_layout.addWidget(QLabel("Preview — what would run"))
+    preview_label = QLabel("Preview — what would run")
+    lower_layout.addWidget(preview_label)
     lower_layout.addWidget(preview)
     lower_layout.addWidget(QLabel("Problems"))
     lower_layout.addWidget(problems_list)

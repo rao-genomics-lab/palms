@@ -262,6 +262,21 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   never change what the suite asserts). Saving derives its destination from the same search
   path reading uses, so a write cannot land where the reader does not look.
 
+  **Upgrades.** `overrides.json` records the hash of the *shipped* text each overridden block
+  was forked from. The `dpkg` "unmodified conffile" case needs no logic — an untouched block
+  is simply absent from the file, so it already tracks upstream. Only a block the user changed
+  can conflict: `ResolvedTemplate.stale_blocks` / `.needs_review` flag it, the edit still
+  applies, and the tab offers a two-way diff plus "Take new default" for the moved blocks only.
+  A conflict that no longer validates is deactivated instead of flagged. Missing/corrupt
+  manifest ⇒ not flagged, deliberately: prompting on every override after every upgrade with
+  nothing specific to point at trains people to dismiss the warning.
+
+  **Downstream visibility.** `notebook_export.customisation_banner` prepends one markdown cell
+  when any node's `template_origin != builtin` (in `notebook_export.graph_to_cells`, *not*
+  `prov_graph`'s, so `analysis.py` and the replay test's verbatim-code-cell property are both
+  unaffected). `scripts/verify_notebook.py::template_provenance` adds a `templates` report
+  section and a `stock_templates` bool.
+
   **Tools → Templates** (`tabs/tab_templates.py`) shows the contract, **Default (read-only)
   beside Yours (editable)**, a live preview of the exact string that would be `exec`'d —
   rendered via `Step.render()` with the owning tab's real widget values when it registers a

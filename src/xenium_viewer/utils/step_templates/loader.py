@@ -82,10 +82,23 @@ class ResolvedTemplate:
     problems: tuple = ()
     path: Optional[Path] = None
     rejected: bool = False
+    #: Overridden blocks whose *shipped* text has changed since the user forked
+    #: them. Their customisation still applies — it is not silently dropped —
+    #: but the user is told, because an upstream change they did not see may be
+    #: a correctness fix their edit is now shadowing.
+    stale_blocks: tuple = ()
+    #: True when the shipped template declares a newer contract than the one the
+    #: override was written against.
+    schema_moved: bool = False
 
     @property
     def is_customised(self) -> bool:
         return self.path is not None
+
+    @property
+    def needs_review(self) -> bool:
+        """Active, but built on shipped text that has since moved on."""
+        return bool(self.stale_blocks or self.schema_moved) and self.is_customised
 
     @property
     def origin(self) -> str:
@@ -449,8 +462,41 @@ def resolve(template_id: str) -> ResolvedTemplate:
         _report_rejection(template_id, problems)
         return ResolvedTemplate(spec=base, builtin=base, problems=tuple(problems),
                                 rejected=True)
+
+    stale, schema_moved = _staleness(template_id, base, applied)
     return ResolvedTemplate(spec=spec, builtin=base, problems=tuple(problems),
-                            path=applied)
+                            path=applied, stale_blocks=stale,
+                            schema_moved=schema_moved)
+
+
+def _staleness(template_id: str, base: TemplateSpec,
+               applied: Path) -> tuple[tuple, bool]:
+    """Which overridden blocks were forked from text that has since changed.
+
+    Note what is *not* here: blocks the user never modified. Those are simply
+    absent from the override file, so they already resolve to whatever the
+    current release ships — the ``dpkg`` "unmodified conffile, replace silently"
+    case needs no logic because per-block override made it structural. Only a
+    block the user actually changed can conflict.
+
+    A missing or unreadable manifest yields "not stale" rather than "stale":
+    prompting every user about every override after any upgrade, with nothing
+    specific to point at, trains people to dismiss the warning.
+    """
+    try:
+        from xenium_viewer.utils.step_templates.overrides import read_manifest
+        record = read_manifest(applied.parent).get(template_id) or {}
+    except Exception:  # pragma: no cover - bookkeeping must not break resolution
+        return (), False
+
+    forked_from = record.get("forked_from") or {}
+    stale = tuple(sorted(
+        name for name, forked_hash in forked_from.items()
+        if name in base.blocks and base.blocks[name].hash() != forked_hash
+    ))
+    based_on = record.get("based_on_schema")
+    schema_moved = isinstance(based_on, int) and base.schema_version > based_on
+    return stale, schema_moved
 
 
 def _report_rejection(template_id: str, problems) -> None:
