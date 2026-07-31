@@ -32,6 +32,14 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 # tests that pin template text are asserting what the package *ships*, not what
 # this machine happens to run. Set deliberately rather than with setdefault —
 # an inherited value would reintroduce exactly the divergence this prevents.
+#
+# NOTE: this also means the code path taken when the variable is *unset* — which
+# is every real user — runs nowhere in this suite by default. That gap shipped a
+# viewer that could not start: `search_path()` and `user_template_dir()`
+# delegated to each other and recursed forever, and no test noticed because none
+# of them ever had the variable unset. `tests/test_template_overrides.py` now has
+# a `no_env` fixture that deletes it (redirecting the platform config dir), and
+# anything reachable at launch should be covered there too.
 os.environ["XENIUM_VIEWER_TEMPLATE_PATH"] = ""
 
 

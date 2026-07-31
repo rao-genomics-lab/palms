@@ -334,3 +334,89 @@ def test_the_stamp_reaches_the_provenance_node(override_dir):
     assert node.template_id == "roi.polygons"
     assert node.template_hash
     assert "# customised" in node.code, "the recorded code is the customised code"
+
+
+# ── the configuration a real user actually has ───────────────────────────────
+#
+# Everything above sets XENIUM_VIEWER_TEMPLATE_PATH, and conftest sets it for
+# the whole suite. That is what keeps a developer's own customisations out of
+# the tests — and it meant the *default* path, with the variable unset, was
+# never executed by anything. It was infinitely recursive, and the viewer would
+# not start. These tests run with the variable deleted.
+
+@pytest.fixture
+def no_env(monkeypatch, tmp_path):
+    """As a real user has it: no XENIUM_VIEWER_TEMPLATE_PATH at all."""
+    from xenium_viewer.utils.step_templates import loader
+
+    monkeypatch.delenv(TEMPLATE_PATH_ENV, raising=False)
+    # Redirect the platform config dir so nothing touches the real one.
+    monkeypatch.setattr(loader, "_default_user_dir", lambda: tmp_path)
+    clear_cache()
+    yield tmp_path
+    clear_cache()
+
+
+def test_the_search_path_resolves_with_no_env_var(no_env):
+    from xenium_viewer.utils.step_templates import search_path, user_template_dir
+
+    assert search_path() == [no_env]
+    assert user_template_dir() == no_env
+
+
+def test_resolving_works_with_no_env_var(no_env):
+    """The launch path. This raised RecursionError and the viewer never opened."""
+    resolved = resolve(LEIDEN)
+    assert not resolved.is_customised
+    assert resolved.spec.blocks == builtin_spec(LEIDEN).blocks
+
+
+def test_every_template_resolves_with_no_env_var(no_env):
+    """The tab populates by resolving all of them, so all of them must work."""
+    from xenium_viewer.utils.step_templates import builtin_ids
+
+    for template_id in builtin_ids():
+        assert resolve(template_id).spec.blocks
+
+
+def test_an_override_still_applies_with_no_env_var(no_env):
+    """The default location is a real location, not just a non-crashing one."""
+    from xenium_viewer.utils.step_templates.overrides import save_override
+
+    save_override(LEIDEN, {"scale": "\nsc.pp.scale(adata_leiden, max_value=99)"})
+    assert (no_env / f"{LEIDEN}.tmpl").is_file()
+    assert resolve(LEIDEN).is_customised
+
+
+def test_disabling_overrides_works_with_no_env_var(no_env):
+    resolve(LEIDEN)
+    set_overrides_enabled(False)
+    try:
+        from xenium_viewer.utils.step_templates import search_path
+        assert search_path() == []
+        assert not resolve(LEIDEN).is_customised
+    finally:
+        set_overrides_enabled(True)
+
+
+def test_the_two_entry_points_do_not_delegate_to_each_other():
+    """Source guard: the shape that made this recursive.
+
+    Both must read the configuration themselves. One calling the other reads
+    naturally, passes every test that sets the variable, and hangs the viewer
+    for everyone who does not.
+    """
+    import ast
+    import inspect
+
+    from xenium_viewer.utils.step_templates import loader
+
+    for name, forbidden in (("search_path", "user_template_dir"),
+                            ("user_template_dir", "search_path")):
+        tree = ast.parse(inspect.getsource(getattr(loader, name)))
+        called = {n.func.id for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        assert forbidden not in called, (
+            f"{name}() calls {forbidden}(); with the env var unset these two "
+            f"recurse forever"
+        )

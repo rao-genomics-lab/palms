@@ -337,20 +337,40 @@ def set_overrides_enabled(enabled: bool) -> None:
     resolve.cache_clear()
 
 
+def _configured_dirs() -> Optional[list[Path]]:
+    """Directories named by the env var, or ``None`` when it is unset.
+
+    ``None`` and ``[]`` mean different things and both are load-bearing: unset
+    means "use the normal config location", while set-but-empty means "no
+    overrides at all", which is how the test suite isolates itself.
+    """
+    raw = os.environ.get(TEMPLATE_PATH_ENV)
+    if raw is None:
+        return None
+    return [Path(p).expanduser() for p in raw.split(os.pathsep) if p.strip()]
+
+
+def _default_user_dir() -> Path:
+    return Path(platformdirs.user_config_dir("xenium-viewer")) / "templates"
+
+
 def user_template_dir() -> Path:
     """Where a user's own templates are *written*. Not created until first save.
 
-    Derived from the same search path used to read them, so a write can never
-    land somewhere the reader does not look. Pointing
-    ``XENIUM_VIEWER_TEMPLATE_PATH`` at a directory therefore redirects saving
-    too — which is what makes the tests isolable with one environment variable
-    instead of by patching, and what stopped them writing into the developer's
-    real config directory.
+    Reads the same configuration the search path does, so a write cannot land
+    somewhere the reader does not look — pointing ``XENIUM_VIEWER_TEMPLATE_PATH``
+    at a directory redirects saving too, which is what lets the tests isolate
+    themselves with one environment variable instead of by patching.
+
+    It resolves that configuration *independently* rather than by calling
+    :func:`search_path`. Having one delegate to the other read naturally and was
+    infinitely recursive for the only case the tests never covered — env var
+    unset, i.e. every real user.
     """
-    path = search_path()
-    if path:
-        return path[0]
-    return Path(platformdirs.user_config_dir("xenium-viewer")) / "templates"
+    configured = _configured_dirs()
+    if configured:
+        return configured[0]
+    return _default_user_dir()
 
 
 def search_path() -> list[Path]:
@@ -361,10 +381,8 @@ def search_path() -> list[Path]:
     """
     if _overrides_disabled:
         return []
-    raw = os.environ.get(TEMPLATE_PATH_ENV)
-    if raw is not None:
-        return [Path(p).expanduser() for p in raw.split(os.pathsep) if p.strip()]
-    return [user_template_dir()]
+    configured = _configured_dirs()
+    return configured if configured is not None else [_default_user_dir()]
 
 
 def _override_files(template_id: str) -> list[Path]:
