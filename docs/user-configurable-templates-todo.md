@@ -41,35 +41,48 @@ path. Editing that template did nothing, and its nodes carried no `template_id`.
 `test_every_step_resolves_user_overrides` now parses every `Step(...)` in every
 tab.
 
-## 2. Verification that needs a real dataset
+## 2. Verification against a real dataset — done, except the full replay
 
-Plan steps 1–3 (unit, migration equivalence, notebook replay) are done and green.
-Steps 4–6 have **not** been run, because they need a dataset. Given that a
-launch-blocking recursion bug shipped past 807 passing tests, these matter:
+Run 2026-07-31 against a 4104-cell / 477-gene Xenium output, by driving
+`app.run_viewer` with `napari.run` replaced by an inspector that exits before
+the `save_session` block. Nothing was written back: the zarr was untouched, and
+the `viewer_cache/prov_graph.json` and `xenium_viewer.log` the launch creates
+were removed afterwards. **`analysis.py` in the dataset root was overwritten**
+and could not be restored — it is derived and rewritten on every recorded step,
+so any run of this kind destroys it. **Copy a dataset before probing it, or use
+one with no `analysis.py`.**
 
-- **The preview is live in shape, not only in value.** Open Tools → Templates →
-  `clustering.leiden`, then toggle "Use HVGs" and "Scale" in the Clustering tab
-  and confirm the *blocks* appear and vanish in the pane. Unit tests assert this
-  through a stub provider; nothing yet observes it through real Qt widgets in a
-  running viewer. Spot-check `roi.deg`, `genes.marker_plot` and
-  `genes.cnv_infercnv` for live values.
-- **End-to-end.** Launch `xenium-viewer <dataset>`, run Leiden, confirm the
-  Templates preview matches the Notebook tab's `clustering:leiden_*` cell. Then
-  edit the `hvg` block, Validate, Save, re-run Leiden, and confirm **(a)** the
-  GUI result changes, **(b)** the Notebook cell shows the edited source, **(c)**
-  the node is stamped `origin="user"`.
-- **Marker plots honour overrides** (the fix in §1). Edit `genes.marker_plot`'s
-  `head` block, Save, generate a dotplot, and confirm the Notebook cell shows
-  the edit and the node carries `template_id="genes.marker_plot"`,
-  `origin="user"`.
-- **Round-trip.** `scripts/verify_notebook.py <dataset> --out report.json` on
-  that customised session: it must replay against the raw Xenium output, and the
-  report must carry `"stock_templates": false` naming the customised steps.
-- **Failure paths on a real launch.** Hand-write a broken override (syntax
-  error; undeclared `$X`; missing required param) into
-  `~/.config/xenium-viewer/templates/`, then confirm the viewer **launches**,
-  warns once, uses the builtin, and badges the template `✕ not used`. Then
-  confirm `--no-user-templates` restores stock behaviour.
+- **Launch.** 7.2 s to ready. All 14 templates preview; all render code that
+  compiles. 12 register a provider, and the two exemptions correctly show
+  sample values — `spatial_neighbors` with `n_neighs=6` from `sample-params`,
+  not the synthesised `1`.
+- **The preview is live in value.** `genes.rank_genes` reads
+  `groupby='graphclust', method='wilcoxon', n_genes=25` from the real widgets,
+  where before this change it read `groupby='sample', method='sample',
+  n_genes=1`.
+- **Live in shape** is now a unit test
+  (`test_toggling_a_real_widget_changes_the_previews_shape`), which drives the
+  actual magicgui checkboxes — it needs a `QApplication`, not a dataset.
+- **End-to-end.** Fork the `tail` block, re-run: 19 → 34 clusters, the recorded
+  node's `code` contains the edit, `template_origin == "user+builtin"`, and the
+  unedited run's node stays `builtin`. `customisation_banner` fires.
+- **Marker plots honour overrides** (the fix in §1) — an override of the `head`
+  block reaches the executed text with `origin="user+builtin"`, where the old
+  `builtin_assemble` path demonstrably did not see it.
+- **Failure paths on a real launch.** A syntax error and an undeclared `$token`,
+  in two different templates: the viewer launched, warned **once per template**,
+  badged both `✕ not used`, and both fell back to byte-identical builtin text.
+  A third template was unaffected, and the rejected ones still preview from the
+  builtin. `--no-user-templates` restores stock resolution.
+- **`stock_templates`.** `verify_notebook.template_provenance` on the customised
+  graph reports `stock_templates: false, n_customised: 1`, naming the node, its
+  template id and hash.
+
+**Still outstanding:** the full round-trip — `scripts/verify_notebook.py
+<dataset> --out report.json` executing the notebook against the raw Xenium
+output. It needs a session persisted into the zarr `viewer_session` attrs, i.e.
+a real `save_session`, which means writing to a dataset. Do it on a copy.
+`tests/test_notebook_replay.py` covers replay itself on synthetic data.
 
 ## 3. Phase 4b — optional, not started
 
