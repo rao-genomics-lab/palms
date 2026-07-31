@@ -11,7 +11,9 @@ from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
-from xenium_viewer.utils.step_templates import builtin_assemble, step_template as _resolved
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_assemble, step_template as _resolved,
+)
 from xenium_viewer.utils.steps import Step, coerce
 
 if TYPE_CHECKING:
@@ -153,13 +155,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
         # Recording happened inside ctx.run_step(), which recorded the very
         # source it executed — there is nothing to re-describe here.
 
-    def _leiden_params() -> dict:
-        """The params for a run with the widgets as they stand right now.
+    def _leiden_preview() -> Preview:
+        """What "Run Leiden Clustering" would run with the widgets as they stand.
 
-        Shared with the Templates tab's preview, so what that pane shows is
-        rendered from the same dict the run would use — a second expression of
+        Shared with the Templates tab's preview, so that pane renders from the
+        same blocks and the same dict the run would use — a second expression of
         "the current settings" is exactly the kind of drift ``Step`` exists to
-        rule out.
+        rule out. The blocks belong here with the params rather than being
+        re-derived by the preview: which preprocessing runs is *what the
+        checkboxes mean*, so it is as much part of "the current settings" as the
+        resolution is.
 
         The flavour is part of the key: the two backends produce genuinely
         different partitions, so at one resolution they must coexist rather than
@@ -167,19 +172,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
         """
         flavor = leiden_flavor.value
         resolution = leiden_resolution.value
-        return {
-            "key": f"leiden_{flavor}_r{resolution}",
-            "resolution": coerce(resolution),
-            "n_neighbors": coerce(leiden_n_neighbors.value),
-            "n_pcs": coerce(leiden_n_pcs.value),
-            "n_top_genes": coerce(leiden_n_hvgs.value),
-            "flavor": flavor,
-            "n_iterations": coerce(leiden_n_iterations.value),
-            "directed": FLAVOR_DEFAULTS[flavor][1],
-            "random_state": 0,
-        }
+        return Preview(
+            _leiden_blocks(leiden_hvg_check.value, leiden_scale_check.value),
+            {
+                "key": f"leiden_{flavor}_r{resolution}",
+                "resolution": coerce(resolution),
+                "n_neighbors": coerce(leiden_n_neighbors.value),
+                "n_pcs": coerce(leiden_n_pcs.value),
+                "n_top_genes": coerce(leiden_n_hvgs.value),
+                "flavor": flavor,
+                "n_iterations": coerce(leiden_n_iterations.value),
+                "directed": FLAVOR_DEFAULTS[flavor][1],
+                "random_state": 0,
+            },
+        )
 
-    ctx.state.setdefault("template_preview_params", {})[TEMPLATE_ID] = _leiden_params
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _leiden_preview
 
     def on_run_leiden():
         use_hvg = leiden_hvg_check.value
@@ -190,11 +198,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        params = _leiden_params()
+        blocks, params, _ = _leiden_preview()
         key = params["key"]
         step = Step(
             id=f"clustering:{key}",
-            **_resolved(TEMPLATE_ID, _leiden_blocks(use_hvg, do_scale)),
+            **_resolved(TEMPLATE_ID, blocks),
             params=params,
             deps=["normalize"],
             kind=ARTIFACT,

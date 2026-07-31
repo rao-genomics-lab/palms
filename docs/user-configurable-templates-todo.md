@@ -1,6 +1,6 @@
 # TODO: user-configurable analysis templates — remaining work
 
-Status: **Phases 0–3 implemented and committed** on `feat/template-registry`
+Status: **Phases 0–4a implemented and committed** on `feat/template-registry`
 (as of 2026-07-31). What follows is what is left. The plan this came from is
 summarised in `CLAUDE.md` under "Code Recording"; the design paradigms are
 Django template loaders + dpkg conffile upgrade policy + nf-core-style declared
@@ -14,50 +14,32 @@ contracts + dbt-style manifest stamping.
 | 1 | Template text → `utils/step_templates/builtin/*.tmpl`, registry, registry-wide `check_step` gate, read-only Tools → Templates | done |
 | 2 | Per-user overrides, validation gate, fail-to-builtin-loudly, provenance stamping, editable tab | done |
 | 3 | `overrides.json` fork record, stale/needs-review detection, diff + take-new-default, notebook banner, `verify_notebook` templates section | done |
-| 4 | Per-dataset scope, export/share, dry-run | **not started (optional)** |
+| 4a | `Preview(blocks, params, note)` providers across every tab; marker-plot override fix; registry-wide preview gates | done |
+| 4b | Per-dataset scope, export/share, dry-run | **not started (optional)** |
 
-813 passed, 24 skipped, ruff clean. Branch has 5 commits and **no PR yet**.
+821 passed, 24 skipped, ruff clean. Branch has 6 commits and **no PR yet**.
 
 ---
 
-## 1. Preview providers — only 1 of 14 tabs has one
+## 1. ~~Preview providers~~ — done
 
-**The main functional gap, and the most visible one.**
+Twelve of fourteen templates now register a `Preview(blocks, params, note="")`
+in `ctx.state["template_preview"]`, and each tab's own callback runs from that
+same call, so the run and the preview are one expression. Providers carry the
+**block selection** as well as the params — `_preview` used to render
+`assemblies[0]` regardless, so the pane tracked the widgets in value but not in
+shape.
 
-Tools → Templates shows a live preview of the exact string a step would `exec`.
-It is real only for Leiden, because `tab_clustering.py` is the only tab that
-registers a provider:
+Two declared exemptions in `tests/test_tab_templates.py::_NO_PROVIDER`:
+`normalize` (no params) and `spatial_neighbors` (its `k` comes from whichever
+tab called `ensure_spatial_neighbors`, so it uses the new `# sample-params:`
+header field rather than a provider that would have to pick one slider).
 
-```python
-ctx.state.setdefault("template_preview_params", {})[TEMPLATE_ID] = _leiden_params
-```
-
-Every other template falls back to synthesised literals of the right type, so
-the pane reads:
-
-```
-# preview — sample values
-# Rank genes: groupby='sample', method='sample', n_genes=1
-```
-
-That is labelled and working as designed, but it makes the tab's headline
-question — *what will this button actually run?* — honest for one template and
-merely illustrative for thirteen.
-
-**The fix, per tab** (~20 lines each, `tab_clustering.py:156-181` is the worked
-example): extract the params dict the callback already builds into a named
-closure, register it, and have the callback call it. The point is that the run
-and the preview then read **one** expression of "the current settings" — a
-second copy is exactly the drift `Step` exists to rule out.
-
-Tabs needing it: `tab_gene_analysis`, `tab_nhood`, `tab_co_occurrence`,
-`tab_ligrec`, `tab_marker_genes`, `tab_gene_correlation`, `tab_roi` (×3),
-`tab_cnv`, plus `normalize` / `spatial_neighbors` in `_helpers.py` (these two
-have no widgets, so `sample_params` in the `.tmpl` header may be the better
-answer for them than a provider).
-
-`tests/test_tab_templates.py::test_the_clustering_tab_registers_a_preview_provider`
-is the pattern for guarding each one.
+Fixed along the way: **`genes.marker_plot` ignored user overrides entirely** —
+it built its `Step` with `template=builtin_assemble(...)`, the shipped-files-only
+path. Editing that template did nothing, and its nodes carried no `template_id`.
+`test_every_step_resolves_user_overrides` now parses every `Step(...)` in every
+tab.
 
 ## 2. Verification that needs a real dataset
 
@@ -65,21 +47,31 @@ Plan steps 1–3 (unit, migration equivalence, notebook replay) are done and gre
 Steps 4–6 have **not** been run, because they need a dataset. Given that a
 launch-blocking recursion bug shipped past 807 passing tests, these matter:
 
+- **The preview is live in shape, not only in value.** Open Tools → Templates →
+  `clustering.leiden`, then toggle "Use HVGs" and "Scale" in the Clustering tab
+  and confirm the *blocks* appear and vanish in the pane. Unit tests assert this
+  through a stub provider; nothing yet observes it through real Qt widgets in a
+  running viewer. Spot-check `roi.deg`, `genes.marker_plot` and
+  `genes.cnv_infercnv` for live values.
 - **End-to-end.** Launch `xenium-viewer <dataset>`, run Leiden, confirm the
   Templates preview matches the Notebook tab's `clustering:leiden_*` cell. Then
   edit the `hvg` block, Validate, Save, re-run Leiden, and confirm **(a)** the
   GUI result changes, **(b)** the Notebook cell shows the edited source, **(c)**
   the node is stamped `origin="user"`.
+- **Marker plots honour overrides** (the fix in §1). Edit `genes.marker_plot`'s
+  `head` block, Save, generate a dotplot, and confirm the Notebook cell shows
+  the edit and the node carries `template_id="genes.marker_plot"`,
+  `origin="user"`.
 - **Round-trip.** `scripts/verify_notebook.py <dataset> --out report.json` on
   that customised session: it must replay against the raw Xenium output, and the
-  report must carry `"stock_templates": false` naming the customised step.
+  report must carry `"stock_templates": false` naming the customised steps.
 - **Failure paths on a real launch.** Hand-write a broken override (syntax
   error; undeclared `$X`; missing required param) into
   `~/.config/xenium-viewer/templates/`, then confirm the viewer **launches**,
   warns once, uses the builtin, and badges the template `✕ not used`. Then
   confirm `--no-user-templates` restores stock behaviour.
 
-## 3. Phase 4 — optional, not started
+## 3. Phase 4b — optional, not started
 
 Only relevant if the per-user-only scope decision changes:
 
@@ -100,7 +92,7 @@ Only relevant if the per-user-only scope decision changes:
 - **No PR** for `feat/template-registry`.
 - **Galaxy's tool-XML and tool-versioning docs were never read.** The design came
   from the dpkg conffile model instead, which covered the upgrade case well. It
-  becomes relevant again only for Phase 4's sharing work — Galaxy has long
+  becomes relevant again only for Phase 4b's sharing work — Galaxy has long
   experience with tool definitions travelling between installations.
 - **Testing blind spot to keep in mind.** `tests/conftest.py` sets
   `XENIUM_VIEWER_TEMPLATE_PATH` for the whole suite, so the branch taken when it

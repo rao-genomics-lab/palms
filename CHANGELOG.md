@@ -1,5 +1,49 @@
 # Changelog
 
+## [Unreleased] — 2026-07-31
+
+### Fixed
+- **Marker-gene plots ignored user templates entirely.** `tab_marker_genes` built its
+  `Step` with `template=builtin_assemble(...)` — the shipped-files-only path, which by
+  design cannot see an override directory. So `genes.marker_plot` could be edited,
+  validated and saved in Tools → Templates with no effect whatsoever, and its provenance
+  nodes carried no `template_id`, leaving them invisible to the notebook's customisation
+  banner and to `verify_notebook`'s `stock_templates`. Every other migrated call site
+  splatted `step_template`; nothing checked that they all did. Now one does
+  (`test_every_step_resolves_user_overrides`), by parsing every `Step(...)` in every tab.
+  `builtin_assemble` remains correct where it is still used — in the `_*_template`
+  helpers the pinning tests read, which must not see a developer's own overrides.
+
+### Changed
+- **The Templates preview now shows what the button would actually run — for every
+  template, in shape as well as in value.** Two gaps, one visible and one not. Only the
+  Clustering tab supplied live parameters, so twelve of fourteen panes read
+  `groupby='sample', n_genes=1`. And the preview always rendered the template's *first
+  declared assembly*, so even Leiden's "real" preview kept the same code shape however
+  the checkboxes were set — untick "use HVGs" and the numbers moved while the statements
+  did not.
+
+  Both follow from the same contract. A tab now registers a `Preview(blocks, params)`
+  in `ctx.state["template_preview"]`, and **its own callback runs from that same
+  call** — so the blocks selected and the parameters passed are one expression, not two
+  that agree by discipline. Block selection has to be in there: the branch structure *is*
+  what the widgets mean, which is exactly why it stays in Python and cannot be re-derived
+  by the pane. Twelve templates have a provider; the two that do not are declared, with
+  their reasons — `normalize` takes no params, and `spatial_neighbors` takes its `k` from
+  whichever tab called it, so it gets a realistic literal from a new `# sample-params:`
+  header field instead of a provider that would have to pick a slider arbitrarily.
+
+  `note` covers the values that cannot come from a widget because they do not exist yet:
+  a save-dialog path renders as the filename the dialog would propose, and the header
+  says `(path chosen on save)` rather than showing a placeholder as settled.
+
+  Guarded four ways, each of which caught a real defect when tried against it: every
+  template has a provider or a declared exemption; every provider is *called* by its own
+  tab rather than shadowed by a second inline dict; every provider actually answers when
+  invoked against a live tab (a raising provider is otherwise indistinguishable from a
+  half-built one, since `_preview` catches it and shows sample values); and every
+  provider selects a block sequence the template declares.
+
 ## [Unreleased] — 2026-07-30
 
 ### Added

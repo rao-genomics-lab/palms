@@ -117,22 +117,35 @@ def _contract_text(spec) -> str:
 
 
 def _preview(ctx: ViewerContext, spec, assembly) -> str:
-    """The exact source this template would execute, for *assembly*.
+    """The exact source this template would execute right now.
 
-    Uses the owning tab's current widget values when it has registered a
-    ``preview_params`` callable, and falls back to synthesised literals of the
-    right type otherwise — so the preview is real for a live tab and still
-    illustrative for one the user has not opened.
+    Uses the owning tab's :class:`Preview` when it has registered one — *both*
+    the blocks it would select and the params it would pass, so the pane tracks
+    the widgets in shape as well as in value. Falls back to *assembly* and
+    synthesised literals of the right type otherwise, so the preview is real for
+    a live tab and still illustrative for one the user has not opened.
+
+    Blocks have to come from the provider rather than from a fixed assembly.
+    The call site owns block selection by design (the branch structure *is* what
+    the widgets mean), so a params-only provider left the preview pinned to the
+    first declared assembly: untick "use HVGs" and the numbers moved while the
+    code shape did not.
     """
-    providers = ctx.state.get("template_preview_params", {})
+    providers = ctx.state.get("template_preview", {})
     provider = providers.get(spec.id)
-    params, source = None, "sample values"
+    params, note, source = None, "", "sample values"
     if callable(provider):
         try:
-            params = provider()
+            blocks, params, note = provider()
+            assembly = list(blocks)
             source = "current widget values"
         except Exception:                      # a half-built tab must not break the view
             params = None
+    try:
+        template = spec.assemble(assembly)
+    except KeyError as exc:                    # a provider naming a block an override dropped
+        return f"# could not assemble this template:\n# {exc}"
+
     if params is None:
         params = spec.synth_params()
     else:
@@ -140,12 +153,13 @@ def _preview(ctx: ViewerContext, spec, assembly) -> str:
         # template still renders rather than raising at the user.
         merged = spec.synth_params()
         merged.update(params)
-        params = {k: v for k, v in merged.items() if f"${k}" in spec.assemble(assembly)}
+        params = {k: v for k, v in merged.items() if f"${k}" in template}
 
-    step = Step(id=f"preview:{spec.id}", template=spec.assemble(assembly),
+    step = Step(id=f"preview:{spec.id}", template=template,
                 params=params, template_id=spec.id)
+    header = f"# preview — {source}" + (f" ({note})" if note else "")
     try:
-        return f"# preview — {source}\n{step.render()}"
+        return f"{header}\n{step.render()}"
     except StepError as exc:
         return f"# could not render this template:\n# {exc}"
 

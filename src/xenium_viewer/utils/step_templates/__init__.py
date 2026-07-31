@@ -34,6 +34,7 @@ from xenium_viewer.utils.step_templates.namespace import (
 from xenium_viewer.utils.step_templates.spec import (
     BlockSpec,
     ParamSpec,
+    Preview,
     TemplateSpec,
 )
 from xenium_viewer.utils.step_templates.validate import (
@@ -52,6 +53,7 @@ __all__ = [
     # spec
     "BlockSpec",
     "ParamSpec",
+    "Preview",
     "TemplateSpec",
     # loader — builtin scope only, never sees an override
     "TemplateError",

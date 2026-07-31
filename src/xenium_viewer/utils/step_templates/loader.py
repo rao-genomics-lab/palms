@@ -17,6 +17,9 @@ File format — a header of comment lines, then one or more blocks::
     sc.pp.highly_variable_genes(adata_leiden, n_top_genes=$n_top_genes)
 
 A ``?`` after a param's type marks it optional (not every assembly uses it).
+An optional ``# sample-params: n_neighs = 6`` line gives realistic literals for
+the Templates tab's preview, for the few templates no tab can supply live values
+for; see :func:`_parse_sample_params`.
 Everything structural is a comment, so a ``.tmpl`` is valid Python: the syntax
 highlighter the Templates tab reuses needs no special case, and a stray edit
 shows up as a comment rather than as a parse error somewhere else.
@@ -32,6 +35,7 @@ override-immunity would be checking a promise; routing through a function that
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 from dataclasses import dataclass, field, replace
@@ -203,6 +207,37 @@ def _parse_params(value: str) -> tuple[ParamSpec, ...]:
     return tuple(specs)
 
 
+def _parse_sample_params(value: str, template_id: str) -> dict:
+    """``n_neighs = 6, method = 'wilcoxon'`` -> a dict of realistic literals.
+
+    Only for the handful of templates whose params no single widget owns, so no
+    tab can register a preview provider for them. The synthesised literal is
+    well-typed but meaningless (``n_neighs=1``), and a preview is read by someone
+    asking what the step does — a plausible value is worth the two lines.
+
+    Parsed with ``literal_eval`` for the same reason params are rendered with
+    ``repr``: a template file must not be able to smuggle an expression into a
+    place that only ever holds a literal.
+    """
+    out: dict = {}
+    for entry in _csv(value):
+        name, sep, literal = entry.partition("=")
+        name = name.strip()
+        if not sep or not name.isidentifier():
+            raise TemplateError(
+                f"template {template_id!r} has a malformed sample-param "
+                f"{entry!r}; expected 'name = <literal>'"
+            )
+        try:
+            out[name] = ast.literal_eval(literal.strip())
+        except (ValueError, SyntaxError) as exc:
+            raise TemplateError(
+                f"template {template_id!r} sample-param {name!r} is not a "
+                f"Python literal: {exc}"
+            ) from None
+    return out
+
+
 def _parse_assemblies(value: str, blocks: dict, template_id: str) -> tuple:
     """``head+hvg+tail | head+tail`` -> the legal block sequences.
 
@@ -260,16 +295,27 @@ def parse_template(text: str, *, source: Optional[str] = None) -> TemplateSpec:
 
     assemblies = _parse_assemblies(fields.get("assemblies", ""), block_specs,
                                    template_id)
+    params = _parse_params(fields.get("params", ""))
+
+    sample_params = _parse_sample_params(
+        fields.get("sample_params", ""), template_id)
+    unknown = sorted(set(sample_params) - {p.name for p in params})
+    if unknown:
+        raise TemplateError(
+            f"template {template_id!r} gives sample values for undeclared "
+            f"param(s) {unknown} (declared: {sorted(p.name for p in params)})"
+        )
 
     return TemplateSpec(
         id=template_id,
         blocks=block_specs,
         assemblies=assemblies,
-        params=_parse_params(fields.get("params", "")),
+        params=params,
         requires=frozenset(_csv(fields.get("requires", ""))),
         outputs=tuple(_csv(fields.get("outputs", ""))),
         doc=fields.get("doc", ""),
         schema_version=int(fields.get("schema_version", "1")),
+        sample_params=sample_params,
         source=source,
     )
 

@@ -23,7 +23,11 @@ from xenium_viewer.utils.gene_analysis import (
     run_llm_annotation,
 )
 from xenium_viewer.utils.steps import Step, coerce
-from xenium_viewer.utils.step_templates import builtin_spec, builtin_text, step_template as _resolved
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_spec, builtin_text, step_template as _resolved,
+)
+
+RANK_GENES_TEMPLATE_ID = "genes.rank_genes"
 
 # Executed *and* recorded — see utils/steps.py. Reads the clustering from
 # adata.obs (where the clustering cell puts it) and ranks on the normalized
@@ -150,13 +154,34 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ga_status = StatusProxy(ctx.viewer)
     ga_progress = make_progress_bar()
 
+    def _rank_genes_preview() -> Preview:
+        """What "Run Rank Genes" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane. Every block, always: this template
+        declares a single assembly, so there is nothing for the widgets to
+        select between.
+        """
+        return Preview(
+            list(builtin_spec(RANK_GENES_TEMPLATE_ID).blocks),
+            {
+                "groupby": ga_clustering_widget.value,
+                "method": ga_method_widget.value,
+                "n_genes": coerce(ga_n_genes_slider.value),
+            },
+        )
+
+    ctx.state.setdefault(
+        "template_preview", {})[RANK_GENES_TEMPLATE_ID] = _rank_genes_preview
+
     def on_run_rank_genes():
         ga_status.value = "Running rank genes (normalizing + computing)..."
         ga_run_button.enabled = False
 
-        clustering_key = ga_clustering_widget.value
-        method = ga_method_widget.value
-        n_genes = ga_n_genes_slider.value
+        blocks, params, _ = _rank_genes_preview()
+        clustering_key = params["groupby"]
+        method = params["method"]
+        n_genes = params["n_genes"]
         state["_rg_method"] = method
         state["_rg_n_genes"] = n_genes
 
@@ -178,12 +203,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id=f"rank_genes:{clustering_key}",
-            **_resolved("genes.rank_genes", list(builtin_spec("genes.rank_genes").blocks)),
-            params={
-                "groupby": clustering_key,
-                "method": method,
-                "n_genes": coerce(n_genes),
-            },
+            **_resolved(RANK_GENES_TEMPLATE_ID, blocks),
+            params=params,
             deps=["normalize", f"clustering:{clustering_key}"],
             label=f"Rank genes: {clustering_key}",
             outputs=["rank_df", "adata_norm"],

@@ -6,7 +6,9 @@ from magicgui.widgets import ComboBox, PushButton, CheckBox
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.steps import Step
-from xenium_viewer.utils.step_templates import builtin_assemble, step_template as _resolved
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_assemble, step_template as _resolved,
+)
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -77,14 +79,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
     plot_button   = PushButton(label="Plot Correlation")
     status        = StatusProxy(ctx.viewer)
 
-    def on_plot():
-        from napari.qt.threading import thread_worker
+    def _gene_corr_preview() -> Preview:
+        """What "Plot Correlation" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane. Both halves matter here: the
+        normalisation combo selects which ``expr.*`` block reads the expression
+        — three genuinely different expressions, not one parameterised — so a
+        params-only preview would show the wrong statement entirely.
+
+        Read-only, deliberately. The run creates ``plots/`` before writing into
+        it; opening the Templates tab must not create a directory as a side
+        effect of drawing a pane.
+        """
         gene_a = gene_a_widget.value
         gene_b = gene_b_widget.value
-        norm   = norm_widget.value
-        norm_label = _NORM_LABELS[norm]
-        status.value = f"Computing correlation: {gene_a} vs {gene_b}…"
-        gen = ctx.dataset_generation
+        norm_label = _NORM_LABELS[norm_widget.value]
 
         # The cluster filter reaches the notebook as an explicit
         # ``obs[key].isin([...])`` rather than as an opaque boolean array.
@@ -99,24 +109,38 @@ def build_tab(ctx: ViewerContext) -> tuple:
         filtered = clustering_key is not None and selected is not None
 
         fmt = state.get("plot_format", "svg")
-        plots_dir = os.path.join(ctx.data_path, "plots")
-        os.makedirs(plots_dir, exist_ok=True)
-        path = os.path.join(plots_dir, f"gene_correlation.{fmt}")
-
         params = {
             "gene_a": gene_a, "gene_b": gene_b,
             "norm_label": norm_label,
             "xlabel": f"{gene_a} [{norm_label}]",
             "ylabel": f"{gene_b} [{norm_label}]",
             "title_prefix": f"{gene_a} vs {gene_b}",
-            "path": path,
+            "path": os.path.join(ctx.data_path, "plots", f"gene_correlation.{fmt}"),
         }
-        deps = ["preamble"]
-        if norm == "Log1p(CPM)":
-            deps = ["normalize"]
         if filtered:
             params["clustering"] = clustering_key
             params["selected"] = selected
+        return Preview(_gene_corr_blocks(norm_widget.value, filtered), params)
+
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _gene_corr_preview
+
+    def on_plot():
+        from napari.qt.threading import thread_worker
+        norm = norm_widget.value
+        blocks, params, _ = _gene_corr_preview()
+        gene_a, gene_b = params["gene_a"], params["gene_b"]
+        norm_label = params["norm_label"]
+        clustering_key = params.get("clustering")
+        status.value = f"Computing correlation: {gene_a} vs {gene_b}…"
+        gen = ctx.dataset_generation
+
+        path = params["path"]
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        deps = ["preamble"]
+        if norm == "Log1p(CPM)":
+            deps = ["normalize"]
+        if clustering_key is not None:
             ctx.record_clustering(clustering_key)
             from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
             add_clustering_to_obs(ctx.adata, ctx.adata,
@@ -125,7 +149,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id="plot:gene_correlation",
-            **_resolved(TEMPLATE_ID, _gene_corr_blocks(norm, filtered)),
+            **_resolved(TEMPLATE_ID, blocks),
             params=params,
             deps=deps,
             kind=TERMINAL,

@@ -13,11 +13,12 @@ napari viewer, and this view reads only ``ctx.state``.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from xenium_viewer.utils.step_templates import builtin_ids, builtin_spec
+from xenium_viewer.utils.step_templates import Preview, builtin_ids, builtin_spec
 from xenium_viewer.utils.steps import Step
 
 
@@ -77,8 +78,9 @@ def test_a_live_tab_supplies_the_real_widget_values(ctx):
     from xenium_viewer.tabs.tab_templates import _preview
 
     spec = builtin_spec("clustering.leiden")
-    ctx.state["template_preview_params"] = {
-        "clustering.leiden": lambda: dict(spec.synth_params(), resolution=0.42),
+    ctx.state["template_preview"] = {
+        "clustering.leiden": lambda: Preview(
+            list(spec.assemblies[0]), dict(spec.synth_params(), resolution=0.42)),
     }
     shown = _preview(ctx, spec, spec.assemblies[0])
 
@@ -86,37 +88,390 @@ def test_a_live_tab_supplies_the_real_widget_values(ctx):
     assert shown.startswith("# preview — current widget values")
 
 
+def test_the_provider_chooses_the_blocks_not_just_the_values(ctx):
+    """The half of "what will this run?" that is about shape, not numbers.
+
+    ``_preview`` used to render ``spec.assemblies[0]`` whatever the widgets said,
+    so unticking a checkbox that selects a different block moved the parameters
+    while the code stayed the same. Block selection lives at the call site by
+    design, which is exactly why the provider has to carry it.
+    """
+    from xenium_viewer.tabs.tab_templates import _preview
+
+    spec = builtin_spec("clustering.leiden")
+    without_hvg = ["head", "tail"]
+    assert tuple(without_hvg) in spec.assemblies
+
+    ctx.state["template_preview"] = {
+        "clustering.leiden": lambda: Preview(without_hvg, spec.synth_params()),
+    }
+    # Asked for an assembly that *does* include HVG selection; the provider's
+    # choice has to win.
+    with_hvg = next(a for a in spec.assemblies if "hvg" in a)
+    shown = _preview(ctx, spec, with_hvg)
+
+    assert "highly_variable_genes" not in shown
+    assert "sc.tl.leiden(" in shown
+
+
+def test_a_note_names_the_value_that_is_not_settled_yet(ctx):
+    """A path the save dialog has not returned must not read as a real one."""
+    from xenium_viewer.tabs.tab_templates import _preview
+
+    spec = builtin_spec("roi.export_expression")
+    blocks = list(spec.blocks)
+    ctx.state["template_preview"] = {
+        spec.id: lambda: Preview(blocks, spec.synth_params(),
+                                 note="path chosen on save"),
+    }
+    shown = _preview(ctx, spec, blocks)
+    assert shown.startswith(
+        "# preview — current widget values (path chosen on save)")
+
+
 def test_a_broken_provider_does_not_break_the_view(ctx):
     """A half-built tab must degrade to sample values, not raise into the GUI."""
     from xenium_viewer.tabs.tab_templates import _preview
 
     spec = builtin_spec("clustering.leiden")
-    ctx.state["template_preview_params"] = {
+    ctx.state["template_preview"] = {
         "clustering.leiden": lambda: (_ for _ in ()).throw(RuntimeError("not ready")),
     }
     shown = _preview(ctx, spec, spec.assemblies[0])
     assert "sc.tl.leiden(" in shown
+    assert shown.startswith("# preview — sample values")
 
 
-def test_the_clustering_tab_registers_a_preview_provider():
-    """Source guard: the wiring that makes the preview real, not illustrative.
+def test_a_provider_naming_an_unknown_block_reports_rather_than_raises(ctx):
+    """An override may drop a block the call site still selects."""
+    from xenium_viewer.tabs.tab_templates import _preview
 
-    ``_leiden_params`` is the single expression of "the current settings" — the
-    run and the preview both call it. If the tab stopped registering it the
-    preview would silently fall back to sample values and look fine.
+    spec = builtin_spec("clustering.leiden")
+    ctx.state["template_preview"] = {
+        "clustering.leiden": lambda: Preview(["head", "nonesuch"],
+                                             spec.synth_params()),
+    }
+    shown = _preview(ctx, spec, spec.assemblies[0])
+    assert shown.startswith("# could not assemble this template")
+    assert "nonesuch" in shown
+
+
+# ── the registry-wide gate ───────────────────────────────────────────────────
+
+#: Templates that deliberately have no preview provider, and why. A new template
+#: has to make this choice rather than defaulting silently to sample values.
+_NO_PROVIDER = {
+    "normalize": (
+        "declares no params, so the synthesised preview is already byte-exact"
+    ),
+    "spatial_neighbors": (
+        "n_neighs comes from whichever tab called ctx.ensure_spatial_neighbors(); "
+        "the Nhood and L-R tabs each have their own slider, so a provider would "
+        "have to pick one arbitrarily. Uses sample-params in the .tmpl instead."
+    ),
+}
+
+
+def _tab_sources() -> dict[str, str]:
+    """Every tab module's source, by module name."""
+    import pkgutil
+
+    from xenium_viewer import tabs
+
+    out = {}
+    for info in pkgutil.iter_modules(tabs.__path__):
+        path = Path(tabs.__path__[0]) / f"{info.name}.py"
+        if path.exists():
+            out[info.name] = path.read_text(encoding="utf-8")
+    return out
+
+
+def _registered_template_ids() -> set[str]:
+    """Template ids some tab registers a preview provider for.
+
+    Read out of the source rather than by building every tab: most of them need
+    a real ``ViewerContext`` with a napari viewer and loaded data, which is the
+    reason this file uses a stand-in context in the first place.
     """
     import ast
-    import inspect
 
-    from xenium_viewer.tabs import tab_clustering
+    found = set()
+    for name, source in _tab_sources().items():
+        module = ast.parse(source)
+        constants = {
+            target.id: node.value.value
+            for node in ast.walk(module)
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+            for target in node.targets
+            if isinstance(target, ast.Name) and isinstance(node.value.value, str)
+        }
+        for node in ast.walk(module):
+            # ctx.state.setdefault("template_preview", {})[<id>] = <provider>
+            if not isinstance(node, ast.Subscript):
+                continue
+            if "template_preview" not in ast.unparse(node.value):
+                continue
+            key = node.slice
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                found.add(key.value)
+            elif isinstance(key, ast.Name) and key.id in constants:
+                found.add(constants[key.id])
+    return found
 
-    source = inspect.getsource(tab_clustering)
-    assert "template_preview_params" in source, (
-        "tab_clustering no longer registers its preview provider"
+
+def test_every_template_has_a_provider_or_a_declared_reason():
+    """The gate that makes the preview true for the whole registry.
+
+    One tab registering a provider made the tab's headline question — what will
+    this button actually run? — honest for a single template and merely
+    illustrative for thirteen. This asserts the property over the registry, so
+    the answer cannot quietly go back to being a sample value.
+    """
+    registered = _registered_template_ids()
+    missing = sorted(set(builtin_ids()) - registered - set(_NO_PROVIDER))
+    assert not missing, (
+        f"template(s) {missing} have no preview provider. Register one in the "
+        f"owning tab (see _leiden_preview in tab_clustering.py), or add the id "
+        f"to _NO_PROVIDER here with the reason."
     )
-    tree = ast.parse(source)
-    names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-    assert "_leiden_params" in names
+    # Kept honest in the other direction too: a stale exemption for a template
+    # that has since grown a provider is a comment claiming something false.
+    both = sorted(registered & set(_NO_PROVIDER))
+    assert not both, f"template(s) {both} are exempted but do have a provider"
+    unknown = sorted(set(_NO_PROVIDER) - set(builtin_ids()))
+    assert not unknown, f"_NO_PROVIDER names template(s) that do not exist: {unknown}"
+
+
+def test_a_run_uses_its_tabs_provider_rather_than_rebuilding_the_params():
+    """Source guard: the provider must be the *single* expression, not a copy.
+
+    The registry gate above proves a provider exists; only this proves the run
+    consults it. A callback that registered a provider and then rebuilt the same
+    dict inline would pass every other test here and drift on the first edit —
+    which is the failure mode the whole Step system exists to rule out.
+    """
+    import ast
+
+    offenders = []
+    for name, source in _tab_sources().items():
+        module = ast.parse(source)
+        providers = {
+            key.value if isinstance(key, ast.Constant) else None
+            for node in ast.walk(module) if isinstance(node, ast.Subscript)
+            if "template_preview" in ast.unparse(node.value)
+            for key in [node.slice]
+        }
+        if not providers:
+            continue
+        # Every function whose name ends in _preview is a provider; each must be
+        # called somewhere other than at its own registration.
+        for func in ast.walk(module):
+            if not isinstance(func, ast.FunctionDef) or not func.name.endswith("_preview"):
+                continue
+            calls = [n for n in ast.walk(module)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                     and n.func.id == func.name]
+            if not calls:
+                offenders.append(f"{name}.{func.name}")
+    assert not offenders, (
+        f"provider(s) {offenders} are registered but never called by their own "
+        f"tab, so the run and the preview are two expressions of the settings"
+    )
+
+
+def test_every_step_resolves_user_overrides():
+    """Source guard: a run must never assemble builtin text directly.
+
+    ``genes.marker_plot`` did. It passed ``template=builtin_assemble(...)``,
+    which by design cannot see an override path — so that template could be
+    edited, validated and saved in this very tab with no effect, and its
+    provenance nodes carried no ``template_id`` for the notebook banner or
+    ``verify_notebook``'s ``stock_templates`` to notice. Every other call site
+    splatted ``step_template``; nothing checked.
+    """
+    import ast
+
+    #: Not run sites. The Templates tab renders a spec it has already resolved,
+    #: and the ``_*_template`` helpers exist so tests can pin the *shipped* text
+    #: without reading the developer's own overrides.
+    allowed_builtin_callers = {"_preview"}
+
+    offenders = []
+    for name, source in _tab_sources().items():
+        module = ast.parse(source)
+        for node in ast.walk(module):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "Step"):
+                continue
+            explicit = [kw for kw in node.keywords if kw.arg == "template"]
+            splatted = [kw for kw in node.keywords if kw.arg is None]
+            enclosing = _enclosing_function(module, node)
+            if enclosing in allowed_builtin_callers:
+                continue
+            if explicit:
+                offenders.append(
+                    f"{name}: Step(template=...) in {enclosing}() — use "
+                    f"**step_template(id, blocks) so user overrides apply"
+                )
+            elif not any("step_template" in ast.unparse(kw.value)
+                         or "_resolved" in ast.unparse(kw.value) for kw in splatted):
+                offenders.append(
+                    f"{name}: Step(...) in {enclosing}() gets its template from "
+                    f"neither step_template nor _resolved"
+                )
+    assert not offenders, "\n".join(offenders)
+
+
+def _enclosing_function(module, target) -> str:
+    """Name of the innermost function containing *target*, or '<module>'."""
+    import ast
+
+    best = "<module>"
+    for node in ast.walk(module):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(child is target for child in ast.walk(node)):
+                best = node.name
+    return best
+
+
+# ── the providers, actually called ───────────────────────────────────────────
+
+#: Tabs that register a provider, and can be built against the stub context
+#: below. ``tab_cnv`` is here too — its provider covers inferCNV only, since
+#: CopyKAT runs detached in another conda env and stays on ``record_node``.
+_PROVIDER_TABS = (
+    "tab_clustering", "tab_gene_analysis", "tab_nhood", "tab_co_occurrence",
+    "tab_ligrec", "tab_gene_correlation", "tab_marker_genes", "tab_roi",
+    "tab_cnv",
+)
+
+
+@pytest.fixture
+def stub_ctx():
+    """Enough ``ViewerContext`` to build a tab and ask its provider.
+
+    A stand-in rather than the real thing, which needs a napari viewer and a
+    loaded dataset. It has to mirror the real contract closely, though —
+    ``get_labels_for`` returns ``{}`` and not ``None`` because ``_helpers``
+    guarantees a dict, and two tabs index it during ``build_tab``.
+    """
+    anndata = pytest.importorskip("anndata")
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+
+    n = 40
+    adata = anndata.AnnData(
+        np.random.default_rng(0).poisson(3, (n, 8)).astype("float32"))
+    adata.obs_names = [f"c{i}" for i in range(n)]
+    adata.var_names = [f"Gene{i}" for i in range(8)]
+    series = pd.Series(np.arange(n) % 3, index=adata.obs_names, name="leiden_r1.0")
+    adata.obs["leiden_r1.0"] = pd.Categorical(series.astype(str))
+
+    return SimpleNamespace(
+        viewer=None, adata=adata, sdata=None, state={}, he_state={}, arms_state={},
+        clusterings={"leiden_r1.0": series}, clustering_names=["leiden_r1.0"],
+        gene_names=list(adata.var_names), data_path="/tmp/xv-not-written",
+        pixel_size=0.2125, color_manager=SimpleNamespace(adata=adata),
+        roi_layer=None, dataset_generation=0, no_cache=False,
+        segmentation_source="xenium",
+        gene_widget=SimpleNamespace(value="Gene0"),
+        filter_check=SimpleNamespace(value=False),
+        clustering_widget=SimpleNamespace(value="leiden_r1.0"),
+        get_selected_cluster_ids=lambda: [],
+        get_cluster_filter=lambda: None,
+        get_labels_for=lambda key: {},
+        refresh_clustering_choices=lambda *a, **k: None,
+        record_clustering=lambda *a, **k: None,
+        record_preamble=lambda *a, **k: None,
+        record_node=lambda *a, **k: None, record_code=lambda *a, **k: None,
+        set_status=lambda *a, **k: None, run_step=lambda step: {},
+        ensure_normalized=lambda: adata, ensure_spatial_neighbors=lambda k: None,
+        reload_dataset=None, external_images_state=[], patch_overlays_state=[],
+    )
+
+
+@pytest.fixture
+def live_providers(qapp, stub_ctx):
+    """Every provider the real tabs register, with the widgets they read alive.
+
+    The returned widgets are held for the lifetime of the fixture on purpose:
+    a provider closes over magicgui widgets, and once Qt has collected the tab
+    the C++ objects behind them are gone — every provider then raises, which
+    ``_preview`` catches and turns into a silent fall back to sample values.
+    That is precisely the failure this test exists to see.
+    """
+    import importlib
+
+    held = []
+    for name in _PROVIDER_TABS:
+        module = importlib.import_module(f"xenium_viewer.tabs.{name}")
+        held.append(module.build_tab(stub_ctx))
+    return stub_ctx.state.get("template_preview", {}), held
+
+
+def test_every_registered_provider_answers(live_providers):
+    """The gate above proves a provider is registered; this proves it works.
+
+    ``_preview`` swallows a provider that raises and shows sample values
+    instead — right for a half-built tab, and indistinguishable from a provider
+    that is quietly broken. So call each one for real.
+    """
+    providers, _held = live_providers
+    # Every template is accounted for, so this check covers the registry rather
+    # than whichever tabs happened to build. Without it, a tab dropped from
+    # _PROVIDER_TABS would take its provider out of the live check silently
+    # while the source-level gate above still passed.
+    uncovered = sorted(set(builtin_ids()) - set(providers) - set(_NO_PROVIDER))
+    assert not uncovered, (
+        f"template(s) {uncovered} are neither exercised here nor exempt — add "
+        f"the owning tab to _PROVIDER_TABS"
+    )
+    failures = {}
+    for template_id, provider in providers.items():
+        try:
+            provider()
+        except Exception as exc:                        # noqa: BLE001 — reporting
+            failures[template_id] = f"{type(exc).__name__}: {exc}"
+    assert not failures, (
+        f"provider(s) raised, so their preview silently degrades to sample "
+        f"values: {failures}"
+    )
+
+
+def test_a_provider_selects_a_declared_assembly(live_providers):
+    """Blocks a provider names must be ones the template declares.
+
+    The same property ``test_template_registry`` asserts of the Python block
+    selectors, now that the provider is what the call site actually uses.
+    """
+    providers, _held = live_providers
+    for template_id, provider in providers.items():
+        blocks = tuple(provider().blocks)
+        assemblies = builtin_spec(template_id).assemblies
+        assert blocks in assemblies, (
+            f"{template_id}: provider selects {blocks}, which is not one of the "
+            f"declared assemblies {assemblies}"
+        )
+
+
+def test_a_provider_renders_the_template_it_selected(ctx, live_providers):
+    """End to end: provider -> _preview -> a real rendered string.
+
+    Not sample values, and not an error message — the two things the pane shows
+    when something upstream has gone wrong.
+    """
+    from xenium_viewer.tabs.tab_templates import _preview
+
+    providers, _held = live_providers
+    ctx.state["template_preview"] = providers
+    for template_id, provider in providers.items():
+        spec = builtin_spec(template_id)
+        shown = _preview(ctx, spec, spec.assemblies[0])
+        assert shown.startswith("# preview — current widget values"), (
+            f"{template_id}: fell back to sample values\n{shown}"
+        )
+        # Parses as Python: the preview claims to be the string handed to exec.
+        compile(shown, f"<preview:{template_id}>", "exec")
 
 
 def test_the_contract_block_reports_the_declared_interface(tab):

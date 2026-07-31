@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 
 from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
 from xenium_viewer.utils.spatial_analysis import make_ligrec_plot
-from xenium_viewer.utils.step_templates import builtin_assemble, step_template as _resolved
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_assemble, step_template as _resolved,
+)
 
 
 # Executed and recorded from one string. Two things the old recorded cell got
@@ -89,12 +91,50 @@ def build_tab(ctx: ViewerContext) -> tuple:
     lr_export_means_button = PushButton(label="Export Means CSV...", enabled=False)
     lr_export_pvals_button = PushButton(label="Export P-values CSV...", enabled=False)
 
+    def _ligrec_preview() -> Preview:
+        """What "Run L-R Analysis" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane. The database checkboxes select blocks
+        *and* fill params, which is precisely why both halves belong together:
+        ticking one changes the shape of the code, not only a value in it.
+
+        Enum *names*, not the members: params must render as literals, and the
+        template reconstructs them via ``InteractionDataset[name]``.
+        """
+        include = []
+        if lr_ds_omnipath.isChecked():
+            include.append("OMNIPATH")
+        if lr_ds_ligrecextra.isChecked():
+            include.append("LIGREC_EXTRA")
+        if lr_ds_pathwayextra.isChecked():
+            include.append("PATHWAY_EXTRA")
+        if lr_ds_kinaseextra.isChecked():
+            include.append("KINASE_EXTRA")
+        resources = "CellPhoneDB" if lr_cpdb_only.isChecked() else None
+
+        params = {
+            "cluster_key": lr_clustering_widget.value,
+            "n_perms": coerce(lr_perms_slider.value),
+            "threshold": 0.01,
+            "seed": 42,
+        }
+        if include:
+            params["include"] = include
+        if resources is not None:
+            params["resources"] = resources
+        return Preview(
+            _ligrec_blocks(bool(include), resources is not None), params)
+
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _ligrec_preview
+
     def on_run_ligrec():
         lr_status.value = "Running L-R analysis..."
         lr_run_button.enabled = False
 
-        clustering_key = lr_clustering_widget.value
-        n_perms = lr_perms_slider.value
+        blocks, params, _ = _ligrec_preview()
+        clustering_key = params["cluster_key"]
+        n_perms = params["n_perms"]
         n_neighs = lr_neighs_slider.value
         # Build interactions description for code recording
         ds_names = []
@@ -114,38 +154,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         }
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        # Enum *names*, not the members: params must render as literals, and
-        # the template reconstructs them via ``InteractionDataset[name]``.
-        include = []
-        if lr_ds_omnipath.isChecked():
-            include.append("OMNIPATH")
-        if lr_ds_ligrecextra.isChecked():
-            include.append("LIGREC_EXTRA")
-        if lr_ds_pathwayextra.isChecked():
-            include.append("PATHWAY_EXTRA")
-        if lr_ds_kinaseextra.isChecked():
-            include.append("KINASE_EXTRA")
-        resources = "CellPhoneDB" if lr_cpdb_only.isChecked() else None
-
         # The clustering must exist as a node, and in adata.obs, before a step
         # can declare it as a dependency and read it. Both on the GUI thread.
         ctx.record_clustering(clustering_key)
         add_clustering_to_obs(_adata, _adata, ctx.clusterings[clustering_key], clustering_key)
 
-        params = {
-            "cluster_key": clustering_key,
-            "n_perms": coerce(n_perms),
-            "threshold": 0.01,
-            "seed": 42,
-        }
-        if include:
-            params["include"] = include
-        if resources is not None:
-            params["resources"] = resources
-
         step = Step(
             id=f"ligrec:{clustering_key}",
-            **_resolved(TEMPLATE_ID, _ligrec_blocks(bool(include), resources is not None)),
+            **_resolved(TEMPLATE_ID, blocks),
             params=params,
             deps=[f"clustering:{clustering_key}", "spatial_neighbors"],
             kind=ARTIFACT,

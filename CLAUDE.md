@@ -278,14 +278,30 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   section and a `stock_templates` bool.
 
   **Tools → Templates** (`tabs/tab_templates.py`) shows the contract, **Default (read-only)
-  beside Yours (editable)**, a live preview of the exact string that would be `exec`'d —
-  rendered via `Step.render()` with the owning tab's real widget values when it registers a
-  provider in `ctx.state["template_preview_params"]` (see `_leiden_params` in
-  `tab_clustering.py`, the single expression both the run and the preview call) — plus
+  beside Yours (editable)**, a live preview of the exact string that would be `exec`'d, plus
   Validate / Save / Revert and a problems list. **Save never refuses**; activation is what is
   gated, and an invalid file is simply rejected by the resolver.
 
-  Three rules that exist because each was once broken:
+  **The preview is rendered from the owning tab's `Preview(blocks, params, note="")`**
+  (`step_templates/spec.py`), registered in `ctx.state["template_preview"]` — and *the tab's
+  own callback runs from the same call* (`_leiden_preview` in `tab_clustering.py` is the
+  worked example). **Blocks travel with the params**: block selection lives at the call site
+  by design, so a params-only provider left the pane pinned to `assemblies[0]` — the numbers
+  tracked the widgets while the code shape did not. `note` names a value that cannot come
+  from a widget yet (a save-dialog path renders as the filename the dialog would propose and
+  the header says so), and a provider must stay **read-only** — no `makedirs`, no
+  `record_clustering` — since drawing a pane must not have side effects.
+
+  Twelve of fourteen templates have a provider. The two exemptions are declared in
+  `tests/test_tab_templates.py::_NO_PROVIDER` with their reasons: `normalize` takes no params,
+  and `spatial_neighbors` takes `k` from whichever tab called `ensure_spatial_neighbors`, so
+  it uses the `# sample-params:` header field instead. Four gates, each verified against the
+  defect it describes: every template has a provider or an exemption; every provider is
+  *called* by its own tab; every provider **answers** when invoked against a live tab (a
+  raising provider is otherwise invisible — `_preview` catches it and shows sample values,
+  exactly as it should for a half-built tab); and every provider selects a declared assembly.
+
+  Four rules that exist because each was once broken:
   **(a) A template may only reference `EXECUTOR_BASE_NAMES`** (`utils/step_templates/namespace.py`:
   `sc sq pd np plt Path data_path sdata adata`) plus names a declared dependency binds.
   `_get_executor` calls `check_base_namespace` on the dict it built, so the set validation
@@ -302,6 +318,14 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   template from that check. Two did (`$n_suffix`, `$dpi_kwarg`); both are now whole-line block
   variants, and `tests/test_template_placeholders.py` is a source guard against the idiom
   returning.
+  **(d) A run site gets its template from `step_template`, never `builtin_assemble`.**
+  `builtin_*` cannot see an override path — which is what makes the pinning tests immune to a
+  developer's own config, and what silently disabled customisation for `genes.marker_plot`,
+  the one call site that used it. That template could be edited, validated and saved with no
+  effect, and its nodes carried no `template_id` for the notebook banner or `stock_templates`
+  to notice. `tests/test_tab_templates.py::test_every_step_resolves_user_overrides` parses
+  every `Step(...)` in every tab; `tab_templates._preview` is the one exemption, since it
+  renders a spec it has already resolved.
 
   `ProvNode`/`Step` also carry `template_id` / `template_origin` / `template_hash`.
   `code` still records what ran, so replay is unaffected; the fields let a reader tell a stock

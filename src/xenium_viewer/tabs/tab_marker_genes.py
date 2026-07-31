@@ -12,7 +12,9 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.steps import Step, StepError
-from xenium_viewer.utils.step_templates import builtin_assemble
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_assemble, step_template as _resolved,
+)
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -53,6 +55,14 @@ def _marker_plot_blocks(plot_name: str, relabel: bool, dpi: bool) -> list[str]:
 
 
 def _marker_plot_template(plot_name: str, relabel: bool, dpi: bool) -> str:
+    """The *shipped* text for these options. Tests pin this.
+
+    ``builtin_assemble`` is right here and wrong at the call site: a test that
+    asserts what the shipped template says must not read the developer's own
+    overrides. The run below goes through ``step_template`` instead — reading
+    builtin text there meant a user could edit this template, validate it, save
+    it, and watch nothing change.
+    """
     return builtin_assemble(
         TEMPLATE_ID, _marker_plot_blocks(plot_name, relabel, dpi))
 
@@ -136,6 +146,82 @@ def build_tab(ctx: ViewerContext) -> tuple:
         )
         return path or None
 
+    def _display_categories(clustering_key: str) -> list | None:
+        """Cluster display names as a literal list, or None if unnamed.
+
+        Reads ``adata.obs`` when the clustering has been mirrored there and the
+        stored series otherwise, so the preview can answer before a run has put
+        the column in place.
+        """
+        labels = ctx.get_labels_for(clustering_key)
+        if not labels:
+            return None
+        obs = ctx.adata.obs if ctx.adata is not None else None
+        if obs is not None and clustering_key in obs:
+            column = obs[clustering_key]
+            source = (column.cat.categories if hasattr(column, "cat")
+                      else sorted(column.unique()))
+        else:
+            series = ctx.clusterings.get(clustering_key)
+            if series is None:
+                return None
+            source = sorted(series.unique())
+        categories = []
+        for c in source:
+            try:
+                label = labels.get(int(c), labels.get(c, c))
+            except (ValueError, TypeError):
+                label = labels.get(c, c)
+            categories.append(str(label))
+        return categories
+
+    def _marker_preview(plot_name: str = None, marker_dict: dict = None,
+                        path: str = None) -> Preview:
+        """What one of the five plot buttons would run, as the widgets stand.
+
+        One expression of the current settings, called by ``_run_plot`` with the
+        values it has validated, and by the Templates tab's preview pane with
+        none — five buttons share this callback, so the pane shows the last one
+        run (a dotplot until something else has been). The blocks belong with the
+        params: the plot type *is* a block, and so is the presence of the dpi
+        argument, so a params-only preview would show the wrong call.
+
+        ``path`` only exists once the save dialog has returned, so the preview
+        shows the filename that dialog would propose and says so in its note.
+        """
+        plot_name = plot_name or state.get("_mg_last_plot") or MARKER_PLOTS[0]
+        fmt = fmt_widget.value.lower()
+        if marker_dict is None:
+            # Best effort and side-effect free: the pane must render whatever is
+            # in the box, without the status messages and state writes that
+            # _parse_marker_dict owes the user when they press a button.
+            try:
+                marker_dict = json.loads(marker_text.toPlainText().strip())
+            except (json.JSONDecodeError, TypeError):
+                marker_dict = None
+            if not isinstance(marker_dict, dict):
+                marker_dict = json.loads(_PLACEHOLDER)
+
+        clustering_key = mg_clustering_widget.value
+        categories = _display_categories(clustering_key) if clustering_key else None
+
+        params = {
+            "plot_name": plot_name,
+            "groupby": clustering_key,
+            "markers": marker_dict,
+            "path": path or f"{plot_name}.{fmt}",
+        }
+        if categories is not None:
+            params["categories"] = categories
+        return Preview(
+            _marker_plot_blocks(plot_name, relabel=categories is not None,
+                                dpi=fmt == "png"),
+            params,
+            note="" if path else "path chosen on save",
+        )
+
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _marker_preview
+
     # ── Generic runner ───────────────────────────────────────────────────
     def _run_plot(plot_name: str):
         """Validate inputs, ask for save path, then run the plot as a Step."""
@@ -155,43 +241,24 @@ def build_tab(ctx: ViewerContext) -> tuple:
             btn.enabled = False
         status_label.value = f"Generating {plot_name}..."
         gen = ctx.dataset_generation
+        state["_mg_last_plot"] = plot_name
 
-        _adata  = ctx.adata
-        _labels = ctx.get_labels_for(clustering_key)
-        _fmt    = fmt_widget.value.lower()
+        _adata = ctx.adata
 
         # The clustering must exist as a node, and in adata.obs, before a step
         # can declare it as a dependency and read it. Both on the GUI thread.
+        # Also before the params are built: the display categories come off the
+        # obs column this puts there.
         from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
         ctx.record_clustering(clustering_key)
         add_clustering_to_obs(_adata, _adata,
                               ctx.clusterings[clustering_key], clustering_key)
 
-        # Display names, resolved here so they render as a literal list.
-        categories = None
-        if _labels:
-            categories = []
-            for c in _adata.obs[clustering_key].cat.categories:
-                try:
-                    label = _labels.get(int(c), _labels.get(c, c))
-                except (ValueError, TypeError):
-                    label = _labels.get(c, c)
-                categories.append(str(label))
-
-        params = {
-            "plot_name": plot_name,
-            "groupby": clustering_key,
-            "markers": marker_dict,
-            "path": path,
-        }
-        if categories is not None:
-            params["categories"] = categories
+        blocks, params, _ = _marker_preview(plot_name, marker_dict, path)
 
         step = Step(
             id=f"plot:markers:{plot_name}:{clustering_key}",
-            template=_marker_plot_template(
-                plot_name, relabel=categories is not None, dpi=_fmt == "png",
-            ),
+            **_resolved(TEMPLATE_ID, blocks),
             params=params,
             deps=["normalize", f"clustering:{clustering_key}"],
             kind=TERMINAL,

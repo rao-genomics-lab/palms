@@ -20,7 +20,9 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, coerce
-from xenium_viewer.utils.step_templates import builtin_assemble, builtin_spec, step_template as _resolved
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_assemble, builtin_spec, step_template as _resolved,
+)
 
 _BACKEND_LABELS = {"infercnv": "inferCNV", "copykat": "CopyKAT"}
 
@@ -811,6 +813,49 @@ def build_tab(ctx: ViewerContext) -> tuple:
             _stop_poll_timer()
 
     # ── Run dispatch ────────────────────────────────────────────────────
+    def _infercnv_preview(reference_key=None, reference_ids=None,
+                          analyze_categories=None) -> Preview:
+        """What an inferCNV run would execute with the widgets as they stand.
+
+        One expression of the current settings, called by ``_run_infercnv`` with
+        the selections it has validated, and by the Templates tab's preview pane
+        with none. Restricting the analysis to a subset of cell types selects a
+        block as well as filling a param, so both halves travel together.
+
+        inferCNV only. CopyKAT runs detached in another conda env and stays on
+        ``record_node`` (its cell says in line that it is a reconstruction), so
+        there is no in-process template for this pane to preview.
+        """
+        if reference_key is None:
+            reference_key = cnv_clustering_widget.value
+            reference_ids = _get_cnv_reference_ids()
+            analyze_ids = _get_cnv_analyze_ids()
+            analyze_categories = (
+                None if not analyze_ids or set(analyze_ids) >= _all_cluster_ids(reference_key)
+                else list(analyze_ids)
+            )
+        from xenium_viewer.utils.cnv_analysis import CNV_REFERENCE_OBS_KEY
+
+        reference_categories = [str(c) for c in (reference_ids or [])]
+        analyze_cats = [str(c) for c in analyze_categories] if analyze_categories else []
+        params = {
+            "reference_clustering": reference_key,
+            "reference_obs_key": CNV_REFERENCE_OBS_KEY,
+            "reference_categories": reference_categories,
+            "n_neighbors": coerce(cnv_n_neighbors.value),
+            "smoothing_neighbors": coerce(cnv_smoothing_neighbors.value),
+            "window_size": coerce(cnv_window_size.value),
+            "step": coerce(cnv_step.value),
+            "lfc_clip": 4.0,
+            "resolution": coerce(cnv_resolution.value),
+        }
+        if analyze_cats:
+            params["include"] = sorted(set(analyze_cats) | set(reference_categories))
+        return Preview(_cnv_blocks(bool(analyze_cats)), params)
+
+    ctx.state.setdefault(
+        "template_preview", {})[CNV_TEMPLATE_ID] = _infercnv_preview
+
     def _run_infercnv(reference_key, reference_ids, analyze_categories):
         from xenium_viewer.utils.cnv_analysis import (
             CNV_REFERENCE_OBS_KEY, _patch_matplotlib_cm_compat,
@@ -827,27 +872,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ctx.record_clustering(reference_key)
         add_clustering_to_obs(_adata, _adata, ctx.clusterings[reference_key], reference_key)
 
-        params = dict(
-            n_neighbors=cnv_n_neighbors.value,
-            smoothing_neighbors=cnv_smoothing_neighbors.value,
-            window_size=cnv_window_size.value,
-            step=cnv_step.value,
-            lfc_clip=4.0,
-            resolution=cnv_resolution.value,
-            n_cores=1,
-        )
-        step_params = {
-            "reference_clustering": reference_key,
-            "reference_obs_key": CNV_REFERENCE_OBS_KEY,
-            "reference_categories": reference_categories,
-            **{k: coerce(v) for k, v in params.items() if k != "n_cores"},
-        }
-        if analyze_cats:
-            step_params["include"] = sorted(set(analyze_cats) | set(reference_categories))
+        blocks, step_params, _ = _infercnv_preview(
+            reference_key, reference_ids, analyze_categories)
+        # The result summary reports the settings back to the user; n_cores is a
+        # runtime detail of this machine, not part of the recorded analysis.
+        params = {k: step_params[k] for k in (
+            "n_neighbors", "smoothing_neighbors", "window_size", "step",
+            "lfc_clip", "resolution")}
+        params["n_cores"] = 1
 
         step = Step(
             id="cnv:infercnv",
-            **_resolved(CNV_TEMPLATE_ID, _cnv_blocks(bool(analyze_cats))),
+            **_resolved(CNV_TEMPLATE_ID, blocks),
             params=step_params,
             deps=[f"clustering:{reference_key}"],
             kind=ARTIFACT,

@@ -15,7 +15,11 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
-from xenium_viewer.utils.step_templates import builtin_spec, builtin_text, step_template as _resolved
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_spec, builtin_text, step_template as _resolved,
+)
+
+TEMPLATE_ID = "spatial.cooccur"
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -119,12 +123,29 @@ def build_tab(ctx: ViewerContext) -> tuple:
     from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
     from xenium_viewer.utils.spatial_analysis import make_co_occurrence_plot
 
+    def _cooccur_preview() -> Preview:
+        """What "Run Co-occurrence" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane.
+        """
+        return Preview(
+            list(builtin_spec(TEMPLATE_ID).blocks),
+            {
+                "cluster_key": co_clustering_widget.value,
+                "interval": coerce(co_interval_slider.value),
+            },
+        )
+
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _cooccur_preview
+
     def on_run_co_occurrence():
         co_status.value = "Running co-occurrence analysis..."
         co_run_button.enabled = False
 
-        clustering_key = co_clustering_widget.value
-        interval = co_interval_slider.value
+        blocks, params, _ = _cooccur_preview()
+        clustering_key = params["cluster_key"]
+        interval = params["interval"]
         state["_co_params"] = {"interval": interval}
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
@@ -135,8 +156,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id=f"cooccur:{clustering_key}",
-            **_resolved("spatial.cooccur", list(builtin_spec("spatial.cooccur").blocks)),
-            params={"cluster_key": clustering_key, "interval": coerce(interval)},
+            **_resolved(TEMPLATE_ID, blocks),
+            params=params,
             deps=[f"clustering:{clustering_key}"],
             kind=ARTIFACT,
             label=f"Co-occurrence: {clustering_key}",

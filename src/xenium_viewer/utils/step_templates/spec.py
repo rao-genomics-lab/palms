@@ -31,11 +31,36 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import NamedTuple, Optional
 
 #: Marker introducing a block in a ``.tmpl`` file. A comment, so the whole file
 #: stays valid Python and the editor's syntax highlighter needs no special case.
 BLOCK_MARKER = "#--- block "
+
+
+class Preview(NamedTuple):
+    """What a tab's button would run *right now*: its blocks and its params.
+
+    Registered by the owning tab in ``ctx.state["template_preview"]`` and called
+    by two places that must not disagree: the tab's own callback, when it builds
+    the :class:`~xenium_viewer.utils.steps.Step`, and the Templates tab, when it
+    renders the preview pane. One expression of "the current settings", so the
+    pane shows the string the button would actually execute rather than a
+    reconstruction of it.
+
+    Both halves are needed. Params alone leave the preview pinned to the
+    template's first declared assembly, so untick a checkbox that selects a
+    different block and the values change while the *shape* does not — which is
+    the half of the question ("what will this run?") that is about structure.
+
+    ``note`` names any value that cannot come from a widget because it does not
+    exist yet — a path the user picks in a save dialog, say. The preview header
+    repeats it, so a placeholder is never shown as though it were settled.
+    """
+
+    blocks: list[str]
+    params: dict
+    note: str = ""
 
 
 @dataclass(frozen=True)
