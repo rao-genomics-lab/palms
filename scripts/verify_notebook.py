@@ -13,9 +13,10 @@ What it does:
 
 1. Reads the provenance graph out of ``<cache>/viewer_session`` attrs. No GUI,
    no napari, no SpatialData load — just zarr attrs.
-2. Derives the notebook with ``notebook_export.write_graph_notebook`` and
-   appends one *injected* cell that dumps the replayed results to disk. That
-   cell is clearly marked and is the only thing added.
+2. Derives the notebook from the graph and appends one *injected* cell that
+   dumps the replayed results to disk. That cell is clearly marked and is the
+   only executable thing added; a customised session also gets the same
+   markdown banner the viewer's own export carries.
 3. Executes the notebook in a fresh kernel with ``allow_errors=False``, timing
    every cell.
 4. Compares the replayed ``adata.obs`` against the clusterings the viewer
@@ -234,13 +235,28 @@ def build_notebook(graph: ProvGraph, work_dir: Path) -> tuple[Path, list]:
 
     The node ids are what makes a failure actionable: nbclient reports a cell
     index, and "cell 4 failed" says nothing about which recorded step is broken.
+    That is why the cells come from ``prov_graph.graph_to_cells`` — it is the one
+    that carries ``node_id`` — and why the customisation banner has to be
+    prepended here rather than being inherited from
+    ``notebook_export.graph_to_cells``, which adds it but returns bare tuples.
+
+    Without this the notebook written to ``--work-dir`` was the one artifact of
+    a customised session that did not say so, while the viewer's own export did.
+    Its ``--out`` report always did; a notebook someone keeps or forwards is
+    exactly where the statement matters most.
     """
     from xenium_viewer.utils.prov_graph import graph_to_cells
     derived = graph_to_cells(graph)
     node_ids = [cell.node_id for cell in derived]
-    node_ids.append(None)  # the injected dump cell belongs to no node
     cells = [(cell.cell_type, cell.source) for cell in derived]
+
+    banner = notebook_export.customisation_banner(graph)
+    if banner:
+        cells.insert(0, ("markdown", banner))
+        node_ids.insert(0, None)   # the banner belongs to no single node
+
     cells.append(("code", _DUMP_CELL.format(out=str(work_dir))))
+    node_ids.append(None)          # nor does the injected dump cell
     nb_path = work_dir / "verify_notebook.ipynb"
     notebook_export.write_notebook(cells, nb_path)
     return nb_path, node_ids

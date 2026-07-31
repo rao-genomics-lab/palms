@@ -41,7 +41,7 @@ path. Editing that template did nothing, and its nodes carried no `template_id`.
 `test_every_step_resolves_user_overrides` now parses every `Step(...)` in every
 tab.
 
-## 2. Verification against a real dataset — done, except the full replay
+## 2. Verification against a real dataset — done
 
 Run 2026-07-31 against a 4104-cell / 477-gene Xenium output, by driving
 `app.run_viewer` with `napari.run` replaced by an inspector that exits before
@@ -77,12 +77,32 @@ one with no `analysis.py`.**
 - **`stock_templates`.** `verify_notebook.template_provenance` on the customised
   graph reports `stock_templates: false, n_customised: 1`, naming the node, its
   template id and hash.
+- **Round-trip — the whole claim, on a customised session.** A real session was
+  saved (Leiden with a forked `tail` block, persisted as `clustering_leiden_verify`,
+  plus rank genes), then `scripts/verify_notebook.py <dataset> --out report.json`:
 
-**Still outstanding:** the full round-trip — `scripts/verify_notebook.py
-<dataset> --out report.json` executing the notebook against the raw Xenium
-output. It needs a session persisted into the zarr `viewer_session` attrs, i.e.
-a real `save_session`, which means writing to a dataset. Do it on a copy.
-`tests/test_notebook_replay.py` covers replay itself on synthetic data.
+  ```
+  Replayed in 26.2s
+    ✓ leiden_verify: ARI = 1.000000 (28 clusters, 4104 cells)
+    ✓ rank genes: top-10 identical in all 28 groups
+    ⚠ 1 of 5 step(s) used customised templates
+        clustering:leiden_verify  (user+builtin, clustering.leiden)
+  ```
+
+  Exit 0, `stock_templates: false`. The exported notebook carries
+  `resolution=1.0 * 2` — the edit — so the customised template travelled into
+  the notebook and reproduced the customised result exactly, which is the point:
+  ARI 1.0 against a *stock* replay would have meant the override was ignored.
+
+This run found one defect, now fixed: `verify_notebook.build_notebook` took its
+cells from `prov_graph.graph_to_cells` (the one carrying `node_id`, which is what
+turns nbclient's "cell 4 failed" into a named step) and so never got the
+customisation banner that `notebook_export.graph_to_cells` adds. The `--work-dir`
+notebook — the artifact most likely to be kept or forwarded — was the only output
+of a customised session that did not say so. Fixed by prepending it explicitly,
+with a matching `None` in `node_ids`: `node_of()` indexes that list by absolute
+cell index, so inserting a cell without shifting it would have misattributed
+every timing in the report.
 
 ## 3. Phase 4b — optional, not started
 

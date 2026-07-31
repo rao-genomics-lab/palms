@@ -3,6 +3,20 @@
 ## [Unreleased] — 2026-07-31
 
 ### Fixed
+- **The verifier's own notebook never said a session was customised.**
+  `scripts/verify_notebook.py` builds its notebook from
+  `prov_graph.graph_to_cells` rather than the `notebook_export` one, because
+  that is the version carrying `node_id` — which is what turns nbclient's
+  "cell 4 failed" into a named step. The customisation banner is added by the
+  other one, so it was silently dropped: the `--work-dir` notebook was the
+  single artifact of a customised session that did not say so, while the
+  viewer's own export and the `--out` report both did, and it is the artifact
+  most likely to be kept or forwarded. Found by running the round-trip on a
+  real dataset. The banner is now prepended explicitly, with a matching `None`
+  in `node_ids` — `node_of()` indexes that list by absolute cell index, so
+  inserting a cell without shifting it would have misattributed every timing in
+  the report. Both halves are guarded by tests.
+
 - **Marker-gene plots ignored user templates entirely.** `tab_marker_genes` built its
   `Step` with `template=builtin_assemble(...)` — the shipped-files-only path, which by
   design cannot see an override directory. So `genes.marker_plot` could be edited,
