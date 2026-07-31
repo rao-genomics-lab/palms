@@ -454,6 +454,50 @@ def test_a_provider_selects_a_declared_assembly(live_providers):
         )
 
 
+def test_toggling_a_real_widget_changes_the_previews_shape(ctx, qapp, stub_ctx):
+    """The end of the chain, driven through actual magicgui widgets.
+
+    Every other test here hands ``_preview`` a stub provider. This one toggles
+    the two checkboxes a user toggles and reads the rendered source, which is
+    the only way to see the whole path — widget, provider, block selector,
+    resolver, ``Step.render`` — agree. It is the property that was broken:
+    the pane rendered ``assemblies[0]`` whatever the checkboxes said.
+    """
+    from qtpy.QtWidgets import QCheckBox
+
+    from xenium_viewer.tabs import tab_clustering
+    from xenium_viewer.tabs.tab_templates import _preview
+
+    held, _exports = tab_clustering.build_tab(stub_ctx)  # held: Qt collects it
+    spec = builtin_spec("clustering.leiden")
+    ctx.state["template_preview"] = stub_ctx.state["template_preview"]
+
+    # Found through *this* tab's widget tree, not by scanning live objects: an
+    # earlier test in this file builds the same tab against another context, and
+    # a global scan picks up whichever copy it happens to reach — the toggles
+    # then land on a tab no provider is reading.
+    boxes = {"Use HVGs only": None, "Scale (max_value=10)": None}
+    for native in held.findChildren(QCheckBox):
+        magic = getattr(native, "_magic_widget", None)
+        if magic is not None and getattr(magic, "label", None) in boxes:
+            boxes[magic.label] = magic
+    assert all(boxes.values()), f"checkbox labels moved: {boxes}"
+
+    for use_hvg in (False, True):
+        for do_scale in (False, True):
+            boxes["Use HVGs only"].value = use_hvg
+            boxes["Scale (max_value=10)"].value = do_scale
+            # assemblies[0] is passed deliberately: the provider's blocks must
+            # override it, so a regression here shows up as a fixed shape.
+            shown = _preview(ctx, spec, spec.assemblies[0])
+            assert shown.startswith("# preview — current widget values")
+            assert ("highly_variable_genes" in shown) is use_hvg
+            assert ("sc.pp.scale" in shown) is do_scale
+            # PCA is recomputed only when the gene set or the scaling changed.
+            assert ("sc.pp.pca(adata_leiden" in shown) is (use_hvg or do_scale)
+            compile(shown, "<preview>", "exec")
+
+
 def test_a_provider_renders_the_template_it_selected(ctx, live_providers):
     """End to end: provider -> _preview -> a real rendered string.
 
