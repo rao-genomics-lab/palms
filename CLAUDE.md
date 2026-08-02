@@ -49,7 +49,11 @@ needed** — `tests/conftest.py` selects `QT_QPA_PLATFORM=offscreen` and
 without a platform plugin, it aborts the process: the symptom is
 `Aborted (core dumped)` with no test name, which is what CI reported for months.
 An explicit `QT_QPA_PLATFORM` or a real display still wins, so a desktop run is
-unchanged. GitHub Actions
+unchanged. On a desktop the platform stays unset, which is why
+`reporting._headless()` does not rely on it alone: it also checks
+`QThread.loopLevel()`, since a `pytest` process has a `QApplication` but no event
+loop, and a modal `exec_()` there blocks forever with nothing to dismiss it.
+GitHub Actions
 (`.github/workflows/ci.yml`) runs the suite in the full conda env plus a fast `ruff`
 error-only lint gate (`--select E9,F63,F7,F82`) on every push/PR. The napari GUI proper
 and the spatial-analysis tabs still have no automated coverage — that testing remains
@@ -112,6 +116,7 @@ never call it from inside a worker that holds a reference to a tab.
 | `transcript_index.py` | Per-gene feather loader |
 | `session.py` | Zarr-based session persistence (ROIs, H&E/ARMS registration, clusterings, DEG results, provenance graph) |
 | `prov_graph.py` | Provenance DAG for reproducible code — nodes/deps, upsert+staleness, topo-sort, cells/script/mermaid/dot rendering |
+| `step_templates/` | The text of every analysis template, as `builtin/*.tmpl`. `spec.py` (TemplateSpec/BlockSpec/ParamSpec), `loader.py` (parse + `builtin_*`), `namespace.py` (`EXECUTOR_BASE_NAMES`) |
 | `notebook_export.py` | Build/write/read `.ipynb` (nbformat) from the graph |
 | `dag_view.py` | Matplotlib+networkx render of the provenance DAG |
 | `umap_widget.py` | Separate linked napari window for UMAP scatter |
@@ -228,6 +233,105 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   `{...}` literals survive; execution is serialised and proceeds statement-by-statement
   so progress can be reported without changing the compiled source. Failures raise
   `StepError` naming the step, and nothing is recorded for a step that did not succeed.
+
+  **Template text lives in `utils/step_templates/builtin/*.tmpl`, not in the tab modules.**
+  A template is an ordered dict of *named blocks*; the `.tmpl` header declares the contract
+  (`params`, `requires`, `outputs`, `assemblies`, `frozen-blocks`) and everything structural
+  is a comment, so the file is valid Python. **The call site owns which blocks are selected;
+  the registry owns their text** — the branch structure *is* what the widgets mean
+  (`use_hvg or do_scale` → the `pca` block), so selection stays in Python. The tab modules'
+  private constants (`_leiden_template`, `_NORMALIZE_TEMPLATE`, …) still exist, bound through
+  `builtin_text`/`builtin_assemble`, which read only shipped files via `importlib.resources`
+  and cannot see an override path — that is what keeps the six template-pinning test modules
+  passing unchanged. `tests/test_template_registry.py` runs the `check_step` lint over every
+  template × every declared assembly (40 renderings), which is where the five hand-written
+  `check_step` calls became a registry-wide gate.
+
+  **Users can override a template**, per user, in `~/.config/xenium-viewer/templates/*.tmpl`
+  — **resolved per block**, so blocks the user did not touch keep tracking the shipped
+  template and still receive upstream fixes. `loader.resolve()` never raises and never
+  returns nothing: an invalid override is skipped, the builtin is used, and the problems ride
+  along on the `ResolvedTemplate` for the GUI to surface (plus a once-per-session napari
+  warning via `reporting.report_template_rejected`). Call sites use
+  `step_template(id, blocks)`, which returns the text **and** its provenance stamp together
+  — a stamp fetched separately could describe a different resolution than the text it labels.
+  `validate.py` is the gate; the check that matters most is that a **required param the
+  template no longer mentions is a hard stop**, because that template runs, succeeds, and
+  silently ignores the user's setting. Two off switches: `--no-user-templates` and
+  `XENIUM_VIEWER_TEMPLATE_PATH` (emptied by `tests/conftest.py`, so a dev's own overrides
+  never change what the suite asserts). Saving derives its destination from the same search
+  path reading uses, so a write cannot land where the reader does not look.
+
+  **Upgrades.** `overrides.json` records the hash of the *shipped* text each overridden block
+  was forked from. The `dpkg` "unmodified conffile" case needs no logic — an untouched block
+  is simply absent from the file, so it already tracks upstream. Only a block the user changed
+  can conflict: `ResolvedTemplate.stale_blocks` / `.needs_review` flag it, the edit still
+  applies, and the tab offers a two-way diff plus "Take new default" for the moved blocks only.
+  A conflict that no longer validates is deactivated instead of flagged. Missing/corrupt
+  manifest ⇒ not flagged, deliberately: prompting on every override after every upgrade with
+  nothing specific to point at trains people to dismiss the warning.
+
+  **Downstream visibility.** `notebook_export.customisation_banner` prepends one markdown cell
+  when any node's `template_origin != builtin` (in `notebook_export.graph_to_cells`, *not*
+  `prov_graph`'s, so `analysis.py` and the replay test's verbatim-code-cell property are both
+  unaffected). `scripts/verify_notebook.py::template_provenance` adds a `templates` report
+  section and a `stock_templates` bool.
+
+  **Tools → Templates** (`tabs/tab_templates.py`) shows the contract, **Default (read-only)
+  beside Yours (editable)**, a live preview of the exact string that would be `exec`'d, plus
+  Validate / Save / Revert and a problems list. **Save never refuses**; activation is what is
+  gated, and an invalid file is simply rejected by the resolver.
+
+  **The preview is rendered from the owning tab's `Preview(blocks, params, note="")`**
+  (`step_templates/spec.py`), registered in `ctx.state["template_preview"]` — and *the tab's
+  own callback runs from the same call* (`_leiden_preview` in `tab_clustering.py` is the
+  worked example). **Blocks travel with the params**: block selection lives at the call site
+  by design, so a params-only provider left the pane pinned to `assemblies[0]` — the numbers
+  tracked the widgets while the code shape did not. `note` names a value that cannot come
+  from a widget yet (a save-dialog path renders as the filename the dialog would propose and
+  the header says so), and a provider must stay **read-only** — no `makedirs`, no
+  `record_clustering` — since drawing a pane must not have side effects.
+
+  Twelve of fourteen templates have a provider. The two exemptions are declared in
+  `tests/test_tab_templates.py::_NO_PROVIDER` with their reasons: `normalize` takes no params,
+  and `spatial_neighbors` takes `k` from whichever tab called `ensure_spatial_neighbors`, so
+  it uses the `# sample-params:` header field instead. Four gates, each verified against the
+  defect it describes: every template has a provider or an exemption; every provider is
+  *called* by its own tab; every provider **answers** when invoked against a live tab (a
+  raising provider is otherwise invisible — `_preview` catches it and shows sample values,
+  exactly as it should for a half-built tab); and every provider selects a declared assembly.
+
+  Four rules that exist because each was once broken:
+  **(a) A template may only reference `EXECUTOR_BASE_NAMES`** (`utils/step_templates/namespace.py`:
+  `sc sq pd np plt Path data_path sdata adata`) plus names a declared dependency binds.
+  `_get_executor` calls `check_base_namespace` on the dict it built, so the set validation
+  checks against and the set execution provides cannot drift — a name in one and not the
+  other passes validation and then fails as a `NameError` on replay, in a clean kernel.
+  **(b) Results come back through declared `outputs`, not by reading `ctx.adata` afterwards.**
+  Reading back worked only while the executor namespace and `ctx.adata` were the same object;
+  `StepExecutor` raises if the template does not bind a declared output, so a template edit
+  that stops producing a result fails loudly instead of returning stale state. Leiden binds
+  `leiden_labels` for exactly this reason.
+  **(c) No template may carry a `$token` that is not a declared param.**
+  `Template.substitute` (not `safe_substitute`) is the only thing checking a template against
+  its params, so stripping a fake token with `str.replace` before `Step` sees it hides the
+  template from that check. Two did (`$n_suffix`, `$dpi_kwarg`); both are now whole-line block
+  variants, and `tests/test_template_placeholders.py` is a source guard against the idiom
+  returning.
+  **(d) A run site gets its template from `step_template`, never `builtin_assemble`.**
+  `builtin_*` cannot see an override path — which is what makes the pinning tests immune to a
+  developer's own config, and what silently disabled customisation for `genes.marker_plot`,
+  the one call site that used it. That template could be edited, validated and saved with no
+  effect, and its nodes carried no `template_id` for the notebook banner or `stock_templates`
+  to notice. `tests/test_tab_templates.py::test_every_step_resolves_user_overrides` parses
+  every `Step(...)` in every tab; `tab_templates._preview` is the one exemption, since it
+  renders a spec it has already resolved.
+
+  `ProvNode`/`Step` also carry `template_id` / `template_origin` / `template_hash`.
+  `code` still records what ran, so replay is unaffected; the fields let a reader tell a stock
+  run from a customised or hand-edited one. They are excluded from `upsert`'s staleness
+  comparison on purpose — they describe where the *same* code came from.
+
   Migrated so far: **Leiden clustering** (`tab_clustering.py`), **normalize**
   (`ctx.ensure_normalized()`, which binds `adata_norm` and replaces the old
   `record_normalize` + `get_normalized_adata` pair), **rank genes**

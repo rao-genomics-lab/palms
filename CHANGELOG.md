@@ -1,8 +1,240 @@
 # Changelog
 
-## [Unreleased] — 2026-07-30
+## [Unreleased] — 2026-07-31
 
 ### Fixed
+- **The verifier's own notebook never said a session was customised.**
+  `scripts/verify_notebook.py` builds its notebook from
+  `prov_graph.graph_to_cells` rather than the `notebook_export` one, because
+  that is the version carrying `node_id` — which is what turns nbclient's
+  "cell 4 failed" into a named step. The customisation banner is added by the
+  other one, so it was silently dropped: the `--work-dir` notebook was the
+  single artifact of a customised session that did not say so, while the
+  viewer's own export and the `--out` report both did, and it is the artifact
+  most likely to be kept or forwarded. Found by running the round-trip on a
+  real dataset. The banner is now prepended explicitly, with a matching `None`
+  in `node_ids` — `node_of()` indexes that list by absolute cell index, so
+  inserting a cell without shifting it would have misattributed every timing in
+  the report. Both halves are guarded by tests.
+
+- **Marker-gene plots ignored user templates entirely.** `tab_marker_genes` built its
+  `Step` with `template=builtin_assemble(...)` — the shipped-files-only path, which by
+  design cannot see an override directory. So `genes.marker_plot` could be edited,
+  validated and saved in Tools → Templates with no effect whatsoever, and its provenance
+  nodes carried no `template_id`, leaving them invisible to the notebook's customisation
+  banner and to `verify_notebook`'s `stock_templates`. Every other migrated call site
+  splatted `step_template`; nothing checked that they all did. Now one does
+  (`test_every_step_resolves_user_overrides`), by parsing every `Step(...)` in every tab.
+  `builtin_assemble` remains correct where it is still used — in the `_*_template`
+  helpers the pinning tests read, which must not see a developer's own overrides.
+
+### Changed
+- **The Templates preview now shows what the button would actually run — for every
+  template, in shape as well as in value.** Two gaps, one visible and one not. Only the
+  Clustering tab supplied live parameters, so twelve of fourteen panes read
+  `groupby='sample', n_genes=1`. And the preview always rendered the template's *first
+  declared assembly*, so even Leiden's "real" preview kept the same code shape however
+  the checkboxes were set — untick "use HVGs" and the numbers moved while the statements
+  did not.
+
+  Both follow from the same contract. A tab now registers a `Preview(blocks, params)`
+  in `ctx.state["template_preview"]`, and **its own callback runs from that same
+  call** — so the blocks selected and the parameters passed are one expression, not two
+  that agree by discipline. Block selection has to be in there: the branch structure *is*
+  what the widgets mean, which is exactly why it stays in Python and cannot be re-derived
+  by the pane. Twelve templates have a provider; the two that do not are declared, with
+  their reasons — `normalize` takes no params, and `spatial_neighbors` takes its `k` from
+  whichever tab called it, so it gets a realistic literal from a new `# sample-params:`
+  header field instead of a provider that would have to pick a slider arbitrarily.
+
+  `note` covers the values that cannot come from a widget because they do not exist yet:
+  a save-dialog path renders as the filename the dialog would propose, and the header
+  says `(path chosen on save)` rather than showing a placeholder as settled.
+
+  Guarded four ways, each of which caught a real defect when tried against it: every
+  template has a provider or a declared exemption; every provider is *called* by its own
+  tab rather than shadowed by a second inline dict; every provider actually answers when
+  invoked against a live tab (a raising provider is otherwise indistinguishable from a
+  half-built one, since `_preview` catches it and shows sample values); and every
+  provider selects a block sequence the template declares.
+
+## [Unreleased] — 2026-07-30
+
+### Added
+- **A customised template survives an upgrade, and says when it needs a second look.**
+  This is the `dpkg` conffile problem, and most of it turned out to be already solved by the
+  shape of the storage rather than by logic: an override records *only* the blocks the user
+  changed, so every other block resolves against whatever the current release ships. The
+  "unmodified file, replace silently" case `dpkg` has to detect **cannot arise here** — there
+  is nothing to detect, and no prompt to dismiss.
+
+  What is left is the genuinely hard case: a block the user *did* change whose shipped version
+  has since changed too. `overrides.json` records the hash of the **shipped** text each block
+  was forked from — of the shipped text, not the user's, because the question a later release
+  must answer is "has the thing they diverged from moved?". The edit still applies; silently
+  reverting someone's method would be far worse. But it is badged `⚠ review`, with a two-way
+  diff of theirs against the new default and a **Take new default** button that updates only
+  the blocks that moved, leaving their other customisations intact. Saving again is itself the
+  act of reviewing, and clears the flag. No three-way auto-merge: its conflict markers land in
+  Python source, where a stray `<<<<<<<` is a syntax error rather than a visible annotation.
+
+  A conflict that no longer *validates* — a release drops a param the forked block still
+  references — is deactivated outright rather than flagged, since there is nothing to review.
+  A corrupt or missing manifest costs the warning, not the override: losing bookkeeping must
+  not lose the user's work.
+
+- **Customisation is visible downstream, not just in the tab.** The exported notebook gains
+  one markdown banner at the top when any step used a non-shipped template, naming the steps,
+  their template ids and hashes — because a customised template renders to code that looks
+  entirely ordinary, so the source alone cannot tell a reader this is not the stock pipeline.
+  `hand-edited` is called out separately as the one origin whose code may not describe what
+  produced the result. `scripts/verify_notebook.py` gains a `templates` section with per-step
+  origin and hash plus a top-level `stock_templates` bool, and prints it: replay agreement
+  proves reproducibility, not that the pipeline was the standard one.
+
+- **Analysis templates can now be customised, per user.** An edited template is used both
+  by the GUI and by the recorded notebook — which needs no special machinery, because the
+  Step system already renders one string and hands it to both.
+
+  Overrides live in `~/.config/xenium-viewer/templates/*.tmpl` (`platformdirs`, so
+  `XDG_CONFIG_HOME` is respected) and are **resolved per block**. That is the load-bearing
+  choice, not a tidiness one: most of a fork is text the user never touched, so those blocks
+  keep tracking the shipped template and a later fix to them still reaches everyone who
+  customised a *different* part. Whole-file override would freeze the entire template at the
+  version it was forked from, which is how someone quietly stops receiving a correctness fix.
+  Saving writes only the blocks that actually differ, so this is the default rather than
+  something the user has to think about.
+
+  **Nothing is trusted without validation** (`step_templates/validate.py`, which promotes
+  `check_step`/`free_names` from test-only helpers to a production gate). Per legal assembly:
+  it must render, parse, read only names the executor guarantees or the template declares,
+  bind every output it claims, and leave frozen blocks alone. The check weighted most heavily
+  is that **a required param the template no longer mentions is a hard stop** — that template
+  would run, report success, and silently ignore a setting the user chose, which is far worse
+  than a crash. Explicitly *not* a security boundary, and the module says so: a user can
+  already run arbitrary Python in the Notebook tab.
+
+  **A refused override is loud and never fatal.** It is skipped, the shipped template runs, a
+  napari warning fires once per template per session, the Cache tab's health line mentions it,
+  and Tools → Templates badges it `✕ not used`. A broken file must not make the viewer
+  unlaunchable — the user would have no way in to fix it. Two off switches, both load-bearing
+  rather than conveniences: `--no-user-templates` (the first thing to try when a result is in
+  doubt) and `XENIUM_VIEWER_TEMPLATE_PATH` (which `tests/conftest.py` empties, so a
+  developer's own customisations can never change what the suite asserts).
+
+  Every step now carries `template_id` / `template_origin` / `template_hash` into the
+  provenance graph, so a reader can tell a stock run from a customised one — which rendered
+  source alone cannot show.
+
+  Tools → Templates gained the editing half: **Default (read-only) beside Yours (editable)**,
+  with Validate, Save & Activate, and Revert. **Save never refuses.** Refusing to write would
+  send the user to an external editor and out of the feedback loop; what is gated is
+  *activation*, and that needs no special mechanism — an invalid file on disk is simply
+  rejected by the resolver, which falls back and says so.
+
+  Three bugs found while building this, each by a test rather than in review: the header
+  parser treated an unindented prose line as a continuation of the field above it (so a saved
+  override's own explanatory comment was appended to `schema-version` and failed to parse);
+  the frozen-block annotation was written onto the block-marker line, where anything after the
+  name *is* the name, so editing the CNV Arrow shim silently created a new block instead of
+  the protected one; and saving resolved its destination independently of reading, so the tab
+  tests wrote into the real `~/.config`. Writes now derive their destination from the same
+  search path reads use, so a write cannot land where the reader does not look.
+
+- **Tools → Templates: see what an analysis button will run, before running it.**
+  The source a step executes was only ever recoverable *after* the fact, from the Notebook
+  tab. The text itself lived in 14 private module constants — seven of them assembled by a
+  private function keyed on booleans — so there was no way to ask what a step takes, what it
+  binds, or what it would run with the settings currently on screen.
+
+  Template text now lives in `utils/step_templates/builtin/*.tmpl`: a header declaring the
+  contract (`params`, `requires`, `outputs`, `assemblies`) and one or more named blocks.
+  Everything structural is a comment, so a `.tmpl` is valid Python and the Notebook tab's
+  syntax highlighter works on it unchanged. **The call site still owns which blocks are
+  selected** — the branch structure is what the widgets mean — while the registry owns their
+  text.
+
+  The new tab shows the contract, the shipped source per block, and a live preview of the
+  exact string that would be `exec`'d. The preview is not a reconstruction: it calls
+  `Step.render()`, the same method the executor calls, with the owning tab's real widget
+  values where the tab registers a provider. Leiden's `_leiden_params()` is now the single
+  expression of "the current settings" that both the run and the preview read.
+
+  The migration is provably text-preserving: all 47 template variants were compared against
+  the previous constants and 43 are byte-identical, the other 4 differing only by the
+  `leiden_labels` line added below. `tests/test_template_registry.py` then applies the
+  `check_step` lint — which had existed since the Step system landed but was only ever called
+  from five hand-written tests — to every template in every declared assembly, 40 renderings:
+  each must parse, read only names the executor guarantees or the template declares, bind every
+  output it claims, and never reach back into `xenium_viewer`. It immediately found one real
+  contract error: `markers` was declared required, but `sc.pl.correlation_matrix` ignores
+  `var_names`, so that assembly never referenced it.
+
+### Changed
+- **Groundwork for user-configurable analysis templates (Phase 0).** No user-visible
+  feature yet; four preparatory changes that each stand on their own, ahead of moving the
+  14 private template constants into a registry.
+
+  - `EXECUTOR_BASE_NAMES` (`utils/step_templates/namespace.py`) now declares the names a
+    template may reach for without binding them. `_get_executor` builds its dict and
+    validates it against that declaration, so the set template validation checks against
+    and the set the executor actually provides cannot drift — a name added to one and not
+    the other would pass validation and then fail as a `NameError` on replay, in a clean
+    kernel, long after the fact.
+
+  - **Two templates no longer smuggle a fake `$token` past `Template.substitute`.** The
+    gene-correlation tail carried `$n_suffix` and the marker-plot tail `$dpi_kwarg`, each
+    stripped by `str.replace` *before* `Step` saw the text. Neither could ever become a
+    real param — `$n_suffix` sits inside an f-string, where `repr('')` renders as `''` and
+    breaks the literal — so they were load-bearing punctuation that looked exactly like
+    parameters, and they hid those templates from the one check that validates a template
+    against its declared params. Both are now whole-line block variants. All 26 assembled
+    variants are byte-identical to before; a source guard fails if the idiom returns.
+
+  - **The Leiden step declares its output.** It previously declared none, and the tab read
+    the labels back off `ctx.adata.obs`, which worked only while the executor namespace and
+    `ctx.adata` were the same object — an invariant maintained by hand and invisible to
+    anyone editing the template. The template now binds `leiden_labels` and the tab reads
+    the returned dict, so a template that stops producing labels raises `StepError` instead
+    of silently handing back whatever obs column was left from a previous run.
+
+  - `ProvNode` and `Step` gained `template_id` / `template_origin` / `template_hash`.
+    `code` still records what actually ran, so replay is unaffected; the fields let a
+    *reader* tell a stock run from a customised one, which rendered source cannot show.
+    Old `prov_graph.json` sidecars and zarr session attrs load unchanged (every field but
+    `id`/`code` is read with a default) and register as `builtin`. Template metadata is
+    deliberately excluded from the staleness comparison — it describes where the same code
+    came from, so changing it must not flag downstream results.
+
+### Fixed
+- **`pytest` hung forever on any machine with a display.** The suite stalled in
+  `test_persistence_safety.py::test_a_failed_persist_leaves_the_table_readable` and never
+  returned. `reporting._headless()` decided "nobody can answer a dialog" from
+  `QT_QPA_PLATFORM` alone — but `conftest.py` deliberately leaves that unset when there is
+  a `DISPLAY`, so on a developer desktop every signal it looked at was clear while the
+  process still had no Qt event loop. `QMessageBox.exec_()` starts a *nested* event loop
+  and returns when something dismisses the dialog; with no window manager and no user,
+  nothing ever did. It needed any earlier test to have created the `QApplication`, which is
+  why the file passed in isolation and why CI (no `DISPLAY` → `offscreen` → modal already
+  suppressed) never saw it. The bug outlived the `_headless()` docstring that describes
+  exactly this failure.
+
+  `_headless()` is now the OR of two independent signals: the platform check, plus
+  `_event_loop_running()` — `QThread.loopLevel() > 0` on the main thread, which is readable
+  from a worker and is the direct answer to the question that actually matters ("is anyone
+  processing events", not "is there a screen"). An unexpected Qt error assumes a loop *is*
+  running: a needless dialog beats silence about a save that did not happen. Three tests
+  cover it, including one that runs a real `exec_()` to prove the check does not simply
+  always say "no loop" — which would have suppressed every modal in the real GUI.
+
+- **The Notebook tab presented hand-edited cells as the recorded provenance.**
+  `_reconcile_edits` folded a user's edit of a graph cell into `node.code` at export time
+  **without executing it**, so the exported notebook showed never-run source in the place
+  where every other node guarantees the code that produced the artifact. The node is now
+  marked `hand-edited` and its `template_hash` cleared. The logic moved to a module-level
+  `reconcile_edits(graph, cells)` so it is tested against a real graph rather than
+  reproduced in the test.
+
 - **CI could never run a Qt test: `pytest` aborted with a core dump.** The workflow set
   `MPLBACKEND` but not `QT_QPA_PLATFORM`, and on a runner with no display Qt does not fail
   when it cannot load the `xcb` platform plugin — it calls `abort()`. The whole run died at

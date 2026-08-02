@@ -1,0 +1,172 @@
+"""Every shipped template, in every legal assembly, is well-formed code.
+
+``check_step`` and ``free_names`` have existed in ``utils/steps.py`` since the
+Step system landed, described there as "the CI template lint" — but they were
+only ever called from five hand-written tests covering five templates. This
+module is that lint, applied to the registry: 14 templates and every assembly
+each of them declares, which is 40 concrete renderings rather than 5.
+
+What it establishes, per rendering:
+
+* it parses as Python;
+* every name it *reads* is one the executor namespace guarantees or its own
+  declared ``requires`` — so no template can quietly depend on a leftover from a
+  previous step in a long session, which would replay as a ``NameError``;
+* every name it declares as an output is actually bound at module level;
+* it never reaches back into ``xenium_viewer``, because the notebook has to run
+  without this package installed.
+
+Pure Python — no Qt, no napari. The block *selection* logic lives in the tab
+modules, but the legal sequences are declared in the ``.tmpl`` headers, which is
+what lets this run without importing a tab.
+"""
+
+from __future__ import annotations
+
+import ast
+
+import pytest
+
+from xenium_viewer.utils.step_templates import (
+    EXECUTOR_BASE_NAMES,
+    builtin_ids,
+    builtin_spec,
+)
+from xenium_viewer.utils.steps import Step, check_step
+
+#: (template id, assembly) for every legal rendering the registry declares.
+ALL_ASSEMBLIES = [
+    (tid, assembly)
+    for tid in builtin_ids()
+    for assembly in builtin_spec(tid).assemblies
+]
+
+
+def _ids(case):
+    tid, assembly = case
+    return f"{tid}[{'+'.join(assembly)}]"
+
+
+def _step(tid: str, assembly) -> Step:
+    spec = builtin_spec(tid)
+    return Step(id=f"test:{tid}", template=spec.assemble(assembly),
+                params=spec.synth_params(), template_id=tid)
+
+
+def _module_level_bindings(code: str) -> set[str]:
+    """Names bound by a top-level statement of *code*.
+
+    Conservative in the safe direction: a name bound only inside an ``if`` or a
+    loop body counts as bound, so this can pass something that fails at run time
+    — where ``StepExecutor.run`` catches it — but it never fails something that
+    would have worked.
+    """
+    bound: set[str] = set()
+    for node in ast.parse(code).body:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                bound.add(sub.id)
+            elif isinstance(sub, (ast.Import, ast.ImportFrom)):
+                for alias in sub.names:
+                    bound.add((alias.asname or alias.name).split(".")[0])
+            elif isinstance(sub, (ast.FunctionDef, ast.ClassDef)):
+                bound.add(sub.name)
+    return bound
+
+
+def test_the_registry_is_not_empty():
+    """Guard the guard: a loader returning nothing would pass every test below."""
+    assert len(builtin_ids()) >= 14
+    assert len(ALL_ASSEMBLIES) >= 40
+
+
+@pytest.mark.parametrize("case", ALL_ASSEMBLIES, ids=_ids)
+def test_every_assembly_renders_and_parses(case):
+    tid, assembly = case
+    code = _step(tid, assembly).render()
+    tree = ast.parse(code)
+    assert tree.body, f"{tid} rendered to nothing executable"
+
+
+@pytest.mark.parametrize("case", ALL_ASSEMBLIES, ids=_ids)
+def test_every_assembly_is_self_contained(case):
+    """The promoted ``check_step`` lint, over the whole registry."""
+    tid, assembly = case
+    spec = builtin_spec(tid)
+    available = EXECUTOR_BASE_NAMES | spec.requires
+    missing = check_step(_step(tid, assembly), available)
+    assert missing == set(), (
+        f"{tid}[{'+'.join(assembly)}] reads {sorted(missing)}, which neither the "
+        f"executor namespace nor its declared 'requires' provides. Either add "
+        f"them to the .tmpl's '# requires:' line (if a dependency step binds "
+        f"them) or stop reading them."
+    )
+
+
+@pytest.mark.parametrize("case", ALL_ASSEMBLIES, ids=_ids)
+def test_declared_outputs_are_bound(case):
+    """A declared output the template never binds is a StepError at run time.
+
+    Catching it here means a broken template fails in CI rather than after a
+    ten-minute analysis has already run.
+    """
+    tid, assembly = case
+    spec = builtin_spec(tid)
+    if not spec.outputs:
+        pytest.skip(f"{tid} declares no outputs")
+    bound = _module_level_bindings(_step(tid, assembly).render())
+    assert set(spec.outputs) <= bound, (
+        f"{tid}[{'+'.join(assembly)}] declares outputs "
+        f"{sorted(set(spec.outputs) - bound)} that it does not bind"
+    )
+
+
+@pytest.mark.parametrize("tid", builtin_ids())
+def test_no_template_imports_the_viewer(tid):
+    """The notebook replays from raw Xenium output, without this package."""
+    for block in builtin_spec(tid).blocks.values():
+        assert "xenium_viewer" not in block.text, (
+            f"{tid}/{block.name} reaches back into xenium_viewer; the exported "
+            f"notebook must run without it installed"
+        )
+
+
+@pytest.mark.parametrize("tid", builtin_ids())
+def test_every_declared_param_is_used_somewhere(tid):
+    """A param no assembly references is dead weight in the contract."""
+    spec = builtin_spec(tid)
+    all_text = "".join(b.text for b in spec.blocks.values())
+    unused = {p.name for p in spec.params if f"${p.name}" not in all_text}
+    assert not unused, f"{tid} declares unused params: {sorted(unused)}"
+
+
+@pytest.mark.parametrize("tid", builtin_ids())
+def test_required_params_appear_in_every_assembly(tid):
+    """"Required" has to mean something: optional params are marked with '?'.
+
+    This is the check that most directly protects against a future param being
+    silently ignored — an analysis that runs with a setting having no effect is
+    worse than one that fails.
+    """
+    spec = builtin_spec(tid)
+    for assembly in spec.assemblies:
+        text = spec.assemble(assembly)
+        missing = {n for n in spec.required_params if f"${n}" not in text}
+        assert not missing, (
+            f"{tid}[{'+'.join(assembly)}] omits required params {sorted(missing)}; "
+            f"mark them optional with '?' in the .tmpl header if that is intended"
+        )
+
+
+@pytest.mark.parametrize("tid", builtin_ids())
+def test_no_block_is_comment_only(tid):
+    """A block that renders to comments is a step that silently does nothing.
+
+    ``allow_errors=False`` cannot catch it — the cell runs fine. Only NOTE nodes
+    are allowed to be prose, and none of them come from a template.
+    """
+    spec = builtin_spec(tid)
+    for block in spec.blocks.values():
+        stripped = [ln for ln in block.text.splitlines()
+                    if ln.strip() and not ln.strip().startswith("#")]
+        assert stripped, f"{tid}/{block.name} contains no executable line"

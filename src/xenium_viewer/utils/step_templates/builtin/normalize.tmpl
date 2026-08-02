@@ -1,0 +1,13 @@
+# xenium-viewer template
+# id: normalize
+# schema-version: 1
+# doc: Normalised copy every expression-based analysis reads.
+# requires: sc, adata
+# outputs: adata_norm
+
+#--- block main
+# Normalized copy used by expression-based analyses
+adata_norm = adata.copy()
+sc.pp.normalize_total(adata_norm, target_sum=1e4)
+sc.pp.log1p(adata_norm)
+sc.pp.pca(adata_norm)

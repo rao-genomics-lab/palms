@@ -99,7 +99,18 @@ def _parse_args():
         "--no-cache", action="store_true",
         help="Skip zarr cache, load from raw Xenium output",
     )
+    parser.add_argument(
+        "--no-user-templates", action="store_true",
+        help="Ignore customised analysis templates and run the shipped ones",
+    )
     args = parser.parse_args()
+
+    # Applied before anything resolves a template. This is the first thing to
+    # try when a result is in doubt, so it must not require finding and moving
+    # files — "run it again with --no-user-templates" has to be a one-liner.
+    if args.no_user_templates:
+        from xenium_viewer.utils.step_templates import set_overrides_enabled
+        set_overrides_enabled(False)
 
     if args.data_dir:
         data_path = Path(args.data_dir)
@@ -308,6 +319,7 @@ def _build_control_panel(ctx: ViewerContext):
     from xenium_viewer.tabs.tab_crop_dataset import build_tab as build_crop_dataset_tab
     from xenium_viewer.tabs.tab_dataset import build_tab as build_dataset_tab
     from xenium_viewer.tabs.tab_cache import build_tab as build_cache_tab
+    from xenium_viewer.tabs.tab_templates import build_tab as build_templates_tab
 
     # ── Build Cell Coloring first (creates cross-tab widgets) ────────────
     coloring_widget, coloring_exports = build_cell_coloring_tab(ctx)
@@ -356,6 +368,7 @@ def _build_control_panel(ctx: ViewerContext):
     crop_widget, crop_exports = build_crop_dataset_tab(ctx)
     dataset_widget, dataset_exports = build_dataset_tab(ctx)
     cache_widget, cache_exports = build_cache_tab(ctx)
+    templates_widget, templates_exports = build_templates_tab(ctx)
 
     # ── Mouse hover: show cluster ID in status bar ───────────────────────
     if ctx.cell_labels_layer is not None:
@@ -437,6 +450,7 @@ def _build_control_panel(ctx: ViewerContext):
     tools_tabs.addTab(notebook_widget, "Notebook")
     tools_tabs.addTab(dataset_widget,  "Dataset")
     tools_tabs.addTab(cache_widget,    "Cache")
+    tools_tabs.addTab(templates_widget, "Templates")
 
     for _group in (cells_tabs, genes_tabs, spatial_tabs, images_tabs, tools_tabs):
         _group.setTabPosition(QTabWidget.South)
@@ -455,7 +469,7 @@ def _build_control_panel(ctx: ViewerContext):
         lr_exports, nhood_exports, co_exports, cnv_exports, novae_exports, arms_exports, corr_exports,
         notebook_exports, annot_exports, annot_nhood_exports, annot_dist_exports,
         seg_exports, ext_img_exports, patch_exports, crop_exports,
-        dataset_exports, cache_exports,
+        dataset_exports, cache_exports, templates_exports,
     ]
 
     def restore_session(session):

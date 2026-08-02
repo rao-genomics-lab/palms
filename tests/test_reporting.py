@@ -169,9 +169,81 @@ def test_reporting_never_raises_without_a_gui(tmp_path):
     ("xcb", False), ("wayland", False), ("", False),
 ])
 def test_headless_platforms_are_recognised(monkeypatch, platform, headless):
-    from xenium_viewer.utils.reporting import _headless
+    """The platform axis, with the event-loop axis held open.
+
+    ``_headless`` is now the OR of two independent signals, so isolate this one
+    by asserting a loop is running — otherwise every case would be True and the
+    parametrization would prove nothing.
+    """
+    import xenium_viewer.utils.reporting as reporting
+
     monkeypatch.setenv("QT_QPA_PLATFORM", platform)
-    assert _headless() is headless
+    monkeypatch.setattr(reporting, "_event_loop_running", lambda: True)
+    assert reporting._headless() is headless
+
+
+def test_a_display_without_an_event_loop_is_still_headless(monkeypatch, qapp):
+    """Regression: `pytest` hung on any machine with a real display.
+
+    ``conftest.py`` deliberately leaves ``QT_QPA_PLATFORM`` unset when there is
+    a ``DISPLAY``, so the platform check — the only signal there used to be —
+    saw nothing wrong. But a `pytest` process has no event loop, so the
+    permission modal's ``exec_()`` had nothing to dismiss it and blocked
+    forever. It reproduced deterministically in
+    ``test_persistence_safety.py::test_a_failed_persist_leaves_the_table_readable``
+    once any earlier test had created the QApplication.
+
+    The precondition that matters is not "is there a screen" but "is anyone
+    processing events".
+    """
+    import xenium_viewer.utils.reporting as reporting
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
+    assert reporting._event_loop_running() is False
+    assert reporting._headless() is True
+
+
+def test_a_real_event_loop_is_detected(monkeypatch, qapp):
+    """Guard the guard: the check must not just always say "no loop".
+
+    Otherwise the fix would silently suppress every modal in the real GUI, which
+    is the failure the suppression exists to avoid causing.
+    """
+    from qtpy.QtCore import QTimer
+
+    import xenium_viewer.utils.reporting as reporting
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
+    seen = {}
+
+    def _inside():
+        seen["loop"] = reporting._event_loop_running()
+        seen["headless"] = reporting._headless()
+        qapp.quit()
+
+    QTimer.singleShot(0, _inside)
+    qapp.exec_()
+
+    assert seen["loop"] is True
+    assert seen["headless"] is False, "a real GUI must still get its dialog"
+
+
+def test_the_loop_check_is_conservative_when_qt_cannot_answer(monkeypatch):
+    """An unexpected Qt error must not silence a failed save.
+
+    Suppressing wrongly means the user is told nothing about a save that did not
+    happen; showing wrongly means a dialog they did not need. Prefer the dialog.
+    """
+    import xenium_viewer.utils.reporting as reporting
+
+    class _Boom:
+        @staticmethod
+        def instance():
+            raise RuntimeError("Qt is unhappy")
+
+    import qtpy.QtWidgets as qtw
+    monkeypatch.setattr(qtw, "QApplication", _Boom)
+    assert reporting._event_loop_running() is True
 
 
 def test_no_modal_is_raised_when_qt_is_headless(tmp_path, monkeypatch, qapp):

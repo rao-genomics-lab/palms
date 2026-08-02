@@ -1,0 +1,11 @@
+# xenium-viewer template
+# id: roi.polygons
+# schema-version: 1
+# doc: The ROI polygons drawn in the viewer, inlined as literals.
+# requires: np
+# outputs: roi_polygons
+# params: polygons:list
+
+#--- block main
+# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)
+roi_polygons = [np.array(_p) for _p in $polygons]

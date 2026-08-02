@@ -12,6 +12,11 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_spec, builtin_text, step_template as _resolved,
+)
+
+TEMPLATE_ID = "spatial.nhood"
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -21,13 +26,7 @@ if TYPE_CHECKING:
 # It runs on ``adata_norm`` with the spatial graph the ``spatial_neighbors``
 # step built on that same object; the old recorded cell called
 # ``sq.gr.nhood_enrichment(adata, ...)`` on raw, graph-less counts.
-_NHOOD_TEMPLATE = """
-# Neighborhood enrichment: $cluster_key (n_perms=$n_perms)
-adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
-sq.gr.nhood_enrichment(
-    adata_norm, cluster_key=$cluster_key, n_perms=$n_perms, seed=$seed,
-)
-nhood_zscore = adata_norm.uns[$uns_key]['zscore']"""
+_NHOOD_TEMPLATE = builtin_text("spatial.nhood")
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -58,12 +57,33 @@ def build_tab(ctx: ViewerContext) -> tuple:
     from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
     from xenium_viewer.utils.spatial_analysis import make_nhood_enrichment_plot
 
+    def _nhood_preview() -> Preview:
+        """What "Run Nhood Enrichment" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane. ``n_neighs`` is not here: it belongs to
+        the ``spatial_neighbors`` step this one depends on, not to this template.
+        """
+        clustering_key = ne_clustering_widget.value
+        return Preview(
+            list(builtin_spec(TEMPLATE_ID).blocks),
+            {
+                "cluster_key": clustering_key,
+                "uns_key": f"{clustering_key}_nhood_enrichment",
+                "n_perms": coerce(ne_perms_slider.value),
+                "seed": 42,
+            },
+        )
+
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _nhood_preview
+
     def on_run_nhood():
         ne_status.value = "Running neighborhood enrichment..."
         ne_run_button.enabled = False
 
-        clustering_key = ne_clustering_widget.value
-        n_perms = ne_perms_slider.value
+        blocks, params, _ = _nhood_preview()
+        clustering_key = params["cluster_key"]
+        n_perms = params["n_perms"]
         n_neighs = ne_neighs_slider.value
         state["_ne_params"] = {"n_perms": n_perms, "n_neighs": n_neighs}
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
@@ -75,13 +95,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id=f"nhood:{clustering_key}",
-            template=_NHOOD_TEMPLATE,
-            params={
-                "cluster_key": clustering_key,
-                "uns_key": f"{clustering_key}_nhood_enrichment",
-                "n_perms": coerce(n_perms),
-                "seed": 42,
-            },
+            **_resolved(TEMPLATE_ID, blocks),
+            params=params,
             deps=[f"clustering:{clustering_key}", "spatial_neighbors"],
             kind=ARTIFACT,
             label=f"Neighborhood enrichment: {clustering_key}",

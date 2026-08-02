@@ -6,6 +6,9 @@ from magicgui.widgets import ComboBox, PushButton, CheckBox
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.steps import Step
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_assemble, step_template as _resolved,
+)
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -18,49 +21,18 @@ if TYPE_CHECKING:
 #
 # Expression is pulled with ``sc.get.obs_df`` rather than indexing ``.X`` and
 # calling ``.toarray()`` by hand — same values, and it is the idiomatic accessor.
-_GENE_CORR_HEAD = """
-# Gene correlation ($norm_label): $gene_a vs $gene_b
-from scipy.stats import pearsonr, spearmanr"""
 
-_GENE_CORR_EXPR = {
-    "Raw counts": """
-_expr = sc.get.obs_df(adata, keys=[$gene_a, $gene_b])
-x = _expr[$gene_a].to_numpy(dtype='float32')
-y = _expr[$gene_b].to_numpy(dtype='float32')""",
-    "Fraction of total": """
-_expr = sc.get.obs_df(adata, keys=[$gene_a, $gene_b])
-_totals = np.asarray(adata.X.sum(axis=1)).ravel().astype('float64')
-_totals[_totals == 0] = 1
-x = (_expr[$gene_a].to_numpy() / _totals).astype('float32')
-y = (_expr[$gene_b].to_numpy() / _totals).astype('float32')""",
-    "Log1p(CPM)": """
-_expr = sc.get.obs_df(adata_norm, keys=[$gene_a, $gene_b])
-x = _expr[$gene_a].to_numpy(dtype='float32')
-y = _expr[$gene_b].to_numpy(dtype='float32')""",
-}
 
-_GENE_CORR_FILTER = """
-_sel = adata.obs[$clustering].astype(str).isin($selected).to_numpy()
-x, y = x[_sel], y[_sel]"""
 
-_GENE_CORR_TAIL = """
-pr, pp = pearsonr(x, y)
-sr, sp = spearmanr(x, y)
-_p = lambda p: f'{p:.2e}' if p < 0.001 else f'{p:.4f}'
 
-fig, ax = plt.subplots(figsize=(5, 5))
-ax.scatter(x, y, s=1, alpha=0.3, rasterized=True, color='#1f77b4')
-ax.set_xlabel($xlabel)
-ax.set_ylabel($ylabel)
-ax.set_title($title_prefix + f'  [n={len(x):,}$n_suffix]')
-ax.text(
-    0.03, 0.97,
-    f'Pearson  r = {pr:.3f}, p = {_p(pp)}\\nSpearman \\u03c1 = {sr:.3f}, p = {_p(sp)}',
-    transform=ax.transAxes, va='top', ha='left', fontsize=9,
-    bbox={'boxstyle': 'round,pad=0.3', 'fc': 'white', 'alpha': 0.7},
-)
-fig.tight_layout()
-fig.savefig($path, dpi=300, bbox_inches='tight')"""
+# The "(filtered)" note used to be spliced in by ``str.replace``-ing a fake
+# ``$n_suffix`` token out of the tail before Step saw it. It cannot be a real
+# param — it sits *inside* an f-string, where ``repr('')`` would render as ``''``
+# and break the literal — so the whole title line is a variant instead. That
+# also removes a trap: a stray ``$n_suffix`` surviving into a template is a hard
+# ``StepError`` from ``Template.substitute``, with a message that names a param
+# no call site has ever declared.
+
 
 _NORM_LABELS = {
     "Raw counts": "raw counts",
@@ -69,14 +41,26 @@ _NORM_LABELS = {
 }
 
 
+TEMPLATE_ID = "genes.correlation"
+
+#: Widget label -> the ``expr.*`` block in the .tmpl that reads expression that
+#: way. Three genuinely different expressions, not three parameterisations of
+#: one — raw counts and fraction-of-total read ``adata``, log1p(CPM) reads
+#: ``adata_norm``, which is why the step's deps differ too.
+_EXPR_BLOCK = {
+    "Raw counts": "expr.raw",
+    "Fraction of total": "expr.fraction",
+    "Log1p(CPM)": "expr.log1p_cpm",
+}
+
+
+def _gene_corr_blocks(norm: str, filtered: bool) -> list[str]:
+    return (["head", _EXPR_BLOCK[norm]] + (["filter"] if filtered else [])
+            + ["stats", "title.filtered" if filtered else "title.plain", "tail"])
+
+
 def _gene_corr_template(norm: str, filtered: bool) -> str:
-    parts = [_GENE_CORR_HEAD, _GENE_CORR_EXPR[norm]]
-    if filtered:
-        parts.append(_GENE_CORR_FILTER)
-    parts.append(_GENE_CORR_TAIL.replace(
-        "$n_suffix", " (filtered)" if filtered else "",
-    ))
-    return "".join(parts)
+    return builtin_assemble(TEMPLATE_ID, _gene_corr_blocks(norm, filtered))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -95,14 +79,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
     plot_button   = PushButton(label="Plot Correlation")
     status        = StatusProxy(ctx.viewer)
 
-    def on_plot():
-        from napari.qt.threading import thread_worker
+    def _gene_corr_preview() -> Preview:
+        """What "Plot Correlation" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane. Both halves matter here: the
+        normalisation combo selects which ``expr.*`` block reads the expression
+        — three genuinely different expressions, not one parameterised — so a
+        params-only preview would show the wrong statement entirely.
+
+        Read-only, deliberately. The run creates ``plots/`` before writing into
+        it; opening the Templates tab must not create a directory as a side
+        effect of drawing a pane.
+        """
         gene_a = gene_a_widget.value
         gene_b = gene_b_widget.value
-        norm   = norm_widget.value
-        norm_label = _NORM_LABELS[norm]
-        status.value = f"Computing correlation: {gene_a} vs {gene_b}…"
-        gen = ctx.dataset_generation
+        norm_label = _NORM_LABELS[norm_widget.value]
 
         # The cluster filter reaches the notebook as an explicit
         # ``obs[key].isin([...])`` rather than as an opaque boolean array.
@@ -117,24 +109,38 @@ def build_tab(ctx: ViewerContext) -> tuple:
         filtered = clustering_key is not None and selected is not None
 
         fmt = state.get("plot_format", "svg")
-        plots_dir = os.path.join(ctx.data_path, "plots")
-        os.makedirs(plots_dir, exist_ok=True)
-        path = os.path.join(plots_dir, f"gene_correlation.{fmt}")
-
         params = {
             "gene_a": gene_a, "gene_b": gene_b,
             "norm_label": norm_label,
             "xlabel": f"{gene_a} [{norm_label}]",
             "ylabel": f"{gene_b} [{norm_label}]",
             "title_prefix": f"{gene_a} vs {gene_b}",
-            "path": path,
+            "path": os.path.join(ctx.data_path, "plots", f"gene_correlation.{fmt}"),
         }
-        deps = ["preamble"]
-        if norm == "Log1p(CPM)":
-            deps = ["normalize"]
         if filtered:
             params["clustering"] = clustering_key
             params["selected"] = selected
+        return Preview(_gene_corr_blocks(norm_widget.value, filtered), params)
+
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _gene_corr_preview
+
+    def on_plot():
+        from napari.qt.threading import thread_worker
+        norm = norm_widget.value
+        blocks, params, _ = _gene_corr_preview()
+        gene_a, gene_b = params["gene_a"], params["gene_b"]
+        norm_label = params["norm_label"]
+        clustering_key = params.get("clustering")
+        status.value = f"Computing correlation: {gene_a} vs {gene_b}…"
+        gen = ctx.dataset_generation
+
+        path = params["path"]
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        deps = ["preamble"]
+        if norm == "Log1p(CPM)":
+            deps = ["normalize"]
+        if clustering_key is not None:
             ctx.record_clustering(clustering_key)
             from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
             add_clustering_to_obs(ctx.adata, ctx.adata,
@@ -143,7 +149,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         step = Step(
             id="plot:gene_correlation",
-            template=_gene_corr_template(norm, filtered),
+            **_resolved(TEMPLATE_ID, blocks),
             params=params,
             deps=deps,
             kind=TERMINAL,

@@ -1,0 +1,21 @@
+# xenium-viewer template
+# id: genes.rank_genes
+# schema-version: 1
+# doc: Rank marker genes per cluster, keyed by clustering.
+# requires: sc, adata, adata_norm
+# outputs: rank_df
+# params: groupby:str, method:str, n_genes:int
+
+#--- block main
+# Rank genes: groupby=$groupby, method=$method, n_genes=$n_genes
+adata_norm.obs[$groupby] = adata.obs[$groupby].values
+sc.tl.rank_genes_groups(
+    adata_norm, groupby=$groupby, method=$method, n_genes=$n_genes,
+)
+rank_df = sc.get.rank_genes_groups_df(adata_norm, group=None)
+# Keyed as well as bound. A second ranking rebinds ``rank_df``, and scanpy
+# overwrites ``uns['rank_genes_groups']`` in place, so without this the notebook
+# ends holding only the last clustering's markers — measured on a real session,
+# which ranked two clusterings and could show the genes for one of them.
+rank_results = globals().get('rank_results', {})
+rank_results[$groupby] = rank_df

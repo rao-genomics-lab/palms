@@ -17,10 +17,42 @@ from qtpy.QtWidgets import (
 from qtpy.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 from qtpy.QtCore import Qt
 
-from xenium_viewer.utils.prov_graph import NOTE
+from xenium_viewer.utils.prov_graph import NOTE, TEMPLATE_HAND_EDITED
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
+
+
+# ── Folding user edits back into the graph ───────────────────────────────────
+
+def reconcile_edits(graph, cells) -> list[str]:
+    """Fold user edits of graph cells back into *graph*. Returns the ids touched.
+
+    The edited text is written straight onto the node **without being
+    executed**, so from that moment the node's ``code`` is no longer the source
+    that produced the artifact the viewer is showing. Every other node in the
+    graph carries exactly that guarantee, and nothing in the exported notebook
+    distinguishes this one — so it is marked ``hand-edited``. ``template_hash``
+    is cleared because the code no longer derives from any template.
+
+    Module-level rather than a closure so it can be tested against a real graph
+    without building the tab (which needs a napari viewer).
+    """
+    touched: list[str] = []
+    if graph is None:
+        return touched
+    for cell in cells:
+        if cell.node_id is None or not cell.edited_by_user:
+            continue
+        node = graph.get(cell.node_id)
+        if node is None:
+            continue
+        node.code = cell.get_code()
+        node.template_origin = TEMPLATE_HAND_EDITED
+        node.template_hash = None
+        cell.edited_by_user = False
+        touched.append(node.id)
+    return touched
 
 
 # ── Syntax highlighting ──────────────────────────────────────────────────────
@@ -361,16 +393,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             cell.clear_output()
 
     def _reconcile_edits():
-        """Fold user edits of graph cells back into the graph before export."""
-        graph = state.get("prov_graph")
-        if graph is None:
-            return
-        for c in cells:
-            if c.node_id is not None and c.edited_by_user:
-                node = graph.get(c.node_id)
-                if node is not None:
-                    node.code = c.get_code()
-                    c.edited_by_user = False
+        reconcile_edits(state.get("prov_graph"), cells)
 
     def _export_cells():
         """(cell_type, source) list for export: graph cells + user cells."""

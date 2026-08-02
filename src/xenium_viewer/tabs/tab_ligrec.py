@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 
 from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
 from xenium_viewer.utils.spatial_analysis import make_ligrec_plot
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_assemble, step_template as _resolved,
+)
 
 
 # Executed and recorded from one string. Two things the old recorded cell got
@@ -26,40 +29,22 @@ from xenium_viewer.utils.spatial_analysis import make_ligrec_plot
 # to squidpy, and it relegated the interaction-database selection to a prose
 # comment, so a replay silently used omnipath's defaults. The checkboxes now
 # reach the notebook as `InteractionDataset` members reconstructed by name.
-_LIGREC_TEMPLATE_HEAD = """
-# Ligand-receptor: $cluster_key (n_perms=$n_perms)
-from omnipath.constants import InteractionDataset
 
-adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
-interactions_params = {}"""
 
-_LIGREC_TEMPLATE_INCLUDE = """
-interactions_params['include'] = tuple(
-    InteractionDataset[_n] for _n in $include
-)"""
 
-_LIGREC_TEMPLATE_RESOURCES = """
-interactions_params['resources'] = $resources"""
 
-_LIGREC_TEMPLATE_TAIL = """
-ligrec_res = sq.gr.ligrec(
-    adata_norm, cluster_key=$cluster_key, n_perms=$n_perms,
-    threshold=$threshold, seed=$seed, use_raw=False, copy=True,
-    transmitter_params={'categories': 'ligand'},
-    receiver_params={'categories': 'receptor'},
-    interactions_params=interactions_params,
-)"""
+
+TEMPLATE_ID = "spatial.ligrec"
+
+
+def _ligrec_blocks(has_include: bool, has_resources: bool) -> list[str]:
+    """The databases blocks appear only when something is actually selected."""
+    return (["head"] + (["include"] if has_include else [])
+            + (["resources"] if has_resources else []) + ["tail"])
 
 
 def _ligrec_template(has_include: bool, has_resources: bool) -> str:
-    """Assemble the L-R template for the selected interaction databases."""
-    parts = [_LIGREC_TEMPLATE_HEAD]
-    if has_include:
-        parts.append(_LIGREC_TEMPLATE_INCLUDE)
-    if has_resources:
-        parts.append(_LIGREC_TEMPLATE_RESOURCES)
-    parts.append(_LIGREC_TEMPLATE_TAIL)
-    return "".join(parts)
+    return builtin_assemble(TEMPLATE_ID, _ligrec_blocks(has_include, has_resources))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -106,12 +91,50 @@ def build_tab(ctx: ViewerContext) -> tuple:
     lr_export_means_button = PushButton(label="Export Means CSV...", enabled=False)
     lr_export_pvals_button = PushButton(label="Export P-values CSV...", enabled=False)
 
+    def _ligrec_preview() -> Preview:
+        """What "Run L-R Analysis" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane. The database checkboxes select blocks
+        *and* fill params, which is precisely why both halves belong together:
+        ticking one changes the shape of the code, not only a value in it.
+
+        Enum *names*, not the members: params must render as literals, and the
+        template reconstructs them via ``InteractionDataset[name]``.
+        """
+        include = []
+        if lr_ds_omnipath.isChecked():
+            include.append("OMNIPATH")
+        if lr_ds_ligrecextra.isChecked():
+            include.append("LIGREC_EXTRA")
+        if lr_ds_pathwayextra.isChecked():
+            include.append("PATHWAY_EXTRA")
+        if lr_ds_kinaseextra.isChecked():
+            include.append("KINASE_EXTRA")
+        resources = "CellPhoneDB" if lr_cpdb_only.isChecked() else None
+
+        params = {
+            "cluster_key": lr_clustering_widget.value,
+            "n_perms": coerce(lr_perms_slider.value),
+            "threshold": 0.01,
+            "seed": 42,
+        }
+        if include:
+            params["include"] = include
+        if resources is not None:
+            params["resources"] = resources
+        return Preview(
+            _ligrec_blocks(bool(include), resources is not None), params)
+
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _ligrec_preview
+
     def on_run_ligrec():
         lr_status.value = "Running L-R analysis..."
         lr_run_button.enabled = False
 
-        clustering_key = lr_clustering_widget.value
-        n_perms = lr_perms_slider.value
+        blocks, params, _ = _ligrec_preview()
+        clustering_key = params["cluster_key"]
+        n_perms = params["n_perms"]
         n_neighs = lr_neighs_slider.value
         # Build interactions description for code recording
         ds_names = []
@@ -131,38 +154,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         }
         _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
 
-        # Enum *names*, not the members: params must render as literals, and
-        # the template reconstructs them via ``InteractionDataset[name]``.
-        include = []
-        if lr_ds_omnipath.isChecked():
-            include.append("OMNIPATH")
-        if lr_ds_ligrecextra.isChecked():
-            include.append("LIGREC_EXTRA")
-        if lr_ds_pathwayextra.isChecked():
-            include.append("PATHWAY_EXTRA")
-        if lr_ds_kinaseextra.isChecked():
-            include.append("KINASE_EXTRA")
-        resources = "CellPhoneDB" if lr_cpdb_only.isChecked() else None
-
         # The clustering must exist as a node, and in adata.obs, before a step
         # can declare it as a dependency and read it. Both on the GUI thread.
         ctx.record_clustering(clustering_key)
         add_clustering_to_obs(_adata, _adata, ctx.clusterings[clustering_key], clustering_key)
 
-        params = {
-            "cluster_key": clustering_key,
-            "n_perms": coerce(n_perms),
-            "threshold": 0.01,
-            "seed": 42,
-        }
-        if include:
-            params["include"] = include
-        if resources is not None:
-            params["resources"] = resources
-
         step = Step(
             id=f"ligrec:{clustering_key}",
-            template=_ligrec_template(bool(include), resources is not None),
+            **_resolved(TEMPLATE_ID, blocks),
             params=params,
             deps=[f"clustering:{clustering_key}", "spatial_neighbors"],
             kind=ARTIFACT,

@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from string import Template
 from typing import Any, Callable, Iterable, Optional
 
-from xenium_viewer.utils.prov_graph import ARTIFACT, ProvGraph
+from xenium_viewer.utils.prov_graph import ARTIFACT, TEMPLATE_BUILTIN, ProvGraph
 
 # Params must render to a literal that ``ast.literal_eval`` accepts. Anything
 # else (a numpy scalar, an AnnData, an ndarray) has to live in the namespace
@@ -91,6 +91,12 @@ class Step:
     kind: str = ARTIFACT
     label: Optional[str] = None
     outputs: list[str] = field(default_factory=list)
+    # Which registered template ``template`` came from, and whether it is the
+    # shipped text. Carried onto the provenance node so a reader can tell a
+    # stock run from a customised one; see :mod:`xenium_viewer.utils.prov_graph`.
+    template_id: Optional[str] = None
+    template_origin: str = TEMPLATE_BUILTIN
+    template_hash: Optional[str] = None
 
     def render(self) -> str:
         """Return the single source string — executed *and* recorded."""
@@ -311,6 +317,9 @@ class StepExecutor:
             self.graph.upsert(
                 step.id, code, deps=list(step.deps), kind=step.kind,
                 label=step.label, params=dict(step.params),
+                template_id=step.template_id,
+                template_origin=step.template_origin,
+                template_hash=step.template_hash,
             )
 
             missing = [name for name in step.outputs if name not in self.ns]

@@ -12,6 +12,10 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, make_progress_bar
 from xenium_viewer.utils.prov_graph import ARTIFACT, SETUP, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
+from xenium_viewer.utils.step_templates import (
+    Preview, builtin_assemble, builtin_spec, builtin_text,
+    step_template as _resolved,
+)
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -19,9 +23,7 @@ if TYPE_CHECKING:
 
 # The drawn polygons are inlined as literals so the notebook reproduces them
 # without the viewer's zarr cache. ``rois`` is a SETUP node: it binds a constant.
-_ROIS_TEMPLATE = """
-# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)
-roi_polygons = [np.array(_p) for _p in $polygons]"""
+_ROIS_TEMPLATE = builtin_text("roi.polygons")
 
 
 # ROI DEG, executed and recorded from one string. The old recorded cell called
@@ -29,125 +31,48 @@ roi_polygons = [np.array(_p) for _p in $polygons]"""
 # this package installed and the reader could not see what it did. It is plain
 # shapely + scanpy, so it is now written out in full. (E3 replaces the
 # point-in-polygon block with ``spatialdata.polygon_query``.)
-_ROI_DEG_HEAD = """
-# ROI differential expression (method=$method)
-from shapely import contains_xy
-from shapely.geometry import Polygon
 
-centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
-roi_region = np.full(adata.n_obs, '', dtype=object)"""
 
-_ROI_DEG_FILTER = """
-# Cluster filter: cells must be inside an ROI *and* in the selected clusters
-cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()"""
 
-_ROI_DEG_LOOP_HEAD = """
-for _i, _poly_yx in enumerate(roi_polygons):
-    _poly = Polygon(_poly_yx[:, ::-1])
-    if not _poly.is_valid:
-        _poly = _poly.buffer(0)
-    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])"""
 
-_ROI_DEG_LOOP_FILTER = """
-    _inside = _inside & cluster_mask"""
-
-_ROI_DEG_TAIL = """
-    roi_region[_inside] = f'Region {_i + 1}'
-
-roi_adata = adata[roi_region != ''].copy()
-roi_adata.obs['roi_region'] = pd.Categorical(roi_region[roi_region != ''])
-sc.pp.normalize_total(roi_adata, target_sum=1e4)
-sc.pp.log1p(roi_adata)
-sc.tl.rank_genes_groups(
-    roi_adata, 'roi_region', method=$method, reference='rest', key_added=$method,
-)
-roi_deg_df = sc.get.rank_genes_groups_df(roi_adata, group=None, key=$method)"""
 
 
 # Per-region expression of one gene. This used to record two comment lines
 # saying the numbers were "shown in the viewer" — a cell that replays as a
 # silent no-op, which ``allow_errors=False`` can never catch. The same shapely
 # membership test as the DEG step above, then the statistics the tab prints.
-_ROI_EXPR_HEAD = """
-# ROI expression of $gene, per drawn region
-from shapely import contains_xy
-from shapely.geometry import Polygon
-from itertools import combinations
-from scipy import stats
 
-centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
-_x = adata[:, $gene].X
-_expr = np.asarray(_x.todense() if hasattr(_x, 'todense') else _x).ravel()
-_cell_ids = (adata.obs['cell_id'].to_numpy() if 'cell_id' in adata.obs
-             else adata.obs_names.to_numpy())"""
 
-_ROI_EXPR_FILTER = """
-# Cluster filter: cells must be inside an ROI *and* in the selected clusters
-cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()"""
 
-_ROI_EXPR_LOOP_HEAD = """
-_rows = []
-for _i, _poly_yx in enumerate(roi_polygons):
-    _poly = Polygon(_poly_yx[:, ::-1])
-    if not _poly.is_valid:
-        _poly = _poly.buffer(0)
-    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])"""
 
-_ROI_EXPR_LOOP_FILTER = """
-    _inside = _inside & cluster_mask"""
 
-_ROI_EXPR_TAIL = """
-    _idx = np.where(_inside)[0]
-    _rows.append(pd.DataFrame({
-        'region_id': _i + 1,
-        'cell_id': _cell_ids[_idx],
-        'x_centroid_um': adata.obsm['spatial'][_idx, 0],
-        'y_centroid_um': adata.obsm['spatial'][_idx, 1],
-        'expression': _expr[_idx],
-    }))
 
-roi_expr_cells = pd.concat(_rows, ignore_index=True)
-roi_expr_stats = (
-    roi_expr_cells.groupby('region_id')['expression']
-    .agg(['count', 'mean', 'median', 'std', 'min', 'max'])
-    .reindex(range(1, len(roi_polygons) + 1))
-)
-roi_expr_stats['count'] = roi_expr_stats['count'].fillna(0).astype(int)
 
-# Pairwise Welch's t-tests between regions, Benjamini-Hochberg corrected
-_groups = [(_r, _g['expression'].to_numpy())
-           for _r, _g in roi_expr_cells.groupby('region_id') if len(_g) >= 2]
-_tests = []
-for (_r1, _e1), (_r2, _e2) in combinations(_groups, 2):
-    _t, _p = stats.ttest_ind(_e1, _e2, equal_var=False)
-    _tests.append({'region_1': _r1, 'region_2': _r2, 't': _t, 'p': _p})
-roi_expr_tests = pd.DataFrame(_tests, columns=['region_1', 'region_2', 't', 'p'])
-roi_expr_tests['p_adj'] = (
-    stats.false_discovery_control(roi_expr_tests['p'], method='bh')
-    if len(roi_expr_tests) > 1 else roi_expr_tests['p']
-)"""
+
+
+
+ROI_EXPR_TEMPLATE_ID = "roi.expression"
+ROI_DEG_TEMPLATE_ID = "roi.deg"
+ROI_EXPORT_TEMPLATE_ID = "roi.export_expression"
+ROI_POLYGONS_TEMPLATE_ID = "roi.polygons"
+
+
+def _roi_blocks(filtered: bool) -> list[str]:
+    """Both ROI templates share the same two filter injection points.
+
+    The cluster mask is built once before the loop and applied inside it, so a
+    filtered run selects two blocks rather than one.
+    """
+    return (["head"] + (["filter"] if filtered else [])
+            + ["loop_head"] + (["loop_filter"] if filtered else []) + ["tail"])
 
 
 def _roi_expr_template(filtered: bool) -> str:
-    parts = [_ROI_EXPR_HEAD]
-    if filtered:
-        parts.append(_ROI_EXPR_FILTER)
-    parts.append(_ROI_EXPR_LOOP_HEAD)
-    if filtered:
-        parts.append(_ROI_EXPR_LOOP_FILTER)
-    parts.append(_ROI_EXPR_TAIL)
-    return "".join(parts)
+    return builtin_assemble(ROI_EXPR_TEMPLATE_ID, _roi_blocks(filtered))
 
 
 def _roi_deg_template(filtered: bool) -> str:
-    parts = [_ROI_DEG_HEAD]
-    if filtered:
-        parts.append(_ROI_DEG_FILTER)
-    parts.append(_ROI_DEG_LOOP_HEAD)
-    if filtered:
-        parts.append(_ROI_DEG_LOOP_FILTER)
-    parts.append(_ROI_DEG_TAIL)
-    return "".join(parts)
+    return builtin_assemble(ROI_DEG_TEMPLATE_ID, _roi_blocks(filtered))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -164,23 +89,70 @@ def build_tab(ctx: ViewerContext) -> tuple:
     roi_deg_status = StatusProxy(ctx.viewer)
     roi_deg_progress = make_progress_bar()
 
+    def _rois_preview() -> Preview:
+        """The drawn polygons, as the literal the ``rois`` step would bind.
+
+        Shown untruncated in the Templates pane. A shortened polygon list would
+        read more easily and would no longer be the string that gets executed,
+        which is the one property that pane has.
+        """
+        polygons = ctx.roi_layer.data if ctx.roi_layer is not None else []
+        return Preview(
+            list(builtin_spec(ROI_POLYGONS_TEMPLATE_ID).blocks),
+            {"polygons": [np.round(np.asarray(p), 2).tolist() for p in polygons]},
+        )
+
+    ctx.state.setdefault(
+        "template_preview", {})[ROI_POLYGONS_TEMPLATE_ID] = _rois_preview
+
     def _record_rois():
         """Bind and record ``roi_polygons`` from the drawn shapes."""
-        polygons = ctx.roi_layer.data if ctx.roi_layer is not None else []
-        if len(polygons) == 0:
+        blocks, params, _ = _rois_preview()
+        if not params["polygons"]:
             return
         ctx.record_preamble()
         ctx.run_step(Step(
             id="rois",
-            template=_ROIS_TEMPLATE,
-            params={"polygons": [
-                np.round(np.asarray(p), 2).tolist() for p in polygons
-            ]},
+            **_resolved(ROI_POLYGONS_TEMPLATE_ID, blocks),
+            params=params,
             deps=["preamble"],
             kind=SETUP,
-            label=f"ROI polygons ({len(polygons)})",
+            label=f"ROI polygons ({len(params['polygons'])})",
             outputs=["roi_polygons"],
         ))
+
+    def _cluster_filter_params(use_filter: bool) -> dict:
+        """The two filter params, or nothing. Shared by the expression and DEG
+        previews, which inject the cluster mask at the same two points.
+
+        Read-only: recording the clustering node and mirroring it onto ``obs``
+        are the run's job, not a side effect of drawing a preview pane.
+        """
+        if not use_filter:
+            return {}
+        clustering_key = ctx.clustering_widget.value
+        if not clustering_key:
+            return {}
+        return {
+            "clustering": clustering_key,
+            "selected": sorted({str(i) for i in ctx.get_selected_cluster_ids()}),
+        }
+
+    def _roi_expr_preview() -> Preview:
+        """What "Calculate Expression" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane. "Filter by cluster" selects two blocks
+        as well as filling two params, so both halves have to travel together.
+        """
+        params = {"gene": ctx.gene_widget.value,
+                  "pixel_size": coerce(ctx.pixel_size)}
+        filter_params = _cluster_filter_params(ctx.filter_check.value)
+        params.update(filter_params)
+        return Preview(_roi_blocks(bool(filter_params)), params)
+
+    ctx.state.setdefault(
+        "template_preview", {})[ROI_EXPR_TEMPLATE_ID] = _roi_expr_preview
 
     def on_calculate_roi():
         gene = ctx.gene_widget.value
@@ -196,26 +168,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
         # The polygons must be bound before the step, which reads them.
         _record_rois()
 
-        use_filter = ctx.filter_check.value
+        blocks, params, _ = _roi_expr_preview()
         deps = ["rois"]
-        params = {"gene": gene, "pixel_size": coerce(ctx.pixel_size)}
         filter_desc = ""
-        if use_filter:
-            clustering_key = ctx.clustering_widget.value
-            selected_ids = ctx.get_selected_cluster_ids()
+        clustering_key = params.get("clustering")
+        if clustering_key is not None:
             ctx.record_clustering(clustering_key)
             from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
             add_clustering_to_obs(ctx.adata, ctx.adata,
                                   ctx.clusterings[clustering_key], clustering_key)
-            params["clustering"] = clustering_key
-            params["selected"] = sorted({str(i) for i in selected_ids})
             deps.append(f"clustering:{clustering_key}")
-            filter_desc = f" ({clustering_key} clusters: {sorted(selected_ids)})"
+            filter_desc = f" ({clustering_key} clusters: {params['selected']})"
 
         try:
             out = ctx.run_step(Step(
                 id=f"roi_expression:{gene}",
-                template=_roi_expr_template(use_filter),
+                **_resolved(ROI_EXPR_TEMPLATE_ID, blocks),
                 params=params,
                 deps=deps,
                 kind=ARTIFACT,
@@ -260,6 +228,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
         roi_text.setPlainText("\n".join(lines))
         roi_export_button.enabled = len(cells) > 0
 
+    def _roi_export_preview(path: str = None) -> Preview:
+        """What "Export CSV" would run: the last calculated gene, and where to.
+
+        ``path`` only exists once the save dialog has returned, so the Templates
+        pane is shown the filename that dialog would propose and told, in the
+        header, that it is the one value not yet settled.
+        """
+        gene = state.get("roi_gene", "gene")
+        return Preview(
+            list(builtin_spec(ROI_EXPORT_TEMPLATE_ID).blocks),
+            {"gene": gene, "path": os.fspath(path) if path else f"roi_{gene}.csv"},
+            note="" if path else "path chosen on save",
+        )
+
+    ctx.state.setdefault(
+        "template_preview", {})[ROI_EXPORT_TEMPLATE_ID] = _roi_export_preview
+
     def on_export_csv():
         cells = state.get("roi_expr_cells")
         gene = state.get("roi_gene", "gene")
@@ -274,12 +259,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         # cell is the statement that produced the file the user has. The full
         # path is recorded, not the basename — a cell that writes somewhere
         # other than where the export went would be a lie about what ran.
+        blocks, params, _ = _roi_export_preview(path)
         try:
             ctx.run_step(Step(
                 id="export:roi_expression",
-                template="\n# Export ROI per-cell expression of $gene\n"
-                         "roi_expr_cells.to_csv($path, index=False)",
-                params={"gene": gene, "path": os.fspath(path)},
+                **_resolved(ROI_EXPORT_TEMPLATE_ID, blocks),
+                params=params,
                 deps=[f"roi_expression:{gene}"],
                 kind=TERMINAL,
                 label="Export ROI expression",
@@ -305,6 +290,24 @@ def build_tab(ctx: ViewerContext) -> tuple:
     roi_deg_export_button = PushButton(label="Export DEG CSV...", enabled=False)
     roi_volcano_button = PushButton(label="Save Volcano Plot(s)...", enabled=False)
 
+    def _roi_deg_preview() -> Preview:
+        """What "Run ROI DEG" would run with the widgets as they stand.
+
+        One expression of the current settings, called by the run below and by
+        the Templates tab's preview pane. Its own filter checkbox, not the ROI
+        expression one — the two analyses are filtered independently.
+        """
+        params = {
+            "method": roi_deg_method_widget.value,
+            "pixel_size": coerce(ctx.pixel_size),
+        }
+        filter_params = _cluster_filter_params(roi_deg_filter_check.value)
+        params.update(filter_params)
+        return Preview(_roi_blocks(bool(filter_params)), params)
+
+    ctx.state.setdefault(
+        "template_preview", {})[ROI_DEG_TEMPLATE_ID] = _roi_deg_preview
+
     def on_roi_deg():
         polygons = ctx.roi_layer.data if ctx.roi_layer is not None else []
         if len(polygons) < 2:
@@ -318,27 +321,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
         # The polygons must be bound before the DEG step, which reads them.
         _record_rois()
 
-        use_filter = roi_deg_filter_check.value
+        blocks, params, _ = _roi_deg_preview()
         deps = ["rois"]
-        params = {
-            "method": roi_deg_method_widget.value,
-            "pixel_size": coerce(ctx.pixel_size),
-        }
-        clustering_key = None
-        if use_filter:
-            clustering_key = ctx.clustering_widget.value
-            selected_ids = ctx.get_selected_cluster_ids()
+        clustering_key = params.get("clustering")
+        if clustering_key is not None:
             ctx.record_clustering(clustering_key)
             from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
             add_clustering_to_obs(ctx.adata, ctx.adata,
                                   ctx.clusterings[clustering_key], clustering_key)
-            params["clustering"] = clustering_key
-            params["selected"] = sorted({str(i) for i in selected_ids})
             deps.append(f"clustering:{clustering_key}")
 
         step = Step(
             id="roi_deg",
-            template=_roi_deg_template(use_filter),
+            **_resolved(ROI_DEG_TEMPLATE_ID, blocks),
             params=params,
             deps=deps,
             kind=ARTIFACT,

@@ -45,10 +45,65 @@ def _build_notebook(cells: Iterable[tuple]):
     return nb
 
 
+def customisation_banner(graph) -> str | None:
+    """A markdown note naming steps that did not use the shipped template.
+
+    ``code`` always records what actually ran, so the notebook replays correctly
+    whether or not a template was customised. What the *reader* cannot tell from
+    the source — a customised template renders to code that looks entirely
+    ordinary — is that it is not the stock pipeline. Someone opening this file a
+    year later, or reviewing it alongside a paper, needs that stated once at the
+    top rather than inferred.
+
+    Returns ``None`` for a fully stock run, so the ordinary notebook is not
+    cluttered with a banner saying nothing happened.
+    """
+    from xenium_viewer.utils.prov_graph import TEMPLATE_BUILTIN
+
+    rows = []
+    for node_id in graph.topo_sort():
+        node = graph.get(node_id)
+        if node is None or node.template_origin == TEMPLATE_BUILTIN:
+            continue
+        detail = node.template_id or "—"
+        short = (node.template_hash or "")[:12]
+        rows.append(f"| `{node_id}` | `{detail}` | {node.template_origin} | `{short}` |")
+    if not rows:
+        return None
+
+    return "\n".join([
+        "## ⚠ This analysis did not use the shipped templates",
+        "",
+        "The cells below are the code that actually ran, so this notebook "
+        "replays exactly what the viewer did. But some steps were generated "
+        "from **customised** analysis templates rather than the ones shipped "
+        "with Xenium Viewer, which the source alone cannot show.",
+        "",
+        "| step | template | origin | template hash |",
+        "|---|---|---|---|",
+        *rows,
+        "",
+        "`user` / `user+builtin` mean a customised template; `hand-edited` "
+        "means the cell was typed into the Notebook tab and **not re-executed**, "
+        "so it is the only kind here that may not describe what produced the "
+        "result.",
+    ])
+
+
 def graph_to_cells(graph, include_terminals: bool = True) -> list[tuple]:
-    """Topologically-ordered [(cell_type, source), ...] derived from the graph."""
+    """Topologically-ordered [(cell_type, source), ...] derived from the graph.
+
+    A customisation banner is prepended when any step used a non-shipped
+    template. It goes here rather than in ``prov_graph.graph_to_cells`` so the
+    flat ``analysis.py`` is unaffected, and it is a single markdown cell so the
+    verbatim-source property the replay test asserts over *code* cells still
+    holds.
+    """
     from xenium_viewer.utils.prov_graph import graph_to_cells as _g2c
-    return [(c.cell_type, c.source) for c in _g2c(graph, include_terminals=include_terminals)]
+    cells = [(c.cell_type, c.source)
+             for c in _g2c(graph, include_terminals=include_terminals)]
+    banner = customisation_banner(graph)
+    return ([("markdown", banner)] + cells) if banner else cells
 
 
 def write_notebook(cells: Iterable[tuple], path: str | Path) -> None:

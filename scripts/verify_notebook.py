@@ -13,9 +13,10 @@ What it does:
 
 1. Reads the provenance graph out of ``<cache>/viewer_session`` attrs. No GUI,
    no napari, no SpatialData load — just zarr attrs.
-2. Derives the notebook with ``notebook_export.write_graph_notebook`` and
-   appends one *injected* cell that dumps the replayed results to disk. That
-   cell is clearly marked and is the only thing added.
+2. Derives the notebook from the graph and appends one *injected* cell that
+   dumps the replayed results to disk. That cell is clearly marked and is the
+   only executable thing added; a customised session also gets the same
+   markdown banner the viewer's own export carries.
 3. Executes the notebook in a fresh kernel with ``allow_errors=False``, timing
    every cell.
 4. Compares the replayed ``adata.obs`` against the clusterings the viewer
@@ -196,6 +197,37 @@ def note_nodes(graph: ProvGraph) -> list[str]:
     return [nid for nid in graph.topo_sort() if graph.get(nid).kind == NOTE]
 
 
+def template_provenance(graph: ProvGraph) -> dict:
+    """Which steps ran shipped templates, and which did not.
+
+    A verification report exists to let someone else believe a result. Replay
+    agreement alone does not establish that the pipeline was the standard one —
+    a customised template reproduces perfectly and is still not what the
+    shipped viewer does. So the report says, explicitly, whether every step came
+    from stock text.
+    """
+    from xenium_viewer.utils.prov_graph import TEMPLATE_BUILTIN
+
+    steps = []
+    for node_id in graph.topo_sort():
+        node = graph.get(node_id)
+        if node is None:
+            continue
+        steps.append({
+            "node": node_id,
+            "template_id": node.template_id,
+            "origin": node.template_origin,
+            "template_hash": node.template_hash,
+        })
+    customised = [s for s in steps if s["origin"] != TEMPLATE_BUILTIN]
+    return {
+        "stock_templates": not customised,
+        "n_customised": len(customised),
+        "customised": customised,
+        "steps": steps,
+    }
+
+
 # ── the replay ───────────────────────────────────────────────────────────────
 
 def build_notebook(graph: ProvGraph, work_dir: Path) -> tuple[Path, list]:
@@ -203,13 +235,28 @@ def build_notebook(graph: ProvGraph, work_dir: Path) -> tuple[Path, list]:
 
     The node ids are what makes a failure actionable: nbclient reports a cell
     index, and "cell 4 failed" says nothing about which recorded step is broken.
+    That is why the cells come from ``prov_graph.graph_to_cells`` — it is the one
+    that carries ``node_id`` — and why the customisation banner has to be
+    prepended here rather than being inherited from
+    ``notebook_export.graph_to_cells``, which adds it but returns bare tuples.
+
+    Without this the notebook written to ``--work-dir`` was the one artifact of
+    a customised session that did not say so, while the viewer's own export did.
+    Its ``--out`` report always did; a notebook someone keeps or forwards is
+    exactly where the statement matters most.
     """
     from xenium_viewer.utils.prov_graph import graph_to_cells
     derived = graph_to_cells(graph)
     node_ids = [cell.node_id for cell in derived]
-    node_ids.append(None)  # the injected dump cell belongs to no node
     cells = [(cell.cell_type, cell.source) for cell in derived]
+
+    banner = notebook_export.customisation_banner(graph)
+    if banner:
+        cells.insert(0, ("markdown", banner))
+        node_ids.insert(0, None)   # the banner belongs to no single node
+
     cells.append(("code", _DUMP_CELL.format(out=str(work_dir))))
+    node_ids.append(None)          # nor does the injected dump cell
     nb_path = work_dir / "verify_notebook.ipynb"
     notebook_export.write_notebook(cells, nb_path)
     return nb_path, node_ids
@@ -435,10 +482,14 @@ def main(argv=None) -> int:
     graph, graph_source = read_graph(data_path, args.cache or cache, args.graph)
     skipped = comment_only_nodes(graph)
     notes = note_nodes(graph)
+    templates = template_provenance(graph)
 
     print(f"Provenance graph: {len(graph)} nodes from {graph_source} "
           f"({len(skipped)} comment-only, which replay as no-ops; "
           f"{len(notes)} viewer-state notes, which are not code by design)")
+    if not templates["stock_templates"]:
+        print(f"  ⚠ {templates['n_customised']} step(s) used CUSTOMISED templates, "
+              f"not the shipped ones — this is not the stock pipeline")
 
     if args.work_dir is not None:
         work_dir = args.work_dir.resolve()
@@ -456,6 +507,7 @@ def main(argv=None) -> int:
         "node_ids": graph.topo_sort(),
         "comment_only_nodes": skipped,
         "note_nodes": notes,
+        "templates": templates,
         "versions": package_versions(),
     }
 
@@ -555,6 +607,17 @@ def _print_summary(report: dict, out_path: Path) -> None:
         print(f"  ✗ rank genes: {len(bad)} group(s) differ: {bad}")
     else:
         print(f"  – rank genes: {rank.get('status')}")
+
+    templates = report.get("templates") or {}
+    if templates.get("stock_templates") is False:
+        print(f"  ⚠ {templates['n_customised']} of {len(templates['steps'])} "
+              f"step(s) used customised templates — replay agreement does not "
+              f"make this the stock pipeline:")
+        for step in templates["customised"]:
+            print(f"      {step['node']}  ({step['origin']}"
+                  f"{', ' + step['template_id'] if step['template_id'] else ''})")
+    elif templates:
+        print(f"  ✓ all {len(templates['steps'])} step(s) used shipped templates")
 
     if any(e.get("status") == "not_in_replay" for e in report["clusterings"]):
         print("\n  Results with no node behind them usually mean the graph on disk "

@@ -1,0 +1,51 @@
+# xenium-viewer template
+# id: genes.marker_plot
+# schema-version: 1
+# assemblies: head+call.dotplot+save.plain | head+call.dotplot+save.dpi |
+#          head+relabel+call.dotplot+save.plain |
+#          head+relabel+call.dotplot+save.dpi | head+call.heatmap+save.plain |
+#          head+call.heatmap+save.dpi | head+relabel+call.heatmap+save.plain |
+#          head+relabel+call.heatmap+save.dpi |
+#          head+call.matrixplot+save.plain | head+call.matrixplot+save.dpi |
+#          head+relabel+call.matrixplot+save.plain |
+#          head+relabel+call.matrixplot+save.dpi |
+#          head+call.tracksplot+save.plain | head+call.tracksplot+save.dpi |
+#          head+relabel+call.tracksplot+save.plain |
+#          head+relabel+call.tracksplot+save.dpi |
+#          head+call.correlation_matrix+save.plain |
+#          head+call.correlation_matrix+save.dpi |
+#          head+relabel+call.correlation_matrix+save.plain |
+#          head+relabel+call.correlation_matrix+save.dpi
+# doc: Scanpy marker-gene figure; one call.* block per plot type.
+# requires: sc, plt, adata, adata_norm
+# params: plot_name:str, groupby:str, markers:dict?, path:str,
+#         categories:dict?
+
+#--- block head
+# $plot_name: $groupby
+adata_norm.obs[$groupby] = adata.obs[$groupby].values
+
+#--- block relabel
+adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)
+
+#--- block call.dotplot
+sc.pl.dotplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)
+
+#--- block call.heatmap
+sc.pl.heatmap(adata_norm, var_names=$markers, groupby=$groupby, show=False)
+
+#--- block call.matrixplot
+sc.pl.matrixplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)
+
+#--- block call.tracksplot
+sc.pl.tracksplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)
+
+#--- block call.correlation_matrix
+sc.tl.dendrogram(adata_norm, $groupby)
+sc.pl.correlation_matrix(adata_norm, $groupby, show=False)
+
+#--- block save.plain
+plt.gcf().savefig($path, bbox_inches='tight')
+
+#--- block save.dpi
+plt.gcf().savefig($path, bbox_inches='tight', dpi=150)

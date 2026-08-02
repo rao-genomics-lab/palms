@@ -100,6 +100,7 @@ def _leiden_step(resolution: float, flavor: str = "igraph") -> Step:
         },
         deps=["normalize"],
         label=f"Clustering: {key}",
+        outputs=["leiden_labels"],
     )
 
 

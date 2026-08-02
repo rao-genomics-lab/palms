@@ -191,6 +191,46 @@ def recording_failures() -> list[dict]:
     return list(_recording_failures)
 
 
+#: Template ids already reported this session, so a rejected override warns once
+#: rather than on every step that resolves it.
+_template_rejections: dict[str, list] = {}
+
+
+def report_template_rejected(template_id: str, problems) -> None:
+    """Surface a customised template that could not be trusted, and was skipped.
+
+    The failure mode this exists to prevent is not a crash — it is a user who
+    edited a template, believes their edit is in effect, and is silently getting
+    the shipped one. That produces numbers they will attribute to their own
+    method. So it is said out loud, once per template per session, and kept for
+    the Templates tab's badge and the health line.
+
+    Deliberately *not* fatal: a bad file in a config directory must never stop
+    the viewer launching, or the user has no way in to fix it.
+    """
+    if template_id in _template_rejections:
+        return
+    listed = [str(p) for p in problems]
+    _template_rejections[template_id] = listed
+    _log.warning("ignoring customised template %r:\n  %s",
+                 template_id, "\n  ".join(listed) or "(no detail)")
+    first = listed[0] if listed else "it did not validate"
+    _notify(
+        f"Your customised template '{template_id}' was not used — {first} "
+        f"The shipped version ran instead. See Tools → Templates."
+    )
+
+
+def template_rejections() -> dict:
+    """Customised templates skipped this session, keyed by template id."""
+    return dict(_template_rejections)
+
+
+def clear_template_rejections() -> None:
+    """Forget rejections so a re-saved template can report again."""
+    _template_rejections.clear()
+
+
 def _notify(message: str) -> None:
     """Non-modal napari warning, on the GUI thread; a no-op with no GUI."""
     try:
@@ -212,6 +252,31 @@ def _notify(message: str) -> None:
     _show()
 
 
+def _event_loop_running() -> bool:
+    """True when the main thread is actually inside a Qt event loop.
+
+    ``QMessageBox.exec_()`` starts a *nested* event loop and returns only when
+    something dismisses the dialog. In a process where nobody ever called
+    ``app.exec_()`` there is no window manager, no user and no other loop to
+    deliver that click, so it never returns.
+
+    ``QThread.loopLevel()`` is the direct answer — 0 outside any event loop, ≥1
+    inside one — and it is readable from a worker thread about the main thread,
+    which matters because failures are reported from napari workers.
+    """
+    try:
+        from qtpy.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            return False
+        return app.thread().loopLevel() > 0
+    except Exception:  # pragma: no cover - old Qt without loopLevel
+        # Unknown → assume a loop is running. A missed suppression shows a
+        # dialog nobody asked for; a wrong suppression is silence about a
+        # failed save, which is worse.
+        return True
+
+
 def _headless() -> bool:
     """True when Qt is up but nobody can answer a dialog.
 
@@ -221,9 +286,20 @@ def _headless() -> bool:
     That is not hypothetical — it hung the test suite for an hour once a fixture
     started creating the QApplication before the tests that inject write
     failures. The notification still fires; only the modal is suppressed.
+
+    Two independent signals, because the first one alone left the bug live on
+    exactly the machine where it hurts most. ``QT_QPA_PLATFORM`` catches CI and
+    explicitly headless runs — but a developer's desktop *has* a display, so
+    ``conftest.py`` deliberately does not set it, and every such signal stayed
+    unset while `pytest` still had no event loop. `pytest` then hung, for real,
+    in ``test_persistence_safety.py``. The loop-level check is the one that
+    actually describes the precondition: not "is there a screen" but "is anyone
+    processing events".
     """
     platform = os.environ.get("QT_QPA_PLATFORM", "").split(":")[0].strip().lower()
-    return platform in {"offscreen", "minimal", "minimalegl", "vnc"}
+    if platform in {"offscreen", "minimal", "minimalegl", "vnc"}:
+        return True
+    return not _event_loop_running()
 
 
 def _surface(kind: str, operation: str, message: str, show_modal: bool) -> None:
@@ -282,6 +358,11 @@ def failure_summary() -> str:
         # the one place a user goes looking for "did anything go wrong?".
         summary += (f" {len(_recording_failures)} step(s) could not be recorded "
                     f"— see the log.")
+    if _template_rejections:
+        # "Did anything go wrong?" has to include "is the code you customised
+        # actually the code that ran?".
+        summary += (f" {len(_template_rejections)} customised template(s) were "
+                    f"skipped — see Tools → Templates.")
     return summary
 
 
@@ -290,6 +371,7 @@ def reset_failures() -> None:
     _failures.clear()
     _recording_failures.clear()
     _modal_shown.clear()
+    _template_rejections.clear()
 
 
 def open_log_file() -> bool:
