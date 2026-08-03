@@ -9,7 +9,7 @@ The Markers tab lets you visualise expression of a user-defined set of genes acr
 | Control | Description |
 |---|---|
 | Clustering | Clustering that defines the cell groups shown in all plots |
-| Marker genes editor | Multi-line text box — paste a JSON dictionary of the form `{"Cluster A": ["Gene1", "Gene2"], "Cluster B": ["Gene3"]}`. Genes absent from the dataset are silently ignored |
+| Marker genes editor | Multi-line text box — paste a JSON dictionary of the form `{"Cluster A": ["Gene1", "Gene2"], "Cluster B": ["Gene3"]}`. Genes absent from the dataset are dropped, and the status bar names them |
 | Save format | Output file format: `PNG` or `SVG` |
 | Dotplot | Generates and saves a scanpy dotplot (mean expression + fraction detected) |
 | Heatmap | Generates and saves a mean-expression heatmap |
@@ -32,3 +32,6 @@ Each button opens a save-file dialog before rendering.
 - The JSON is validated on each button press; a status message reports any genes that were not found in the dataset.
 - The JSON content is stored in session state and restored automatically on the next load.
 - Plot types are independent — you can generate any subset in any order without re-running a computation step.
+- A valid clustering must be selected first; without one, the run stops with "Select a valid clustering first".
+- PNG output is written at a set resolution; SVG is vector and has no dpi setting.
+- All five plots are templated steps, so the exact code behind them can be read and changed in the [Templates](Tab-Templates) tab, and each is recorded into the analysis provenance.

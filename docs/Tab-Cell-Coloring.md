@@ -14,8 +14,9 @@ The Coloring tab controls how cells in the segmentation layer are rendered: you 
 | Colormap | Dropdown. Colour map applied to gene expression values (default: viridis). Options include viridis, plasma, magma, inferno, cividis, and others. |
 | Clustering | Dropdown. Clustering used for Cluster mode and for cluster-level visibility filtering. |
 | Filter by cluster | Checkbox. When enabled, reveals a grid of per-cluster checkboxes for manual visibility control. |
-| Min cluster size | Slider (100–10 000, default 500). Cell-count threshold used by **Filter Small Clusters**. |
-| Filter Small Clusters | Button. Automatically unchecks clusters whose cell count is below **Min cluster size**. |
+| Min cluster size | Slider (100–10 000, default 500, in steps of 100). Cell-count threshold used by **Filter Small Clusters**. |
+| Filter Small Clusters | Button. Unchecks clusters whose cell count is below **Min cluster size**. Also ticks **Filter by cluster** for you, so you do not need to enable it first. |
+| Edit Cluster Labels... | Button. Opens a dialog to rename the clusters of the selected clustering. The same dialog is available in the [Rank Genes](Tab-Rank-Genes) tab. |
 | Select All | Button. Checks all per-cluster visibility checkboxes. |
 | Deselect All | Button. Unchecks all per-cluster visibility checkboxes. |
 | Per-cluster checkboxes | Grid. Shows one checkbox per cluster; uncheck a cluster to hide those cells. |
@@ -34,4 +35,6 @@ The Coloring tab controls how cells in the segmentation layer are rendered: you 
 
 - The display does not update in real time; you must click **Apply Cell Coloring** after every change.
 - Cluster filtering and gene expression colouring are fully compatible: you can colour cells by gene expression while hiding specific clusters.
-- The last applied state is saved to the session and restored automatically on the next launch.
+- **Colouring settings are not persisted.** Every launch starts in Gene Expression mode on the first gene in the panel with the viridis colourmap and no cluster filter, whatever you had applied when you closed the viewer. The clusterings and cluster names themselves are saved; the way you were looking at them is not.
+- The cluster filter set here is read by several other tabs — Nhood Enrich, Co-occur, Lig-Rec and parts of ROI DEG restrict their results to the clusters left visible here. If an analysis returns fewer groups than expected, check whether a filter is still active.
+- Cells can also be coloured by a continuous per-cell score rather than a gene — the CNV tab uses this for CNV burden, and the Annot Dist tab for distance.

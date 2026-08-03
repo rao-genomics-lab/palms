@@ -16,8 +16,8 @@ The Annot Dist tab computes the minimum distance from each cell to the boundary 
 | Distance colormap | Colour map applied when colouring cells by distance (e.g. `plasma`) |
 | Run Distance Analysis | Computes the minimum distance to the annotation boundary for every cell |
 | Results area | Shows min, median, mean, and max distances overall, plus per-cluster medians |
-| Show Plot | Renders the distribution plot; enabled after running the analysis |
-| Export CSV... | Saves a table with cell coordinates, cluster assignment, and distance for each cell; enabled after running |
+| Show Plot | Renders the distribution plot; enabled after running the analysis. Also saves the figure — see the notes. |
+| Export CSV... | Saves a table with cell coordinates, cluster assignment, and a `distance_um` column for each cell; enabled after running. Defaults to the filename `annotation_distances.csv`. |
 | Colour cells by distance | Applies distance-based colouring to the cell labels layer using the selected colourmap; enabled after running |
 | Clear distance colouring | Restores the previous colourmap; enabled when distance colouring is active |
 
@@ -36,3 +36,4 @@ The Annot Dist tab computes the minimum distance from each cell to the boundary 
 
 - At least one annotation polygon of the selected type must exist before running the analysis.
 - Distance colouring is independent of other colouring modes; **Clear distance colouring** restores whatever colourmap was active before you applied distance colouring.
+- **Show Plot** also writes the figure to `<dataset>/plots/annot_distance.<fmt>`, where the format follows **Preferences → Plot format** (SVG by default, PNG at 300 dpi if selected). No save dialog appears; the file is simply written.

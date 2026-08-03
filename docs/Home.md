@@ -9,18 +9,20 @@ Xenium Viewer is an open-source, napari-based viewer for 10x Genomics Xenium spa
 - Transcript overlay with per-gene point layers and density heatmaps
 - Linked UMAP viewer in a separate floating window
 - Region-of-interest (ROI) analysis with differential gene expression
-- Ligand-receptor interaction analysis (via CellChat/squidpy)
+- Ligand-receptor interaction analysis (squidpy, over the OmniPath, LigRecExtra and CellPhoneDB databases)
 - Neighbourhood enrichment analysis
 - Co-occurrence analysis
 - Spatial domain inference (Novae integration)
-- Copy-number variation (CNV) inference (InSituCNV/infercnvpy integration)
+- Copy-number variation (CNV) inference with two backends — inferCNV and CopyKAT
 - H&E image registration using landmark-based affine alignment
 - ARMS fluorescence image overlay with landmark registration
 - Custom segmentation pipeline support
 - Annotation tools for labelling cells and regions
 - Crop Dataset tool for exporting drawn regions as standalone, independently-openable datasets
-- Interactive Notebook tab for running code against the loaded dataset
 - Reproducible analysis: every user action is recorded as a step in a provenance graph, exported as `analysis.py` and `analysis_notebook.ipynb` and carried across sessions
+- Customisable analysis templates: read, edit and validate the exact code each analysis button runs, per block, without touching the installation
+- Cache health checking and repair, with recovery of user-generated data from a backup store
+- On-disk inventory of everything a dataset holds, with selective deletion of viewer-created files
 
 ## Requirements
 
@@ -48,31 +50,37 @@ For full installation instructions, optional extras, and troubleshooting, see th
 
 ### Tab Reference
 
-| Tab | Description |
-|-----|-------------|
-| [Tab-Clustering](Tab-Clustering) | Leiden clustering and cluster assignment |
-| [Tab-Cell-Coloring](Tab-Cell-Coloring) | Colour cells by gene expression or metadata |
-| [Tab-Transcripts](Tab-Transcripts) | Per-gene transcript point layers and heatmaps |
-| [Tab-UMAP](Tab-UMAP) | UMAP dimensionality reduction and linked viewer |
-| [Tab-Rank-Genes](Tab-Rank-Genes) | Rank marker genes per cluster |
-| [Tab-Markers](Tab-Markers) | Marker gene panels and scoring |
-| [Tab-Gene-Correlation](Tab-Gene-Correlation) | Pairwise and module gene correlation |
-| [Tab-CNV](Tab-CNV) | Copy-number variation inference (InSituCNV) |
-| [Tab-ROI-Analysis](Tab-ROI-Analysis) | ROI-based differential gene expression |
-| [Tab-Ligand-Receptor](Tab-Ligand-Receptor) | Ligand-receptor interaction analysis |
-| [Tab-Neighborhood-Enrichment](Tab-Neighborhood-Enrichment) | Spatial neighbourhood enrichment |
-| [Tab-Co-occurrence](Tab-Co-occurrence) | Spatial co-occurrence scoring |
-| [Tab-Domains](Tab-Domains) | Spatial domain inference with Novae |
-| [Tab-Annot-Nhood](Tab-Annot-Nhood) | Neighbourhood-based cell annotation |
-| [Tab-Annot-Distance](Tab-Annot-Distance) | Distance-based cell annotation |
-| [Tab-HE-Registration](Tab-HE-Registration) | H&E image landmark registration |
-| [Tab-ARMS-Overlay](Tab-ARMS-Overlay) | ARMS fluorescence image overlay and registration |
-| [Tab-External-Images](Tab-External-Images) | Load and align external image files |
-| [Tab-Patches](Tab-Patches) | Tile/patch-based image export |
-| [Tab-Annotations](Tab-Annotations) | Draw and label annotation shapes |
-| [Tab-Segmentation](Tab-Segmentation) | Custom cell segmentation pipeline |
-| [Tab-Crop-Dataset](Tab-Crop-Dataset) | Export drawn regions as standalone datasets |
-| [Tab-Notebook](Tab-Notebook) | Interactive notebook and code journal |
+Listed in the order the tabs appear in the control panel. The name in brackets is the
+label on the tab itself, where it is abbreviated to fit.
+
+| Tab | Group | Description |
+|-----|-------|-------------|
+| [Clustering](Tab-Clustering) | Cells | Leiden clustering and cluster assignment |
+| [Cell Coloring](Tab-Cell-Coloring) (Coloring) | Cells | Colour cells by gene expression or metadata |
+| [Transcripts](Tab-Transcripts) | Cells | Per-gene transcript point layers and heatmaps |
+| [UMAP](Tab-UMAP) | Cells | UMAP dimensionality reduction and linked viewer |
+| [Rank Genes](Tab-Rank-Genes) | Genes | Rank marker genes per cluster |
+| [Markers](Tab-Markers) | Genes | Marker gene panels and scoring |
+| [Gene Correlation](Tab-Gene-Correlation) (Correlation) | Genes | Pairwise gene correlation |
+| [CNV](Tab-CNV) | Genes | Copy-number variation inference (inferCNV and CopyKAT) |
+| [ROI Analysis](Tab-ROI-Analysis) (ROI DEG) | Spatial | ROI-based differential gene expression |
+| [Ligand-Receptor](Tab-Ligand-Receptor) (Lig-Rec) | Spatial | Ligand-receptor interaction analysis |
+| [Neighborhood Enrichment](Tab-Neighborhood-Enrichment) (Nhood Enrich) | Spatial | Spatial neighbourhood enrichment |
+| [Co-occurrence](Tab-Co-occurrence) (Co-occur) | Spatial | Spatial co-occurrence scoring |
+| [Spatial Domains](Tab-Domains) (Domains) | Spatial | Spatial domain inference with Novae |
+| [Annot Nhood](Tab-Annot-Nhood) | Spatial | Neighbourhood enrichment around annotation regions |
+| [Annot Distance](Tab-Annot-Distance) (Annot Dist) | Spatial | Cell-to-annotation distance analysis |
+| [H&E Registration](Tab-HE-Registration) (H&E) | Images | H&E image landmark registration |
+| [ARMS Overlay](Tab-ARMS-Overlay) (ARMS) | Images | ARMS fluorescence image overlay and registration |
+| [External Images](Tab-External-Images) (Ext Images) | Images | Load and align external image files |
+| [Patches](Tab-Patches) | Images | Tile/patch-based overlays |
+| [Annotations](Tab-Annotations) | Tools | Draw and label annotation shapes |
+| [Segmentation](Tab-Segmentation) | Tools | Custom cell segmentation pipeline |
+| [Crop Dataset](Tab-Crop-Dataset) | Tools | Export drawn regions as standalone datasets |
+| [Notebook](Tab-Notebook) | Tools | Recorded analysis steps, notebook and script export |
+| [Dataset](Tab-Dataset) | Tools | On-disk inventory and selective deletion |
+| [Cache](Tab-Cache) | Tools | Cache health check, repair and recovery |
+| [Templates](Tab-Templates) | Tools | View and edit the code each analysis button runs |
 
 ### Tutorials
 
@@ -84,3 +92,4 @@ For full installation instructions, optional extras, and troubleshooting, see th
 | [Tutorial-ARMS-Overlay](Tutorial-ARMS-Overlay) | Overlay and register an ARMS fluorescence image |
 | [Tutorial-ROI-Analysis](Tutorial-ROI-Analysis) | Draw ROIs and run differential gene expression |
 | [Tutorial-Annotations](Tutorial-Annotations) | Annotate cells and export results |
+| [Tutorial-Recovering-a-Cache](Tutorial-Recovering-a-Cache) | Diagnose and repair a damaged zarr cache without losing your work |

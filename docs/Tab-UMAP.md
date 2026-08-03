@@ -22,7 +22,8 @@ The UMAP tab opens a linked scatter plot window showing cells projected into two
 
 ## Notes
 
-- UMAP coordinates are loaded from `analysis/umap/gene_expression_2_components/projection.csv` in the Xenium output directory and stored in `adata.obsm['X_umap']`. If this file is absent, the UMAP tab will not display data.
-- A clustering must be active before saving for the figure to be colour-coded. If no clustering is selected, the plot is saved without cluster colours.
+- UMAP coordinates are normally loaded from `analysis/umap/gene_expression_2_components/projection.csv` in the Xenium output directory and stored in `adata.obsm['X_umap']`. If that file is absent — as it is in a dataset produced by [Crop Dataset](Tab-Crop-Dataset) — the coordinates already in `adata.obsm['X_umap']` are used instead, so the tab still works. It is empty only when neither source exists.
+- **A clustering must be selected before saving.** With no clustering selected, **Save UMAP Plot...** reports "No clustering selected" and writes nothing at all — it does not fall back to an uncoloured figure.
 - PNG output is saved at 150 dpi. SVG output is saved in vector format and is recommended for publications or figures requiring further editing.
-- Cluster label renames applied in [Gene Analysis](Tab-Gene-Analysis) are reflected in the saved figure.
+- Cluster label renames applied in [Rank Genes](Tab-Rank-Genes) are reflected in the saved figure.
+- The step this tab records into the notebook **recomputes** the embedding with `sc.pp.neighbors` and `sc.tl.umap` rather than reading Xenium's precomputed coordinates. A replayed notebook therefore produces its own UMAP, which will resemble but not exactly match the one shown here.

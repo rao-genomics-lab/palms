@@ -35,3 +35,7 @@ The Annot Nhood tab runs neighbourhood enrichment analysis between real cell clu
 - Requires at least one clustering and at least one polygon of each selected annotation type.
 - The Z-score matrix rows and columns cover all real cell clusters plus all included annotation types.
 - Positive Z-scores indicate that a cell type tends to be found near that annotation type; negative Z-scores indicate spatial avoidance.
+- **Show Heatmap** also writes the figure to `<dataset>/plots/annot_nhood_enrichment.<fmt>`, where the format follows **Preferences → Plot format** (SVG by default, PNG at 300 dpi if selected). No save dialog appears; the file is simply written.
+- The results area repeats an important caveat: virtual cells carry no gene expression, so the Z-scores here describe spatial proximity alone and are not comparable to expression-based enrichment.
+- If no annotation types are found, the checkbox grid shows a placeholder pointing at the [Annotations](Tab-Annotations) tab rather than an empty list.
+- **This tab records nothing into the provenance graph**, so its results do not appear in `analysis.py` or the exported notebook. The virtual cells are sampled from a napari shapes layer that a standalone script has no access to, so there is no code that would reproduce them. Export the Z-score CSV if you need the numbers outside the viewer.

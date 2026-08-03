@@ -40,6 +40,9 @@
 - [Segmentation](Tab-Segmentation)
 - [Crop Dataset](Tab-Crop-Dataset)
 - [Notebook](Tab-Notebook)
+- [Dataset](Tab-Dataset)
+- [Cache](Tab-Cache)
+- [Templates](Tab-Templates)
 
 ---
 
@@ -50,3 +53,4 @@
 - [ARMS Overlay](Tutorial-ARMS-Overlay)
 - [ROI Analysis](Tutorial-ROI-Analysis)
 - [Annotations](Tutorial-Annotations)
+- [Recovering a Cache](Tutorial-Recovering-a-Cache)

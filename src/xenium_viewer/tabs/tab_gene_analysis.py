@@ -859,6 +859,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_n_genes_slider,
         ga_run_button,
         ga_progress,
+        # Built and filled at :246 but never laid out, so the top-50 preview has
+        # never been visible — the results reached the user only as a status line.
+        ga_results_text,
         ga_dotplot_n_slider,
         ga_dendro_check,
         ga_dotplot_btn_row,

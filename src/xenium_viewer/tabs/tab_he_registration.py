@@ -475,6 +475,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         coarse_align_button,
         lm_btn_row,
         register_button,
+        # Filled at :361 but never laid out. Tab-HE-Registration.md has always
+        # documented a "Residuals (read-only)" control; this is what makes that
+        # true. Per-landmark residuals are the only way to tell which landmark
+        # is dragging the fit, and the status bar shows the mean alone.
+        reg_residuals_qt,
         io_btn_row,
     )
 

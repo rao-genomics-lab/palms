@@ -17,7 +17,7 @@ The Clustering tab lets you run Leiden clustering on the cell expression matrix 
 | n_top_genes | Slider (500–4000, default 2000). Number of highly variable genes selected when "Use HVGs only" is active. |
 | Scale (max_value=10) | Checkbox (default unchecked). Scales the expression matrix to unit variance, capping values at 10. |
 | Run Leiden Clustering | Button. Executes Leiden clustering. The result is stored under the key `leiden_{flavor}_r{resolution}` (e.g. `leiden_igraph_r1.0`). |
-| Import Clustering... | Button. Opens a file dialog to load cluster assignments from a CSV or TSV file with columns `cell_id` and `group`. |
+| Import Clustering... | Button. Opens a file dialog to load cluster assignments from a CSV or TSV file with columns `cell_id` and `group`. If those column names are absent, the first two columns are used in that order. |
 | Export Clustering... | Button. Saves the active clustering to a CSV or TSV file. |
 | Status text area | Read-only. Displays the clustering key, number of clusters found, and the parameters used to produce the result. |
 
@@ -28,7 +28,7 @@ The Clustering tab lets you run Leiden clustering on the cell expression matrix 
 3. Optionally enable **Use HVGs only** and set **n_top_genes** to speed up computation on large datasets.
 4. Optionally enable **Scale (max_value=10)** if you want variance-scaled input.
 5. Click **Run Leiden Clustering**. Check the status area for the result key and cluster count.
-6. Switch to [Coloring](Tab-Cell-Coloring) or [Gene Analysis](Tab-Gene-Analysis) to use the new clustering.
+6. Switch to [Coloring](Tab-Cell-Coloring) or [Rank Genes](Tab-Rank-Genes) to use the new clustering.
 7. To use an externally computed partition, click **Import Clustering...** and select a CSV/TSV file with `cell_id` and `group` columns. The filename becomes the clustering key.
 8. To save results for sharing or downstream scripts, click **Export Clustering...**.
 
@@ -37,4 +37,7 @@ The Clustering tab lets you run Leiden clustering on the cell expression matrix 
 - The result key is deterministic: re-running with the same flavour and resolution produces the same key and overwrites the previous result.
 - Datasets clustered before the flavour picker existed hold keys of the older form `leiden_r{resolution}`. Those still load and appear in every dropdown, but a new run at the same resolution now writes `leiden_igraph_r{resolution}` alongside them rather than replacing them — delete the older key if you don't want both.
 - Imported clusterings appear alongside computed ones in every clustering dropdown across the viewer.
-- To rename clusters for display and export, use the **Edit Cluster Labels...** button in the [Gene Analysis](Tab-Gene-Analysis) tab.
+- To rename clusters for display and export, use the **Edit Cluster Labels...** button, available in both the [Rank Genes](Tab-Rank-Genes) and [Coloring](Tab-Cell-Coloring) tabs.
+- A progress bar under **Run Leiden Clustering** tracks the run, which is dominated by the neighbour-graph construction on a large section.
+- The clustering runs from a template, so the exact code — including the fixed random seed — can be read and changed in the [Templates](Tab-Templates) tab, and is recorded verbatim into the exported notebook.
+- Cluster assignments produced before the move to scanpy's own Leiden implementation will not match a new run at the same parameters, because the two optimise slightly different objectives. Existing saved clusterings are left exactly as they were.

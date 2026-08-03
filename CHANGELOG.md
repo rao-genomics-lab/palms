@@ -1,5 +1,77 @@
 # Changelog
 
+## [Unreleased] — 2026-08-02
+
+### Documentation
+- **Comprehensive wiki review.** `docs/` doubles as the GitHub Wiki and the mkdocs
+  source; 20 of 23 `Tab-*.md` pages had not been touched since 2026-06-26, and
+  `mkdocs.yml` had not moved either. Audited every page against the code it documents.
+
+  **Three shipped tabs had no page and appeared in no navigation** — Tools → Dataset,
+  Cache and Templates, all added in the last fortnight. `docs/Tab-Dataset.md`,
+  `docs/Tab-Cache.md` and `docs/Tab-Templates.md` now exist, and the Tools section of
+  `_Sidebar.md`, `Home.md`, `Interface-Overview.md` and the `mkdocs.yml` nav lists all
+  seven tabs rather than four. The nav had also been missing `Tab-CNV.md` and
+  `Tab-Crop-Dataset.md` since they were written.
+
+  **`Tab-CNV.md` predated the entire CopyKAT backend.** It described a single-backend
+  tab; it now covers the backend selector (defaulting to *both*), CopyKAT max cells,
+  call extrapolation, the cell-type restriction grid, the per-backend/per-resolution
+  heatmap selectors, the human-only panel guard, and the detached second-environment
+  run. Its output paths (`plots/cnv_heatmap_<backend>_<key>.*`) and clustering keys
+  (`cnv_leiden_res<res>`, not `cnv_leiden_<res>`) were both wrong.
+
+  **Corrections that mattered most**, each verified against the code rather than
+  assumed: `Tab-Transcripts.md` claimed **Min QV** filtered at display time and that
+  **Show transcripts** toggled the layer — neither is connected to anything at runtime;
+  `Tab-Cell-Coloring.md` claimed colouring state was restored across launches, and it is
+  not persisted at all; `Tab-UMAP.md` claimed a plot without a clustering saved
+  uncoloured, when it writes nothing; `Tab-Rank-Genes.md` claimed LLM annotation needs
+  an API key, when it shells out to a local CLI; `Installation.md` named a
+  `sdata_cached_corrupt_*` file the code no longer produces and described staleness as
+  an mtime check rather than a content hash. Six pages omitted that their figure is
+  written to `plots/` (SVG by default) with no dialog. `--no-user-templates` and
+  `XENIUM_VIEWER_TEMPLATE_PATH` were undocumented despite being the designated
+  "results in doubt" escape hatches.
+
+  New `docs/Tutorial-Recovering-a-Cache.md`, because recovery spans the startup dialog,
+  the Cache tab and the Dataset tab, so no reference page owns it. New `## Menu Bar`
+  section in `Interface-Overview.md`, which had never documented the three menus.
+
+### Fixed
+- **Three widgets were built, filled, and never laid out.** `ga_results_text` (the Rank
+  Genes top-50 preview), `lr_results_text` (the Lig-Rec interaction counts and top-20
+  table) and `reg_residuals_qt` (the H&E per-landmark residuals) were each constructed,
+  connected and populated on every run, then omitted from their tab's `make_tab(...)`
+  call — so the work was done and discarded, and the results reached the user only as a
+  one-line status message. The H&E one is the sharpest case: `Tab-HE-Registration.md`
+  has always documented a "Residuals (read-only)" control, and per-landmark residuals
+  are the only way to see *which* landmark is dragging a fit, where the status bar shows
+  the mean alone. Found by diffing each page's control table against the `make_tab`
+  argument list, which is the definitive record of what renders.
+
+- **The screenshot script mislabelled a tab.** `capture_screenshots.py` mapped Tools
+  index 2 to `tab-notebook.png`, but index 2 has been Crop Dataset since that tab was
+  inserted — so every capture run overwrote the Notebook screenshot with a picture of
+  Crop Dataset. Indices are positional into `app.py`'s `addTab` order; the missing CNV
+  and Tools 3–6 entries are added.
+
+- **An internal planning note was published to the public wiki.**
+  `push_to_wiki.sh` excluded repo-only files by a hand-maintained list, which had to be
+  extended after each leak and had already missed `user-configurable-templates-todo.md`.
+  Replaced with a convention — a wiki page is `Title-Case.md` or `_Sidebar.md`, and
+  internal notes are lower-case — so the next note is repo-only without anyone
+  remembering. `tests/test_docs_links.py` parses the pattern out of the script, keeping
+  it the single source of truth.
+
+### Added
+- **`tests/test_docs_links.py`** — the first automated check on `docs/`. Asserts that
+  internal wiki links resolve, that referenced screenshots exist, that the set of
+  published pages, the mkdocs nav and the sidebar agree, and that every `addTab` label
+  in `app.py` has a reference page (read with `ast`, so no Qt import). That third
+  assertion alone would have caught every navigation gap found in this review. Pure
+  stdlib, no dataset, runs in the existing CI job in milliseconds.
+
 ## [Unreleased] — 2026-07-31
 
 ### Fixed
