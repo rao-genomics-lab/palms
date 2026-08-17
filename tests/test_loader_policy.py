@@ -284,6 +284,124 @@ def test_an_unopenable_cache_with_no_dialog_raises_rather_than_rebuilding(
         )
 
 
+# ── the headless opt-in: xenium-build-cache --on-stale ───────────────────────
+#
+# The rule above ("never discard without asking") left a terminal with no way to
+# say yes. --on-stale is that yes, and these check it stays an opt-in.
+
+def test_without_on_stale_a_stale_cache_with_user_data_is_still_kept(
+    monkeypatch, fake_cache,
+):
+    """The default is unchanged: no answer given, no dialog available, keep."""
+    cache, _ = fake_cache
+    (cache / "adata_cnv_cache_copykat.h5ad").write_bytes(b"x")
+    monkeypatch.setattr(loader, "_qt_message_box", lambda: None)
+
+    assert loader._stale_preference(_detect_user_data(cache), certain=True) == "keep"
+
+
+@pytest.mark.parametrize("answer", ["rebuild", "restore", "keep"])
+def test_on_stale_answers_without_a_dialog(monkeypatch, fake_cache, answer):
+    cache, _ = fake_cache
+    (cache / "adata_cnv_cache_copykat.h5ad").write_bytes(b"x")
+    monkeypatch.setattr(loader, "_qt_message_box", lambda: None)
+
+    assert loader._stale_preference(
+        _detect_user_data(cache), certain=True, on_stale=answer) == answer
+
+
+def test_on_stale_also_covers_the_branches_that_never_prompt(fake_cache):
+    """An uncertain, empty cache rebuilds silently — 'keep' must still stop it.
+
+    This is the branch that returns before any dialog is consulted, so a preset
+    threaded only through ``_ask_rebuild_preference`` would have missed it.
+    """
+    cache, _ = fake_cache
+    empty = _detect_user_data(cache)
+
+    assert loader._stale_preference(empty, certain=False) is None
+    assert loader._stale_preference(empty, certain=False, on_stale="keep") == "keep"
+
+
+def test_on_stale_keep_still_refuses_an_unopenable_cache(monkeypatch, fake_cache):
+    """'keep' is not an answer here — the cache does not open, so keeping it is
+    not a way to carry on."""
+    from xenium_viewer.utils import cache_repair
+
+    cache, _ = fake_cache
+    (cache / "adata_cnv_cache_copykat.h5ad").write_bytes(b"x")
+    monkeypatch.setattr(loader, "_qt_message_box", lambda: None)
+
+    with pytest.raises(loader.CacheLoadAborted):
+        loader._ask_corrupt_cache(
+            OSError("bad store"), cache_repair.verify(cache),
+            _detect_user_data(cache), preset="keep",
+        )
+
+    for answer in ("rebuild", "restore"):
+        assert loader._ask_corrupt_cache(
+            OSError("bad store"), cache_repair.verify(cache),
+            _detect_user_data(cache), preset=answer,
+        ) == answer
+
+
+def test_a_mistyped_on_stale_is_an_error_not_a_shrug(tmp_path):
+    """It must not degrade to 'ask', which on a headless box means 'keep'."""
+    with pytest.raises(ValueError, match="on_stale"):
+        loader.load_sdata(tmp_path, on_stale="rebiuld")
+
+
+# ── the console script ───────────────────────────────────────────────────────
+
+def test_build_cache_parser_maps_flags_to_load_sdata_kwargs():
+    parser = loader._build_parser()
+
+    args = parser.parse_args(["/data"])
+    assert args.on_stale == "ask"          # translated to on_stale=None in main()
+    assert args.n_jobs == 8
+    assert not args.no_pyramid and not args.no_cache and not args.check
+
+    args = parser.parse_args(
+        ["/data", "--on-stale", "restore", "--no-pyramid", "--n-jobs", "2", "--check"])
+    assert (args.on_stale, args.n_jobs, args.no_pyramid, args.check) == (
+        "restore", 2, True, True)
+
+
+def test_build_cache_parser_rejects_an_unknown_on_stale():
+    with pytest.raises(SystemExit):
+        loader._build_parser().parse_args(["/data", "--on-stale", "maybe"])
+
+
+def test_the_console_script_target_exists():
+    """pyproject points xenium-build-cache at this name."""
+    entry = "xenium-build-cache = \"xenium_viewer.loader:main\""
+    pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+    assert entry in pyproject
+    assert callable(loader.main)
+
+
+def test_check_reports_a_missing_cache_without_creating_one(tmp_path, capsys):
+    assert loader._check_cache(tmp_path) == 1
+    assert "No zarr cache" in capsys.readouterr().out
+    assert not (tmp_path / "sdata_cached.zarr").exists()
+
+
+def test_check_is_read_only_on_a_cache_it_condemns(fake_cache, capsys):
+    """--check must not touch the store, least of all a broken one."""
+    cache, experiment = fake_cache
+    (cache / "adata_cnv_cache_copykat.h5ad").write_bytes(b"x")
+    before = sorted(p.relative_to(cache) for p in cache.rglob("*"))
+
+    # No manifest and a source newer than the cache ⇒ reported as possibly stale.
+    os.utime(experiment, (time.time() + 10, time.time() + 10))
+    assert loader._check_cache(cache.parent) == 1
+
+    out = capsys.readouterr().out
+    assert "stale" in out.lower()
+    assert "adata_cnv_cache_copykat.h5ad" in out
+    assert sorted(p.relative_to(cache) for p in cache.rglob("*")) == before
+
+
 def test_the_loader_never_deletes_a_cache_directory():
     """Every destructive branch must be a rename. Source-level guard."""
     import re

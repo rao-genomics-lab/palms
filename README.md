@@ -109,6 +109,11 @@ xenium-viewer [/path/to/xenium/output]
 # Produces transcript_cache/ next to the dataset, used for fast gene loading.
 xenium-preprocess /path/to/xenium/output
 
+# Build the SpatialData zarr cache without starting the GUI (tens of minutes).
+# The viewer does this on first launch anyway; this is how to get it out of the
+# way over ssh or overnight. `--check` reports on an existing cache instead.
+xenium-build-cache /path/to/xenium/output
+
 # Skip the SpatialData zarr cache (force reload from raw output)
 xenium-viewer /path/to/xenium/output --no-cache
 ```
@@ -119,6 +124,7 @@ Console scripts shipped:
 | ---------------------------------- | ------------------------------------------------------------ |
 | `xenium-viewer`                    | Launch the GUI                                               |
 | `xenium-preprocess`                | Build the per-gene transcript feather cache (run once)       |
+| `xenium-build-cache`               | Build/inspect the SpatialData zarr cache without the GUI     |
 | `xenium-fetch-references`          | Download public scRNA-seq references for label transfer      |
 | `xenium-build-custom-segmentation` | Build custom segmentation assets from Seurat extract output  |
 
