@@ -546,7 +546,11 @@ API_SECTIONS: list[ApiSection] = [
                 "cold `spatialdata_io.xenium()` needs, and the pyramid levels come "
                 "back read from disk rather than as a lazy `coarsen()` chain — "
                 "which is the difference between a 1.7 GB and a 23 GB peak the "
-                "moment you touch a low-resolution level.",
+                "moment you touch a low-resolution level. `on_stale` answers the "
+                "stale-cache question in advance (`'keep'`, `'rebuild'` or "
+                "`'restore'`) instead of prompting, which is what makes the load "
+                "usable with no GUI attached; the `xenium-build-cache` console "
+                "script is this function with that flag exposed.",
                 snippet=(
                     "from pathlib import Path\n"
                     "from xenium_viewer import loader\n\n"

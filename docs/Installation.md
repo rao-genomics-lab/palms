@@ -93,6 +93,30 @@ xenium-viewer /path/to/xenium/output/ --no-user-templates
 
 `python -m xenium_viewer` is equivalent to `xenium-viewer` and accepts the same arguments.
 
+### Building the zarr cache ahead of time
+
+The first launch on a dataset reads the raw Xenium output and writes `sdata_cached.zarr/` beside it, which takes tens of minutes and tens of GB. That happens automatically, so this step is optional — but it holds a napari window open for the duration, which is awkward over ssh. `xenium-build-cache` does the same work with no GUI:
+
+```bash
+# Build it (or refresh it) — safe to run detached or overnight
+xenium-build-cache /path/to/xenium/output/
+
+# Report on an existing cache and exit; builds nothing, writes nothing.
+# Exits non-zero if the cache is missing, stale, or does not verify.
+xenium-build-cache /path/to/xenium/output/ --check
+```
+
+With no GUI attached there is nobody to answer the "this cache looks stale — rebuild it?" question, so by default the command **keeps the existing cache** rather than discarding work you cannot get back. `--on-stale` answers in advance:
+
+| `--on-stale` | Meaning |
+|--------------|---------|
+| `ask` (default) | Prompt if a GUI is available, otherwise keep the cache untouched |
+| `restore` | Rebuild and carry your ROIs, registrations, clusterings and CNV results over |
+| `rebuild` | Rebuild and discard them (the old cache is still moved aside, never deleted) |
+| `keep` | Load the cache as it is, and stop asking |
+
+Run `--check` first if you are not sure what a rebuild would cost you — it lists the user-generated data the cache holds. This is separate from `xenium-preprocess`, which builds the per-gene transcript cache; the two are independent and can be run in either order.
+
 ### Environment variables
 
 | Variable | Meaning |
@@ -109,6 +133,7 @@ The following commands are available after activating the environment:
 |---------|-------------|
 | `xenium-viewer` | Launch the viewer |
 | `xenium-preprocess` | Preprocess transcripts for fast per-gene loading |
+| `xenium-build-cache` | Build or inspect the SpatialData zarr cache without the GUI |
 | `xenium-fetch-references` | Download pre-built label transfer reference datasets |
 | `xenium-build-custom-segmentation` | Run the custom cell segmentation pipeline |
 

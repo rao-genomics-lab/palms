@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased] — 2026-08-17 (headless cache build)
+
+### Added
+- **`xenium-build-cache` console script** — builds `sdata_cached.zarr/` for a dataset
+  without starting the GUI, so the cold read (tens of minutes, tens of GB) can happen
+  over ssh or overnight. The capability already existed as `loader.main()` but was never
+  registered in `[project.scripts]`, never documented, and its `--help` still advertised
+  `scripts/01_load_sdata.py`, deleted in the March 2026 refactor. `xenium-preprocess`
+  only ever built the *transcript* cache, which is what made the zarr one look like
+  GUI-only work.
+
+  Flags: `--on-stale {ask,keep,rebuild,restore}`, `--no-pyramid`, `--n-jobs`, `--check`.
+- **`--check`** reports a cache's freshness, integrity and user-generated contents and
+  exits without building anything, non-zero if it is missing, stale or does not verify.
+  It reuses `cache_repair.verify` and `_detect_user_data`, both filesystem-level, so it
+  works on a store too broken for zarr to open — which is when it gets run.
+
+### Changed
+- **`load_sdata(on_stale=)`** answers the stale-cache question in advance instead of
+  prompting. This closes a real gap rather than relaxing a safety rule: with no dialog
+  available `_ask_rebuild_preference` returns `'keep'` and `_ask_corrupt_cache` raises,
+  deliberately — but that left a terminal user with no way to say yes at all, short of
+  moving the cache aside by hand. The default (`None`) is unchanged, and the GUI passes
+  it. `'keep'` still does not satisfy `_ask_corrupt_cache`: a cache that will not open
+  cannot be kept, and pretending otherwise would hide the breakage.
+- The stale-cache decision moved into `loader._stale_preference`, a near-pure function.
+  It checks `on_stale` **before** the branch chain, because two of those branches (the
+  pre-manifest rebuild, and a certain-stale cache holding nothing) return without ever
+  consulting a dialog — a preset threaded only through the ask-helper would have been
+  silently ignored there. Extracting it also made every branch testable without data.
+
 ## [Unreleased] — 2026-08-17 (documentation)
 
 ### Tracked, not fixed

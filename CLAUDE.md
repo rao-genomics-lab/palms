@@ -17,6 +17,10 @@ conda activate xenium_viewer
 # Without this, transcript loading falls back to scanning transcripts.parquet (~5s/gene instead of <100ms)
 xenium-preprocess /path/to/xenium/output/
 
+# Optional: build the SpatialData zarr cache without the GUI (the viewer builds
+# it on first launch anyway). --check reports on an existing one and writes nothing.
+xenium-build-cache /path/to/xenium/output/
+
 # Launch viewer (file dialog opens if no path given)
 xenium-viewer [/path/to/xenium/output/]
 
@@ -24,7 +28,7 @@ xenium-viewer [/path/to/xenium/output/]
 xenium-viewer /path/to/xenium/output/ --no-cache
 ```
 
-The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
+The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-build-cache`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
 
 There is a `pytest` suite in `tests/` (~320 tests) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -64,7 +68,7 @@ manual/exploratory.
 ### Entry Points & Load Sequence
 
 1. **`src/xenium_viewer/app.py`** — Main entry point (~1300 lines). Validates data dir, orchestrates loading, builds napari viewer with layers, instantiates all managers, creates `ViewerContext`, builds all tab widgets, then restores session. The `main()` function is the `xenium-viewer` console-script entry point.
-2. **`src/xenium_viewer/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness comes from a content hash in `.xv_manifest.json` (see "Cache safety"). Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`.
+2. **`src/xenium_viewer/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness comes from a content hash in `.xv_manifest.json` (see "Cache safety"). Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`. Its `main()` is the `xenium-build-cache` console script — the same load, headless, so the cold read can happen over ssh. `load_sdata(on_stale=)` is how a caller with no GUI authorises a rebuild: `_stale_preference` checks it *before* any branch that would prompt, because two of those branches never reach a dialog. Default `None` keeps the GUI behaviour exactly as it was, and `'keep'` deliberately does not satisfy `_ask_corrupt_cache` — a cache that will not open cannot be kept.
 3. **`src/xenium_viewer/preprocess.py`** — One-time step that splits the transcript parquet into ~480 per-gene feather files for fast per-gene loading (~100ms vs 4–5s). The `main()` function is the `xenium-preprocess` console-script entry point.
 
 ### Central State: ViewerContext

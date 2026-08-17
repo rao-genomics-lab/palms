@@ -1,8 +1,9 @@
 """
 SpatialData loading for Xenium 3.x output.
 
-Usage (standalone test):
-    python scripts/01_load_sdata.py
+Also the ``xenium-build-cache`` console script (see ``main`` at the bottom of
+this file), which runs the same load headlessly so the slow first read of a
+dataset can happen without holding a napari window open.
 
 Returns a SpatialData object with:
   - images:  morphology_focus (multiscale, 4-channel, CYX)
@@ -203,6 +204,43 @@ def _format_user_data_message(user_data: dict) -> str:
     return "\n".join(lines)
 
 
+def _stale_preference(user_data: dict, certain: bool,
+                      on_stale: Optional[str] = None) -> Optional[str]:
+    """Decide what to do about a stale cache. Pure apart from its printing.
+
+    Returns 'restore', 'rebuild', 'keep', or ``None`` for "say nothing more and
+    rebuild" — the pre-manifest case, where there is nothing to lose.
+
+    ``on_stale`` is the caller answering in advance (``xenium-build-cache
+    --on-stale``), which is the only way to authorise a rebuild from a terminal:
+    with no dialog every branch below either keeps the cache or asks. It is
+    checked first so it covers the branches that never reach a prompt, and it is
+    deliberately not a default — an explicit opt-in is not the same thing as a
+    silent one.
+    """
+    if on_stale is not None:
+        print(f"Zarr cache is stale; proceeding with '{on_stale}' as instructed.")
+        return on_stale
+
+    if not certain and not _has_any_user_data(user_data):
+        # Pre-manifest cache, mtime-only signal, nothing to lose:
+        # rebuilding is cheap insurance and stamps a manifest.
+        print("Zarr cache may be stale (no manifest; experiment.xenium is "
+              "newer). Rebuilding...")
+        return None
+
+    if not certain:
+        print("Zarr cache may be stale — the check is a file timestamp, "
+              "which a copy or re-download also changes.")
+        return _ask_rebuild_preference(user_data, certain=False)
+
+    preference = (_ask_rebuild_preference(user_data)
+                  if _has_any_user_data(user_data) else "rebuild")
+    if preference == "rebuild":
+        print("Zarr cache is stale (experiment.xenium has changed). Rebuilding...")
+    return preference
+
+
 def _ask_rebuild_preference(user_data: dict, certain: bool = True) -> str:
     """Ask what to do about a stale cache. Returns 'restore', 'rebuild' or 'keep'.
 
@@ -263,13 +301,22 @@ def _qt_message_box():
     return QMessageBox if QApplication.instance() is not None else None
 
 
-def _ask_corrupt_cache(error: Exception, report, user_data: dict) -> str:
+def _ask_corrupt_cache(error: Exception, report, user_data: dict,
+                       preset: Optional[str] = None) -> str:
     """Ask what to do about a cache that will not open even after repair.
 
     Returns 'restore', 'rebuild' or 'quit'. Never returns a destructive default:
     with no way to prompt we raise instead, because the previous behaviour —
     silently rebuilding 30 GB — is the thing being fixed.
+
+    ``preset`` answers in advance for a headless caller, but only for the two
+    answers that make sense here. 'keep' does not: this cache cannot be opened,
+    so keeping it is not a way to carry on — it falls through to the raise
+    below, which is what tells the user their cache is broken.
     """
+    if preset in ("restore", "rebuild"):
+        return preset
+
     summary = _format_user_data_message(user_data)
     detail = (
         f"The zarr cache could not be opened:\n  {error}\n\n"
@@ -619,11 +666,15 @@ def _retile_morphology_focus(sdata, path: Path) -> bool:
     return True
 
 
+ON_STALE_CHOICES = ("keep", "rebuild", "restore")
+
+
 def load_sdata(
     path: Path,
     build_pyramid: bool = True,
     n_jobs: int = 8,
     use_cache: bool = True,
+    on_stale: Optional[str] = None,
 ):
     """
     Load the Xenium 3.x output as a SpatialData object.
@@ -642,12 +693,23 @@ def load_sdata(
         Number of threads for spatialdata_io.
     use_cache : bool
         If True, use/create a zarr cache for faster subsequent loads.
+    on_stale : {'keep', 'rebuild', 'restore'}, optional
+        Answer the stale/unopenable-cache question in advance instead of
+        prompting. ``None`` (the default, and what the GUI passes) prompts if a
+        dialog is available and otherwise keeps the cache. Used by
+        ``xenium-build-cache --on-stale``, which is the only way to authorise a
+        rebuild from a terminal.
 
     Returns
     -------
     spatialdata.SpatialData
     """
     from datetime import datetime
+
+    if on_stale is not None and on_stale not in ON_STALE_CHOICES:
+        raise ValueError(
+            f"on_stale must be one of {ON_STALE_CHOICES} or None, got {on_stale!r}"
+        )
 
     cache_path = path / "sdata_cached.zarr"
     experiment_path = path / "experiment.xenium"
@@ -673,21 +735,7 @@ def load_sdata(
         preference = None
 
         if stale:
-            if not certain and not _has_any_user_data(user_data):
-                # Pre-manifest cache, mtime-only signal, nothing to lose:
-                # rebuilding is cheap insurance and stamps a manifest.
-                print("Zarr cache may be stale (no manifest; experiment.xenium is "
-                      "newer). Rebuilding...")
-            elif not certain:
-                print("Zarr cache may be stale — the check is a file timestamp, "
-                      "which a copy or re-download also changes.")
-                preference = _ask_rebuild_preference(user_data, certain=False)
-            else:
-                preference = (_ask_rebuild_preference(user_data)
-                              if _has_any_user_data(user_data) else "rebuild")
-                if preference == "rebuild":
-                    print("Zarr cache is stale (experiment.xenium has changed). "
-                          "Rebuilding...")
+            preference = _stale_preference(user_data, certain, on_stale)
 
         if not stale or preference == "keep":
             print(f"Loading SpatialData from zarr cache: {cache_path}")
@@ -704,7 +752,8 @@ def load_sdata(
                 return sdata
             except Exception as e:
                 from xenium_viewer.utils import cache_repair
-                choice = _ask_corrupt_cache(e, cache_repair.verify(cache_path), user_data)
+                choice = _ask_corrupt_cache(e, cache_repair.verify(cache_path),
+                                            user_data, preset=on_stale)
                 if choice == "quit":
                     raise CacheLoadAborted(
                         "Cancelled at the user's request; the cache was left untouched."
@@ -936,18 +985,119 @@ def get_label_to_obs_mapping(sdata):
     return label_to_obs
 
 
-def main():
+def _build_parser():
+    """The ``xenium-build-cache`` argument parser, separated so it can be tested.
+
+    The description is spelled out rather than taken from ``__doc__``: the
+    module docstring describes the library, and putting it here is how the
+    ``--help`` text came to advertise a script deleted in the 2026 refactor.
+    """
     import argparse
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="xenium-build-cache",
+        description=(
+            "Build the SpatialData zarr cache (sdata_cached.zarr/) for a Xenium "
+            "output directory, without starting the GUI. The viewer builds this "
+            "on first launch anyway; running it here lets the slow first read "
+            "happen over ssh or overnight. Complements xenium-preprocess, which "
+            "builds the separate per-gene transcript cache."
+        ),
+    )
     parser.add_argument("data_dir",
                         help="Path to Xenium output directory")
+    parser.add_argument("--on-stale", choices=("ask",) + ON_STALE_CHOICES,
+                        default="ask",
+                        help="What to do when the existing cache is stale or will "
+                             "not open. 'ask' (default) prompts if a GUI is "
+                             "available and otherwise keeps the cache untouched, "
+                             "so a rebuild from a terminal has to be asked for: "
+                             "'rebuild' discards user data in the cache, 'restore' "
+                             "rebuilds and carries it over, 'keep' loads it as-is.")
+    parser.add_argument("--no-pyramid", action="store_true",
+                        help="Do not build the morphology_focus image pyramid "
+                             "(faster, but pan/zoom in the viewer will stutter)")
+    parser.add_argument("--n-jobs", type=int, default=8,
+                        help="Threads for spatialdata_io (default: 8)")
+    parser.add_argument("--check", action="store_true",
+                        help="Report the cache's status and exit without building "
+                             "anything. Exits non-zero if it is missing, stale or "
+                             "does not verify.")
     parser.add_argument("--no-cache", action="store_true",
-                        help="Skip zarr cache, load from raw output")
+                        help="Read the raw output without writing a cache — a dry "
+                             "run of the read path, not a way to build one")
+    return parser
+
+
+def _check_cache(data_path: Path) -> int:
+    """Print what is known about a cache without opening it. Returns an exit code.
+
+    Every call here is read-only and filesystem-level (the same property
+    ``cache_repair.verify`` relies on), so this works on a store too broken for
+    zarr to open — which is exactly when someone runs it.
+    """
+    from xenium_viewer.utils import cache_repair
+
+    cache_path = data_path / "sdata_cached.zarr"
+    experiment_path = data_path / "experiment.xenium"
+
+    print(f"Dataset: {data_path}")
+    if not cache_path.exists():
+        print(f"No zarr cache at {cache_path}.")
+        print("Run this command without --check to build it.")
+        return 1
+
+    print(f"Cache:   {cache_path}")
+    ok = True
+
+    stale, certain = _is_cache_stale(cache_path, experiment_path)
+    if not experiment_path.exists():
+        print("Freshness: unknown — no experiment.xenium to compare against.")
+    elif stale and certain:
+        print("Freshness: STALE — experiment.xenium has changed since the build.")
+        ok = False
+    elif stale:
+        print("Freshness: possibly stale — no manifest, so this is an mtime "
+              "comparison, which copying the dataset also trips.")
+        ok = False
+    else:
+        print("Freshness: up to date.")
+
+    report = cache_repair.verify(cache_path)
+    print("\nIntegrity:")
+    print(report.summary())
+    if not report.ok:
+        ok = False
+
+    user_data = _detect_user_data(cache_path)
+    if _has_any_user_data(user_data):
+        # Not a duplicate of the sidecar list above: this is the "what would
+        # --on-stale rebuild throw away" view, the same one the GUI dialog shows.
+        print("\nUser-generated data in this cache:")
+        print(_format_user_data_message(user_data))
+    else:
+        print("\nNo user-generated data in this cache.")
+
+    return 0 if ok else 1
+
+
+def main():
+    parser = _build_parser()
     args = parser.parse_args()
 
     data_path = Path(args.data_dir)
+    if not data_path.is_dir():
+        sys.exit(f"Error: {data_path} is not a directory.")
 
-    sdata = load_sdata(data_path, use_cache=not args.no_cache)
+    if args.check:
+        sys.exit(_check_cache(data_path))
+
+    sdata = load_sdata(
+        data_path,
+        build_pyramid=not args.no_pyramid,
+        n_jobs=args.n_jobs,
+        use_cache=not args.no_cache,
+        on_stale=None if args.on_stale == "ask" else args.on_stale,
+    )
     umap_df = load_umap(data_path)
     clusterings = load_clusterings(data_path)
 
