@@ -1,5 +1,107 @@
 # Changelog
 
+## [Unreleased] — 2026-08-16
+
+### Performance
+- **The transcript feather cache rebuilt ~13× more data than it needed to** — measured, not
+  estimated: of the ~69 minutes a verified real-scale crop took, ~53 minutes (77%) was
+  `preprocess.py`. Feather (Arrow IPC) has no append, so `_flush_buffers` **read back and
+  rewrote every gene's entire accumulated file on every flush cycle**; with ~13 cycles that
+  is `sum(1..13)/13 ≈ 7×` the final size in writes plus ~6× in reads, and the same
+  multiplier on the `pd.concat` cost — ~66,000 read+write operations where 5,101 writes
+  would do. (The measurement was against local disk, so this was genuine rewrite cost, not
+  NAS latency.) Replaced with **one open `pa.ipc.new_file` writer per gene**, so each row is
+  written exactly once; `ulimit -n` is ~1e6, so a handle per gene is not a concern. Two
+  supporting changes: all batches are written against **one fixed schema** (decoding
+  dictionary columns to their value type — `feature_name` comes back from `to_pandas()` as a
+  dictionary whose categories vary batch to batch, which the writer rejects on the first
+  mismatch, the same class of bug hit in `crop_export.py`), and `iter_batches(columns=…)` now
+  reads only the 6 columns used instead of decoding all 13 and discarding most.
+
+  **Measured: full 218.5M-row dataset in 6.2 min / 1.40 GB peak RSS**, versus a 52.6-min
+  baseline for 127.9M kept rows — ~13× faster normalised per row. Correctness was pinned
+  first: old vs new over a real 3M-row slice forced through ~6 flush cycles produce
+  **identical output** — same 5,101 genes, same row counts, same values, and the same dtypes
+  (`float32` preserved, not upcast). Benefits the `xenium-preprocess` CLI and `app.py`'s
+  one-time preprocessing worker too, not just cropping, since all three share this function.
+
+  **Two fd-exhaustion bugs were found and fixed while validating this**, both of which had
+  to be reproduced under the *viewer's* real limits rather than a shell's:
+  - A pool of one writer per gene needs one fd per gene (5,101 for this panel), but a
+    desktop-launched process inherits systemd's default soft `RLIMIT_NOFILE` of **1024**
+    (hard ~1e6) — an interactive shell reports ~1e6 because conda's init already raised it,
+    which is exactly how the unbounded design got waved through. `preprocess()` now raises
+    its own soft limit best-effort for the duration (restoring it after; lowering a soft
+    limit never invalidates open fds), **and** caps the pool at `limit - 256`. Genes beyond
+    the cap fall back to one shard per flush, merged at the end into the same single
+    `<gene>.feather` — so the reader is unaffected and the failure is structurally
+    impossible rather than merely unlikely.
+  - `RecordBatchFileWriter.close()` **does not release the underlying file descriptor**
+    when pyarrow opened the sink from a path; the fd survives until garbage collection
+    (measured: 200 writers, all closed, still holding 200 fds until `gc.collect()`). Sinks
+    are now created as explicit `pa.OSFile` objects and closed alongside their writers.
+
+  All three fd regimes are verified to produce output **identical to the pre-change
+  implementation** (same genes, rows, values, dtypes): the viewer's real soft-1024 case,
+  a worst case where the limit cannot be raised at all (4,322 genes sharded), and a forced
+  8-writer budget (5,082 genes sharded) — the fallback is exercised deliberately rather
+  than left as untested branch.
+
+  Also: gene files are now written as `<gene>.feather.partial` and renamed only once every
+  writer is closed. An IPC file has no footer until closed, and
+  `TranscriptLoader._cached_genes` globs `*.feather` **without** consulting the `.complete`
+  sentinel — so an interrupted rebuild previously left files the viewer would happily pick
+  up. `FLUSH_THRESHOLD` moved to a module-level constant beside `CHUNK_SIZE`/`MIN_QV` so the
+  flush path is tunable and testable (a single-flush test passes trivially and proves
+  nothing). Its value is deliberately left at 10M rows: with the rewrite gone it only
+  controls batch granularity and peak buffer memory, and raising it would trade back the
+  memory headroom the crash fix above exists to protect.
+
+### Fixed
+- **Crop Dataset could exhaust memory and crash the machine on a large crop** — the real
+  cause, found after an initial (real but insufficient) transcript-filter fix still
+  crashed on a retry: `crop_and_export()` (`utils/crop_export.py`) pulled the cropped
+  morphology image and both label rasters fully into dense numpy arrays
+  (`np.asarray(...compute())`) before ever touching disk. For a crop spanning roughly
+  half a slide (confirmed from the crash's own leftover partial output: 27043×51144px,
+  full width / half height — this dataset has two tissue sections sharing one run,
+  cropped out separately), that's ~11GB for the image alone plus ~5.5GB each for the two
+  label rasters, before `np.isin`/`np.unique` working-buffer overhead — on top of
+  whatever the running viewer already held. Nowhere else in the codebase does this;
+  the initial cache build already writes the full, larger, uncropped image the same
+  dask-backed way. Fixed by keeping the image/label crops as dask arrays through
+  `Image2DModel.parse`/`Labels2DModel.parse` (both accept a dask array directly) instead
+  of materializing them first, so `new_sdata.write()` computes and writes them chunk by
+  chunk. The transcript path needed the same treatment for the same crop shape (a
+  full-width crop barely benefits from `filters=` bbox pruning, since the on-disk
+  partitions are banded by x, not y) plus two more real bugs surfaced only by testing at
+  the actual crash size: `PointsModel.parse`'s own internal index-monotonicity check
+  forces an eager `.compute()` that (like the image/label case) can pull many large
+  partitions into memory at once under dask's default ~40-way scheduler — capped to a
+  small worker count for this path specifically; and `feature_name` (5000+ possible gene
+  names) needs `.cat.as_known()` before any write, or partitions that happen to see
+  different numbers of distinct genes get inconsistent categorical index widths and the
+  parquet write fails outright with a schema mismatch (the fix mirrors spatialdata's own
+  `write_points()`, which hits the identical issue). The exported `transcripts.parquet`
+  also has to stay a single *file* (matching real Xenium output, which the rest of the
+  app assumes) rather than the directory dask's own `.to_parquet()` would produce, so
+  it's streamed through one shared `pyarrow.parquet.ParquetWriter` across partitions
+  instead. **Verified against the actual dataset and crop size that crashed**: peak RSS
+  9.76GB (previously crashed the machine), 287,548 cells / 145,605,025 transcripts
+  written correctly, full pytest suite green.
+- **Crop Dataset's transcript-filter step loaded the entire source transcripts table on
+  every crop, regardless of crop size** — `ctx.sdata.points["transcripts"]` (spatialdata's
+  dask dataframe over `points.parquet`, opened with no predicate) fed straight into
+  `.map_partitions(...).compute()`: every partition of a potentially
+  hundreds-of-millions-of-row table was loaded and mostly discarded, for every crop. A
+  boolean bbox mask applied to the already-open dask dataframe does *not* get pushed down
+  into the parquet reader (confirmed empirically — identical wall-clock with or without
+  the mask); re-reading the same on-disk `points.parquet` directory with an explicit
+  `filters=` kwarg does get real row-group pruning where the crop is narrow in x (the
+  axis partitions are banded by) — e.g. ~40s → ~1-2s for a small crop — though as the fix
+  above found, this alone doesn't help (and isn't relied on for correctness/memory
+  safety) once the crop spans most of the source table's width.
+
 ## [Unreleased] — 2026-08-05
 
 ### Changed — templates now use the library API instead of hand-rolled equivalents
