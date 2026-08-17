@@ -1660,12 +1660,17 @@ def run_viewer(data_path=None, no_cache: bool = False):
 def main():
     """Console-script entry point — parses argv and launches the viewer."""
     data_path, no_cache = _parse_args()
-    from xenium_viewer.loader import CacheLoadAborted
+    from xenium_viewer.loader import CacheLoadAborted, NoRawSourceError
     try:
         run_viewer(data_path, no_cache=no_cache)
     except CacheLoadAborted as e:
         # The user declined to rebuild, or we had no way to ask. Exiting
         # quietly is the point: the cache is left exactly as it was.
+        print(f"\n{e}")
+        raise SystemExit(1) from None
+    except NoRawSourceError as e:
+        # The message names the dataset, why it cannot be rebuilt and what to
+        # try instead; a traceback on top of that adds nothing.
         print(f"\n{e}")
         raise SystemExit(1) from None
 

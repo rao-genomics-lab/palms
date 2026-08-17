@@ -16,6 +16,7 @@ Run headless:  QT_QPA_PLATFORM=offscreen pytest tests/test_loader_policy.py
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -36,14 +37,37 @@ from xenium_viewer.loader import (  # noqa: E402
 
 @pytest.fixture
 def fake_cache(tmp_path):
-    """A directory shaped like a cache, without the cost of building one."""
+    """A directory shaped like a cache, without the cost of building one.
+
+    Includes a stand-in for the raw 10x output, because staleness and rebuild
+    policy only mean anything for a dataset that *can* be rebuilt. The
+    cache-only shape is ``crop_export_dir`` below.
+    """
     cache = tmp_path / "sdata_cached.zarr"
     (cache / "tables" / "table" / "obs").mkdir(parents=True)
     (cache / "tables" / "table" / "uns").mkdir(parents=True)
     (cache / "tables" / "table" / "obsm").mkdir(parents=True)
     experiment = tmp_path / "experiment.xenium"
     experiment.write_text('{"pixel_size": 0.2125}')
+    (tmp_path / "cells.zarr.zip").write_bytes(b"PK\x05\x06" + b"\0" * 18)
     return cache, experiment
+
+
+@pytest.fixture
+def crop_export_dir(tmp_path):
+    """What Crop Dataset writes: no raw 10x output, so nothing to rebuild from.
+
+    ``experiment.xenium`` *is* present — ``crop_export`` copies it and ``app.py``
+    refuses to open a directory without one. What is absent is everything
+    ``spatialdata_io.xenium`` actually reads.
+    """
+    cache = tmp_path / "sdata_cached.zarr"
+    (cache / "tables" / "table" / "obs").mkdir(parents=True)
+    experiment = tmp_path / "experiment.xenium"
+    experiment.write_text('{"pixel_size": 0.2125}')
+    (tmp_path / "transcripts.parquet").write_bytes(b"PAR1")
+    (tmp_path / "transcript_cache").mkdir()
+    return tmp_path
 
 
 # ── the silent-rebuild case ──────────────────────────────────────────────────
@@ -155,7 +179,14 @@ def test_a_manifest_still_detects_a_real_change(fake_cache):
 
 
 def test_a_missing_source_is_never_stale(fake_cache):
-    """A Crop Dataset export has no experiment.xenium to compare against."""
+    """No experiment.xenium ⇒ nothing to compare against.
+
+    This used to say "a Crop Dataset export has no experiment.xenium", which is
+    false — ``crop_export`` copies it (``app.py`` refuses to open a directory
+    without one). That wrong mental model is part of why cache-only datasets
+    reached the rebuild branches at all; ``has_raw_xenium_source`` is what
+    actually identifies them, and it is exercised below.
+    """
     cache, experiment = fake_cache
     experiment.unlink()
     assert _is_cache_stale(cache, experiment) == (False, True)
@@ -400,6 +431,138 @@ def test_check_is_read_only_on_a_cache_it_condemns(fake_cache, capsys):
     assert "stale" in out.lower()
     assert "adata_cnv_cache_copykat.h5ad" in out
     assert sorted(p.relative_to(cache) for p in cache.rglob("*")) == before
+
+
+# ── a dataset with no raw source is never told to rebuild (issue #17) ────────
+#
+# A Crop Dataset export ships experiment.xenium + sdata_cached.zarr + derived
+# transcripts, and nothing else. Without a manifest, freshness fell back to
+# comparing experiment.xenium's mtime against the cache directory's — which a
+# copy, an unzip or a sync reorders — and three separate branches then tried to
+# rebuild from raw files that were never there. Two of them renamed the only
+# copy of the data aside *first*.
+
+def test_a_crop_export_is_recognised_as_having_no_raw_source(crop_export_dir):
+    assert not loader.has_raw_xenium_source(crop_export_dir)
+
+
+def test_a_normal_dataset_is_recognised_as_rebuildable(fake_cache):
+    assert loader.has_raw_xenium_source(fake_cache[0].parent)
+
+
+@pytest.mark.parametrize(
+    "marker", ["cells.zarr.zip", "cell_feature_matrix.h5", "morphology_focus"])
+def test_any_raw_marker_is_enough_to_count_as_rebuildable(crop_export_dir, marker):
+    """Conservative on purpose: partial raw output is broken raw output, and
+    should keep raising whatever error says so — not be reclassified."""
+    (crop_export_dir / marker).write_bytes(b"x")
+    assert loader.has_raw_xenium_source(crop_export_dir)
+
+
+def test_a_cache_only_dataset_loads_from_cache_and_moves_nothing(
+    monkeypatch, crop_export_dir,
+):
+    """The reported trigger: experiment.xenium newer than the cache, no manifest.
+
+    Asserted behaviourally with a ``shutil.move`` spy rather than by grepping the
+    source, because what matters is that no rename *happens*, not that no rename
+    is written down.
+    """
+    os.utime(crop_export_dir / "experiment.xenium",
+             (time.time() + 100, time.time() + 100))
+
+    moves = []
+    monkeypatch.setattr(loader.shutil, "move",
+                        lambda src, dst: moves.append((src, dst)))
+    monkeypatch.setattr(loader, "_open_cache", lambda p: "SDATA")
+    # Would prompt, or return a destructive default, if it were ever consulted.
+    monkeypatch.setattr(loader, "_stale_preference",
+                        lambda *a, **k: pytest.fail("staleness was consulted"))
+
+    assert loader.load_sdata(crop_export_dir) == "SDATA"
+    assert moves == []
+
+
+def test_a_cache_only_dataset_is_stamped_so_the_next_run_need_not_re_derive(
+    monkeypatch, crop_export_dir,
+):
+    from xenium_viewer.utils.cache_repair import read_manifest
+
+    monkeypatch.setattr(loader, "_open_cache", lambda p: "SDATA")
+    loader.load_sdata(crop_export_dir)
+
+    manifest = read_manifest(crop_export_dir / "sdata_cached.zarr")
+    assert manifest["cache_only"] is True
+    assert len(manifest["source_sha256"]) == 64
+
+
+@pytest.mark.parametrize("answer", ["rebuild", "restore"])
+def test_on_stale_cannot_authorise_an_impossible_rebuild(
+    monkeypatch, crop_export_dir, answer,
+):
+    """--on-stale is a yes to a question that is not being asked here."""
+    os.utime(crop_export_dir / "experiment.xenium",
+             (time.time() + 100, time.time() + 100))
+    moves = []
+    monkeypatch.setattr(loader.shutil, "move",
+                        lambda src, dst: moves.append((src, dst)))
+    monkeypatch.setattr(loader, "_open_cache", lambda p: "SDATA")
+
+    assert loader.load_sdata(crop_export_dir, on_stale=answer) == "SDATA"
+    assert moves == []
+
+
+def test_an_unopenable_cache_only_cache_refuses_instead_of_renaming(
+    monkeypatch, crop_export_dir,
+):
+    """Every non-quit answer _ask_corrupt_cache can give moves the cache aside
+    and then rebuilds — here that renames away the only copy and fails anyway."""
+    def _boom(path):
+        raise OSError("bad store")
+
+    moves = []
+    monkeypatch.setattr(loader.shutil, "move",
+                        lambda src, dst: moves.append((src, dst)))
+    monkeypatch.setattr(loader, "_open_cache", _boom)
+    monkeypatch.setattr(loader, "_ask_corrupt_cache",
+                        lambda *a, **k: pytest.fail("would have offered a rebuild"))
+
+    with pytest.raises(loader.NoRawSourceError) as excinfo:
+        loader.load_sdata(crop_export_dir)
+
+    message = str(excinfo.value)
+    assert "nothing to rebuild from" in message
+    assert "Nothing has been moved or deleted" in message
+    assert "backup" in message.lower()
+    assert moves == []
+    assert (crop_export_dir / "sdata_cached.zarr").exists()
+
+
+def test_no_cache_flag_still_loads_a_cache_only_dataset(monkeypatch, crop_export_dir):
+    """--no-cache means 'read the raw files', which do not exist here."""
+    monkeypatch.setattr(loader, "_open_cache", lambda p: "SDATA")
+    assert loader.load_sdata(crop_export_dir, use_cache=False) == "SDATA"
+
+
+def test_a_cache_only_dataset_with_no_cache_left_fails_legibly(crop_export_dir):
+    """Otherwise this surfaces as h5py failing to open a file the user never had."""
+    shutil.rmtree(crop_export_dir / "sdata_cached.zarr")
+
+    with pytest.raises(loader.NoRawSourceError, match="no raw Xenium output"):
+        loader.load_sdata(crop_export_dir)
+
+
+def test_check_reports_a_cache_only_dataset_as_not_applicable(
+    crop_export_dir, capsys,
+):
+    """Reporting it stale would be advising a rebuild that cannot happen."""
+    os.utime(crop_export_dir / "experiment.xenium",
+             (time.time() + 100, time.time() + 100))
+    loader._check_cache(crop_export_dir)
+
+    out = capsys.readouterr().out
+    assert "Freshness: n/a" in out
+    assert "STALE" not in out
 
 
 def test_the_loader_never_deletes_a_cache_directory():
