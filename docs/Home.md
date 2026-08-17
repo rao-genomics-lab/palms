@@ -93,3 +93,10 @@ label on the tab itself, where it is abbreviated to fit.
 | [Tutorial-ROI-Analysis](Tutorial-ROI-Analysis) | Draw ROIs and run differential gene expression |
 | [Tutorial-Annotations](Tutorial-Annotations) | Annotate cells and export results |
 | [Tutorial-Recovering-a-Cache](Tutorial-Recovering-a-Cache) | Diagnose and repair a damaged zarr cache without losing your work |
+
+### The code underneath
+
+| Page | Description |
+|------|-------------|
+| [Analysis Templates](Analysis-Templates) | What every analysis actually computes, its contract, and its full default source |
+| [API Reference](API-Reference) | Calling the loading, analysis and persistence functions directly from a notebook |

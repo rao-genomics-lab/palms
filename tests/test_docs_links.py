@@ -17,12 +17,19 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 DOCS = REPO / "docs"
+
+# Imported for its anchor rule only, so the check here and the anchors the
+# generator emits cannot disagree. Stdlib at import time; the package is only
+# imported inside its render functions, so this stays dependency-free.
+sys.path.insert(0, str(REPO / "scripts"))
+import generate_docs  # noqa: E402
 SCREENSHOTS = DOCS / "screenshots"
 PUBLISH_SCRIPT = REPO / "scripts" / "push_to_wiki.sh"
 MKDOCS = REPO / "mkdocs.yml"
@@ -117,6 +124,46 @@ def test_referenced_screenshots_exist():
             if not (DOCS / target).exists():
                 missing.append(f"{md.name} -> {target}")
     assert not missing, "referenced images that do not exist:\n  " + "\n  ".join(missing)
+
+
+def _anchors_in(page: Path) -> set[str]:
+    """Every same-page link target a reader could land on, by GitHub's rules."""
+    anchors = set()
+    fenced = False
+    for line in page.read_text().splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced and line.startswith("#"):
+            anchors.add(generate_docs._anchor(line.lstrip("#").strip()))
+    return anchors
+
+
+def test_link_anchors_resolve():
+    """A ``Page#anchor`` link must land on a heading that exists.
+
+    ``test_internal_links_resolve`` splits the anchor off and checks only the
+    page, so a link to a heading that was renamed — or never existed — passed
+    while silently dropping the reader at the top of the page. Cross-references
+    into the generated pages are written by hand and use anchors GitHub derives
+    by a rule that is easy to get wrong (underscores are kept, dots are not), so
+    they need checking.
+    """
+    broken = []
+    for md in _md_files():
+        for raw in LINK_RE.findall(md.read_text()):
+            target = raw.split(" ", 1)[0].strip()
+            if "://" in target or "#" not in target or target.startswith("mailto:"):
+                continue
+            page_part, _, anchor = target.partition("#")
+            if not anchor:
+                continue
+            page = md if not page_part else DOCS / f"{page_part}.md"
+            if not page.exists():
+                continue                      # test_internal_links_resolve owns this
+            if f"#{anchor}" not in _anchors_in(page):
+                broken.append(f"{md.name} -> {target}")
+    assert not broken, "links to non-existent anchors:\n  " + "\n  ".join(broken)
 
 
 def test_no_internal_notes_are_published():
@@ -222,6 +269,81 @@ def test_every_gui_tab_has_a_reference_page():
         if lbl in labels and not (DOCS / page).exists()
     )
     assert not missing, f"reference pages that do not exist: {missing}"
+
+
+def _addtab_order() -> dict[int, list[str]]:
+    """Tab labels per group, in ``addTab()`` order, keyed by group index.
+
+    The inner tabs are added to ``<group>_tabs`` before the groups are added to
+    the outer ``tab_widget``, so the receiver name identifies the group and the
+    outer order comes from the ``tab_widget.addTab`` calls.
+    """
+    tree = ast.parse(APP.read_text())
+    per_receiver: dict[str, list[str]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "addTab"
+                and isinstance(node.func.value, ast.Name)):
+            continue
+        label = next((a.value for a in node.args
+                      if isinstance(a, ast.Constant) and isinstance(a.value, str)), None)
+        widget = next((a.id for a in node.args if isinstance(a, ast.Name)), None)
+        if label is None:
+            continue
+        per_receiver.setdefault(node.func.value.id, []).append((label, widget))
+
+    outer = per_receiver.get("tab_widget", [])
+    order = {}
+    for index, (_group_label, group_widget) in enumerate(outer):
+        order[index] = [lbl for lbl, _ in per_receiver.get(group_widget, [])]
+    return order
+
+
+def test_screenshot_indices_point_at_the_tab_they_are_named_for():
+    """``TAB_SHOTS`` positions must match ``app.py``'s ``addTab`` order.
+
+    The indices in ``scripts/capture_screenshots.py`` are positional, so
+    inserting a tab shifts every entry below it — and the failure is silent: the
+    run succeeds and writes a picture of the wrong tab under the right name.
+    That happened once already (``tab-notebook.png`` was a picture of Crop
+    Dataset for as long as the list was one short), and the script carries a
+    comment about it. This turns that comment into a check.
+    """
+    capture = (REPO / "scripts" / "capture_screenshots.py").read_text()
+    tree = ast.parse(capture)
+    shots = None
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == "TAB_SHOTS" for t in node.targets)):
+            shots = ast.literal_eval(node.value)
+    assert shots, "TAB_SHOTS not found in capture_screenshots.py"
+
+    order = _addtab_order()
+    # A screenshot file name is the lower-cased page name: Tab-Cell-Coloring.md
+    # is illustrated by tab-cell-coloring.png.
+    label_for_stem = {page[: -len(".md")].lower(): label
+                      for label, page in TAB_PAGES.items()}
+
+    wrong, checked = [], 0
+    for outer, inner, fname in shots:
+        stem = "tab-" + fname[len("tab-"):-len(".png")]
+        expected_label = label_for_stem.get(stem)
+        if expected_label is None:
+            wrong.append(f"{fname}: no page in TAB_PAGES is named for it")
+            continue
+        labels = order.get(outer, [])
+        actual = labels[inner] if inner < len(labels) else "<out of range>"
+        checked += 1
+        if actual != expected_label:
+            wrong.append(f"{fname}: ({outer},{inner}) is {actual!r}, "
+                         f"expected {expected_label!r}")
+    assert not wrong, "capture_screenshots.py indices are stale:\n  " + "\n  ".join(wrong)
+    # Without this the whole test passes by matching nothing, which is how the
+    # first version of it "passed" against 26 entries it never looked at.
+    assert checked == len(shots), (
+        f"only {checked} of {len(shots)} TAB_SHOTS entries were checked"
+    )
 
 
 def test_tab_pages_mapping_has_no_stale_entries():

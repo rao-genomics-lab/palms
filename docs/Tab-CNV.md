@@ -2,7 +2,7 @@
 
 Infer copy-number variation from expression data: pick an existing clustering, mark some of its categories as the "normal" reference population, and run inference to get a colourable CNV-subclone clustering, a continuous per-cell CNV score, and a chromosome heatmap. Two backends are available — **inferCNV**, which runs in the main environment, and **CopyKAT**, which runs detached in a second one — and by default both are run. This is the **CNV** tab in the "Genes" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-cnv.png -->
+![CNV](screenshots/tab-cnv.png)
 
 Requires the `cnv` optional extra, and CopyKAT additionally requires the `xenium_viewer_copykat` environment — see [Installation](Installation).
 

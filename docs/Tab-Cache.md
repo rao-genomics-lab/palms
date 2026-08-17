@@ -2,7 +2,7 @@
 
 Check the health of the dataset's zarr cache, rebuild its metadata index, recover user-generated data out of a backup, and force a full rebuild from the raw Xenium files. Every action here is one the loader already attempts automatically at startup; this tab makes them available deliberately, and shows you what it found. This is the **Cache** tab in the "Tools" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-cache.png -->
+![Cache](screenshots/tab-cache.png)
 
 ## Controls
 
@@ -31,6 +31,7 @@ Check the health of the dataset's zarr cache, rebuild its metadata index, recove
 
 - **Force Rebuild does not rebuild in the session.** It renames the store to `sdata_cached_prev_<timestamp>.zarr` and stops, because every napari layer and manager in a running viewer points into the live store; rebuilding underneath them would leave them pointing at freed memory. The rebuild happens on the next launch. Nothing is deleted at any point.
 - The rebuild refuses to start when free space is under roughly 1.1× the store size — it keeps the old copy alongside the new one, so it would rather stop than fill the disk.
+- **A rebuild reports its memory use per element**, to the terminal and the session log, because it runs for tens of minutes and "how much is this using" is a question people ask while it is happening. On a full slide it peaks around 9 GB and stays flat across the write; a figure that climbs element after element is worth reporting.
 - **Recovery never opens the backup as a SpatialData object**, deliberately: a cache worth recovering from is usually one that will not open. It works at the filesystem and zarr-array level instead.
 - A whole-cache recovery pulls across, in order: user shapes and images (ROIs, annotations, landmarks, tiles); clustering and CNV `obs` columns, reindexed onto the live cells; the session attributes and the H&E/ARMS affines; and the sidecar files from `viewer_cache/`. Anything already present in the live cache is left untouched, so recovering twice is harmless.
 - Because the H&E and ARMS transforms are rewritten from memory when the session is saved, a recovery also loads them back into the running viewer — otherwise the images would return unaligned at the next save.

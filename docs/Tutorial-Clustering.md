@@ -14,9 +14,12 @@
 2. Set **Resolution** to `1.0` (higher values produce more clusters; lower values produce fewer).
 3. Leave **n_neighbors** and **n_pcs** at their defaults unless you have a reason to change them.
 4. Leave **flavor** at `igraph` — it is much faster. Switch it to `leidenalg` only if you are reproducing an existing scanpy pipeline that used that backend; the two optimise different objectives and give different partitions, so both can be run at one resolution and compared.
-5. Click **Run Leiden Clustering**.
+5. Leave **Use HVGs only** and **Scale (max_value=10)** unticked for a first pass. Both are off by default because a Xenium panel is a few hundred targeted genes rather than a transcriptome — selecting highly variable genes from it discards a large fraction of a panel that was already curated. Tick them if you are matching a scRNA-seq pipeline that did the same.
+6. Click **Run Leiden Clustering**.
 
-The viewer runs PCA, constructs a neighbourhood graph, and runs the Leiden algorithm. When it finishes, a new clustering key `leiden_igraph_r1.0` appears in the clustering dropdowns throughout the interface.
+The viewer runs PCA, constructs a neighbourhood graph, and runs the Leiden algorithm. When it finishes, a new clustering key `leiden_igraph_r1.0` appears in the clustering dropdowns throughout the interface — the name records the flavour and resolution, so runs at different settings sit alongside each other rather than replacing one another.
+
+Ticking either checkbox changes which code runs, not just its arguments: see [`clustering.leiden`](Analysis-Templates#clusteringleiden) for the four variants and exactly what each one does.
 
 ![Tutorial Clustering Step1](screenshots/tutorial-clustering-step1.png)
 
@@ -54,9 +57,9 @@ The viewer calls `scanpy.tl.rank_genes_groups` comparing each cluster against al
 
 ### 5. View the dotplot
 
-Click **Show Dotplot**. A scanpy dotplot opens in a new window, showing expression and detection fraction for the top marker genes across all clusters. The plot is automatically saved as a PNG in your output directory.
+Click **Show Dotplot**. A scanpy dotplot opens in its own window: one row per cluster, one column per marker gene, dot size showing the fraction of cells in which the gene was detected and dot colour its mean expression. The plot is saved as a PNG in your output directory at the same time.
 
-<!-- SCREENSHOT: docs/screenshots/tutorial-clustering-step5.png -->
+The window belongs to matplotlib rather than to the viewer, so it can be resized, panned and saved again from its own toolbar — and closing it does not affect the results, which stay in the Rank Genes table.
 
 ### 6. Edit cluster labels
 
@@ -87,6 +90,8 @@ The saved figure uses the same cluster colours as the canvas and includes a lege
 
 - Clustering results are saved automatically to `sdata_cached.zarr` and restored on the next launch; you do not need to re-run clustering each session.
 - You can run clustering at multiple resolutions (e.g. `0.5`, `1.0`, `2.0`) and switch between them using the dropdowns throughout the interface.
+- **Ranked genes are stored per clustering.** Ranking a second clustering does not overwrite the first, so you can rank at several resolutions and compare them — each result is keyed by the clustering it came from, and the dotplot and export always follow the clustering currently selected.
+- Every step here is recorded as it runs. The [Notebook](Tab-Notebook) tab shows the code, and an exported `.ipynb` replays it from the raw Xenium output — so this tutorial's result is reproducible without repeating the clicks.
 - To compare two specific clusters rather than one-vs-all, use the ROI DEG workflow described in [Tutorial-ROI-Analysis](Tutorial-ROI-Analysis).
 
 ---

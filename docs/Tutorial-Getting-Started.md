@@ -26,9 +26,11 @@ xenium-viewer
 
 ### 2. Wait for the initial load
 
-On the first launch, the viewer builds a zarr cache (`sdata_cached.zarr/`) inside your output directory. This takes **3–10 minutes** depending on dataset size. Subsequent launches use the cache and take only **10–30 seconds**.
+On the first launch, the viewer builds a zarr cache (`sdata_cached.zarr/`) inside your output directory. This takes **3–10 minutes** depending on dataset size, and on a full slide the cache is around 14 GB, so make sure there is room. Subsequent launches use the cache and take only **10–30 seconds**.
 
-A progress bar appears in the terminal and at the bottom of the viewer window while loading.
+A progress bar appears in the terminal and at the bottom of the viewer window while loading. The terminal also reports memory per element as each one is written — a full slide peaks around 9 GB and stays flat across the write.
+
+If the dataset directory is read-only, or you only want a quick look, `--no-cache` will start without writing anything. On a full slide it is expensive rather than merely slower: see **Memory** in [Installation](Installation) before reaching for it.
 
 ### 3. Navigate the canvas
 
