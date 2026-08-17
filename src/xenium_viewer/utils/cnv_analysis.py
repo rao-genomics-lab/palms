@@ -291,10 +291,13 @@ def run_cnv_pipeline(
         cluster_series.index = adata_work.obs["cell_id"].values
     cluster_series.name = cluster_key
 
+    # abs().mean(axis=1) works natively on a CSR matrix, so the whole
+    # n_cells x n_bins CNV matrix never has to be densified for a row mean.
+    # Kept in step with the inferCNV template, which tests/test_cnv_step.py pins
+    # against this function.
     X_cnv = adata_work.obsm["X_cnv"]
-    X_cnv_dense = X_cnv.toarray() if hasattr(X_cnv, "toarray") else np.asarray(X_cnv)
     cnv_score = pd.Series(
-        np.abs(X_cnv_dense).mean(axis=1),
+        np.asarray(np.abs(X_cnv).mean(axis=1)).ravel(),
         index=(adata_work.obs["cell_id"].values if "cell_id" in adata_work.obs.columns else adata_work.obs_names),
         name="cnv_score",
     )

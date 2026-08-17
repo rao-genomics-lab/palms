@@ -21,9 +21,13 @@ from typing import Iterable
 
 #: Names bound in a fresh executor namespace, before any step has run.
 #:
-#: Third-party modules (``sc``, ``sq``, ``pd``, ``np``, ``plt``) plus ``Path``
-#: are the imports the notebook preamble makes. ``data_path``, ``sdata`` and
-#: ``adata`` are the dataset the viewer already loaded.
+#: Third-party modules (``sc``, ``sq``, ``sd``, ``pd``, ``np``, ``plt``) plus
+#: ``Path`` are the imports the notebook preamble makes. ``sd`` is
+#: ``spatialdata`` itself, which templates need for the operations that belong
+#: to the container rather than to the table — ``sd.polygon_query`` and the
+#: ``sd.transformations`` that let a template *declare* a coordinate frame
+#: instead of applying it by hand. ``data_path``, ``sdata`` and ``adata`` are
+#: the dataset the viewer already loaded.
 #:
 #: Names bound *by* a step (``adata_norm``, ``adata_leiden``, ``rank_df``,
 #: ``roi_polygons``, …) are deliberately absent: a step that needs one must
@@ -31,7 +35,7 @@ from typing import Iterable
 #: against ``EXECUTOR_BASE_NAMES | spec.requires`` rather than against whatever
 #: happens to be lying around in a long-lived session.
 EXECUTOR_BASE_NAMES = frozenset({
-    "sc", "sq", "pd", "np", "plt",
+    "sc", "sq", "sd", "pd", "np", "plt",
     "Path",
     "data_path", "sdata", "adata",
 })

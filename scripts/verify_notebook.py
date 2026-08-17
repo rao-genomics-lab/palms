@@ -21,7 +21,7 @@ What it does:
    every cell.
 4. Compares the replayed ``adata.obs`` against the clusterings the viewer
    persisted in the zarr table (``clustering_*``), and the replayed ranked genes
-   against ``uns['rank_genes_groups']``.
+   against ``uns['rank_genes_<clustering>']``.
 5. Writes a JSON report: per-clustering ARI and cluster counts, top-N gene
    agreement, per-cell wall-clock, package versions — and the ids of every
    **comment-only node**, which replay as silent no-ops. That list is the
@@ -67,13 +67,31 @@ _verify_out = _Path({out!r})
 # Everything is compared as strings, and an all-string frame is the one thing
 # parquet will always accept out of a real obs table.
 adata.obs.astype(str).to_parquet(_verify_out / "replay_obs.parquet")
-if "rank_results" in globals() and rank_results:
-    # One frame per clustering ranked, tagged — the notebook rebinds rank_df on
-    # every ranking, so taking that name alone compared whichever ran last
-    # against whichever the viewer happened to store.
+# One frame per clustering ranked, tagged — the notebook rebinds rank_df on
+# every ranking, so taking that name alone compared whichever ran last against
+# whichever the viewer happened to store. The rankings are keyed slots in
+# adata_norm.uns, and the groupby comes from scanpy's own params rather than
+# from the slot name, so a renamed key cannot make the tag lie.
+# Matching on the prefix alone is not enough: `rank_genes_groupby` shares it and
+# is a plain string, and a restored session can carry a stale unkeyed
+# `rank_genes_groups` alongside the keyed ones. A ranking is the thing that has
+# scanpy's `params.groupby`.
+# No brace literals anywhere in this cell: it is rendered with str.format, so a
+# bare brace is read as a replacement field and raises. (The Step templates use
+# $name for the same reason — see rule (c) in CLAUDE.md.)
+_rank_keys = ([_k for _k in adata_norm.uns
+               if _k.startswith("rank_genes")
+               and isinstance(adata_norm.uns[_k], dict)
+               and isinstance(adata_norm.uns[_k].get("params"), dict)
+               and "groupby" in adata_norm.uns[_k]["params"]]
+              if "adata_norm" in globals() else [])
+if _rank_keys:
     import pandas as _pd
+    import scanpy as _sc
     _pd.concat(
-        [_df.assign(groupby=_key) for _key, _df in rank_results.items()],
+        [_sc.get.rank_genes_groups_df(adata_norm, group=None, key=_k)
+         .assign(groupby=adata_norm.uns[_k]["params"]["groupby"])
+         for _k in _rank_keys],
         ignore_index=True,
     ).to_parquet(_verify_out / "replay_rank.parquet")
 elif "rank_df" in globals():
@@ -143,16 +161,24 @@ def read_viewer_obs(cache: Path):
 
 
 def read_viewer_rank_genes(cache: Path) -> tuple[dict, str | None]:
-    """Top gene names per group from the viewer's persisted ``uns``."""
+    """Top gene names per group from the viewer's persisted ``uns``.
+
+    The viewer writes ``rank_genes_<clustering>``; ``rank_genes_groupby`` names
+    the most recent one. The unkeyed ``rank_genes_groups`` is the fallback, and
+    is all a cache written before the keying holds.
+    """
     import zarr
     from anndata.io import read_elem
     store = zarr.open(str(cache), mode="r")
     uns_group = store[f"{TABLE_PATH}/uns"]
-    if "rank_genes_groups" not in uns_group:
-        return {}, None
-    rgg = read_elem(uns_group["rank_genes_groups"])
     groupby = read_elem(uns_group["rank_genes_groupby"]) \
         if "rank_genes_groupby" in uns_group else None
+    key = f"rank_genes_{groupby}" if groupby else None
+    if key is None or key not in uns_group:
+        key = "rank_genes_groups"
+    if key not in uns_group:
+        return {}, None
+    rgg = read_elem(uns_group[key])
     names = rgg.get("names")
     if names is None:
         return {}, groupby
@@ -393,13 +419,13 @@ def compare_rank_genes(viewer_names: dict, replay_rank, top_n: int,
                        groupby: str | None = None) -> dict:
     """Top-N gene name agreement per group, for the clustering the viewer stored.
 
-    *groupby* selects the replayed ranking to compare against. The viewer keeps
-    exactly one ``uns['rank_genes_groups']`` — scanpy overwrites it — so a
-    session that ranked two clusterings stores one and the notebook binds the
-    other last. Comparing those two reported every group as "diverged" when
-    nothing had diverged: the genes were right, the group numbering belonged to
-    a different clustering. Selecting by name is what makes the comparison mean
-    anything.
+    *groupby* selects the replayed ranking to compare against. Both sides now
+    key their rankings per clustering, but the comparison still has to select:
+    the viewer's ``rank_genes_groupby`` names one, and the notebook replays all
+    of them. Comparing whichever pair happened to line up reported every group
+    as "diverged" when nothing had diverged — the genes were right, the group
+    numbering belonged to a different clustering. Selecting by name is what
+    makes the comparison mean anything.
     """
     if not viewer_names:
         return {"status": "no_viewer_result"}

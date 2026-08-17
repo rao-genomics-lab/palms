@@ -8,7 +8,7 @@
 #          head+expr.log1p_cpm+stats+title.plain+tail |
 #          head+expr.log1p_cpm+filter+stats+title.filtered+tail
 # doc: Two-gene scatter with Pearson/Spearman, one expr.* block per normalisation.
-# requires: sc, np, plt, adata, adata_norm
+# requires: sc, plt, adata, adata_norm
 # outputs: fig, x, pr, pp, sr, sp
 # params: gene_a:str, gene_b:str, norm_label:str, xlabel:str, ylabel:str,
 #         title_prefix:str, path:str, clustering:str?, selected:list?
@@ -24,7 +24,12 @@ y = _expr[$gene_b].to_numpy(dtype='float32')
 
 #--- block expr.fraction
 _expr = sc.get.obs_df(adata, keys=[$gene_a, $gene_b])
-_totals = np.asarray(adata.X.sum(axis=1)).ravel().astype('float64')
+# Totals from scanpy's QC helper rather than a hand-rolled row sum.
+# inplace=False deliberately: inplace=True writes obs['total_counts'], which is
+# one of Xenium's own columns, so it would overwrite the raw value on adata.
+_qc_obs, _ = sc.pp.calculate_qc_metrics(adata, percent_top=None, log1p=False,
+                                        inplace=False)
+_totals = _qc_obs['total_counts'].to_numpy(dtype='float64')
 _totals[_totals == 0] = 1
 x = (_expr[$gene_a].to_numpy() / _totals).astype('float32')
 y = (_expr[$gene_b].to_numpy() / _totals).astype('float32')

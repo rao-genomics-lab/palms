@@ -3,49 +3,66 @@
 # schema-version: 1
 # assemblies: head+loop_head+tail | head+filter+loop_head+loop_filter+tail
 # doc: Per-region expression of one gene, with pairwise Welch tests.
-# requires: np, pd, adata, roi_polygons
+# requires: sc, np, pd, adata, roi_polygons
 # outputs: roi_expr_cells, roi_expr_stats, roi_expr_tests
 # params: gene:str, pixel_size:float, clustering:str?, selected:list?
 
 #--- block head
 # ROI expression of $gene, per drawn region
-from shapely import contains_xy
-from shapely.geometry import Polygon
 from itertools import combinations
 from scipy import stats
 
-centroids_yx = adata.obsm['spatial'][:, ::-1] / $pixel_size   # µm→px, xy→yx
-_x = adata[:, $gene].X
-_expr = np.asarray(_x.todense() if hasattr(_x, 'todense') else _x).ravel()
-_cell_ids = (adata.obs['cell_id'].to_numpy() if 'cell_id' in adata.obs
-             else adata.obs_names.to_numpy())
+# Cell centroids as a spatialdata points element. adata.obsm['spatial'] is in
+# microns and the ROIs are in pixels; the scale between them is *declared* as a
+# transformation rather than applied by hand, so sd.polygon_query does the
+# point-in-polygon test in the ROIs' own frame.
+roi_cells = sd.models.PointsModel.parse(
+    pd.DataFrame({
+        'x': adata.obsm['spatial'][:, 0],
+        'y': adata.obsm['spatial'][:, 1],
+        'cell_index': np.arange(adata.n_obs),
+    }),
+    coordinates={'x': 'x', 'y': 'y'},
+    transformations={'global': sd.transformations.Scale(
+        [1 / $pixel_size, 1 / $pixel_size], axes=('x', 'y'))},
+)
+roi_region = np.zeros(adata.n_obs, dtype=int)          # 0 = outside every ROI
 
 #--- block filter
 # Cluster filter: cells must be inside an ROI *and* in the selected clusters
 cluster_mask = adata.obs[$clustering].astype(str).isin($selected).to_numpy()
 
 #--- block loop_head
-_rows = []
-for _i, _poly_yx in enumerate(roi_polygons):
-    _poly = Polygon(_poly_yx[:, ::-1])
-    if not _poly.is_valid:
-        _poly = _poly.buffer(0)
-    _inside = contains_xy(_poly, centroids_yx[:, 1], centroids_yx[:, 0])
+for _i, _poly in enumerate(roi_polygons):
+    # polygon_query returns None, not an empty frame, for an ROI with no cells.
+    _hit = sd.polygon_query(roi_cells, _poly, target_coordinate_system='global')
+    _idx = (_hit.compute()['cell_index'].to_numpy() if _hit is not None
+            else np.empty(0, dtype=int))
 
 #--- block loop_filter
-    _inside = _inside & cluster_mask
+    _idx = _idx[cluster_mask[_idx]]
 
 #--- block tail
-    _idx = np.where(_inside)[0]
-    _rows.append(pd.DataFrame({
-        'region_id': _i + 1,
-        'cell_id': _cell_ids[_idx],
-        'x_centroid_um': adata.obsm['spatial'][_idx, 0],
-        'y_centroid_um': adata.obsm['spatial'][_idx, 1],
-        'expression': _expr[_idx],
-    }))
+    # Last ROI wins where two overlap: a cell belongs to one region.
+    roi_region[_idx] = _i + 1
 
-roi_expr_cells = pd.concat(_rows, ignore_index=True)
+_cells = sc.get.obs_df(
+    adata, keys=[$gene], obsm_keys=[('spatial', 0), ('spatial', 1)],
+)
+roi_expr_cells = pd.DataFrame({
+    'region_id': roi_region,
+    'cell_id': (adata.obs['cell_id'].to_numpy() if 'cell_id' in adata.obs
+                else adata.obs_names.to_numpy()),
+    'x_centroid_um': _cells['spatial-0'].to_numpy(),
+    'y_centroid_um': _cells['spatial-1'].to_numpy(),
+    'expression': _cells[$gene].to_numpy(),
+})
+# Region-grouped, as the exported CSV has always been; stable, so cells keep
+# their order within a region.
+roi_expr_cells = (roi_expr_cells[roi_expr_cells['region_id'] > 0]
+                  .sort_values('region_id', kind='stable')
+                  .reset_index(drop=True))
+
 roi_expr_stats = (
     roi_expr_cells.groupby('region_id')['expression']
     .agg(['count', 'mean', 'median', 'std', 'min', 'max'])
@@ -53,7 +70,9 @@ roi_expr_stats = (
 )
 roi_expr_stats['count'] = roi_expr_stats['count'].fillna(0).astype(int)
 
-# Pairwise Welch's t-tests between regions, Benjamini-Hochberg corrected
+# Pairwise Welch's t-tests between regions, Benjamini-Hochberg corrected.
+# Hand-rolled deliberately: scanpy has no per-region two-sample test, and
+# scipy's false_discovery_control is already the right call for the correction.
 _groups = [(_r, _g['expression'].to_numpy())
            for _r, _g in roi_expr_cells.groupby('region_id') if len(_g) >= 2]
 _tests = []

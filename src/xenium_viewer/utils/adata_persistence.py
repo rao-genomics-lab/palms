@@ -418,12 +418,20 @@ def load_custom_seg_from_sdata(sdata) -> tuple:
 def save_rank_genes_to_adata(ctx: ViewerContext, df, adata_norm, groupby: str) -> None:
     """Write rank genes results to adata.uns and persist.
 
-    Copies rank_genes_groups from adata_norm.uns into main adata.uns (so
+    Copies the ranking from adata_norm.uns into main adata.uns (so
     sc.get.rank_genes_groups_df can reconstruct the DataFrame on restore),
     and stores adata_norm as sdata.tables['adata_norm'] for dotplot/volcano.
+
+    Written under the *keyed* slot the step template produces, so ranking a
+    second clustering adds a result rather than overwriting the first.
+    ``rank_genes_groupby`` still names the most recent one, which is what the
+    restore below and ``scripts/verify_notebook.py`` select on.
     """
-    if 'rank_genes_groups' in adata_norm.uns:
-        ctx.adata.uns['rank_genes_groups'] = adata_norm.uns['rank_genes_groups']
+    from xenium_viewer.utils.gene_analysis import resolve_rank_key
+
+    key = resolve_rank_key(adata_norm, groupby)
+    if key in adata_norm.uns:
+        ctx.adata.uns[key] = adata_norm.uns[key]
     ctx.adata.uns['rank_genes_groupby'] = groupby
     _persist_table(ctx)
     _persist_adata_norm(ctx, adata_norm)
@@ -434,16 +442,20 @@ def load_rank_genes_from_adata(adata, sdata) -> tuple:
 
     Returns (df, adata_norm, groupby) or (None, None, None) if not stored.
     adata_norm is loaded from <zarr_path>/adata_norm_cache.h5ad if present.
+
+    ``resolve_rank_key`` falls back to the unkeyed ``rank_genes_groups``, which
+    is what every cache written before the keying holds.
     """
-    rgg = adata.uns.get('rank_genes_groups')
-    if rgg is None:
-        return None, None, None
+    from xenium_viewer.utils.gene_analysis import resolve_rank_key
 
     groupby = adata.uns.get('rank_genes_groupby')
+    key = resolve_rank_key(adata, groupby)
+    if key not in adata.uns:
+        return None, None, None
 
     import scanpy as sc
     try:
-        df = sc.get.rank_genes_groups_df(adata, group=None)
+        df = sc.get.rank_genes_groups_df(adata, group=None, key=key)
     except Exception as e:
         log.warning(f"could not reconstruct rank genes DataFrame: {e}")
         return None, None, None
@@ -1255,8 +1267,14 @@ def migrate_old_session_to_adata(
         rg_parquet = session_dir / "rank_genes.parquet"
         rg_h5ad = session_dir / "rank_genes_adata_norm.h5ad"
         groupby = attrs.get("rank_genes_groupby")
+        # A Phase-2-era h5ad holds the *unkeyed* uns slot, so it is migrated
+        # under that name and read back through resolve_rank_key's fallback.
+        # The guard resolves too: a cache that already holds a keyed ranking
+        # must not be overwritten with the older parquet's contents.
+        from xenium_viewer.utils.gene_analysis import resolve_rank_key
+        _existing = resolve_rank_key(adata, groupby)
 
-        if attrs.get("has_rank_genes") and rg_parquet.exists() and "rank_genes_groups" not in adata.uns:
+        if attrs.get("has_rank_genes") and rg_parquet.exists() and _existing not in adata.uns:
             # Migrate rank_genes_groups from h5ad into main adata.uns
             if rg_h5ad.exists():
                 try:

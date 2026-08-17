@@ -1,6 +1,64 @@
 # Changelog
 
-## [Unreleased] — 2026-08-02
+## [Unreleased] — 2026-08-05
+
+### Changed — templates now use the library API instead of hand-rolled equivalents
+
+The `.tmpl` files are unusual code: they are `exec`'d by the GUI *and* recorded verbatim
+into the reproducible notebook, so a reader learns the analysis from them. Hand-rolled
+numpy/shapely that re-implements a library call is therefore worse here than in ordinary
+code — longer, likelier to be subtly wrong, and it teaches a non-idiom. A review of all
+14 templates found the four squidpy ones clean and no hand-rolled neighbour-graph
+construction anywhere; it found four places worth replacing. `CLAUDE.md` records the
+principle as rule **(e)**, beside the four that already exist because each was once broken.
+
+- **ROI membership is `spatialdata.polygon_query`.** `roi.deg` and `roi.expression` each
+  carried the same five-line `shapely.contains_xy` loop, with three defects: a
+  `[:, ::-1]` flip undone by the `[:, 1], [:, 0]` read on the very next line (an
+  `n_obs × 2` copy for nothing, and a comment asserting a convention the code reversed);
+  `buffer(0)` to repair a self-intersecting ROI; and a µm→pixel conversion applied to
+  every centroid rather than declared once. Cell centroids are now a `PointsModel` whose
+  scale is a **declared transformation**, and `roi.polygons` binds valid shapely
+  geometries in (x, y) pixel space — the same frame `sdata.shapes['rois']` already uses,
+  so the napari (y, x) flip happens once at the source.
+
+  Two user-visible consequences:
+  - **A self-intersecting ROI keeps every lobe.** `buffer(0)` silently *deleted* one —
+    on a bow-tie it returned half the area. `shapely.make_valid` repairs the shape
+    instead, so a polygon drawn across its own edge no longer loses cells without warning.
+  - **Boundary semantics.** spatialdata tests `intersects` where `contains_xy` was
+    strict, so a cell centroid landing exactly on an ROI edge is now inside. For float
+    centroids this is measure-zero: on a real 63k-cell dataset with two overlapping
+    L-shaped ROIs, membership was **identical** to the old loop, cell for cell.
+
+  Overlapping ROIs keep their last-wins labelling, which the template now states rather
+  than leaving implicit.
+
+- **Rank genes are stored per clustering.** `sc.tl.rank_genes_groups(key_added=…)`
+  replaces the notebook-local `rank_results` dict that worked around scanpy overwriting
+  `uns['rank_genes_groups']` in place. The dict kept every ranking but put it where no
+  `sc.pl.rank_genes_groups*` function could reach it — they all take `key=`.
+
+  Results now live in **`uns['rank_genes_<clustering>']`** in the persisted table, so
+  ranking a second clustering adds a result instead of replacing the first, and the
+  recorded dotplot and panel-plot cells pass the matching `key=`. `rank_genes_groupby`
+  still names the most recent one. **Existing caches keep working**: every read resolves
+  through `gene_analysis.resolve_rank_key`, which falls back to the unkeyed
+  `rank_genes_groups` that is all a pre-existing cache holds. Cache-rebuild warnings and
+  Tools → Dataset deletion recognise the keyed names too — both matched a literal string
+  before, so a keyed ranking would otherwise have stopped counting as user data.
+
+- **Two smaller substitutions.** `roi.expression` reads expression through
+  `sc.get.obs_df` (one call, no `.todense()` branch, no per-region `DataFrame` +
+  `concat`); the inferCNV template and `cnv_analysis.run_cnv_pipeline` take the CNV row
+  mean with `np.abs(X).mean(axis=1)`, which works natively on CSR instead of densifying
+  the whole `n_cells × n_bins` matrix. `genes.correlation`'s fraction-of-total branch
+  takes totals from `sc.pp.calculate_qc_metrics(…, inplace=False)` — **`inplace=False`
+  deliberately**: `inplace=True` writes `obs['total_counts']`, one of Xenium's own
+  columns, and would overwrite the raw value on the live object.
+
+`spatialdata` is now bound as **`sd`** in the template namespace and imported by the
+recorded notebook preamble.
 
 ### Documentation
 - **Comprehensive wiki review.** `docs/` doubles as the GitHub Wiki and the mkdocs

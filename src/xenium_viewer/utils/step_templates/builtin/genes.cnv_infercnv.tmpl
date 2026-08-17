@@ -81,7 +81,9 @@ cnv_clusters = pd.Series(
     index=_cnv_ids, name=cnv_cluster_keys[0],
 )
 _X_cnv = adata_cnv.obsm['X_cnv']
+# abs().mean(axis=1) works natively on a CSR matrix, so the whole
+# n_cells x n_bins CNV matrix never has to be densified for a row mean.
 cnv_score = pd.Series(
-    np.abs(_X_cnv.toarray() if hasattr(_X_cnv, 'toarray') else np.asarray(_X_cnv)).mean(axis=1),
+    np.asarray(np.abs(_X_cnv).mean(axis=1)).ravel(),
     index=_cnv_ids, name='cnv_score',
 )

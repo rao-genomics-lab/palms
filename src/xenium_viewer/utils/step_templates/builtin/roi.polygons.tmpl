@@ -7,5 +7,12 @@
 # params: polygons:list
 
 #--- block main
-# ROI polygons drawn in the viewer (Nx2 arrays, pixel coords, (y, x) order)
-roi_polygons = [np.array(_p) for _p in $polygons]
+# ROI polygons drawn in the viewer. napari stores shapes as Nx2 (y, x) pixel
+# arrays; they are flipped to (x, y) once here, so every consumer works in the
+# same frame as sdata.shapes['rois'] instead of flipping back and forth.
+# make_valid, not buffer(0): buffer(0) silently *deletes* a lobe of a
+# self-intersecting ROI rather than repairing it.
+from shapely import make_valid
+from shapely.geometry import Polygon
+
+roi_polygons = [make_valid(Polygon(np.asarray(_p)[:, ::-1])) for _p in $polygons]

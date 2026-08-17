@@ -38,6 +38,8 @@ The ROI DEG tab analyses gene expression within hand-drawn ROI polygons on the n
 
 - At least two ROI polygons are required to run DEG analysis.
 - ROI polygons are automatically saved when the viewer closes and restored on the next load.
+- A cell belongs to an ROI when its centroid falls inside the drawn polygon (`spatialdata.polygon_query`). A centroid landing exactly on the boundary counts as inside. Where two ROIs overlap, a cell is assigned to the **last** one drawn — each cell carries one region label.
+- A polygon drawn across its own edge (a figure-eight) is repaired before the test, and every lobe is kept.
 - When **Filter by cluster** is checked, only cells belonging to the active cluster selection contribute to the DEG test. Note that this checkbox affects the **DEG** analysis only — **Calculate Expression** always follows the cluster filter set in the [Coloring](Tab-Cell-Coloring) tab, whether or not this box is ticked.
 - DEG results are cached to `<dataset>/viewer_cache/roi_deg_cache.parquet` and restored on the next launch, so reopening the dataset does not mean re-running the test.
 - A progress bar under **Run ROI DEG** tracks the pairwise comparisons.

@@ -25,7 +25,9 @@ Run standalone:   python tests/test_notebook_replay.py
 """
 from __future__ import annotations
 
+import ast
 import sys
+import types
 import warnings
 from pathlib import Path
 
@@ -57,6 +59,7 @@ from xenium_viewer.tabs._helpers import (  # noqa: E402
     _NORMALIZE_TEMPLATE, _SPATIAL_NEIGHBORS_TEMPLATE,
 )
 from xenium_viewer.tabs.tab_gene_analysis import _RANK_GENES_TEMPLATE  # noqa: E402
+from xenium_viewer.utils.gene_analysis import rank_genes_key  # noqa: E402
 from xenium_viewer.tabs.tab_nhood import _NHOOD_TEMPLATE  # noqa: E402
 
 CLUSTER_KEYS = ("leiden_igraph_r0.5", "leiden_igraph_r1.0")
@@ -132,7 +135,8 @@ def _run_the_analysis(h5ad_path: Path) -> StepExecutor:
             ex.run(_leiden_step(float(key.rsplit("r", 1)[1])))
         ex.run(Step(
             id=f"rank_genes:{PRIMARY_KEY}", template=_RANK_GENES_TEMPLATE,
-            params={"groupby": PRIMARY_KEY, "method": "wilcoxon", "n_genes": 25},
+            params={"groupby": PRIMARY_KEY, "method": "wilcoxon", "n_genes": 25,
+                    "rank_key": rank_genes_key(PRIMARY_KEY)},
             deps=["normalize", f"clustering:{PRIMARY_KEY}"],
             label=f"Rank genes: {PRIMARY_KEY}", outputs=["rank_df"],
         ))
@@ -513,18 +517,53 @@ def test_a_clustering_the_notebook_never_ranked_is_named_as_such():
 
 
 def test_every_ranking_survives_into_the_notebook():
-    """`rank_df` is rebound by the next ranking; `rank_results` keeps them all.
+    """`rank_df` is rebound by the next ranking; the keyed `uns` slots are not.
 
     Without this the notebook ends holding markers for whichever clustering was
-    ranked last, and the others are simply gone from the replayed state.
+    ranked last, and the others are simply gone from the replayed state. This
+    used to be a notebook-local `rank_results` dict, which kept the frames but
+    put them somewhere no `sc.pl.rank_genes_groups*` call could reach — they all
+    take `key=`. `key_added=` is the scanpy API for exactly this.
     """
-    namespace = {"rank_df": "first", "rank_results": {"a": "first"}}
-    exec(compile("rank_results = globals().get('rank_results', {})\n"
-                 "rank_results['b'] = 'second'", "<t>", "exec"), namespace)
+    assert "key_added=$rank_key" in _RANK_GENES_TEMPLATE
+    assert "key=$rank_key" in _RANK_GENES_TEMPLATE
+    assert "globals()" not in _RANK_GENES_TEMPLATE
 
-    assert namespace["rank_results"] == {"a": "first", "b": "second"}
-    assert "rank_results = globals().get('rank_results', {})" in _RANK_GENES_TEMPLATE
-    assert "rank_results[$groupby] = rank_df" in _RANK_GENES_TEMPLATE
+    # The harvest cell in verify_notebook enumerates those slots and tags each
+    # frame with scanpy's own recorded groupby, so the two sides of
+    # `compare_rank_genes` can still be matched up by clustering name.
+    assert '"params"]["groupby"]' in verify_notebook._DUMP_CELL
+    assert "rank_results" not in verify_notebook._DUMP_CELL
+    _harvest_the_rankings(
+        {rank_genes_key("a"): {"params": {"groupby": "a"}},
+         rank_genes_key("b"): {"params": {"groupby": "b"}}},
+        expected=[rank_genes_key("a"), rank_genes_key("b")])
+
+
+def test_the_harvest_skips_uns_entries_that_only_look_like_rankings():
+    """`rank_genes_groupby` shares the prefix and is a plain string.
+
+    A restored session also carries a stale unkeyed `rank_genes_groups`
+    alongside the keyed ones. Selecting on the prefix alone put both into
+    `sc.get.rank_genes_groups_df(key=...)`, which is a crash in the *injected*
+    cell — i.e. a verification run that fails while the analysis is fine.
+    """
+    _harvest_the_rankings(
+        {"rank_genes_groupby": "leiden_r1.0",
+         "rank_genes_groups": {"names": ["A"]},          # no params
+         rank_genes_key("a"): {"params": {"groupby": "a"}}},
+        expected=[rank_genes_key("a")])
+
+
+def _harvest_the_rankings(uns: dict, expected: list[str]):
+    """Run the `_rank_keys = ...` statement of the injected cell over *uns*."""
+    source = verify_notebook._DUMP_CELL.format(out="/tmp")
+    stmt = next(s for s in ast.parse(source).body
+                if isinstance(s, ast.Assign)
+                and getattr(s.targets[0], "id", None) == "_rank_keys")
+    namespace = {"adata_norm": types.SimpleNamespace(uns=uns)}
+    exec(compile(ast.Module([stmt], []), "<harvest>", "exec"), namespace)  # noqa: S102
+    assert sorted(namespace["_rank_keys"]) == sorted(expected)
 
 
 if __name__ == "__main__":

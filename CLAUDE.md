@@ -301,9 +301,9 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   raising provider is otherwise invisible — `_preview` catches it and shows sample values,
   exactly as it should for a half-built tab); and every provider selects a declared assembly.
 
-  Four rules that exist because each was once broken:
+  Five rules that exist because each was once broken:
   **(a) A template may only reference `EXECUTOR_BASE_NAMES`** (`utils/step_templates/namespace.py`:
-  `sc sq pd np plt Path data_path sdata adata`) plus names a declared dependency binds.
+  `sc sq sd pd np plt Path data_path sdata adata`) plus names a declared dependency binds.
   `_get_executor` calls `check_base_namespace` on the dict it built, so the set validation
   checks against and the set execution provides cannot drift — a name in one and not the
   other passes validation and then fails as a `NameError` on replay, in a clean kernel.
@@ -326,6 +326,21 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   to notice. `tests/test_tab_templates.py::test_every_step_resolves_user_overrides` parses
   every `Step(...)` in every tab; `tab_templates._preview` is the one exemption, since it
   renders a spec it has already resolved.
+  **(e) A template may not hand-roll what a library API already does.** Templates are read as
+  the explanation of the analysis, so prefer `scanpy` / `squidpy` / `spatialdata` / `anndata`
+  calls over manual numpy/pandas/shapely equivalents — `sc.get.obs_df` over indexing `.X` and
+  densifying, `sc.tl.rank_genes_groups(key_added=)` over a results dict, `sd.polygon_query`
+  over a point-in-polygon loop, `shapely.make_valid` over `buffer(0)` (which silently *deletes*
+  a lobe of a self-intersecting polygon rather than repairing it). Hand-rolled code is allowed
+  where no API covers it — the Welch + BH block in `roi.expression`, the frozen `arrow_shim`
+  block — and says so in a comment. **A manual coordinate transform is the specific smell**: a
+  `spatialdata` transformation *declares* the frame instead of applying it by hand, which is
+  what keeps the notebook's coordinate conventions honest. The ROI templates were the worked
+  example: a `[:, ::-1]` flip undone by the `[:, 1], [:, 0]` read on the very next line, so the
+  comment asserted a convention the code reversed. One caveat found while applying the rule:
+  `sc.pp.calculate_qc_metrics(inplace=True)` overwrites Xenium's own `obs['total_counts']`,
+  which `store_inventory._STRUCTURAL_OBS` lists — a template must not mutate `adata` to reach
+  an API, so `genes.correlation` uses `inplace=False`.
 
   `ProvNode`/`Step` also carry `template_id` / `template_origin` / `template_hash`.
   `code` still records what ran, so replay is unaffected; the fields let a reader tell a stock
@@ -426,7 +441,10 @@ reproducibility defect rather than a kernel-discovery one.
 - **napari** + **PyQt5/qtpy** + **magicgui** — UI framework
 - **scanpy** / **anndata** — single-cell analysis
 - **squidpy** — spatial transcriptomics analysis
-- **spatialdata** / **spatialdata_io** — spatial data container and Xenium loader
+- **spatialdata** / **spatialdata_io** — spatial data container and Xenium loader.
+  `spatialdata` is bound as **`sd`** in the template namespace (`EXECUTOR_BASE_NAMES`) and
+  imported by the recorded notebook preamble, so a template can call `sd.polygon_query` and
+  `sd.transformations.*` directly — see rule (e) above.
 - **zarr** — caching and session persistence
 - **dask** — lazy array loading
 - **tifffile**, **opencv**, **scikit-image** — image processing

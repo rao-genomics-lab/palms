@@ -50,6 +50,17 @@ def _is_user_element(name: str, keys: list) -> bool:
 
 _USER_UNS_KEYS = ["nhood_enrichment", "co_occurrence", "ligrec", "rank_genes_groups"]
 
+# A prefix, not a name: the rank-genes step writes `rank_genes_<clustering>` so
+# ranking a second clustering does not overwrite the first, and `rank_genes_groupby`
+# names the most recent. A fixed list would have stopped counting a ranking as
+# user data the moment the keying landed — and "no user data" is what lets a
+# cache be rebuilt with no dialog.
+_USER_UNS_PREFIXES = ("rank_genes",)
+
+
+def _is_user_uns(name: str) -> bool:
+    return name in _USER_UNS_KEYS or name.startswith(_USER_UNS_PREFIXES)
+
 # Globs, not literal names: the previous fixed list omitted the CNV caches, so a
 # cache whose only user data was a multi-hour CopyKAT run reported "no user
 # data" and was rebuilt with no dialog at all.
@@ -113,9 +124,9 @@ def _detect_user_data(cache_path: Path) -> dict:
                 found["clusterings"].append(item.name)
     uns_dir = cache_path / "tables" / "table" / "uns"
     if uns_dir.exists():
-        for key in _USER_UNS_KEYS:
-            if (uns_dir / key).exists():
-                found["uns_keys"].append(key)
+        for item in sorted(uns_dir.iterdir()):
+            if not item.name.startswith(".") and _is_user_uns(item.name):
+                found["uns_keys"].append(item.name)
     obsm_dir = cache_path / "tables" / "table" / "obsm"
     if obsm_dir.exists() and (obsm_dir / "X_umap").exists():
         found["has_obsm_umap"] = True
@@ -155,9 +166,18 @@ def _format_user_data_message(user_data: dict) -> str:
             "co_occurrence": "Co-occurrence results",
             "ligrec": "Ligand-receptor results",
             "rank_genes_groups": "Rank genes results",
+            "rank_genes_groupby": "Rank genes results",
         }
+        seen_uns: set[str] = set()
         for key in user_data["uns_keys"]:
-            lines.append(f"  • {labels.get(key, key)}")
+            # Every rank_genes_<clustering> slot is one line — a dataset with
+            # four rankings should not print four indistinguishable bullets.
+            label = labels.get(key) or (
+                "Rank genes results" if key.startswith("rank_genes") else key)
+            if label in seen_uns:
+                continue
+            seen_uns.add(label)
+            lines.append(f"  • {label}")
     _sidecar_labels = {
         "roi_deg_cache.parquet": "ROI DEG results",
         "arms_tile_deg_cache.parquet": "ARMS tile DEG results",
