@@ -26,6 +26,8 @@ from shapely import contains_xy
 from shapely.affinity import scale as shapely_scale
 from shapely.geometry import Polygon
 
+from xenium_viewer.utils import sdata_write
+
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
@@ -40,10 +42,12 @@ _MIN_LEVEL_SIZE = 8  # stop building pyramid levels once a dim would drop below 
 # pruning above) can still pull several GB into memory at once even though no
 # single partition is ever fully collected. Measured: `PointsModel.parse`'s
 # own internal index-monotonicity check alone hit an ArrowMemoryError under a
-# 24GB cap with the default (~40-way) scheduler. Capping workers here is a
-# blunt, deliberately conservative safety net for the transcript path only —
-# trades write speed for a hard bound on concurrent partition memory.
-_TRANSCRIPT_WRITE_WORKERS = 2
+# 24GB cap with the default (~40-way) scheduler.
+#
+# Shared with the cache build in `loader.py`, which has exactly the same problem
+# for exactly the same reason — the two drifting apart is how one write path ends
+# up bounded and the other does not.
+_TRANSCRIPT_WRITE_WORKERS = sdata_write.WRITE_WORKERS
 
 
 class CropExportError(Exception):

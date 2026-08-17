@@ -20,6 +20,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from xenium_viewer.utils import sdata_write
+
 # ─── Channel names for the 4 morphology_focus planes ───────────────────────
 CHANNEL_NAMES = [
     "DAPI",
@@ -27,6 +29,9 @@ CHANNEL_NAMES = [
     "18S",
     "AlphaSMA-Vimentin",
 ]
+
+# Pyramid levels built for morphology_focus: scale0 plus one per factor.
+PYRAMID_SCALE_FACTORS = (2, 2, 2, 2, 2)
 
 # ─── User-generated element keys ────────────────────────────────────────────
 _USER_SHAPE_KEYS = [
@@ -516,6 +521,66 @@ def _convert_arrow_strings(sdata):
         pd.options.future.infer_string = old_infer
 
 
+def _print_and_log(line: str) -> None:
+    """Progress detail that belongs both on screen and in the dataset log."""
+    from xenium_viewer.utils import reporting
+    print(f"  {line}")
+    reporting.get_logger().info(line)
+
+
+def _retile_morphology_focus(sdata, path: Path) -> bool:
+    """Re-read morphology_focus from the OME-TIFF's own 1024px tiles.
+
+    ``spatialdata_io`` reads that image with ``dask_image.imread``, which gives
+    one dask chunk per *full channel page* — 5.93 GB each on a typical slide, and
+    every one of them has to be decoded and held before a single output tile can
+    be written. The file is tiled, so reading it that way instead removes ~24 GB
+    from the cache build. The pyramid is still built by spatialdata from this
+    array, so **every written byte is unchanged**; only the chunking of the read
+    differs. See ``utils/raster_io.py`` for the measurements, including why the
+    TIFF's own pyramid levels are *not* reused.
+
+    Returns True if the swap happened. Declining leaves spatialdata_io's element
+    untouched — a performance regression at worst, never a correctness one — so
+    this never raises.
+    """
+    from spatialdata.models import Image2DModel
+
+    from xenium_viewer.utils import raster_io, reporting
+
+    if "morphology_focus" not in sdata.images:
+        return False
+    reference = sdata.images["morphology_focus"]
+    try:
+        level0 = raster_io.tiled_morphology_image(Path(path), reference)
+        scale_factors = raster_io.pyramid_scale_factors(reference)
+        if level0 is None or scale_factors is None:
+            reporting.get_logger().info(
+                "morphology_focus: no usable tiled source; reading it as before.")
+            return False
+        sdata.images["morphology_focus"] = Image2DModel.parse(
+            level0,
+            dims=("c", "y", "x"),
+            transformations=raster_io.reference_transformations(reference),
+            chunks=raster_io.DEFAULT_CHUNKS,
+            # Taken from the element being replaced, not from a constant: this
+            # has to reproduce whatever levels spatialdata_io actually built,
+            # and it fills in its own default scale_factors when we pass none.
+            scale_factors=scale_factors or None,
+            c_coords=raster_io.reference_channels(reference),
+            rgb=None,
+        )
+    except Exception as exc:
+        reporting.get_logger().warning(
+            "Could not re-read morphology_focus from its tiles (%s); "
+            "reading it as before.", exc)
+        return False
+
+    print(f"  morphology_focus: reading the OME-TIFF's own "
+          f"{level0.chunksize[-2:]} tiles instead of whole pages.")
+    return True
+
+
 def load_sdata(
     path: Path,
     build_pyramid: bool = True,
@@ -530,9 +595,11 @@ def load_sdata(
     path : Path
         Root directory of the Xenium output.
     build_pyramid : bool
-        If True, build a 5-level software image pyramid for the morphology_focus
-        TIFFs (which have no internal pyramid). Required for smooth napari
-        pan/zoom performance.
+        If True, build a 5-level image pyramid for morphology_focus. Required for
+        smooth napari pan/zoom performance. The source OME-TIFFs do carry their
+        own pyramid, but it is computed with a different filter than spatialdata's
+        (measured ~15% per-pixel difference — see ``utils/raster_io.py``), so only
+        their full-resolution level is read and the rest is recomputed.
     n_jobs : int
         Number of threads for spatialdata_io.
     use_cache : bool
@@ -626,7 +693,7 @@ def load_sdata(
 
     image_models_kwargs = {}
     if build_pyramid:
-        image_models_kwargs = {"scale_factors": [2, 2, 2, 2, 2]}
+        image_models_kwargs = {"scale_factors": list(PYRAMID_SCALE_FACTORS)}
 
     print(f"Loading SpatialData from {path} ...")
     sdata = xenium(
@@ -644,6 +711,11 @@ def load_sdata(
     )
     print("SpatialData loaded successfully.")
     print(sdata)
+
+    # Unconditional, not gated on build_pyramid: the whole-page read happens
+    # either way (spatialdata_io fills in its own default scale_factors when we
+    # pass none, so build_pyramid=False does not actually mean "single scale").
+    _retile_morphology_focus(sdata, path)
 
     # Restore user elements from backup into the fresh sdata (before writing).
     if backup_path is not None:
@@ -674,7 +746,18 @@ def load_sdata(
             _check_free_space(path, backup_path)
             _convert_arrow_strings(sdata)
             print(f"Writing zarr cache to {cache_path} ...")
-            sdata.write(str(staging))
+            # Element by element rather than `sdata.write()`: it caps dask's
+            # concurrency only for the elements that need it (labels, points),
+            # and it is what lets memory be released — and reported — between
+            # elements.
+            sdata_write.write_sdata(
+                sdata, staging,
+                progress_cb=lambda pct, msg: print(f"  [{pct}%] {msg}"),
+                # To the terminal as well as the log: a cache build runs for
+                # tens of minutes, and "how much memory is this using" is a
+                # question people ask *while* it is happening.
+                log=_print_and_log,
+            )
             write_manifest(staging, experiment_path)
             if backup_path is not None:
                 _copy_sidecars_and_session(backup_path, staging, user_data)
@@ -687,6 +770,12 @@ def load_sdata(
                 shutil.move(str(cache_path), str(displaced))
                 print(f"  Existing cache moved to {displaced.name}")
             os.rename(staging, cache_path)
+            # The write pointed `sdata` at the staging directory, which no longer
+            # exists. Every later element write in the viewer resolves against
+            # `sdata.path` (`zarr_safe._store_root`), so leaving it stale means
+            # the first ROI or clustering saved after a rebuild lands in a
+            # resurrected `.sdata_cached__building.zarr` instead of the cache.
+            sdata.path = cache_path
             print("Zarr cache written.")
             if backup_path is not None:
                 shutil.rmtree(str(backup_path), ignore_errors=True)

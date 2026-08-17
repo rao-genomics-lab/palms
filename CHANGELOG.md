@@ -1,5 +1,119 @@
 # Changelog
 
+## [Unreleased] — 2026-08-17
+
+### Performance
+- **Building `sdata_cached.zarr` needed ~24 GB before it could write a single byte**, and
+  the cause was the *chunking of the read*, not anything in the write. `spatialdata_io`
+  reads `morphology_focus` through `dask_image.imread`, which yields **one dask chunk per
+  full channel page** — measured on a 57887×51217 4-channel slide, `chunksize
+  (1, 57887, 51217)` = **5.93 GB per chunk**. `Image2DModel.parse(chunks=(1, 4096, 4096))`
+  then rechunks that into ~195 tiles per channel, but dask cannot produce *any* tile
+  without decoding a whole page, and must hold it until every consumer is done — including
+  the chained pyramid levels above it, whose top two levels are single chunks depending on
+  the entire level below. All four channel pages therefore land in memory at once.
+
+  The file was never the problem: it is tiled 1024×1024 and readable a tile at a time
+  through `tifffile.imread(..., aszarr=True)` (opens in 0.85 s; a 1024² sub-region reads
+  from the NAS in 0.36 s). `utils/raster_io.py` reads morphology_focus that way and the
+  loader re-parses it, leaving the pyramid computation to spatialdata exactly as before —
+  **so every written byte is unchanged**; only the chunking of the read differs.
+
+  **Measured on the dataset that prompted this, both runs under an `RLIMIT_AS` cap so an
+  over-budget run fails instead of taking the machine down:**
+
+  | | peak RSS | outcome |
+  |---|---|---|
+  | before | **41.2 GB** | died at a 60 GB cap: `Unable to allocate 5.52 GiB for an array with shape (1, 57887, 51217)` |
+  | after | **8.5 / 9.2 GB** (VmHWM 8.97 / 9.26 GB) | full 14 GB store written under a 24 GB cap, in 473 s / 491 s |
+
+  (Two independent complete runs; the second was a re-measurement on the final code.)
+
+  And the reported symptom — memory climbing element after element — is gone; RSS is now
+  flat across the whole write, with the peak set once during the image and never revisited:
+
+  ```
+  [mem] wrote morphology_focus: rss=4.74GB peak=8.81GB
+  [mem] wrote nucleus_labels:   rss=4.93GB peak=9.26GB
+  [mem] wrote cell_labels:      rss=4.97GB peak=9.26GB
+  [mem] wrote transcripts:      rss=5.79GB peak=9.26GB
+  [mem] wrote table:            rss=5.82GB peak=9.26GB
+  ```
+
+  The resulting store was diffed against a cache built by the old code on the same dataset:
+  identical level counts, shapes, dtypes, chunk grids and sampled data for **all six image
+  pyramid levels and both label pyramids**, identical table `X`/`obs`/`var_names`, identical
+  transcript row count (218,457,525) and partition count. The one difference is the *order*
+  of the transcripts columns (same set, same data) — `PointsModel.parse` iterates
+  `set(data.columns)` and documents its column order as "not guaranteed", so it varies run
+  to run upstream of anything here, and nothing in the viewer reads those columns by
+  position.
+
+  The TIFF's own pyramid levels 1+ are deliberately **not** reused, even though they exist,
+  are tiled, and match `scale_factors=[2, 2, 2, 2, 2]` shape for shape. 10x downsamples with
+  a different filter, and measured against the real slide the difference is not a rounding
+  error: mean |diff| of **8.63** against `coarsen().mean()` on a level whose mean value is
+  57.6 (≈15% of every pixel drawn when zoomed out), 5.98 against decimation, 14.74 against
+  max-pooling. Reading only level 0 gets the same 24 GB back with no change to the output at
+  all. The reader **declines** — leaving spatialdata_io's element untouched — if there is no
+  readable OME-TIFF, or if its full-resolution level disagrees with what spatialdata_io
+  produced in shape or dtype, so older Xenium layouts behave exactly as before.
+
+- **dask's concurrency is now capped per element type rather than per write.** The 2-worker
+  cap introduced for the crop path applied to whole writes, which is both too much and too
+  little:
+  - **Images do not need it.** Measured on the real slide, capping them moved the peak only
+    8.71 GB → 8.31 GB while making the raster write several times slower. Their chunking was
+    the problem, not their concurrency.
+  - **Labels do**, for a reason images do not share. Both pyramids are lazy, but labels go
+    through `spatialdata.models.pyramids_utils.to_multiscale`, which does an explicit
+    `prev.astype(float)` and **two rechunks per level** (either side of
+    `ome_zarr.dask_utils.resize`'s `map_blocks`); a rechunk is a many-to-many gather and the
+    float64 intermediates are 134 MB a chunk. Uncapped, it was the *label* write — not the
+    30× larger image write — that died: `Unable to allocate 177. MiB for an array with
+    shape (3620, 6404) and data type float64`. Labels are only ~277 MB on disk, so the cap
+    costs a couple of minutes.
+
+  `sdata_write.ELEMENT_WORKERS` declares the exceptions; `crop_export` and the cache build
+  share one constant so the two write paths cannot drift apart.
+- The morphology re-read is **not** gated on `load_sdata(build_pyramid=...)`, because the
+  whole-page read happens either way: `spatialdata_io` fills in its own default
+  `scale_factors` whenever the caller passes none, so `build_pyramid=False` never actually
+  meant "single scale". For the same reason the replacement's `scale_factors` are derived
+  from the element being replaced rather than from a constant.
+
+### Added
+- `utils/sdata_write.write_sdata()` — writes a store **one element at a time** instead of
+  through `SpatialData.write()`'s internal loop, so there is a point at which progress can
+  be reported, dask concurrency chosen per element type, and memory released. Uses only
+  public spatialdata API (an empty `SpatialData` writes the store shell and performs the
+  path-safety validation; `write_element` does the rest), and a test asserts it produces a
+  store byte-identical to `SpatialData.write()`.
+- `utils/mem_probe.py` — RSS/peak-RSS probes, a `malloc_trim` wrapper and a reader for
+  napari's global dask cache. The cache build now logs a memory line per element, to the
+  terminal and the dataset log, because "how much is this using" is a question people ask
+  *while* a tens-of-minutes build is happening.
+
+### Fixed
+- **Freed memory now returns to the OS between elements.** glibc keeps freed blocks in
+  per-thread arenas, so RSS ratcheted to the high-water mark and stayed there — which is
+  what made the write loop look like it leaked when nothing was actually retained.
+  `write_sdata` calls `gc.collect()` + `malloc_trim(0)` after each element.
+
+### Investigated, no change
+- **napari's global opportunistic dask cache is not implicated.** `Layer.__init__` calls
+  `configure_dask(data, cache=True)` for any dask-backed layer, which sizes
+  `dask.cache.Cache` at 25% of RAM — **33.77 GB** here — and `dask.callbacks` registration
+  is process-global, so a slicing window overlapping a long write does register it. But
+  cachey scores entries by cost *per byte*, and large chunks score near zero: measured
+  retention during a registered window was **0.2 MB out of 32 MB computed**. Bounding it
+  would have been a plausible-sounding fix for a problem it does not cause.
+- `FLUSH_THRESHOLD` in `preprocess.py` stays at 10M (see 2026-08-16).
+- **Crop & Export still uses `sdata.write()` under a blanket 2-worker cap**, rather than
+  being moved onto `write_sdata`. It would gain per-element progress and let its image write
+  run at full width, but that path was verified at real scale only days ago and is bounded
+  as it stands; changing it is a separate, separately-verified piece of work.
+
 ## [Unreleased] — 2026-08-16
 
 ### Performance
@@ -11,7 +125,8 @@
   multiplier on the `pd.concat` cost — ~66,000 read+write operations where 5,101 writes
   would do. (The measurement was against local disk, so this was genuine rewrite cost, not
   NAS latency.) Replaced with **one open `pa.ipc.new_file` writer per gene**, so each row is
-  written exactly once; `ulimit -n` is ~1e6, so a handle per gene is not a concern. Two
+  written exactly once (bounded by the process's real fd limit — see the two fd bugs
+  below, which is where the first attempt at this went wrong). Two
   supporting changes: all batches are written against **one fixed schema** (decoding
   dictionary columns to their value type — `feature_name` comes back from `to_pandas()` as a
   dictionary whose categories vary batch to batch, which the writer rejects on the first
