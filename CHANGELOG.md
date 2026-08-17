@@ -2,6 +2,26 @@
 
 ## [Unreleased] — 2026-08-17 (documentation)
 
+### Tracked, not fixed
+- **`sq.gr.spatial_neighbors` is deprecated in squidpy 1.8.2 and removed in 1.9.0** —
+  `docs/squidpy-spatial-neighbors-migration.md`, flagged at the top of `CLAUDE.md` so it is
+  seen before the next dependency bump. Found while executing the API-Reference snippets.
+  It matters more than a leaf deprecation because the neighbour graph is a **dependency**:
+  Neighbourhood Enrichment, Co-occurrence and Ligand-Receptor break together, and so does
+  every **already-exported notebook**, whose recorded `spatial_neighbors` cell calls the
+  removed function — which is precisely the promise the provenance graph exists to keep.
+  `squidpy>=1.8` is pinned with no upper bound in `environment.yml` and `pyproject.toml`,
+  so an ordinary `conda env update` is enough to trigger it.
+
+  The migration is nonetheless **low-risk, and measured rather than assumed**: on 500
+  random points under squidpy 1.8.2, `spatial_neighbors_knn(n_neighs=6)` writes the same
+  `obsp`/`uns` keys and a **byte-identical** `spatial_connectivities` and
+  `spatial_distances` to `spatial_neighbors(coord_type='generic', n_neighs=6)`, and
+  `nhood_enrichment` runs unchanged against it. `coord_type='generic'` with `n_neighs=k`
+  *is* k-nearest-neighbours. So it is a rename across two call sites, not a change of
+  results — no saved analysis is invalidated. The doc carries the equivalence check to
+  re-run against whatever squidpy version is current at the time.
+
 ### Added
 - **[Analysis Templates](docs/Analysis-Templates.md)** — a catalogue of all fourteen analysis
   templates: what each computes, which tab runs it, its full contract, and its **complete
