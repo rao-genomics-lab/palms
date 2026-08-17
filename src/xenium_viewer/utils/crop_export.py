@@ -16,17 +16,38 @@ import shutil
 from pathlib import Path
 from typing import Callable, TYPE_CHECKING
 
+import dask
+import dask.array as da
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from shapely import contains_xy
 from shapely.affinity import scale as shapely_scale
 from shapely.geometry import Polygon
+
+from xenium_viewer.utils import sdata_write
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
 _PYRAMID_FACTORS = [2, 2, 2, 2, 2]
 _MIN_LEVEL_SIZE = 8  # stop building pyramid levels once a dim would drop below this
+
+# Transcript partitions can be far bigger than an image/label chunk (~150MB+
+# compressed, all columns, vs ~30-130MB for an image/label chunk) — dask's
+# default scheduler runs up to one task per CPU core concurrently, so a crop
+# that overlaps most of the source table's partitions (e.g. a crop spanning
+# most of the slide's width, which barely benefits from the `filters=`
+# pruning above) can still pull several GB into memory at once even though no
+# single partition is ever fully collected. Measured: `PointsModel.parse`'s
+# own internal index-monotonicity check alone hit an ArrowMemoryError under a
+# 24GB cap with the default (~40-way) scheduler.
+#
+# Shared with the cache build in `loader.py`, which has exactly the same problem
+# for exactly the same reason — the two drifting apart is how one write path ends
+# up bounded and the other does not.
+_TRANSCRIPT_WRITE_WORKERS = sdata_write.WRITE_WORKERS
 
 
 class CropExportError(Exception):
@@ -216,10 +237,22 @@ def crop_and_export(
     adata_cropped.obsm["spatial"] = adata_cropped.obsm["spatial"] - np.array([origin_x_um, origin_y_um])
 
     # ── Crop morphology image (bbox, full-res, rebuild pyramid) ──────────────
+    # Kept lazy (a dask array, not `.compute()`'d here): for a crop spanning a
+    # large fraction of the slide, materializing the full-res crop as a dense
+    # numpy array before it ever reaches disk can be tens of GB (measured: a
+    # 27043x51144x4ch uint16 crop is ~11GB for the image alone, ~5.5GB each for
+    # the two label rasters below, plus np.isin/np.unique working buffers on
+    # top) — on top of whatever the running viewer already holds, that's a real
+    # OOM risk, and it's the only place in the codebase that eagerly
+    # materializes an image/label array this size (loader.py's initial cache
+    # build writes the full, larger, uncropped image the same dask-backed way).
+    # Image2DModel.parse/Labels2DModel.parse accept a dask array directly, so
+    # `new_sdata.write(...)` below computes and writes these chunk-by-chunk
+    # instead of all at once.
     _progress(20, "Cropping morphology image...")
     morph_scales = _extract_dt_scales(ctx.sdata.images["morphology_focus"])
     morph_full = morph_scales[0]
-    cropped_img = np.asarray(morph_full[:, row_min:row_max, col_min:col_max].compute())
+    cropped_img = morph_full[:, row_min:row_max, col_min:col_max]
     scale_factors = _safe_scale_factors(cropped_img.shape[-2], cropped_img.shape[-1])
     img_element = Image2DModel.parse(
         cropped_img, dims=("c", "y", "x"),
@@ -230,11 +263,10 @@ def crop_and_export(
     # ── Crop cell_labels (bbox, then zero out non-kept cells) ────────────────
     _progress(35, "Cropping cell labels...")
     cl_scales = _extract_dt_scales(ctx.sdata.labels["cell_labels"])
-    cropped_cl = np.asarray(cl_scales[0][row_min:row_max, col_min:col_max].compute())
-    cropped_cl = cropped_cl.copy()
-    cropped_cl[~np.isin(cropped_cl, kept_cell_ids)] = 0
+    cropped_cl = cl_scales[0][row_min:row_max, col_min:col_max]
+    masked_cl = da.where(da.isin(cropped_cl, kept_cell_ids), cropped_cl, 0)
     cl_element = Labels2DModel.parse(
-        cropped_cl, dims=("y", "x"),
+        masked_cl, dims=("y", "x"),
         transformations={"global": Identity()},
         scale_factors=scale_factors,
     )
@@ -245,19 +277,21 @@ def crop_and_export(
     # rasters at the same spatial location gives different, unrelated
     # numbers, even though both value ranges span roughly 1..n_obs). So
     # instead of matching ID numbers, find which nucleus IDs spatially
-    # overlap a kept cell's footprint in the already-masked cropped_cl (any
-    # overlapping pixel counts — a nucleus straddling a kept/non-kept cell
-    # boundary is conservatively kept rather than silently dropped) and zero
-    # out the rest, mirroring the cell_labels masking above.
+    # overlap a kept cell's footprint in the already-masked cell-label crop
+    # (any overlapping pixel counts — a nucleus straddling a kept/non-kept
+    # cell boundary is conservatively kept rather than silently dropped) and
+    # zero out the rest, mirroring the cell_labels masking above. The only
+    # eager `.compute()` in this whole section: its result is just the
+    # distinct nucleus IDs (a few thousand values), not the underlying array.
     _progress(45, "Cropping nucleus labels...")
     nl_scales = _extract_dt_scales(ctx.sdata.labels["nucleus_labels"])
-    cropped_nl = np.asarray(nl_scales[0][row_min:row_max, col_min:col_max].compute())
-    cropped_nl = cropped_nl.copy()
-    kept_nucleus_ids = np.unique(cropped_nl[cropped_cl > 0])
+    cropped_nl = nl_scales[0][row_min:row_max, col_min:col_max]
+    nl_where_kept_cell = da.where(masked_cl > 0, cropped_nl, 0)
+    kept_nucleus_ids = da.unique(nl_where_kept_cell).compute()
     kept_nucleus_ids = kept_nucleus_ids[kept_nucleus_ids > 0]
-    cropped_nl[~np.isin(cropped_nl, kept_nucleus_ids)] = 0
+    masked_nl = da.where(da.isin(cropped_nl, kept_nucleus_ids), cropped_nl, 0)
     nl_element = Labels2DModel.parse(
-        cropped_nl, dims=("y", "x"),
+        masked_nl, dims=("y", "x"),
         transformations={"global": Identity()},
         scale_factors=scale_factors,
     )
@@ -270,7 +304,42 @@ def crop_and_export(
     # TranscriptLoader expect.
     _progress(60, "Filtering transcripts...")
     poly_xy_um = shapely_scale(poly_xy, xfact=pixel_size, yfact=pixel_size, origin=(0, 0))
-    transcripts_ddf = ctx.sdata.points["transcripts"]
+
+    # ctx.sdata.points["transcripts"] is spatialdata's dask dataframe over the
+    # on-disk points.parquet, opened with a plain dask.dataframe.read_parquet(path)
+    # and no predicate (spatialdata._io.io_points._read_points). A boolean-mask
+    # bbox filter applied on top of that dataframe does *not* get pushed down
+    # into the parquet reader, and even where an explicit `filters=` kwarg does
+    # get real row-group pruning (confirmed for a bbox narrow in x), a crop
+    # that spans nearly the full width — e.g. splitting a two-section slide by
+    # height, which is what this tissue's own naming ("PCA043_PCA044") and a
+    # real crash both point at — barely prunes anything: the on-disk
+    # partitions are banded by x, not y, so a full-width bbox still overlaps
+    # every partition. Measured directly: for that crop shape, collecting the
+    # filtered result into one pandas DataFrame (the previous version of this
+    # code) pulled ~100M+ rows into memory and hit an ArrowMemoryError under a
+    # 24GB test cap. So this stays fully lazy end-to-end, like the image/label
+    # crops above — never call `.compute()` on the filtered dataframe itself;
+    # let `new_sdata.write()` and `to_parquet()` below stream it partition by
+    # partition. `filters=` is still applied as a first-pass narrowing where it
+    # helps (small/x-narrow crops), it just isn't relied on for correctness or
+    # memory safety.
+    x_min_um, x_max_um = col_min * pixel_size, col_max * pixel_size
+    y_min_um, y_max_um = row_min * pixel_size, row_max * pixel_size
+    bbox_filters = [
+        ("x", ">=", x_min_um), ("x", "<=", x_max_um),
+        ("y", ">=", y_min_um), ("y", "<=", y_max_um),
+    ]
+    try:
+        import dask.dataframe as dd
+        points_parquet_path = Path(ctx.sdata.path) / "points" / "transcripts" / "points.parquet"
+        transcripts_ddf = dd.read_parquet(points_parquet_path, filters=bbox_filters)
+    except Exception:
+        transcripts_ddf = ctx.sdata.points["transcripts"]
+        transcripts_ddf = transcripts_ddf[
+            (transcripts_ddf["x"] >= x_min_um) & (transcripts_ddf["x"] <= x_max_um)
+            & (transcripts_ddf["y"] >= y_min_um) & (transcripts_ddf["y"] <= y_max_um)
+        ]
 
     def _filter_partition(pdf):
         if len(pdf) == 0:
@@ -278,25 +347,44 @@ def crop_and_export(
         mask = contains_xy(poly_xy_um, pdf["x"].to_numpy(), pdf["y"].to_numpy())
         return pdf[mask]
 
-    filtered_df = transcripts_ddf.map_partitions(_filter_partition).compute()
-    # Each source partition keeps its own index (e.g. restarting at 0), so the
-    # concatenated result has duplicate index labels — spatialdata's parquet
-    # writer (dask-expr `assign`) fails on that with "cannot reindex on an
-    # axis with duplicate labels". Reset to a clean unique RangeIndex.
-    filtered_df = filtered_df.reset_index(drop=True)
-    filtered_df["x"] = filtered_df["x"] - origin_x_um
-    filtered_df["y"] = filtered_df["y"] - origin_y_um
-
+    filtered_ddf = transcripts_ddf.map_partitions(_filter_partition)
+    # Each source partition keeps its own index (e.g. restarting at 0), so
+    # without this the partitions have duplicate index labels — spatialdata's
+    # parquet writer (dask-expr `assign`) fails on that with "cannot reindex
+    # on an axis with duplicate labels". reset_index on a dask dataframe is a
+    # lightweight per-partition-length computation, not a full materialization.
+    filtered_ddf = filtered_ddf.reset_index(drop=True)
+    filtered_ddf["x"] = filtered_ddf["x"] - origin_x_um
+    filtered_ddf["y"] = filtered_ddf["y"] - origin_y_um
     points_coords = {"x": "x", "y": "y"}
-    if "z" in filtered_df.columns:
+    if "z" in filtered_ddf.columns:
         points_coords["z"] = "z"
-    points_element = PointsModel.parse(
-        filtered_df,
-        coordinates=points_coords,
-        feature_key="feature_name",
-        instance_key="cell_id",
-        transformations={"global": Scale([1.0 / pixel_size, 1.0 / pixel_size], axes=("x", "y"))},
-    )
+    # Everything from here through the write() calls below stays under a
+    # concurrency-capped scheduler (see _TRANSCRIPT_WRITE_WORKERS) — including
+    # `.cat.as_known()` just below, which triggers its own eager `.compute()`
+    # and hit the same unbounded-concurrency ArrowMemoryError as the rest of
+    # this section when it ran under the default (~40-way) scheduler.
+    with dask.config.set(scheduler="threads", num_workers=_TRANSCRIPT_WRITE_WORKERS):
+        # feature_name is dictionary-encoded with ~5000+ possible gene names
+        # (this panel: 5001 predesigned + 100 custom, well past 127) — read
+        # lazily/filtered, each partition only knows the categories *it*
+        # happens to contain, so pyarrow infers a different index width per
+        # partition (int8 vs int16) and `to_parquet` fails with a schema
+        # mismatch across partitions once two disagree. spatialdata's own
+        # `write_points()` hits the identical issue and fixes it the same
+        # way: force one *known*, shared category set before any write. This
+        # computes only the distinct gene names actually present (a few
+        # thousand strings), not the data.
+        if filtered_ddf["feature_name"].dtype == "category" and not filtered_ddf["feature_name"].cat.known:
+            filtered_ddf["feature_name"] = filtered_ddf["feature_name"].cat.as_known()
+
+        points_element = PointsModel.parse(
+            filtered_ddf,
+            coordinates=points_coords,
+            feature_key="feature_name",
+            instance_key="cell_id",
+            transformations={"global": Scale([1.0 / pixel_size, 1.0 / pixel_size], axes=("x", "y"))},
+        )
 
     # ── Table ──────────────────────────────────────────────────────────────
     # Set/overwrite a 'cell_labels' obs column holding the raster pixel values
@@ -337,13 +425,42 @@ def crop_and_export(
         # loader.py's cache-freshness check requires the zarr be >= as fresh.
         shutil.copy(ctx.data_path / "experiment.xenium", staging_dir / "experiment.xenium")
 
-        new_sdata.write(str(staging_dir / "sdata_cached.zarr"), overwrite=True)
+        # Image/label pyramid chunks are small enough that the default (~40-way)
+        # scheduler already proved safe for them (measured); the points element
+        # embedded in the same `new_sdata` is not, so the whole write stays
+        # under the capped scheduler rather than trying to split images/labels
+        # out into a separate write just to give them back full concurrency.
+        with dask.config.set(scheduler="threads", num_workers=_TRANSCRIPT_WRITE_WORKERS):
+            new_sdata.write(str(staging_dir / "sdata_cached.zarr"), overwrite=True)
 
-        _progress(90, "Writing transcripts.parquet...")
-        parquet_path = staging_dir / "transcripts.parquet"
-        raw_schema_df = filtered_df.rename(columns={"x": "x_location", "y": "y_location", "z": "z_location"})
-        raw_schema_df.attrs = {}   # spatialdata's transform metadata isn't JSON-serializable
-        raw_schema_df.to_parquet(parquet_path, index=False)
+            _progress(90, "Writing transcripts.parquet...")
+            parquet_path = staging_dir / "transcripts.parquet"
+            # Re-derives the same filtered dask dataframe rather than reusing a
+            # materialized result from the write above (there isn't one to reuse
+            # — filtered_ddf was never `.compute()`'d) — this re-reads and
+            # re-filters the source transcripts a second time, which is wasted
+            # work for a large crop, but keeps this write bounded the same way:
+            # each partition is materialized, written, and dropped in turn.
+            #
+            # This has to be `transcripts.parquet` as a single *file*, not a
+            # directory — preprocess.py and TranscriptLoader read it as plain
+            # Xenium output, matching the real 10x format. dask's own
+            # `.to_parquet()` always writes a directory of per-partition files
+            # (like spatialdata's own points.parquet), so it can't be used
+            # here; write one shared `pq.ParquetWriter` across partitions
+            # instead — same bounded-memory streaming, single physical file.
+            raw_schema_ddf = filtered_ddf.rename(columns={"x": "x_location", "y": "y_location", "z": "z_location"})
+            raw_schema_ddf.attrs = {}   # spatialdata's transform metadata isn't JSON-serializable
+            schema = pa.Table.from_pandas(raw_schema_ddf._meta, preserve_index=False).schema
+            writer = pq.ParquetWriter(parquet_path, schema)
+            try:
+                for partition in raw_schema_ddf.partitions:
+                    pdf = partition.compute()
+                    if len(pdf) == 0:
+                        continue
+                    writer.write_table(pa.Table.from_pandas(pdf, preserve_index=False).cast(schema))
+            finally:
+                writer.close()
 
         _progress(95, "Building transcript cache...")
         preprocess(parquet_path=parquet_path, cache_dir=staging_dir / "transcript_cache")

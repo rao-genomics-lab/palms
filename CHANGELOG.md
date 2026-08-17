@@ -1,5 +1,271 @@
 # Changelog
 
+## [Unreleased] — 2026-08-17
+
+### Performance
+- **Building `sdata_cached.zarr` needed ~24 GB before it could write a single byte**, and
+  the cause was the *chunking of the read*, not anything in the write. `spatialdata_io`
+  reads `morphology_focus` through `dask_image.imread`, which yields **one dask chunk per
+  full channel page** — measured on a 57887×51217 4-channel slide, `chunksize
+  (1, 57887, 51217)` = **5.93 GB per chunk**. `Image2DModel.parse(chunks=(1, 4096, 4096))`
+  then rechunks that into ~195 tiles per channel, but dask cannot produce *any* tile
+  without decoding a whole page, and must hold it until every consumer is done — including
+  the chained pyramid levels above it, whose top two levels are single chunks depending on
+  the entire level below. All four channel pages therefore land in memory at once.
+
+  The file was never the problem: it is tiled 1024×1024 and readable a tile at a time
+  through `tifffile.imread(..., aszarr=True)` (opens in 0.85 s; a 1024² sub-region reads
+  from the NAS in 0.36 s). `utils/raster_io.py` reads morphology_focus that way and the
+  loader re-parses it, leaving the pyramid computation to spatialdata exactly as before —
+  **so every written byte is unchanged**; only the chunking of the read differs.
+
+  **Measured on the dataset that prompted this, both runs under an `RLIMIT_AS` cap so an
+  over-budget run fails instead of taking the machine down:**
+
+  | | peak RSS | outcome |
+  |---|---|---|
+  | before | **41.2 GB** | died at a 60 GB cap: `Unable to allocate 5.52 GiB for an array with shape (1, 57887, 51217)` |
+  | after | **8.5 / 9.2 GB** (VmHWM 8.97 / 9.26 GB) | full 14 GB store written under a 24 GB cap, in 473 s / 491 s |
+
+  (Two independent complete runs; the second was a re-measurement on the final code.)
+
+  And the reported symptom — memory climbing element after element — is gone; RSS is now
+  flat across the whole write, with the peak set once during the image and never revisited:
+
+  ```
+  [mem] wrote morphology_focus: rss=4.74GB peak=8.81GB
+  [mem] wrote nucleus_labels:   rss=4.93GB peak=9.26GB
+  [mem] wrote cell_labels:      rss=4.97GB peak=9.26GB
+  [mem] wrote transcripts:      rss=5.79GB peak=9.26GB
+  [mem] wrote table:            rss=5.82GB peak=9.26GB
+  ```
+
+  The resulting store was diffed against a cache built by the old code on the same dataset:
+  identical level counts, shapes, dtypes, chunk grids and sampled data for **all six image
+  pyramid levels and both label pyramids**, identical table `X`/`obs`/`var_names`, identical
+  transcript row count (218,457,525) and partition count. The one difference is the *order*
+  of the transcripts columns (same set, same data) — `PointsModel.parse` iterates
+  `set(data.columns)` and documents its column order as "not guaranteed", so it varies run
+  to run upstream of anything here, and nothing in the viewer reads those columns by
+  position.
+
+  The TIFF's own pyramid levels 1+ are deliberately **not** reused, even though they exist,
+  are tiled, and match `scale_factors=[2, 2, 2, 2, 2]` shape for shape. 10x downsamples with
+  a different filter, and measured against the real slide the difference is not a rounding
+  error: mean |diff| of **8.63** against `coarsen().mean()` on a level whose mean value is
+  57.6 (≈15% of every pixel drawn when zoomed out), 5.98 against decimation, 14.74 against
+  max-pooling. Reading only level 0 gets the same 24 GB back with no change to the output at
+  all. The reader **declines** — leaving spatialdata_io's element untouched — if there is no
+  readable OME-TIFF, or if its full-resolution level disagrees with what spatialdata_io
+  produced in shape or dtype, so older Xenium layouts behave exactly as before.
+
+- **dask's concurrency is now capped per element type rather than per write.** The 2-worker
+  cap introduced for the crop path applied to whole writes, which is both too much and too
+  little:
+  - **Images do not need it.** Measured on the real slide, capping them moved the peak only
+    8.71 GB → 8.31 GB while making the raster write several times slower. Their chunking was
+    the problem, not their concurrency.
+  - **Labels do**, for a reason images do not share. Both pyramids are lazy, but labels go
+    through `spatialdata.models.pyramids_utils.to_multiscale`, which does an explicit
+    `prev.astype(float)` and **two rechunks per level** (either side of
+    `ome_zarr.dask_utils.resize`'s `map_blocks`); a rechunk is a many-to-many gather and the
+    float64 intermediates are 134 MB a chunk. Uncapped, it was the *label* write — not the
+    30× larger image write — that died: `Unable to allocate 177. MiB for an array with
+    shape (3620, 6404) and data type float64`. Labels are only ~277 MB on disk, so the cap
+    costs a couple of minutes.
+
+  `sdata_write.ELEMENT_WORKERS` declares the exceptions; `crop_export` and the cache build
+  share one constant so the two write paths cannot drift apart.
+- The morphology re-read is **not** gated on `load_sdata(build_pyramid=...)`, because the
+  whole-page read happens either way: `spatialdata_io` fills in its own default
+  `scale_factors` whenever the caller passes none, so `build_pyramid=False` never actually
+  meant "single scale". For the same reason the replacement's `scale_factors` are derived
+  from the element being replaced rather than from a constant.
+
+### Added
+- `utils/sdata_write.write_sdata()` — writes a store **one element at a time** instead of
+  through `SpatialData.write()`'s internal loop, so there is a point at which progress can
+  be reported, dask concurrency chosen per element type, and memory released. Uses only
+  public spatialdata API (an empty `SpatialData` writes the store shell and performs the
+  path-safety validation; `write_element` does the rest), and a test asserts it produces a
+  store byte-identical to `SpatialData.write()`.
+- `utils/mem_probe.py` — RSS/peak-RSS probes, a `malloc_trim` wrapper and a reader for
+  napari's global dask cache. The cache build now logs a memory line per element, to the
+  terminal and the dataset log, because "how much is this using" is a question people ask
+  *while* a tens-of-minutes build is happening.
+
+### Fixed
+- **Loading a dataset for the first time killed the terminal while the GUI was adding
+  `morphology_focus`** — build the cache and display it in one session and it died;
+  restart, load the same dataset, and it was fine. Both halves have the same cause:
+  `load_sdata` wrote the cache and then returned the **in-memory** object it had built,
+  not the store it had just written. Setting `sdata.path` pointed later *writes* at the
+  cache but rebound no array, so every layer was still backed by the build-time dask
+  graph, in which the pyramid levels above `scale0` exist only as a chained
+  `coarsen().mean()`.
+
+  That matters because **napari displays the smallest level first**
+  (`_scalar_field.py`: `_data_level = len(data) - 1`), and so does the thumbnail, and so
+  does the coarse-alignment thumbnail in `_populate_viewer`. On a full slide `scale5` is
+  20 MiB of pixels standing on **13,444 tasks over all 780 `scale0` chunks**, promoted to
+  float64 on the way — three layers over. Touching the smallest level materialised the
+  largest one.
+
+  `load_sdata` now re-opens the cache it just wrote (`_reopen_written_cache`) and returns
+  that, so the first session holds exactly what every later session holds. Measured on
+  `Run4/…PCA030_PCA031…`, layer-building only, under a 40 GB `RLIMIT_AS` cap:
+
+  | | peak RSS | outcome |
+  |---|---|---|
+  | before (build-time object, uncapped) | **23.1 GB** | died in 51 s: `MemoryError: Unable to allocate 32.0 MiB for an array with shape (1, 2048, 2048) and data type float64` — a 32 MiB coarsen intermediate failing is what address-space exhaustion looks like |
+  | after (re-opened from cache) | **1.70 GB** | 9 s, complete |
+
+  The re-open is lazy and costs a few seconds. It also settles `sdata.path` without a
+  separate assignment, and fixes the same latent problem for `points/transcripts` and the
+  table, which were likewise left pointing at the raw output after a build.
+
+  **What was actually killing the terminal is `systemd-oomd`**, and it is worth knowing
+  because the numbers look wrong otherwise: it fires on sustained memory *pressure*
+  (50% PSI for 20 s), not on absolute usage, which is why RSS was never seen near the
+  125 GB the box has — and it kills the **cgroup scope**, i.e. the terminal and every tab
+  in it, rather than the offending process. `journalctl -u systemd-oomd` names the scope
+  and the pressure figure outright, and is the first thing to check the next time a
+  session disappears without a traceback. Left as it is: it is the reason a runaway
+  allocation costs a terminal instead of the desktop.
+- **`--no-cache` now says what it is about to do**, because the fix above cannot help it.
+  With no cache to read, the lower pyramid levels have to be computed, and that
+  computation does not stream: each level is rechunked either side of the coarsen, which
+  is a many-to-many gather, so a whole level of float64 must be live at once — ~24 GB for
+  `scale1` on a full slide. Capping dask's concurrency was tried first and **does not
+  work**, which is worth recording because it sounds like it should: same dataset, same
+  40 GB cap, **23.1 GB uncapped vs 25.2 GB at 4 workers, both dead**. The memory is a
+  property of the graph's shape, not of how many workers walk it. So `_populate_viewer`
+  detects a pyramid whose levels are computed rather than stored and warns, naming
+  `journalctl -u systemd-oomd` — turning a session that vanishes without a traceback into
+  one that said why first. `--no-cache` on a full slide still needs that memory; it always
+  did.
+- **Freed memory now returns to the OS between elements.** glibc keeps freed blocks in
+  per-thread arenas, so RSS ratcheted to the high-water mark and stayed there — which is
+  what made the write loop look like it leaked when nothing was actually retained.
+  `write_sdata` calls `gc.collect()` + `malloc_trim(0)` after each element.
+
+### Investigated, no change
+- **napari's global opportunistic dask cache is not implicated.** `Layer.__init__` calls
+  `configure_dask(data, cache=True)` for any dask-backed layer, which sizes
+  `dask.cache.Cache` at 25% of RAM — **33.77 GB** here — and `dask.callbacks` registration
+  is process-global, so a slicing window overlapping a long write does register it. But
+  cachey scores entries by cost *per byte*, and large chunks score near zero: measured
+  retention during a registered window was **0.2 MB out of 32 MB computed**. Bounding it
+  would have been a plausible-sounding fix for a problem it does not cause.
+- `FLUSH_THRESHOLD` in `preprocess.py` stays at 10M (see 2026-08-16).
+- **Crop & Export still uses `sdata.write()` under a blanket 2-worker cap**, rather than
+  being moved onto `write_sdata`. It would gain per-element progress and let its image write
+  run at full width, but that path was verified at real scale only days ago and is bounded
+  as it stands; changing it is a separate, separately-verified piece of work.
+
+## [Unreleased] — 2026-08-16
+
+### Performance
+- **The transcript feather cache rebuilt ~13× more data than it needed to** — measured, not
+  estimated: of the ~69 minutes a verified real-scale crop took, ~53 minutes (77%) was
+  `preprocess.py`. Feather (Arrow IPC) has no append, so `_flush_buffers` **read back and
+  rewrote every gene's entire accumulated file on every flush cycle**; with ~13 cycles that
+  is `sum(1..13)/13 ≈ 7×` the final size in writes plus ~6× in reads, and the same
+  multiplier on the `pd.concat` cost — ~66,000 read+write operations where 5,101 writes
+  would do. (The measurement was against local disk, so this was genuine rewrite cost, not
+  NAS latency.) Replaced with **one open `pa.ipc.new_file` writer per gene**, so each row is
+  written exactly once (bounded by the process's real fd limit — see the two fd bugs
+  below, which is where the first attempt at this went wrong). Two
+  supporting changes: all batches are written against **one fixed schema** (decoding
+  dictionary columns to their value type — `feature_name` comes back from `to_pandas()` as a
+  dictionary whose categories vary batch to batch, which the writer rejects on the first
+  mismatch, the same class of bug hit in `crop_export.py`), and `iter_batches(columns=…)` now
+  reads only the 6 columns used instead of decoding all 13 and discarding most.
+
+  **Measured: full 218.5M-row dataset in 6.2 min / 1.40 GB peak RSS**, versus a 52.6-min
+  baseline for 127.9M kept rows — ~13× faster normalised per row. Correctness was pinned
+  first: old vs new over a real 3M-row slice forced through ~6 flush cycles produce
+  **identical output** — same 5,101 genes, same row counts, same values, and the same dtypes
+  (`float32` preserved, not upcast). Benefits the `xenium-preprocess` CLI and `app.py`'s
+  one-time preprocessing worker too, not just cropping, since all three share this function.
+
+  **Two fd-exhaustion bugs were found and fixed while validating this**, both of which had
+  to be reproduced under the *viewer's* real limits rather than a shell's:
+  - A pool of one writer per gene needs one fd per gene (5,101 for this panel), but a
+    desktop-launched process inherits systemd's default soft `RLIMIT_NOFILE` of **1024**
+    (hard ~1e6) — an interactive shell reports ~1e6 because conda's init already raised it,
+    which is exactly how the unbounded design got waved through. `preprocess()` now raises
+    its own soft limit best-effort for the duration (restoring it after; lowering a soft
+    limit never invalidates open fds), **and** caps the pool at `limit - 256`. Genes beyond
+    the cap fall back to one shard per flush, merged at the end into the same single
+    `<gene>.feather` — so the reader is unaffected and the failure is structurally
+    impossible rather than merely unlikely.
+  - `RecordBatchFileWriter.close()` **does not release the underlying file descriptor**
+    when pyarrow opened the sink from a path; the fd survives until garbage collection
+    (measured: 200 writers, all closed, still holding 200 fds until `gc.collect()`). Sinks
+    are now created as explicit `pa.OSFile` objects and closed alongside their writers.
+
+  All three fd regimes are verified to produce output **identical to the pre-change
+  implementation** (same genes, rows, values, dtypes): the viewer's real soft-1024 case,
+  a worst case where the limit cannot be raised at all (4,322 genes sharded), and a forced
+  8-writer budget (5,082 genes sharded) — the fallback is exercised deliberately rather
+  than left as untested branch.
+
+  Also: gene files are now written as `<gene>.feather.partial` and renamed only once every
+  writer is closed. An IPC file has no footer until closed, and
+  `TranscriptLoader._cached_genes` globs `*.feather` **without** consulting the `.complete`
+  sentinel — so an interrupted rebuild previously left files the viewer would happily pick
+  up. `FLUSH_THRESHOLD` moved to a module-level constant beside `CHUNK_SIZE`/`MIN_QV` so the
+  flush path is tunable and testable (a single-flush test passes trivially and proves
+  nothing). Its value is deliberately left at 10M rows: with the rewrite gone it only
+  controls batch granularity and peak buffer memory, and raising it would trade back the
+  memory headroom the crash fix above exists to protect.
+
+### Fixed
+- **Crop Dataset could exhaust memory and crash the machine on a large crop** — the real
+  cause, found after an initial (real but insufficient) transcript-filter fix still
+  crashed on a retry: `crop_and_export()` (`utils/crop_export.py`) pulled the cropped
+  morphology image and both label rasters fully into dense numpy arrays
+  (`np.asarray(...compute())`) before ever touching disk. For a crop spanning roughly
+  half a slide (confirmed from the crash's own leftover partial output: 27043×51144px,
+  full width / half height — this dataset has two tissue sections sharing one run,
+  cropped out separately), that's ~11GB for the image alone plus ~5.5GB each for the two
+  label rasters, before `np.isin`/`np.unique` working-buffer overhead — on top of
+  whatever the running viewer already held. Nowhere else in the codebase does this;
+  the initial cache build already writes the full, larger, uncropped image the same
+  dask-backed way. Fixed by keeping the image/label crops as dask arrays through
+  `Image2DModel.parse`/`Labels2DModel.parse` (both accept a dask array directly) instead
+  of materializing them first, so `new_sdata.write()` computes and writes them chunk by
+  chunk. The transcript path needed the same treatment for the same crop shape (a
+  full-width crop barely benefits from `filters=` bbox pruning, since the on-disk
+  partitions are banded by x, not y) plus two more real bugs surfaced only by testing at
+  the actual crash size: `PointsModel.parse`'s own internal index-monotonicity check
+  forces an eager `.compute()` that (like the image/label case) can pull many large
+  partitions into memory at once under dask's default ~40-way scheduler — capped to a
+  small worker count for this path specifically; and `feature_name` (5000+ possible gene
+  names) needs `.cat.as_known()` before any write, or partitions that happen to see
+  different numbers of distinct genes get inconsistent categorical index widths and the
+  parquet write fails outright with a schema mismatch (the fix mirrors spatialdata's own
+  `write_points()`, which hits the identical issue). The exported `transcripts.parquet`
+  also has to stay a single *file* (matching real Xenium output, which the rest of the
+  app assumes) rather than the directory dask's own `.to_parquet()` would produce, so
+  it's streamed through one shared `pyarrow.parquet.ParquetWriter` across partitions
+  instead. **Verified against the actual dataset and crop size that crashed**: peak RSS
+  9.76GB (previously crashed the machine), 287,548 cells / 145,605,025 transcripts
+  written correctly, full pytest suite green.
+- **Crop Dataset's transcript-filter step loaded the entire source transcripts table on
+  every crop, regardless of crop size** — `ctx.sdata.points["transcripts"]` (spatialdata's
+  dask dataframe over `points.parquet`, opened with no predicate) fed straight into
+  `.map_partitions(...).compute()`: every partition of a potentially
+  hundreds-of-millions-of-row table was loaded and mostly discarded, for every crop. A
+  boolean bbox mask applied to the already-open dask dataframe does *not* get pushed down
+  into the parquet reader (confirmed empirically — identical wall-clock with or without
+  the mask); re-reading the same on-disk `points.parquet` directory with an explicit
+  `filters=` kwarg does get real row-group pruning where the crop is narrow in x (the
+  axis partitions are banded by) — e.g. ~40s → ~1-2s for a small crop — though as the fix
+  above found, this alone doesn't help (and isn't relied on for correctness/memory
+  safety) once the crop spans most of the source table's width.
+
 ## [Unreleased] — 2026-08-05
 
 ### Changed — templates now use the library API instead of hand-rolled equivalents
