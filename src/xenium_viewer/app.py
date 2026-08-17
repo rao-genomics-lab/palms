@@ -241,6 +241,47 @@ def _extract_dt_scales(dt):
     return scales
 
 
+def _warn_if_pyramid_is_not_stored(sdata):
+    """Say so before building layers from a pyramid that is still a computation.
+
+    Normally every level of `morphology_focus` is an array on disk, and napari
+    reads a few chunks of the smallest one. When the dataset did not come from a
+    cache (`--no-cache`, or a build whose write failed) only `scale0` holds data;
+    the rest is a chained `coarsen().mean()`. napari draws the *smallest* level
+    first, so adding the layer walks that whole chain, and the chain is not
+    streamable — each level is rechunked either side of the coarsen, which is a
+    many-to-many gather, so a full level of float64 has to be live at once. On a
+    full slide that is ~24 GB for `scale1` alone, and capping dask's concurrency
+    does not change it (measured: 23.1 GB uncapped, 25.2 GB at 4 workers, both
+    dead at a 40 GB cap).
+
+    There is no cheap fix here — the pyramid genuinely has to be computed — so
+    this warns instead of pretending otherwise. Without a cache to read, a
+    full-slide dataset needs that memory, and the failure mode is a killed
+    session rather than an error, which is worth a sentence of warning.
+    """
+    element = sdata.images.get("morphology_focus") if sdata.images else None
+    if element is None or not hasattr(element, "children"):
+        return
+    scales = _extract_dt_scales(element)
+    if len(scales) < 2:
+        return
+    smallest = scales[-1]
+    # One task per chunk (plus a bookkeeping key) means it is read, not built.
+    if len(smallest.dask) <= smallest.npartitions + 1:
+        return
+    msg = ("morphology_focus has no stored pyramid — its lower levels will be "
+           "computed from the full-resolution image while the layers are built. "
+           "On a full slide this needs tens of GB; if the session dies without "
+           "a traceback, check `journalctl -u systemd-oomd`.")
+    print(f"  Warning: {msg}")
+    try:
+        from xenium_viewer.utils import reporting
+        reporting.get_logger().warning(msg)
+    except Exception:
+        pass
+
+
 def _add_layers_manually(viewer, sdata):
     """Add images and labels from sdata DataTree to the napari viewer."""
     # ── Morphology image (multiscale pyramid from sdata) ─────────────────────
@@ -608,6 +649,8 @@ def _populate_viewer(viewer, data: dict) -> dict:
     sdata = data["sdata"]
     adata = data["adata"]
     pixel_size = data["pixel_size"]
+
+    _warn_if_pyramid_is_not_stored(sdata)
 
     t0 = time.perf_counter()
     _add_layers_manually(viewer, sdata)

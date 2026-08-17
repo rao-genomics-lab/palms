@@ -187,11 +187,18 @@ def test_loader_repoints_sdata_after_renaming_staging_into_place():
                 and node.func.attr == "rename"
                 and any(getattr(a, "id", None) == "staging" for a in node.args)):
             renamed_at = node.lineno
-        if (isinstance(node, ast.Assign)
-                and any(isinstance(t, ast.Attribute) and t.attr == "path"
-                        and getattr(t.value, "id", None) == "sdata"
-                        for t in node.targets)):
-            repointed_at = node.lineno
+        # Either form settles the path: assigning it outright, or rebinding
+        # `sdata` to the re-opened cache, which carries its own path.
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Attribute) and t.attr == "path"
+                   and getattr(t.value, "id", None) == "sdata"
+                   for t in node.targets):
+                repointed_at = node.lineno
+            elif (any(getattr(t, "id", None) == "sdata" for t in node.targets)
+                  and isinstance(node.value, ast.Call)
+                  and getattr(node.value.func, "id", None)
+                  == "_reopen_written_cache"):
+                repointed_at = node.lineno
 
     assert renamed_at is not None, "load_sdata no longer renames the staging dir"
     assert repointed_at is not None, (
@@ -199,6 +206,87 @@ def test_loader_repoints_sdata_after_renaming_staging_into_place():
         "sdata.path, so later element writes go to the staging path"
     )
     assert repointed_at > renamed_at, "sdata.path is reset before the rename"
+
+    # The re-open helper is the one carrying that guarantee now, so it has to
+    # keep the fallback that sets the path when the re-open fails.
+    helper = ast.parse(
+        textwrap.dedent(inspect.getsource(loader._reopen_written_cache)))
+    assert any(
+        isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Attribute) and t.attr == "path"
+                and getattr(t.value, "id", None) == "sdata"
+                for t in node.targets)
+        for node in ast.walk(helper)
+    ), ("_reopen_written_cache no longer sets sdata.path on the fallback path, "
+        "so a failed re-open leaves the object pointing at the staging dir")
+
+
+def _levels(element):
+    """The dask array behind every scale of a multiscale element."""
+    return [element[name]["image"].data
+            for name in sorted(element.children, key=lambda n: int(n[5:]))]
+
+
+def test_reopen_returns_arrays_that_are_read_rather_than_recomputed(
+        sample_sdata, tmp_path):
+    """The whole point of the swap: no level may still be a coarsen chain.
+
+    A freshly parsed multiscale element holds only ``scale0`` as data; every
+    smaller level is a lazy ``coarsen().mean()`` over the one below it. napari
+    displays the *smallest* level first, so on a full slide adding the layer
+    walked the entire pyramid — tens of GB — for a thumbnail. After the re-open
+    each level is an array on disk, which shows up as one task per chunk.
+    """
+    pytest.importorskip("spatialdata")
+    from xenium_viewer import loader
+    from xenium_viewer.utils import sdata_write
+
+    cache = tmp_path / "sdata_cached.zarr"
+    built = sample_sdata()
+
+    # The premise. If this stops holding, the fix is no longer needed and this
+    # test is the one that should say so.
+    assert any(len(arr.dask) > arr.npartitions
+               for arr in _levels(built.images["im"])), (
+        "expected the parsed pyramid to be a lazy chain, not stored levels")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sdata_write.write_sdata(built, cache, log=lambda line: None)
+        reopened = loader._reopen_written_cache(built, cache)
+
+    # A stored array is one task per chunk, plus the single bookkeeping key
+    # `da.from_zarr` adds. A computed one carries the whole chain below it.
+    for name, element in (("im", reopened.images["im"]),
+                          ("lab", reopened.labels["lab"])):
+        for i, arr in enumerate(_levels(element)):
+            assert len(arr.dask) <= arr.npartitions + 1, (
+                f"{name} scale{i} is still computed ({len(arr.dask)} tasks for "
+                f"{arr.npartitions} chunks) — the build graph was returned")
+
+    from pathlib import Path
+    assert Path(reopened.path) == cache
+
+
+def test_reopen_falls_back_to_the_in_memory_dataset(sample_sdata, tmp_path,
+                                                    monkeypatch):
+    """A cache that will not re-open must not lose the build."""
+    pytest.importorskip("spatialdata")
+    from pathlib import Path
+
+    from xenium_viewer import loader
+
+    def _boom(_path):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(loader, "_open_cache", _boom)
+
+    built = sample_sdata()
+    cache = tmp_path / "sdata_cached.zarr"
+    returned = loader._reopen_written_cache(built, cache)
+
+    assert returned is built
+    assert Path(returned.path) == cache
 
 
 def test_element_names_matches_gen_elements(sample_sdata):

@@ -20,7 +20,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from xenium_viewer.utils import sdata_write
+from xenium_viewer.utils import mem_probe, sdata_write
 
 # ─── Channel names for the 4 morphology_focus planes ───────────────────────
 CHANNEL_NAMES = [
@@ -308,6 +308,44 @@ def _ask_corrupt_cache(error: Exception, report, user_data: dict) -> str:
     if clicked is quit_btn:
         return "quit"
     return "rebuild"
+
+
+def _reopen_written_cache(sdata, cache_path: Path):
+    """Swap the freshly built SpatialData for the one we just wrote to disk.
+
+    The object returned by `xenium()` reaches its rasters through lazy dask
+    graphs rooted in the OME-TIFF, and its pyramid levels above `scale0` exist
+    only as a chained `coarsen().mean()`. The level *napari shows first* is the
+    smallest one (`_data_level = len(data) - 1`), so adding the layer walks that
+    chain all the way down: on a full slide `scale5` is 20 MiB of pixels
+    standing on ~13,400 tasks over all 780 `scale0` chunks, promoted to float64
+    on the way. That is tens of GB of pressure for a thumbnail, three layers
+    over, and it is why building and displaying in one session was killed while
+    a restart against the same cache is fine.
+
+    Re-reading costs a few seconds and is lazy; every level is then a direct
+    read of an array that is already on disk. It also settles `sdata.path`
+    without a separate assignment — the write pointed it at the staging
+    directory, which no longer exists, and every later element write resolves
+    against it (`zarr_safe._store_root`), so a stale value sent the first ROI or
+    clustering into a resurrected `.sdata_cached__building.zarr`.
+
+    Never raises: a cache that was just written should open, but if it does not,
+    the caller is better off with the in-memory object than with an exception
+    that loses a build. In that case the path is set the old way, and the layers
+    are built from the chain — slowly, and capped by `app._populate_viewer`.
+    """
+    try:
+        reopened = _open_cache(cache_path)
+    except Exception as e:
+        sdata.path = cache_path
+        _print_and_log(
+            f"Warning: could not re-open the cache just written ({e}). "
+            "Continuing with the in-memory dataset — building the layers will "
+            "use much more memory than usual."
+        )
+        return sdata
+    return reopened
 
 
 def _open_cache(cache_path: Path):
@@ -770,12 +808,11 @@ def load_sdata(
                 shutil.move(str(cache_path), str(displaced))
                 print(f"  Existing cache moved to {displaced.name}")
             os.rename(staging, cache_path)
-            # The write pointed `sdata` at the staging directory, which no longer
-            # exists. Every later element write in the viewer resolves against
-            # `sdata.path` (`zarr_safe._store_root`), so leaving it stale means
-            # the first ROI or clustering saved after a rebuild lands in a
-            # resurrected `.sdata_cached__building.zarr` instead of the cache.
-            sdata.path = cache_path
+            sdata = _reopen_written_cache(sdata, cache_path)
+            # After the rebinding, not inside the helper: the caller's reference
+            # is what keeps the build-time object alive, so trimming any earlier
+            # trims nothing.
+            mem_probe.release()
             print("Zarr cache written.")
             if backup_path is not None:
                 shutil.rmtree(str(backup_path), ignore_errors=True)

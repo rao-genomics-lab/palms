@@ -95,6 +95,55 @@
   *while* a tens-of-minutes build is happening.
 
 ### Fixed
+- **Loading a dataset for the first time killed the terminal while the GUI was adding
+  `morphology_focus`** — build the cache and display it in one session and it died;
+  restart, load the same dataset, and it was fine. Both halves have the same cause:
+  `load_sdata` wrote the cache and then returned the **in-memory** object it had built,
+  not the store it had just written. Setting `sdata.path` pointed later *writes* at the
+  cache but rebound no array, so every layer was still backed by the build-time dask
+  graph, in which the pyramid levels above `scale0` exist only as a chained
+  `coarsen().mean()`.
+
+  That matters because **napari displays the smallest level first**
+  (`_scalar_field.py`: `_data_level = len(data) - 1`), and so does the thumbnail, and so
+  does the coarse-alignment thumbnail in `_populate_viewer`. On a full slide `scale5` is
+  20 MiB of pixels standing on **13,444 tasks over all 780 `scale0` chunks**, promoted to
+  float64 on the way — three layers over. Touching the smallest level materialised the
+  largest one.
+
+  `load_sdata` now re-opens the cache it just wrote (`_reopen_written_cache`) and returns
+  that, so the first session holds exactly what every later session holds. Measured on
+  `Run4/…PCA030_PCA031…`, layer-building only, under a 40 GB `RLIMIT_AS` cap:
+
+  | | peak RSS | outcome |
+  |---|---|---|
+  | before (build-time object, uncapped) | **23.1 GB** | died in 51 s: `MemoryError: Unable to allocate 32.0 MiB for an array with shape (1, 2048, 2048) and data type float64` — a 32 MiB coarsen intermediate failing is what address-space exhaustion looks like |
+  | after (re-opened from cache) | **1.70 GB** | 9 s, complete |
+
+  The re-open is lazy and costs a few seconds. It also settles `sdata.path` without a
+  separate assignment, and fixes the same latent problem for `points/transcripts` and the
+  table, which were likewise left pointing at the raw output after a build.
+
+  **What was actually killing the terminal is `systemd-oomd`**, and it is worth knowing
+  because the numbers look wrong otherwise: it fires on sustained memory *pressure*
+  (50% PSI for 20 s), not on absolute usage, which is why RSS was never seen near the
+  125 GB the box has — and it kills the **cgroup scope**, i.e. the terminal and every tab
+  in it, rather than the offending process. `journalctl -u systemd-oomd` names the scope
+  and the pressure figure outright, and is the first thing to check the next time a
+  session disappears without a traceback. Left as it is: it is the reason a runaway
+  allocation costs a terminal instead of the desktop.
+- **`--no-cache` now says what it is about to do**, because the fix above cannot help it.
+  With no cache to read, the lower pyramid levels have to be computed, and that
+  computation does not stream: each level is rechunked either side of the coarsen, which
+  is a many-to-many gather, so a whole level of float64 must be live at once — ~24 GB for
+  `scale1` on a full slide. Capping dask's concurrency was tried first and **does not
+  work**, which is worth recording because it sounds like it should: same dataset, same
+  40 GB cap, **23.1 GB uncapped vs 25.2 GB at 4 workers, both dead**. The memory is a
+  property of the graph's shape, not of how many workers walk it. So `_populate_viewer`
+  detects a pyramid whose levels are computed rather than stored and warns, naming
+  `journalctl -u systemd-oomd` — turning a session that vanishes without a traceback into
+  one that said why first. `--no-cache` on a full slide still needs that memory; it always
+  did.
 - **Freed memory now returns to the OS between elements.** glibc keeps freed blocks in
   per-thread arenas, so RSS ratcheted to the high-water mark and stayed there — which is
   what made the write loop look like it leaked when nothing was actually retained.
