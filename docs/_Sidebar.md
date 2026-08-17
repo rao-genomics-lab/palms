@@ -7,6 +7,7 @@
 ---
 
 **Reference**
+- [Analysis Templates](Analysis-Templates)
 
 *Cells*
 - [Clustering](Tab-Clustering)
@@ -54,3 +55,7 @@
 - [ROI Analysis](Tutorial-ROI-Analysis)
 - [Annotations](Tutorial-Annotations)
 - [Recovering a Cache](Tutorial-Recovering-a-Cache)
+
+---
+
+**[API Reference](API-Reference)**

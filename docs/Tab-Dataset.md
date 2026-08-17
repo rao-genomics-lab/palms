@@ -2,7 +2,7 @@
 
 Inventory everything this dataset holds on disk — the original Xenium output, the viewer's zarr cache, saved session state, derived analysis caches, and backups — with a size for each, then tick what you no longer want and delete it. Answers the question the [Cache](Tab-Cache) tab cannot: not "is the store healthy" but "where did the space go, and how do I get rid of something". The original 10x output is listed read-only and can never be selected. This is the **Dataset** tab in the "Tools" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-dataset.png -->
+![Dataset](screenshots/tab-dataset.png)
 
 ## Controls
 

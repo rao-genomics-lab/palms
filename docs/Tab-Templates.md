@@ -2,7 +2,9 @@
 
 Inspect and edit the analysis code every other tab runs. Each analysis step is a template with a declared contract, made of named blocks; this tab shows the shipped source, lets you override it, and previews the exact string that would be executed with the parameters currently set in the owning tab. The preview is not a reconstruction of what might run — it calls the same render method the executor calls, so the code shown is the code that would run. This is the **Templates** tab in the "Tools" control panel group.
 
-<!-- SCREENSHOT: docs/screenshots/tab-templates.png -->
+> This page describes the **tab**. For what each of the fourteen templates computes, its contract and its full default source, see **[Analysis Templates](Analysis-Templates)** — the same content this tab shows, readable without launching the viewer.
+
+![Templates](screenshots/tab-templates.png)
 
 ## Controls
 

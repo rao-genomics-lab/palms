@@ -1,5 +1,53 @@
 # Changelog
 
+## [Unreleased] — 2026-08-17 (documentation)
+
+### Added
+- **[Analysis Templates](docs/Analysis-Templates.md)** — a catalogue of all fourteen analysis
+  templates: what each computes, which tab runs it, its full contract, and its **complete
+  default source, block by block**. The templates *are* the analysis, and until now none of
+  them could be read without launching the viewer and clicking through the Templates tab.
+- **[API Reference](docs/API-Reference.md)** — the ~50 functions that are usable outside the
+  GUI, with live signatures, a runnable snippet each, and the distinction that matters:
+  `run_rank_genes(adata_norm, groupby, …)` takes a plain `AnnData` and works in any notebook,
+  while `crop_and_export(ctx, …)` needs a `ViewerContext` and is documented as *not* API. No
+  page in `docs/` previously contained the string `from xenium_viewer`.
+- `scripts/generate_docs.py` generates both pages — the template bodies from the registry,
+  the signatures from the live objects — with the prose held in the script so regenerating
+  never destroys writing. **`tests/test_generated_docs.py` fails if a checked-in page differs
+  from what the generator produces**, if a shipped template has no prose, or if a documented
+  function no longer exists. Code in the docs cannot go stale without CI noticing.
+
+### Fixed
+- **The four missing screenshots** (CNV, Dataset, Cache, Templates) are captured; those pages
+  had carried unfilled placeholders since the tabs were added.
+- **Three documented calls were wrong, and executing the snippets is what found them** —
+  which is the argument for the snippets being executable at all. `load_clusterings` takes a
+  *dataset path* and returns 10x's own `analysis/clustering/` results, not an `AnnData` and
+  not the clusterings you computed; `TranscriptLoader.cached_genes` is a property, not a
+  method; and the rank-genes example grouped by a `'leiden'` column that no dataset actually
+  has, since the viewer names its clusterings `clustering_*`.
+- **A generated page had this machine's paths in it.** `TranscriptLoader`'s `cache_dir` and
+  `parquet_path` defaults resolve against the working directory at import time, so the
+  extracted signature contained an absolute path that is wrong for every reader. Shortened to
+  `.../name`, with a test that fails on any absolute path in a generated page.
+- `Installation.md` gains a **Memory** section and a "the viewer vanished and took the
+  terminal with it" entry naming `journalctl -u systemd-oomd` — the failure looks nothing
+  like an out-of-memory error, because oomd fires on memory *pressure* and kills the whole
+  cgroup scope. It also no longer recommends `--no-cache` for read-only filesystems without
+  saying what it costs on a full slide.
+- **Two docs tests that could not fail**, both found while adding a third:
+  `test_internal_links_resolve` split the anchor off a `Page#anchor` link and checked only
+  the page, so a link to a heading that never existed passed — `test_link_anchors_resolve`
+  now checks the heading, across 30 such links. And the new screenshot-index guard matched
+  nothing on its first version (0 of 26 entries) because it compared page names that still
+  had `.md` on them; it now asserts a count as well as the property, since a guard that
+  silently checks nothing is worse than no guard.
+- `Tab-Crop-Dataset.md`, `Tab-Cache.md`, `Tutorial-Getting-Started.md` and
+  `Tutorial-Clustering.md` describe current behaviour: bounded crop memory, per-element
+  memory reporting during a rebuild, per-clustering ranked genes, and the two clustering
+  preprocessing checkboxes the tutorial never mentioned.
+
 ## [Unreleased] — 2026-08-17
 
 ### Performance

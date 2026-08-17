@@ -96,6 +96,7 @@ Click **Save Volcano Plot(s)...** and choose a directory. One PNG volcano plot i
 - To clear all ROIs, select all shapes in the ROI polygons layer and press Delete, or use the Edit menu in napari.
 - If you have registered an H&E image, you can draw ROIs using the H&E layer as a visual reference while keeping the ROI polygons layer active.
 - ROI polygons use the Xenium pixel coordinate system. If you export them and reimport them in another tool, apply the pixel size conversion (`pixel_size` in `experiment.xenium`, typically 0.2125 µm/pixel).
+- The recorded code does that conversion by *declaring* a spatialdata transformation rather than scaling the coordinates by hand, so the notebook keeps the two frames straight. See [`roi.polygons`](Analysis-Templates#roipolygons) and [`roi.deg`](Analysis-Templates#roideg) for the exact code — the polygons you drew are inlined as literals, so an exported notebook reproduces these regions without needing the viewer.
 
 ---
 

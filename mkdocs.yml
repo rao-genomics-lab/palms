@@ -13,6 +13,7 @@ nav:
   - Installation: Installation.md
   - Interface Overview: Interface-Overview.md
   - Reference:
+    - Analysis Templates: Analysis-Templates.md
     - Cells:
       - Clustering: Tab-Clustering.md
       - Cell Coloring: Tab-Cell-Coloring.md
@@ -52,3 +53,4 @@ nav:
     - ROI Analysis: Tutorial-ROI-Analysis.md
     - Annotations: Tutorial-Annotations.md
     - Recovering a Cache: Tutorial-Recovering-a-Cache.md
+  - API Reference: API-Reference.md

@@ -83,7 +83,8 @@ xenium-preprocess /path/to/xenium/output/
 # Launch viewer (a file dialog opens if no path is given)
 xenium-viewer [/path/to/xenium/output/]
 
-# Launch without building or reading the SpatialData zarr cache
+# Launch without building or reading the SpatialData zarr cache.
+# Expect a slow start and high memory use — see "Memory" under Troubleshooting.
 xenium-viewer /path/to/xenium/output/ --no-cache
 
 # Launch ignoring any customised analysis templates, running the shipped ones
@@ -121,7 +122,21 @@ The repository also ships `scripts/verify_notebook.py`, which exports a dataset'
 Handled automatically at startup. No action required.
 
 **Permission errors on read-only filesystems**
-If your Xenium output directory is on a read-only filesystem, copy the dataset to a writable location before launching. Alternatively, use `--no-cache` to skip zarr cache creation, though session persistence and faster loading will be unavailable.
+If your Xenium output directory is on a read-only filesystem, copy the dataset to a writable location before launching. `--no-cache` will also start, but on a full slide it is expensive rather than merely slower — see **Memory** below — so copying the dataset is the better answer where there is room for it.
+
+**Memory**
+Building the cache for a full slide peaks at around 9 GB, and reports its usage per element as it goes, to both the terminal and the session log. Once a cache exists, launching against it is a fraction of that.
+
+`--no-cache` is the exception, and the reason is worth understanding. The image pyramid the viewer displays exists on disk in a cache; without one it has to be *computed*, and napari draws the smallest, most zoomed-out level first — which stands on every chunk of the full-resolution image below it. On a 57887×51217 slide that is tens of GB, and it is not something a smaller machine can page its way through: the computation is not streamable, so a whole pyramid level must be resident at once. The viewer warns at startup when it is about to do this. Use `--no-cache` for a quick look at a small dataset, not as a way to avoid writing to disk on a large one.
+
+**The viewer vanished with no error, and took the terminal with it**
+That is almost certainly not a crash — a crashing process leaves a traceback, and closing every tab in a terminal window is beyond what one process can do to itself. On systemd-based Linux desktops it is `systemd-oomd`, which kills an entire cgroup scope when a slice is under sustained memory *pressure*, not when memory is exhausted. It is why you can see this at 60% of RAM and never catch the process anywhere near the limit.
+
+```bash
+journalctl -u systemd-oomd --since "1 hour ago" | grep Killed
+```
+
+A line naming a `vte-spawn-*.scope` and a pressure percentage confirms it. Nothing appears in `dmesg`, because this is not the kernel OOM killer. The fix is to reduce the memory rather than to disable oomd, which is what keeps a runaway allocation from taking the desktop down with it: build the cache once and launch against it rather than using `--no-cache`, and close other large applications during a first load.
 
 **Corrupt zarr cache**
 The viewer tries to repair the cache itself before asking you anything — replaying any interrupted write, clearing debris, rebuilding the metadata index, and restoring elements from its own backup copies. Most damage is resolved there and you never see a dialog.
