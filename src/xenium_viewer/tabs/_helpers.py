@@ -307,7 +307,7 @@ def create_shared_helpers(ctx: ViewerContext):
 
         The graph used to reach disk only inside ``save_session``, which runs on
         a dataset switch or at viewer exit — while the *artifacts* it explains
-        (``clustering_*`` columns, ``uns['rank_genes_groups']``) are persisted
+        (``clustering_*`` columns, ``uns['rank_genes_*']``) are persisted
         the moment they are produced. A session verified, inspected, or killed
         in between therefore had results on disk whose code was nowhere: measured
         on a real session, the store held a 16-minute-old three-node graph while
@@ -389,12 +389,13 @@ def create_shared_helpers(ctx: ViewerContext):
             import numpy as _np
             import pandas as pd
             import scanpy as sc
+            import spatialdata as sd
             import squidpy as sq
             from pathlib import Path as _Path
 
             graph = state.setdefault("prov_graph", ProvGraph())
             base_namespace = {
-                "sc": sc, "sq": sq, "pd": pd, "np": _np, "plt": plt,
+                "sc": sc, "sq": sq, "sd": sd, "pd": pd, "np": _np, "plt": plt,
                 "Path": _Path,
                 "data_path": ctx.data_path,
                 "sdata": ctx.sdata,
@@ -485,6 +486,7 @@ def create_shared_helpers(ctx: ViewerContext):
             "preamble",
             "import scanpy as sc\n"
             "import squidpy as sq\n"
+            "import spatialdata as sd\n"
             "import matplotlib.pyplot as plt\n"
             "import pandas as pd\n"
             "import numpy as np\n"

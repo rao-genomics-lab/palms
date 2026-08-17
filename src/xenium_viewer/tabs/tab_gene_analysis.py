@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
 
 from xenium_viewer.utils.gene_analysis import (
-    add_clustering_to_obs,
+    add_clustering_to_obs, rank_genes_key, resolve_rank_key,
     make_rank_genes_dotplot, make_rank_genes_plot, generate_all_volcano_plots,
     run_celltypist_annotation,
     load_reference_h5ad, get_annotation_columns, run_label_transfer,
@@ -42,15 +42,18 @@ def dotplot_code(groupby: str, n_genes: int, dendrogram: bool, fmt: str) -> str:
     ``adata_norm``, not ``adata``: the ranked genes live on the normalised copy
     (see ``_RANK_GENES_TEMPLATE``). Recorded against ``adata`` this cell died on
     replay with ``KeyError: 'rank_genes_groups'`` — found by
-    ``scripts/verify_notebook.py``, not by reading it. Module-level so a test can
-    execute the exact string the viewer records.
+    ``scripts/verify_notebook.py``, not by reading it. ``key=`` for the same
+    reason, now that the ranking step writes a keyed slot: without it this cell
+    reaches for a ``uns['rank_genes_groups']`` the notebook never binds.
+    Module-level so a test can execute the exact string the viewer records.
     """
+    key = rank_genes_key(groupby)
     return (
         f"\n# Dotplot (n_genes={n_genes}, dendrogram={dendrogram})\n"
         + (f"sc.tl.dendrogram(adata_norm, groupby=\"{groupby}\")\n"
            if dendrogram else "")
         + f"dotplot = sc.pl.rank_genes_groups_dotplot(\n"
-        f"    adata_norm, groupby=\"{groupby}\", n_genes={n_genes},\n"
+        f"    adata_norm, groupby=\"{groupby}\", n_genes={n_genes}, key=\"{key}\",\n"
         f"    dendrogram={dendrogram}, show=False, return_fig=True,\n"
         f")\n"
         f"dotplot.savefig(\"dotplot.{fmt}\", dpi=300, bbox_inches='tight')"
@@ -162,12 +165,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
         declares a single assembly, so there is nothing for the widgets to
         select between.
         """
+        groupby = ga_clustering_widget.value
         return Preview(
             list(builtin_spec(RANK_GENES_TEMPLATE_ID).blocks),
             {
-                "groupby": ga_clustering_widget.value,
+                "groupby": groupby,
                 "method": ga_method_widget.value,
                 "n_genes": coerce(ga_n_genes_slider.value),
+                # Derived from the clustering, not read off a widget — the
+                # invariant is that a params dict is all a callback builds.
+                "rank_key": rank_genes_key(groupby),
             },
         )
 
@@ -267,6 +274,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             fig = make_rank_genes_dotplot(
                 adata_norm, groupby, n_genes=n_genes,
                 cluster_labels=labels, dendrogram=dendro,
+                key=resolve_rank_key(adata_norm, groupby),
             )
             return fig
         _run()
@@ -320,13 +328,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _rp_n = ga_n_genes_slider.value
         groupby = state.get("rank_genes_groupby", "")
         labels = ctx.get_labels_for(groupby)
-        fig = make_rank_genes_plot(adata_norm, n_genes=_rp_n, cluster_labels=labels)
+        fig = make_rank_genes_plot(adata_norm, n_genes=_rp_n, cluster_labels=labels,
+                                   key=resolve_rank_key(adata_norm, groupby))
         _plt.show(block=False)
         ga_status.value = "Rank genes plot displayed"
+        # key=, or the exported notebook reaches for a uns['rank_genes_groups']
+        # the ranking step never binds — it writes a keyed slot.
         ctx.record_node(
             f"plot:rank_panel:{groupby}",
             f"\n# Rank genes panel plot (n_genes={_rp_n})\n"
-            f"sc.pl.rank_genes_groups(adata_norm, n_genes={_rp_n})",
+            f"sc.pl.rank_genes_groups(adata_norm, n_genes={_rp_n}, "
+            f"key=\"{rank_genes_key(groupby)}\")",
             deps=[f"rank_genes:{groupby}"],
             kind=TERMINAL,
             label="Rank-genes panel plot",
@@ -859,6 +871,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ga_n_genes_slider,
         ga_run_button,
         ga_progress,
+        # Built and filled at :246 but never laid out, so the top-50 preview has
+        # never been visible — the results reached the user only as a status line.
+        ga_results_text,
         ga_dotplot_n_slider,
         ga_dendro_check,
         ga_dotplot_btn_row,

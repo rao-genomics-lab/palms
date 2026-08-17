@@ -1,5 +1,135 @@
 # Changelog
 
+## [Unreleased] — 2026-08-05
+
+### Changed — templates now use the library API instead of hand-rolled equivalents
+
+The `.tmpl` files are unusual code: they are `exec`'d by the GUI *and* recorded verbatim
+into the reproducible notebook, so a reader learns the analysis from them. Hand-rolled
+numpy/shapely that re-implements a library call is therefore worse here than in ordinary
+code — longer, likelier to be subtly wrong, and it teaches a non-idiom. A review of all
+14 templates found the four squidpy ones clean and no hand-rolled neighbour-graph
+construction anywhere; it found four places worth replacing. `CLAUDE.md` records the
+principle as rule **(e)**, beside the four that already exist because each was once broken.
+
+- **ROI membership is `spatialdata.polygon_query`.** `roi.deg` and `roi.expression` each
+  carried the same five-line `shapely.contains_xy` loop, with three defects: a
+  `[:, ::-1]` flip undone by the `[:, 1], [:, 0]` read on the very next line (an
+  `n_obs × 2` copy for nothing, and a comment asserting a convention the code reversed);
+  `buffer(0)` to repair a self-intersecting ROI; and a µm→pixel conversion applied to
+  every centroid rather than declared once. Cell centroids are now a `PointsModel` whose
+  scale is a **declared transformation**, and `roi.polygons` binds valid shapely
+  geometries in (x, y) pixel space — the same frame `sdata.shapes['rois']` already uses,
+  so the napari (y, x) flip happens once at the source.
+
+  Two user-visible consequences:
+  - **A self-intersecting ROI keeps every lobe.** `buffer(0)` silently *deleted* one —
+    on a bow-tie it returned half the area. `shapely.make_valid` repairs the shape
+    instead, so a polygon drawn across its own edge no longer loses cells without warning.
+  - **Boundary semantics.** spatialdata tests `intersects` where `contains_xy` was
+    strict, so a cell centroid landing exactly on an ROI edge is now inside. For float
+    centroids this is measure-zero: on a real 63k-cell dataset with two overlapping
+    L-shaped ROIs, membership was **identical** to the old loop, cell for cell.
+
+  Overlapping ROIs keep their last-wins labelling, which the template now states rather
+  than leaving implicit.
+
+- **Rank genes are stored per clustering.** `sc.tl.rank_genes_groups(key_added=…)`
+  replaces the notebook-local `rank_results` dict that worked around scanpy overwriting
+  `uns['rank_genes_groups']` in place. The dict kept every ranking but put it where no
+  `sc.pl.rank_genes_groups*` function could reach it — they all take `key=`.
+
+  Results now live in **`uns['rank_genes_<clustering>']`** in the persisted table, so
+  ranking a second clustering adds a result instead of replacing the first, and the
+  recorded dotplot and panel-plot cells pass the matching `key=`. `rank_genes_groupby`
+  still names the most recent one. **Existing caches keep working**: every read resolves
+  through `gene_analysis.resolve_rank_key`, which falls back to the unkeyed
+  `rank_genes_groups` that is all a pre-existing cache holds. Cache-rebuild warnings and
+  Tools → Dataset deletion recognise the keyed names too — both matched a literal string
+  before, so a keyed ranking would otherwise have stopped counting as user data.
+
+- **Two smaller substitutions.** `roi.expression` reads expression through
+  `sc.get.obs_df` (one call, no `.todense()` branch, no per-region `DataFrame` +
+  `concat`); the inferCNV template and `cnv_analysis.run_cnv_pipeline` take the CNV row
+  mean with `np.abs(X).mean(axis=1)`, which works natively on CSR instead of densifying
+  the whole `n_cells × n_bins` matrix. `genes.correlation`'s fraction-of-total branch
+  takes totals from `sc.pp.calculate_qc_metrics(…, inplace=False)` — **`inplace=False`
+  deliberately**: `inplace=True` writes `obs['total_counts']`, one of Xenium's own
+  columns, and would overwrite the raw value on the live object.
+
+`spatialdata` is now bound as **`sd`** in the template namespace and imported by the
+recorded notebook preamble.
+
+### Documentation
+- **Comprehensive wiki review.** `docs/` doubles as the GitHub Wiki and the mkdocs
+  source; 20 of 23 `Tab-*.md` pages had not been touched since 2026-06-26, and
+  `mkdocs.yml` had not moved either. Audited every page against the code it documents.
+
+  **Three shipped tabs had no page and appeared in no navigation** — Tools → Dataset,
+  Cache and Templates, all added in the last fortnight. `docs/Tab-Dataset.md`,
+  `docs/Tab-Cache.md` and `docs/Tab-Templates.md` now exist, and the Tools section of
+  `_Sidebar.md`, `Home.md`, `Interface-Overview.md` and the `mkdocs.yml` nav lists all
+  seven tabs rather than four. The nav had also been missing `Tab-CNV.md` and
+  `Tab-Crop-Dataset.md` since they were written.
+
+  **`Tab-CNV.md` predated the entire CopyKAT backend.** It described a single-backend
+  tab; it now covers the backend selector (defaulting to *both*), CopyKAT max cells,
+  call extrapolation, the cell-type restriction grid, the per-backend/per-resolution
+  heatmap selectors, the human-only panel guard, and the detached second-environment
+  run. Its output paths (`plots/cnv_heatmap_<backend>_<key>.*`) and clustering keys
+  (`cnv_leiden_res<res>`, not `cnv_leiden_<res>`) were both wrong.
+
+  **Corrections that mattered most**, each verified against the code rather than
+  assumed: `Tab-Transcripts.md` claimed **Min QV** filtered at display time and that
+  **Show transcripts** toggled the layer — neither is connected to anything at runtime;
+  `Tab-Cell-Coloring.md` claimed colouring state was restored across launches, and it is
+  not persisted at all; `Tab-UMAP.md` claimed a plot without a clustering saved
+  uncoloured, when it writes nothing; `Tab-Rank-Genes.md` claimed LLM annotation needs
+  an API key, when it shells out to a local CLI; `Installation.md` named a
+  `sdata_cached_corrupt_*` file the code no longer produces and described staleness as
+  an mtime check rather than a content hash. Six pages omitted that their figure is
+  written to `plots/` (SVG by default) with no dialog. `--no-user-templates` and
+  `XENIUM_VIEWER_TEMPLATE_PATH` were undocumented despite being the designated
+  "results in doubt" escape hatches.
+
+  New `docs/Tutorial-Recovering-a-Cache.md`, because recovery spans the startup dialog,
+  the Cache tab and the Dataset tab, so no reference page owns it. New `## Menu Bar`
+  section in `Interface-Overview.md`, which had never documented the three menus.
+
+### Fixed
+- **Three widgets were built, filled, and never laid out.** `ga_results_text` (the Rank
+  Genes top-50 preview), `lr_results_text` (the Lig-Rec interaction counts and top-20
+  table) and `reg_residuals_qt` (the H&E per-landmark residuals) were each constructed,
+  connected and populated on every run, then omitted from their tab's `make_tab(...)`
+  call — so the work was done and discarded, and the results reached the user only as a
+  one-line status message. The H&E one is the sharpest case: `Tab-HE-Registration.md`
+  has always documented a "Residuals (read-only)" control, and per-landmark residuals
+  are the only way to see *which* landmark is dragging a fit, where the status bar shows
+  the mean alone. Found by diffing each page's control table against the `make_tab`
+  argument list, which is the definitive record of what renders.
+
+- **The screenshot script mislabelled a tab.** `capture_screenshots.py` mapped Tools
+  index 2 to `tab-notebook.png`, but index 2 has been Crop Dataset since that tab was
+  inserted — so every capture run overwrote the Notebook screenshot with a picture of
+  Crop Dataset. Indices are positional into `app.py`'s `addTab` order; the missing CNV
+  and Tools 3–6 entries are added.
+
+- **An internal planning note was published to the public wiki.**
+  `push_to_wiki.sh` excluded repo-only files by a hand-maintained list, which had to be
+  extended after each leak and had already missed `user-configurable-templates-todo.md`.
+  Replaced with a convention — a wiki page is `Title-Case.md` or `_Sidebar.md`, and
+  internal notes are lower-case — so the next note is repo-only without anyone
+  remembering. `tests/test_docs_links.py` parses the pattern out of the script, keeping
+  it the single source of truth.
+
+### Added
+- **`tests/test_docs_links.py`** — the first automated check on `docs/`. Asserts that
+  internal wiki links resolve, that referenced screenshots exist, that the set of
+  published pages, the mkdocs nav and the sidebar agree, and that every `addTab` label
+  in `app.py` has a reference page (read with `ast`, so no Qt import). That third
+  assertion alone would have caught every navigation gap found in this review. Pure
+  stdlib, no dataset, runs in the existing CI job in milliseconds.
+
 ## [Unreleased] — 2026-07-31
 
 ### Fixed

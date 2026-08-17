@@ -23,6 +23,7 @@ np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 sc = pytest.importorskip("scanpy")
 sq = pytest.importorskip("squidpy")
+sd = pytest.importorskip("spatialdata")
 pytest.importorskip("shapely")
 plt = pytest.importorskip("matplotlib.pyplot")
 
@@ -58,7 +59,7 @@ def _adata(n_obs: int = 120, n_vars: int = 30):
 
 
 def _ns(adata=None):
-    return {"sc": sc, "sq": sq, "pd": pd, "np": np, "plt": plt,
+    return {"sc": sc, "sq": sq, "sd": sd, "pd": pd, "np": np, "plt": plt,
             "adata": adata if adata is not None else _adata()}
 
 
@@ -332,11 +333,24 @@ def _roi_deg_step(filtered=False):
 
 def test_roi_deg_no_longer_imports_the_viewer_package():
     """The old recorded cell called `xenium_viewer.utils.gene_analysis`, so the
-    notebook was not standalone scverse code. It is plain shapely + scanpy now."""
+    notebook was not standalone scverse code. It is plain spatialdata + scanpy
+    now — the membership test is `sd.polygon_query`, not a hand-rolled
+    `contains_xy` loop over centroids the template converted itself."""
     source = _roi_deg_template(False)
     assert "xenium_viewer" not in source
-    assert "from shapely import contains_xy" in source
+    assert "sd.polygon_query(" in source
+    assert "contains_xy" not in source
     assert "sc.tl.rank_genes_groups(" in source
+
+
+def test_roi_deg_declares_the_pixel_scale_rather_than_applying_it():
+    """The old block wrote `adata.obsm['spatial'][:, ::-1] / pixel_size` with a
+    'µm→px, xy→yx' comment, then read the result back as `[:, 1], [:, 0]` — an
+    n_obs x 2 copy for nothing, and a comment asserting a convention the very
+    next line reversed. The scale is a declared transformation now."""
+    source = _roi_deg_template(False)
+    assert "sd.transformations.Scale(" in source
+    assert "[:, ::-1]" not in source
 
 
 def test_roi_deg_matches_compute_roi_deg():
@@ -363,14 +377,25 @@ def test_roi_deg_cluster_filter_is_recorded_as_code():
     ex = _run([_rois_step(), _roi_deg_step(filtered=True)])
     code = ex.graph.get("roi_deg").code
     assert "cluster_mask = adata.obs['leiden_r1.0'].astype(str).isin(['0', '1'])" in code
-    assert "_inside = _inside & cluster_mask" in code
+    # Applied to the indices polygon_query returns, not to a boolean mask.
+    assert "_idx = _idx[cluster_mask[_idx]]" in code
 
 
 def test_roi_polygons_round_trip_as_literals():
+    """Bound as shapely geometries in (x, y) pixel space.
+
+    The napari (y, x) flip happens once here rather than in each consumer, and
+    the frame matches what ``save_rois_to_sdata`` writes to
+    ``sdata.shapes['rois']``.
+    """
     ex = _run([_rois_step()])
     polygons = ex.ns["roi_polygons"]
     assert len(polygons) == 2
-    np.testing.assert_allclose(polygons[0], np.array(_roi_polygons()[0]))
+
+    drawn_yx = np.array(_roi_polygons()[0])
+    corners = np.asarray(polygons[0].exterior.coords)[:-1]      # drops the close
+    np.testing.assert_allclose(sorted(map(tuple, corners)),
+                               sorted(map(tuple, drawn_yx[:, ::-1])))
 
 
 if __name__ == "__main__":

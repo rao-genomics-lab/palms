@@ -40,5 +40,6 @@ Annotations are drawn directly on the napari canvas, not through this tab's butt
 ## Notes
 
 - Annotations are persisted to `sdata_cached.zarr` automatically and restored on the next launch.
+- The annotation type table is introduced by the label "Annotation types (click colour to change):" — the colour swatch in each row is clickable.
 - Importing a GeoJSON file appends shapes to existing annotations; it does not replace them. Merge conflicts must be resolved manually.
 - Annotation types defined here are available to the Annot Nhood and Annot Dist analysis tabs.

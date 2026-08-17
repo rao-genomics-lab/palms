@@ -29,8 +29,9 @@ _ROIS_TEMPLATE = builtin_text("roi.polygons")
 # ROI DEG, executed and recorded from one string. The old recorded cell called
 # ``xenium_viewer.utils.gene_analysis.compute_roi_deg`` — so the notebook needed
 # this package installed and the reader could not see what it did. It is plain
-# shapely + scanpy, so it is now written out in full. (E3 replaces the
-# point-in-polygon block with ``spatialdata.polygon_query``.)
+# spatialdata + scanpy, so it is now written out in full: membership comes from
+# ``sd.polygon_query`` against a points element whose µm→pixel scale is a
+# declared transformation, not a hand-rolled ``contains_xy`` loop.
 
 
 
@@ -39,8 +40,9 @@ _ROIS_TEMPLATE = builtin_text("roi.polygons")
 
 # Per-region expression of one gene. This used to record two comment lines
 # saying the numbers were "shown in the viewer" — a cell that replays as a
-# silent no-op, which ``allow_errors=False`` can never catch. The same shapely
-# membership test as the DEG step above, then the statistics the tab prints.
+# silent no-op, which ``allow_errors=False`` can never catch. The same
+# ``polygon_query`` membership test as the DEG step above, then the statistics
+# the tab prints.
 
 
 

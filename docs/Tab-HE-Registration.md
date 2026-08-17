@@ -49,5 +49,6 @@ The combined affine applied to the H&E image is composed as: flip affine then co
 
 ## Notes
 
-- Registration is persisted automatically to `sdata_cached.zarr` and restored on the next launch; you do not need to redo registration between sessions.
+- Registration is persisted automatically to `sdata_cached.zarr` and restored on the next launch; you do not need to redo registration between sessions. The transform lives in `viewer_session/he/`, alongside the image path, its dimensions and the flip settings.
 - The H&E image itself is also stored in the zarr cache, so you do not need to re-load the original file on subsequent sessions.
+- The flips, the coarse alignment and the landmark registration are each recorded into the analysis provenance, with the landmark coordinates inlined, so the exported notebook reproduces the transform without needing the landmark files.

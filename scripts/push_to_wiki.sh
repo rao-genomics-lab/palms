@@ -19,21 +19,24 @@ rm -rf "$WIKI_DIR"
 git clone https://github.com/sraorao/xenium_viewer.wiki.git "$WIKI_DIR"
 
 echo "Copying docs to wiki..."
-# docs/ doubles as the wiki source, so every .md added there is published by
-# default. Internal planning/design notes live there too but are not wiki pages;
-# list them here to keep them repo-only.
-WIKI_EXCLUDE=(
-    pyqt6-migration.md
-    reproducible_notebook_plan.md
-)
+# docs/ doubles as the wiki source, so every .md added there would be published
+# by default. Internal planning/design notes live there too but are not wiki
+# pages. Selecting by *convention* rather than by an exclusion list, because the
+# list only ever grew after a note had already leaked: it was extended for
+# pyqt6-migration.md and reproducible_notebook_plan.md, and still missed
+# user-configurable-templates-todo.md, which reached the public wiki as an
+# orphan page.
+#
+# The convention: a wiki page is Title-Case-With-Hyphens.md (Home, Installation,
+# Tab-CNV, Tutorial-Getting-Started) or the _Sidebar.md nav file. Internal notes
+# are lower-case, so a new one is repo-only without anyone remembering to say so.
+# tests/test_docs_links.py parses this pattern, so it is the single source of
+# truth for what is a wiki page.
+WIKI_PAGE_RE='^(_Sidebar|[A-Z][A-Za-z0-9-]*)\.md$'
 
 for src in "$REPO_ROOT"/docs/*.md; do
     name="$(basename "$src")"
-    skip=""
-    for excluded in "${WIKI_EXCLUDE[@]}"; do
-        [ "$name" = "$excluded" ] && skip=1 && break
-    done
-    if [ -n "$skip" ]; then
+    if ! [[ "$name" =~ $WIKI_PAGE_RE ]]; then
         echo "  skipping $name (repo-only)"
         continue
     fi

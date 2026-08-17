@@ -93,6 +93,36 @@ def add_clustering_to_obs(
     adata_norm.obs[key_name] = pd.Categorical(vals)
 
 
+# ── where a ranking lives ────────────────────────────────────────────────────
+# scanpy overwrites ``uns['rank_genes_groups']`` in place, so a session that
+# ranked two clusterings kept only the last, and no ``sc.pl.rank_genes_groups*``
+# call could reach a specific one — they all take ``key=``. The step template
+# passes ``key_added=``; everything that reads a ranking back derives the same
+# name from the clustering it belongs to, through these two functions.
+
+RANK_GENES_PREFIX = "rank_genes"
+#: What scanpy writes with no ``key_added``. Still read, never written.
+LEGACY_RANK_KEY = "rank_genes_groups"
+
+
+def rank_genes_key(groupby: str) -> str:
+    """The ``uns`` slot holding the ranking for clustering *groupby*."""
+    return f"{RANK_GENES_PREFIX}_{groupby}"
+
+
+def resolve_rank_key(adata, groupby: Optional[str]) -> str:
+    """The keyed slot if *adata* has one, else scanpy's default.
+
+    The fallback is what keeps caches written before the keying readable: they
+    hold a single ``uns['rank_genes_groups']`` and no keyed slot at all.
+    """
+    if groupby:
+        keyed = rank_genes_key(groupby)
+        if adata is not None and keyed in adata.uns:
+            return keyed
+    return LEGACY_RANK_KEY
+
+
 def run_rank_genes(
     adata_norm: sc.AnnData,
     groupby: str,
@@ -100,8 +130,10 @@ def run_rank_genes(
     n_genes: int = 25,
 ) -> pd.DataFrame:
     """Run rank_genes_groups and return full results DataFrame."""
-    sc.tl.rank_genes_groups(adata_norm, groupby, method=method, n_genes=n_genes)
-    return sc.get.rank_genes_groups_df(adata_norm, group=None)
+    key = rank_genes_key(groupby)
+    sc.tl.rank_genes_groups(adata_norm, groupby, method=method, n_genes=n_genes,
+                            key_added=key)
+    return sc.get.rank_genes_groups_df(adata_norm, group=None, key=key)
 
 
 def make_rank_genes_dotplot(
@@ -110,8 +142,15 @@ def make_rank_genes_dotplot(
     n_genes: int = 5,
     cluster_labels: Optional[dict] = None,
     dendrogram: bool = True,
+    key: Optional[str] = None,
 ) -> plt.Figure:
-    """Create a dotplot of top marker genes per cluster. Returns matplotlib Figure."""
+    """Create a dotplot of top marker genes per cluster. Returns matplotlib Figure.
+
+    *key* is the ``uns`` slot the ranking was written to; it defaults through
+    :func:`resolve_rank_key`, so an ``adata_norm`` restored from a cache written
+    before the keying still plots.
+    """
+    key = key or resolve_rank_key(adata_norm, groupby)
     label_mapping = _build_label_mapping(
         adata_norm.obs[groupby].cat.categories, cluster_labels or {}
     )
@@ -123,7 +162,7 @@ def make_rank_genes_dotplot(
             dendrogram = False
 
     dp = sc.pl.rank_genes_groups_dotplot(
-        adata_norm, groupby=groupby, n_genes=n_genes,
+        adata_norm, groupby=groupby, n_genes=n_genes, key=key,
         dendrogram=dendrogram, show=False, return_fig=True,
     )
     if label_mapping:
@@ -144,10 +183,16 @@ def make_rank_genes_plot(
     adata_norm: sc.AnnData,
     n_genes: int = 25,
     cluster_labels: Optional[dict] = None,
+    key: Optional[str] = None,
 ) -> plt.Figure:
-    """Create the standard rank_genes_groups panel plot. Returns matplotlib Figure."""
-    groupby = adata_norm.uns.get('rank_genes_groups', {}).get('params', {}).get('groupby')
-    sc.pl.rank_genes_groups(adata_norm, n_genes=n_genes, show=False)
+    """Create the standard rank_genes_groups panel plot. Returns matplotlib Figure.
+
+    *key* names the ranking to draw; the groupby is read back out of scanpy's
+    own ``params`` for that slot rather than being passed in twice.
+    """
+    key = key or LEGACY_RANK_KEY
+    groupby = adata_norm.uns.get(key, {}).get('params', {}).get('groupby')
+    sc.pl.rank_genes_groups(adata_norm, n_genes=n_genes, key=key, show=False)
     fig = plt.gcf()
     if cluster_labels and groupby and groupby in adata_norm.obs.columns:
         label_mapping = _build_label_mapping(

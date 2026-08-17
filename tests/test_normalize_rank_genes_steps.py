@@ -26,6 +26,7 @@ sc = pytest.importorskip("scanpy")
 from xenium_viewer.utils.steps import Step, StepExecutor, check_step  # noqa: E402
 from xenium_viewer.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
 from xenium_viewer.tabs.tab_gene_analysis import _RANK_GENES_TEMPLATE  # noqa: E402
+from xenium_viewer.utils.gene_analysis import rank_genes_key  # noqa: E402
 
 
 def _adata(n_obs: int = 120, n_vars: int = 40):
@@ -50,7 +51,9 @@ def _rank_step(groupby="group", method="wilcoxon", n_genes=10):
     return Step(
         id=f"rank_genes:{groupby}",
         template=_RANK_GENES_TEMPLATE,
-        params={"groupby": groupby, "method": method, "n_genes": n_genes},
+        params={"groupby": groupby, "method": method, "n_genes": n_genes,
+                # Derived from the clustering by the tab, exactly as here.
+                "rank_key": rank_genes_key(groupby)},
         outputs=["rank_df", "adata_norm"],
     )
 
@@ -107,6 +110,35 @@ def test_rank_genes_runs_on_the_normalized_copy_not_raw_counts():
     assert "rank_genes_groups(adata," not in _RANK_GENES_TEMPLATE.replace(" ", "")
 
 
+def test_a_second_ranking_does_not_overwrite_the_first():
+    """What the notebook-local ``rank_results`` dict used to work around.
+
+    scanpy overwrites ``uns['rank_genes_groups']`` in place, so a session that
+    ranked two clusterings ended holding markers for whichever ran last. The
+    dict kept both but no ``sc.pl.rank_genes_groups*`` call could reach them —
+    they all take ``key=``. ``key_added=`` gives both properties at once.
+    """
+    adata = _adata()
+    adata.obs["other"] = pd.Categorical(["x", "y"] * (adata.n_obs // 2))
+
+    ex = StepExecutor(namespace={"sc": sc, "adata": adata})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ex.run(_normalize_step())
+        ex.run(_rank_step(groupby="group"))
+        first = ex.ns["rank_df"]
+        ex.run(_rank_step(groupby="other"))
+
+    uns = ex.ns["adata_norm"].uns
+    assert rank_genes_key("group") in uns and rank_genes_key("other") in uns
+    # Nothing landed in scanpy's default slot, so nothing could be clobbered.
+    assert "rank_genes_groups" not in uns
+
+    recovered = sc.get.rank_genes_groups_df(ex.ns["adata_norm"], group=None,
+                                            key=rank_genes_key("group"))
+    pd.testing.assert_frame_equal(first, recovered)
+
+
 # ── the guarantee ────────────────────────────────────────────────────────────
 
 def test_recorded_source_is_executed_source():
@@ -140,6 +172,7 @@ def test_rank_genes_params_appear_literally():
     assert "groupby='leiden_r1.0'" in source
     assert "method='t-test'" in source
     assert "n_genes=25" in source
+    assert "key_added='rank_genes_leiden_r1.0'" in source
 
 
 def test_topo_order_puts_normalize_before_rank_genes():

@@ -34,6 +34,7 @@ TAB_SHOTS = [
     (1, 0, "tab-rank-genes.png"),
     (1, 1, "tab-markers.png"),
     (1, 2, "tab-gene-correlation.png"),
+    (1, 3, "tab-cnv.png"),
     (2, 0, "tab-roi-analysis.png"),
     (2, 1, "tab-ligand-receptor.png"),
     (2, 2, "tab-neighborhood-enrichment.png"),
@@ -47,7 +48,15 @@ TAB_SHOTS = [
     (3, 3, "tab-patches.png"),
     (4, 0, "tab-annotations.png"),
     (4, 1, "tab-segmentation.png"),
-    (4, 2, "tab-notebook.png"),
+    # Tools index 2 is Crop Dataset, not Notebook. This entry said
+    # "tab-notebook.png", so every capture run overwrote the Notebook screenshot
+    # with a picture of the Crop Dataset tab. Indices here are positional into
+    # app.py's addTab() order — when a tab is inserted, this list shifts with it.
+    (4, 2, "tab-crop-dataset.png"),
+    (4, 3, "tab-notebook.png"),
+    (4, 4, "tab-dataset.png"),
+    (4, 5, "tab-cache.png"),
+    (4, 6, "tab-templates.png"),
 ]
 
 # Tutorial screenshots: full-window grab, navigate to the indicated tab first

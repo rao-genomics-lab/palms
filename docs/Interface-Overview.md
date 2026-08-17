@@ -6,55 +6,87 @@ The viewer consists of a **napari canvas** occupying the left portion of the win
 
 ## Control Panel Tab Groups
 
-Each top-level tab contains sub-tabs positioned along the bottom of the panel.
+Each top-level tab contains sub-tabs positioned along the bottom of the panel. The **Sub-tab** column below is the label on the tab itself, abbreviated where the tab bar is too narrow for the full name; the **Reference page** column links to the page documenting it. This table is the authority for which name refers to which tab.
 
 ### Cells
 
-| Sub-tab | Purpose |
-|---------|---------|
-| Clustering | Run Leiden clustering, adjust resolution, view cluster assignments |
-| Coloring | Colour cells by gene expression, metadata column, or cluster |
-| Transcripts | Load per-gene transcript point layers and density heatmaps |
-| UMAP | Compute and display UMAP; open the linked UMAP window |
+| Sub-tab | Purpose | Reference page |
+|---------|---------|----------------|
+| Clustering | Run Leiden clustering, adjust resolution, view cluster assignments | [Clustering](Tab-Clustering) |
+| Coloring | Colour cells by gene expression, metadata column, or cluster | [Cell Coloring](Tab-Cell-Coloring) |
+| Transcripts | Load per-gene transcript point layers and density heatmaps | [Transcripts](Tab-Transcripts) |
+| UMAP | Display the UMAP embedding; open the linked UMAP window | [UMAP](Tab-UMAP) |
 
 ### Genes
 
-| Sub-tab | Purpose |
-|---------|---------|
-| Rank Genes | Rank marker genes per cluster using Wilcoxon or t-test |
-| Markers | Score and visualise curated marker gene panels |
-| Correlation | Compute pairwise and module-level gene correlations |
-| CNV | Infer copy-number variation using the InSituCNV method |
+| Sub-tab | Purpose | Reference page |
+|---------|---------|----------------|
+| Rank Genes | Rank marker genes per cluster using Wilcoxon or t-test | [Rank Genes](Tab-Rank-Genes) |
+| Markers | Score and visualise curated marker gene panels | [Markers](Tab-Markers) |
+| Correlation | Compute pairwise gene correlations | [Gene Correlation](Tab-Gene-Correlation) |
+| CNV | Infer copy-number variation with the inferCNV and CopyKAT backends | [CNV](Tab-CNV) |
 
 ### Spatial
 
-| Sub-tab | Purpose |
-|---------|---------|
-| ROI DEG | Draw regions of interest and run differential gene expression |
-| Lig-Rec | Ligand-receptor interaction analysis |
-| Nhood Enrich | Spatial neighbourhood enrichment |
-| Co-occur | Spatial co-occurrence scoring between cell types |
-| Domains | Spatial domain inference using Novae |
-| Annot Nhood | Annotate cells based on neighbourhood composition |
-| Annot Dist | Annotate cells based on distance to a reference population |
+| Sub-tab | Purpose | Reference page |
+|---------|---------|----------------|
+| ROI DEG | Draw regions of interest and run differential gene expression | [ROI Analysis](Tab-ROI-Analysis) |
+| Lig-Rec | Ligand-receptor interaction analysis | [Ligand-Receptor](Tab-Ligand-Receptor) |
+| Nhood Enrich | Spatial neighbourhood enrichment | [Neighborhood Enrichment](Tab-Neighborhood-Enrichment) |
+| Co-occur | Spatial co-occurrence scoring between cell types | [Co-occurrence](Tab-Co-occurrence) |
+| Domains | Spatial domain inference using Novae | [Spatial Domains](Tab-Domains) |
+| Annot Nhood | Neighbourhood enrichment around annotation regions | [Annot Nhood](Tab-Annot-Nhood) |
+| Annot Dist | Distance from each cell to an annotation region | [Annot Distance](Tab-Annot-Distance) |
 
 ### Images
 
-| Sub-tab | Purpose |
-|---------|---------|
-| H&E | Load and register an H&E brightfield image |
-| ARMS | Load and register an ARMS fluorescence image |
-| Ext Images | Load and align additional external image files |
-| Patches | Export tiled image patches for downstream use |
+| Sub-tab | Purpose | Reference page |
+|---------|---------|----------------|
+| H&E | Load and register an H&E brightfield image | [H&E Registration](Tab-HE-Registration) |
+| ARMS | Load and register an ARMS fluorescence image | [ARMS Overlay](Tab-ARMS-Overlay) |
+| Ext Images | Load and align additional external image files | [External Images](Tab-External-Images) |
+| Patches | Overlay tile-level clustering and subclone predictions | [Patches](Tab-Patches) |
 
 ### Tools
 
-| Sub-tab | Purpose |
-|---------|---------|
-| Annotations | Draw, label, and export annotation shapes |
-| Segmentation | Run the custom cell segmentation pipeline |
-| Crop Dataset | Export drawn regions as standalone, independently-openable datasets |
-| Notebook | Interactive code notebook and code journal viewer |
+| Sub-tab | Purpose | Reference page |
+|---------|---------|----------------|
+| Annotations | Draw, label, and export annotation shapes | [Annotations](Tab-Annotations) |
+| Segmentation | Run the custom cell segmentation pipeline | [Segmentation](Tab-Segmentation) |
+| Crop Dataset | Export drawn regions as standalone, independently-openable datasets | [Crop Dataset](Tab-Crop-Dataset) |
+| Notebook | Review recorded analysis steps and export the notebook | [Notebook](Tab-Notebook) |
+| Dataset | Inventory everything on disk and delete viewer-created files | [Dataset](Tab-Dataset) |
+| Cache | Check, repair and recover the zarr cache | [Cache](Tab-Cache) |
+| Templates | View and edit the code each analysis button runs | [Templates](Tab-Templates) |
+
+## Menu Bar
+
+The viewer adds three menus to napari's own menu bar.
+
+### File
+
+| Item | Description |
+|------|-------------|
+| Open Dataset... (Ctrl+O) | Close the current dataset and open another. The session is saved first. |
+| Preprocess Dataset... | Run the one-time per-gene transcript preprocessing on a dataset, the same work `xenium-preprocess` does from the command line. |
+
+### View
+
+| Item | Description |
+|------|-------------|
+| Show Xenium Controls (Ctrl+Shift+X) | Show or hide the control panel dock. On by default. |
+| Show Minimap | Show or hide the overview minimap. Off, and disabled until a minimap exists. |
+
+### Preferences
+
+| Item | Description |
+|------|-------------|
+| Plot format | **PNG** or **SVG** for every automatically saved figure. Defaults to SVG. |
+| Plot font size | Base font size for generated figures, from 1 to 20. Defaults to 10. |
+| CPU cores | The core budget for parallel analyses — currently CopyKAT only. Choices scale to the machine, with "half" and "all" labelled; defaults to half. |
+| Record reproducible code | Whether user actions are recorded into the provenance graph. On by default. |
+| Save recorded code... | Write the derived script to a chosen location. |
+| Continue from existing code file... | Load a previously written script so a new session appends to it. |
 
 ## Layer List
 
@@ -84,9 +116,13 @@ A separate floating napari window can be opened from the **UMAP** sub-tab. This 
 
 Every user action that modifies the dataset or triggers an analysis is recorded as a step in a provenance graph, where each step carries its own code and its dependencies on earlier steps. Two files are written into the dataset directory: `analysis.py`, a flat script derived from the graph, and `analysis_notebook.ipynb`, the same steps as notebook cells.
 
-Because the notebook is derived by sorting the graph rather than by logging actions in order, it always respects dependencies no matter what order you worked in. Both files open with a preamble containing the imports and data loading, so either can be run independently against the raw Xenium output.
+Because the notebook is derived by sorting the graph rather than by logging actions in order, it always respects dependencies no matter what order you worked in. Both files open with a preamble containing the imports and data loading, so either can be run independently against the raw Xenium output. Immediately after it comes an `environment` step recording the versions of every relevant package along with the random seeds, so a result can be read against the software that produced it. That step has no dependents, so a version change never marks your analysis stale.
 
-You can view the accumulated code, inspect the graph, and export the notebook from the **Notebook** tab in the Tools group. The graph is saved with the session and restored when you reopen the dataset, so an analysis spanning several sessions accumulates into one notebook.
+Steps that have no code equivalent — the canvas background colour, which overlays were visible, a crop export — are recorded as **notes** and rendered as markdown rather than as code. This distinguishes them from a step that was simply never recorded: a comment-only code cell runs successfully and does nothing, which made the two indistinguishable.
+
+If any step ran a customised analysis template (see the [Templates](Tab-Templates) tab), the exported notebook opens with a banner naming those steps, and cells you edited by hand in the Notebook tab are marked as such rather than presented as recorded provenance.
+
+You can view the accumulated code, inspect the graph, and export the notebook from the **Notebook** tab in the Tools group. The graph is written to `viewer_cache/prov_graph.json` after every recorded step, and also saved into the session at exit, so an analysis spanning several sessions accumulates into one notebook — and an interrupted session does not lose the steps it had already recorded.
 
 ## Session Persistence
 
@@ -95,6 +131,11 @@ Your analyses are automatically saved to `sdata_cached.zarr/viewer_session/` wit
 - Clustering assignments and resolution settings
 - ROI shapes and DEG results
 - H&E and ARMS registration landmarks and affine matrices
-- Custom colour assignments
+- Custom colour assignments and cluster names
+- CNV results and the parameters each run used
+- External image and patch overlay setup
+- The provenance graph behind the Notebook tab
 
 No explicit save action is required; the session is written whenever a relevant action is performed.
+
+Larger derived results are written beside the store rather than inside it, in `<dataset>/viewer_cache/` — normalised expression, CNV profiles, cached DEG tables and the provenance graph. Keeping them out of the zarr store means rebuilding the cache does not discard hours of computation. Generated figures go to `<dataset>/plots/`, and the session log to `<dataset>/xenium_viewer.log`. All of these are listed, with their sizes, in the [Dataset](Tab-Dataset) tab.

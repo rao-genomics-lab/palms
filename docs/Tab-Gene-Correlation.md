@@ -8,11 +8,11 @@ The Correlation tab computes Pearson and Spearman correlation between the expres
 
 | Control | Description |
 |---|---|
-| Gene A | First gene to correlate |
-| Gene B | Second gene to correlate |
-| Normalisation | How to prepare expression values before computing correlation: `Raw counts`, `Fraction of total`, or `Log1p(CPM)` |
+| Gene A | First gene to correlate. Defaults to the first gene in the panel. |
+| Gene B | Second gene to correlate. Defaults to the second gene in the panel. |
+| Normalisation | How to prepare expression values before computing correlation: `Raw counts`, `Fraction of total`, or `Log1p(CPM)`. Defaults to **Log1p(CPM)**. |
 | Filter by current cluster selection | When checked, restricts the analysis to cells currently visible in the Cell Coloring filter |
-| Plot Correlation | Computes Pearson r and Spearman rho, generates a scatter plot with a statistics box, saves the figure, and displays correlation values in the status bar |
+| Plot Correlation | Computes Pearson r and Spearman rho, generates a scatter plot with a statistics box, writes the figure to disk, and displays correlation values in the status bar |
 
 ## Workflow
 
@@ -26,3 +26,5 @@ The Correlation tab computes Pearson and Spearman correlation between the expres
 - At least two genes must be present in the dataset for this tab to be functional.
 - If cluster filtering is enabled but no filter is active in Cell Coloring, all cells are used.
 - The saved figure includes both correlation coefficients and the number of cells used.
+- **Plot Correlation** does not open a save dialog. It writes to `<dataset>/plots/gene_correlation.<fmt>` every time, where the format follows **Preferences → Plot format** (SVG by default, PNG at 300 dpi if selected). Each run overwrites the previous file, so rename anything you want to keep.
+- `Log1p(CPM)` uses the shared normalised expression data, computing it once if no other tab has yet; the other two normalisations read the raw counts directly.

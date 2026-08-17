@@ -66,3 +66,4 @@ The registration workflow is identical to the H&E Registration tab.
 
 - Landmarks, affine, tile data, and the ARMS image are all persisted to `sdata_cached.zarr` and restored automatically on the next launch.
 - DEG requires at least 2 selected tile clusters, each containing at least 10 cells.
+- Tile DEG results are cached to `<dataset>/viewer_cache/arms_tile_deg_cache.parquet` and restored on the next launch, so reopening the dataset does not mean re-running the test.

@@ -27,13 +27,19 @@ matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 
 from xenium_viewer.tabs.tab_gene_analysis import dotplot_code  # noqa: E402
+from xenium_viewer.utils.gene_analysis import rank_genes_key  # noqa: E402
 
 GROUPBY = "leiden_igraph_r1.0"
 
 
 @pytest.fixture(scope="module")
 def ranked():
-    """An `adata_norm` in the state the notebook has at the dotplot cell."""
+    """An `adata_norm` in the state the notebook has at the dotplot cell.
+
+    Ranked with ``key_added``, as the rank-genes step does — the dotplot cell
+    passes the matching ``key=``, and ranking here the old unkeyed way would
+    test the cell against a state no notebook ever has.
+    """
     rng = np.random.default_rng(0)
     counts = rng.poisson(2.0, size=(80, 30)).astype("float32")
     counts[:40, :10] += 8          # something for the ranking to find
@@ -42,7 +48,8 @@ def ranked():
     adata_norm.obs[GROUPBY] = pd.Categorical(["0"] * 40 + ["1"] * 40)
     sc.pp.normalize_total(adata_norm, target_sum=1e4)
     sc.pp.log1p(adata_norm)
-    sc.tl.rank_genes_groups(adata_norm, groupby=GROUPBY, method="wilcoxon")
+    sc.tl.rank_genes_groups(adata_norm, groupby=GROUPBY, method="wilcoxon",
+                            key_added=rank_genes_key(GROUPBY))
     return adata_norm
 
 
@@ -71,6 +78,25 @@ def test_the_cell_never_names_raw_adata(ranked):
     with pytest.raises(NameError):
         exec(compile(code, "<plot:dotplot>", "exec"),  # noqa: S102
              {"sc": sc, "adata": ranked})
+
+
+def test_the_cell_reaches_the_keyed_ranking(ranked):
+    """The step writes `uns['rank_genes_<clustering>']`, not scanpy's default.
+
+    Same shape of failure as the `adata`/`adata_norm` one above, one layer in:
+    every *name* resolves, and the cell dies on the `uns` lookup. Asserted both
+    on the string and by running it against an `adata_norm` that has only the
+    unkeyed slot — which is what the notebook would have if the cell and the
+    step disagreed about the key.
+    """
+    code = dotplot_code(GROUPBY, n_genes=5, dendrogram=False, fmt="png")
+    assert f'key="{rank_genes_key(GROUPBY)}"' in code
+
+    legacy = ranked.copy()
+    legacy.uns["rank_genes_groups"] = legacy.uns.pop(rank_genes_key(GROUPBY))
+    with pytest.raises(KeyError):
+        exec(compile(code, "<plot:dotplot>", "exec"),  # noqa: S102
+             {"sc": sc, "np": np, "pd": pd, "adata_norm": legacy})
 
 
 if __name__ == "__main__":

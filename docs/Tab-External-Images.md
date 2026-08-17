@@ -10,7 +10,7 @@ Load one or more multichannel OME-TIFF images as RGB composites with per-channel
 
 | Control | Description |
 |---|---|
-| Add image... | Opens a file dialog to select one or more OME-TIFF, TIFF, or SVS files. Each file is loaded as an RGB composite napari layer and appears in the image list. |
+| Add image… | Opens a file dialog to select **one** OME-TIFF, TIFF, or SVS file. The file is loaded as an RGB composite napari layer and appears in the image list. Repeat for each further image. |
 
 ### Selected image panel
 
@@ -18,7 +18,7 @@ The panel below the image list updates when you click an image in the list.
 
 | Control | Description |
 |---|---|
-| Opacity | Slider (0–100). Controls the blending opacity of the selected layer. |
+| Opacity | Slider (0–100, default 100). Controls the blending opacity of the selected layer. |
 | Channel visibility checkbox | One per channel. Enables or disables individual channels. |
 | Channel colour button | Opens a colour picker for the corresponding channel. |
 | Channel contrast slider | Dual-handle slider setting the minimum and maximum contrast limits for the channel. Updates are debounced by 100 ms to avoid excessive redrawing. |
@@ -40,7 +40,7 @@ The panel below the image list updates when you click an image in the list.
 
 ## Workflow
 
-1. Click "Add image..." and select one or more OME-TIFF files. Each file is added as a separate layer.
+1. Click "Add image…" and select an OME-TIFF file. It is added as its own layer. To load several images, repeat this step once per file — the dialog takes one at a time.
 2. Click a layer in the image list to select it and display its controls.
 3. Adjust per-channel visibility, colour, and contrast as needed.
 4. Register the image to the Xenium coordinate system using one of two approaches:
@@ -52,4 +52,5 @@ The panel below the image list updates when you click an image in the list.
 
 - The "Or apply transform from:" dropdown is useful when the external image is already spatially aligned to a registered H&E or ARMS image — no additional landmark placement is needed.
 - Channel contrast changes are debounced (100 ms) to avoid excessive redrawing during slider interaction.
-- Landmarks and affines are persisted to `sdata_cached.zarr`.
+- Landmarks and affines are persisted to `sdata_cached.zarr`, and the image list and its per-channel settings are restored on the next launch.
+- Deleting an image in the [Dataset](Tab-Dataset) tab also removes its two landmark layers, since landmarks are meaningless without the image they register.

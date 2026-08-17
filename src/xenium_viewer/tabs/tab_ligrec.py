@@ -342,6 +342,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         lr_cpdb_only,
         lr_run_button,
         lr_progress,
+        # Filled at :235 but never laid out — the interaction counts and top-20
+        # table were computed on every run and then thrown away.
+        lr_results_text,
         lr_pval_widget,
         lr_plot_button,
         lr_export_btn_row,

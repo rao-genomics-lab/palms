@@ -24,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
+sc = pytest.importorskip("scanpy")
+sd = pytest.importorskip("spatialdata")
 anndata = pytest.importorskip("anndata")
 pytest.importorskip("shapely")
 pytest.importorskip("qtpy")
@@ -63,7 +65,7 @@ def _adata():
 
 def _run(filtered: bool = False, polygons=POLYGONS, adata=None, **extra):
     """Execute the rois + roi_expression steps and return the executor."""
-    ex = StepExecutor(namespace={"np": np, "pd": pd,
+    ex = StepExecutor(namespace={"sc": sc, "sd": sd, "np": np, "pd": pd,
                                  "adata": adata if adata is not None else _adata()})
     ex.run(Step(id="rois", template=_ROIS_TEMPLATE,
                 params={"polygons": polygons}, outputs=["roi_polygons"]))
@@ -87,7 +89,8 @@ def test_the_template_is_executable_and_self_contained(filtered):
                 params={"gene": "X", "pixel_size": 0.2125,
                         "clustering": "leiden", "selected": ["0"]})
     ast.parse(step.render())
-    missing = check_step(step, available={"np", "pd", "adata", "roi_polygons"})
+    missing = check_step(
+        step, available={"sc", "sd", "np", "pd", "adata", "roi_polygons"})
     assert missing == set()
 
 
@@ -118,10 +121,105 @@ def test_the_statistics_match_the_expression_of_the_cells_inside():
     assert stats.loc[2, "mean"] == pytest.approx(15.0)
 
 
+def test_the_frame_stays_region_grouped_in_cell_order():
+    """The per-region frames became one `sc.get.obs_df` call plus a filter.
+
+    That builds the table in *cell* order, so without the stable sort the
+    exported CSV silently changed row order for every existing user. Columns,
+    order and dtypes are the export's contract.
+    """
+    cells = _run().get("roi_expr_cells")
+
+    assert list(cells.columns) == ["region_id", "cell_id", "x_centroid_um",
+                                   "y_centroid_um", "expression"]
+    assert list(cells["region_id"]) == [1, 1, 1, 1, 2, 2]
+    assert list(cells["cell_id"]) == [f"cell{i}" for i in range(6)]
+    assert list(cells.index) == list(range(6))          # reset, not inherited
+
+
 def test_the_coordinates_are_the_micron_ones_the_export_promises():
     cells = _run().get("roi_expr_cells")
     first = cells.loc[cells["cell_id"] == "cell0"].iloc[0]
     assert (first["x_centroid_um"], first["y_centroid_um"]) == (2.0, 2.0)
+
+
+def test_membership_is_what_the_shapely_loop_computed():
+    """The migration's whole claim, over a *non-convex* ROI.
+
+    The trap this pins: ``polygon_query`` on the SpatialData as the viewer loads
+    it delegates to ``bounding_box_query`` (the table is annotated by a labels
+    raster, not by points), which would return the ROI's bounding box and pass
+    every convex-ROI test silently. An L-shape distinguishes the two.
+    """
+    from shapely import contains_xy
+    from shapely.geometry import Polygon
+
+    rng = np.random.default_rng(0)
+    coords = rng.uniform(0, 40, size=(400, 2))
+    adata = anndata.AnnData(rng.random((400, 2), dtype="float32"))
+    adata.var_names = [GENE, "GENE2"]
+    adata.obs_names = [f"cell{i}" for i in range(400)]
+    adata.obs["cell_id"] = list(adata.obs_names)
+    adata.obsm["spatial"] = coords
+
+    # An L, in napari (y, x) order. Its bounding box is the full 30x30 square.
+    l_shape_yx = [[0.0, 0.0], [0.0, 30.0], [10.0, 30.0],
+                  [10.0, 10.0], [30.0, 10.0], [30.0, 0.0]]
+
+    cells = _run(polygons=[l_shape_yx], adata=adata).get("roi_expr_cells")
+
+    poly_xy = Polygon(np.asarray(l_shape_yx)[:, ::-1])
+    legacy = contains_xy(poly_xy, coords[:, 0], coords[:, 1])
+
+    assert set(cells["cell_id"]) == {f"cell{i}" for i in np.flatnonzero(legacy)}
+    # ...and the bounding box would have been a strictly larger answer, so the
+    # equality above is load-bearing rather than trivially satisfied.
+    assert legacy.sum() < ((coords < 30).all(axis=1)).sum()
+
+
+def test_an_roi_holding_no_cells_is_handled():
+    """``polygon_query`` returns ``None``, not an empty frame.
+
+    The boolean mask it replaced had no equivalent case, so nothing in the old
+    template exercised this path.
+    """
+    import spatialdata as _sd
+    from shapely.geometry import Polygon
+
+    adata = _adata()
+    points = _sd.models.PointsModel.parse(
+        pd.DataFrame({"x": adata.obsm["spatial"][:, 0],
+                      "y": adata.obsm["spatial"][:, 1],
+                      "cell_index": np.arange(adata.n_obs)}),
+        coordinates={"x": "x", "y": "y"},
+    )
+    far = Polygon([[900, 900], [900, 910], [910, 910], [910, 900]])
+    assert _sd.polygon_query(points, far, target_coordinate_system="global") is None
+
+
+def test_a_self_intersecting_roi_keeps_both_lobes():
+    """``buffer(0)`` silently deleted one lobe; ``make_valid`` repairs the shape.
+
+    A figure-eight is the shape a user draws by crossing the polygon tool over
+    its own edge, and it used to lose half its cells with no warning.
+    """
+    from shapely import make_valid
+    from shapely.geometry import Polygon
+
+    adata = _adata()
+    # One cell in each lobe of a bow-tie spanning (0,0)-(10,10).
+    adata.obsm["spatial"] = np.array([
+        [5.0, 8.0], [5.0, 2.0],
+        [50.0, 50.0], [51.0, 51.0], [52.0, 52.0], [53.0, 53.0], [54.0, 54.0],
+    ])
+    figure_eight = [[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 10.0]]
+
+    cells = _run(polygons=[figure_eight], adata=adata).get("roi_expr_cells")
+    assert set(cells["cell_id"]) == {"cell0", "cell1"}
+
+    # The regression itself, stated directly.
+    bow_tie = Polygon(np.asarray(figure_eight)[:, ::-1])
+    assert make_valid(bow_tie).area == pytest.approx(2 * bow_tie.buffer(0).area)
 
 
 def test_an_empty_region_is_reported_rather_than_dropped():

@@ -29,6 +29,10 @@ These are the extras declared in `pyproject.toml`. Install them after activating
 | Reference datasets | `pip install -e ".[references]"` | readfcs + rasterio, for reading reference panel formats |
 | CNV inference | `pip install -e ".[cnv]"` | infercnvpy + insitucnv — **already included** in `environment.yml` |
 | Everything | `pip install -e ".[full]"` | All of the above |
+| Test suite | `pip install -e ".[test]"` | pytest + nbformat, nbclient and ipykernel, needed to run the notebook-replay test |
+| Development | `pip install -e ".[dev]"` | The `test` extra plus ruff, matching what CI runs |
+
+`full` deliberately does *not* include `test` or `dev` — install those explicitly if you intend to run the suite. A plain `pip` install needs Python 3.10 or newer; the conda environment pins 3.12.
 
 Each extra is independent — install only what you need. A tab whose optional dependency is missing still appears in the UI; it reports a clear "not installed" error naming the command to run, rather than failing at startup.
 
@@ -81,7 +85,20 @@ xenium-viewer [/path/to/xenium/output/]
 
 # Launch without building or reading the SpatialData zarr cache
 xenium-viewer /path/to/xenium/output/ --no-cache
+
+# Launch ignoring any customised analysis templates, running the shipped ones
+xenium-viewer /path/to/xenium/output/ --no-user-templates
 ```
+
+`python -m xenium_viewer` is equivalent to `xenium-viewer` and accepts the same arguments.
+
+### Environment variables
+
+| Variable | Meaning |
+|----------|---------|
+| `XENIUM_COPYKAT_ENV` | Name of the conda environment holding the CopyKAT stack |
+| `XENIUM_COPYKAT_PYTHON` | Full path to that environment's `python` |
+| `XENIUM_VIEWER_TEMPLATE_PATH` | Colon-separated search path replacing the default location for customised analysis templates. Set it to an empty value to disable overrides entirely. See [Templates](Tab-Templates). |
 
 ## Console Scripts
 
@@ -96,6 +113,8 @@ The following commands are available after activating the environment:
 
 All commands accept `--help` for usage details.
 
+The repository also ships `scripts/verify_notebook.py`, which exports a dataset's recorded analysis as a notebook, replays it against the raw Xenium output, and compares the replayed results against what the viewer saved. Use `--dry-run` for a summary in seconds without replaying.
+
 ## Troubleshooting
 
 **ICE/X11 disconnect on startup**
@@ -105,7 +124,22 @@ Handled automatically at startup. No action required.
 If your Xenium output directory is on a read-only filesystem, copy the dataset to a writable location before launching. Alternatively, use `--no-cache` to skip zarr cache creation, though session persistence and faster loading will be unavailable.
 
 **Corrupt zarr cache**
-If the viewer detects a corrupt cache at startup, it will prompt you. The old cache is automatically preserved as `sdata_cached_corrupt_<timestamp>.zarr` in the same directory for manual inspection or recovery before a fresh cache is built.
+The viewer tries to repair the cache itself before asking you anything — replaying any interrupted write, clearing debris, rebuilding the metadata index, and restoring elements from its own backup copies. Most damage is resolved there and you never see a dialog.
+
+If the repair does not succeed, a dialog offers three choices:
+
+| Choice | What happens |
+|--------|--------------|
+| Rebuild and restore my data | The cache is set aside as `sdata_cached_backup_<timestamp>.zarr`, a fresh one is built from the raw files, and your clusterings, ROIs, registrations and session state are copied across. The backup is removed once the rebuild succeeds. |
+| Rebuild without restoring | The cache is set aside as `sdata_cached_prev_<timestamp>.zarr` and **kept**, and a fresh empty cache is built. Use this when you suspect the saved analyses themselves are the problem. |
+| Quit | Nothing is changed, so you can back the directory up first. |
+
+The viewer never deletes a cache — every path here is a rename. With no display available it raises an error rather than choosing for you. To inspect or repair a cache deliberately rather than at startup, use the [Cache](Tab-Cache) tab; for the whole procedure, see [Recovering a Cache](Tutorial-Recovering-a-Cache).
 
 **Stale zarr cache**
-If `experiment.xenium` has been modified since the cache was last built (for example, by running Xenium Explorer), a dialog will appear at startup offering to rebuild the cache. Your existing analyses (clusterings, ROIs, registration) are preserved during the rebuild.
+Freshness is decided by a content hash of `experiment.xenium` recorded when the cache was built, so copying a dataset, re-downloading it or restoring it from backup does not make the cache look stale — only a genuine change to the file does. If a change is detected, a dialog at startup offers to rebuild; your existing analyses are preserved.
+
+Caches built before content hashing existed fall back to comparing modification times. That is treated as an uncertain signal: it prompts rather than rebuilding, and choosing to keep the cache records a hash so it stops asking.
+
+**Where the viewer writes**
+Besides the zarr cache, a dataset directory accumulates `viewer_cache/` (normalised expression, CNV profiles, cached DEG tables, the analysis provenance graph), `plots/` (saved figures), `transcript_cache/` (per-gene transcript files), `analysis.py`, `analysis_notebook.ipynb`, and a rotating `xenium_viewer.log`. The [Dataset](Tab-Dataset) tab lists all of it with sizes and can delete the regenerable parts.

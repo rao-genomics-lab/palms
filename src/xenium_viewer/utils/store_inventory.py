@@ -104,6 +104,14 @@ _UNRECOGNISED = "not recognised as viewer-created — left alone"
 _DELETABLE_UNS = frozenset(loader._USER_UNS_KEYS) | {
     "rank_genes_groupby", "cnv_runs", "cnv_run_info", "cnv",
 }
+# Rankings are keyed per clustering (`rank_genes_<key>`), so membership in a
+# fixed set is not enough — a name test is. Without it a keyed ranking showed up
+# as "not recognised as viewer-created" and could not be deleted at all.
+_DELETABLE_UNS_PREFIXES = ("rank_genes",)
+
+
+def _is_deletable_uns(name: str) -> bool:
+    return name in _DELETABLE_UNS or name.startswith(_DELETABLE_UNS_PREFIXES)
 # X_umap is a copy of analysis/umap/ from the raw output; obsm['spatial'] is
 # structural and every spatial step depends on it.
 _DELETABLE_OBSM = frozenset({"X_umap", "X_cnv"})
@@ -486,13 +494,13 @@ def _obs_nodes(cache_path: Path, element: str, parent: str) -> list[Node]:
 def _uns_obsm_nodes(cache_path: Path, element: str, parent: str) -> list[Node]:
     table = element.partition("/")[2]
     nodes: list[Node] = []
-    for sub, kind, allowed in (("uns", UNS, _DELETABLE_UNS),
-                               ("obsm", OBSM, _DELETABLE_OBSM)):
+    for sub, kind, is_allowed in (("uns", UNS, _is_deletable_uns),
+                                  ("obsm", OBSM, _DELETABLE_OBSM.__contains__)):
         directory = cache_path / element / sub
         if not directory.is_dir():
             continue
         for entry in sorted(_public_entries(directory)):
-            deletable = entry.name in allowed
+            deletable = is_allowed(entry.name)
             nodes.append(Node(
                 key=f"{sub}:{table}/{entry.name}",
                 kind=kind,
@@ -1092,7 +1100,7 @@ def bundles(sections: Iterable[Section]) -> dict[str, tuple[str, ...]]:
     ranked = tuple(
         key for key, node in index.items()
         if node.deletable and (
-            (node.kind == UNS and node.name in ("rank_genes_groups", "rank_genes_groupby"))
+            (node.kind == UNS and node.name.startswith("rank_genes"))
             or (node.kind == SIDECAR and node.name.endswith("adata_norm_cache.h5ad"))
         )
     )
