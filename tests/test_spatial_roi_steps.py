@@ -112,7 +112,10 @@ def _replay(ex, adata=None):
 def test_spatial_neighbors_builds_the_graph_on_the_object_consumers_use():
     """Regression: the old node built the graph on `adata`, but every consumer
     was handed `adata_norm` — so a replay ran nhood against no graph at all."""
-    assert "sq.gr.spatial_neighbors(adata_norm" in _SPATIAL_NEIGHBORS_TEMPLATE
+    assert "sq.gr.spatial_neighbors_knn(adata_norm" in _SPATIAL_NEIGHBORS_TEMPLATE
+    # The removed-in-1.9 spelling must not creep back; `_knn(` is a different
+    # substring, so the old assertion would not have caught a partial revert.
+    assert "sq.gr.spatial_neighbors(" not in _SPATIAL_NEIGHBORS_TEMPLATE
     ex = _run([_normalize_step(), _neighbors_step()])
     assert "spatial_connectivities" in ex.ns["adata_norm"].obsp
 

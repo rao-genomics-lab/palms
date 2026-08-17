@@ -86,8 +86,11 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "[Ligand-Receptor](Tab-Ligand-Receptor)",
         what=(
             "Builds the spatial neighbour graph squidpy's spatial statistics need, "
-            "on `adata_norm`, with `coord_type='generic'` and *k* nearest "
-            "neighbours."
+            "on `adata_norm`, from each cell's *k* nearest neighbours. Uses "
+            "`spatial_neighbors_knn`, which replaced "
+            "`spatial_neighbors(coord_type='generic')` — removed in squidpy 1.9. "
+            "The two produce an identical graph, so results recorded before the "
+            "change still match."
         ),
         reading=(
             "This is the one template with no live preview in the "
