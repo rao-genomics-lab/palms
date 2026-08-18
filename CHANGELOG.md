@@ -45,6 +45,60 @@
   `tests/test_notebook_replay.py` *does* cover this path — it replays a
   `spatial_neighbors` node in a clean kernel, which is the gate the doc said did not
   exist.
+## [Unreleased] — 2026-08-17 (cache-only datasets)
+
+### Fixed
+- **A dataset with no raw Xenium output is never told to rebuild its cache**
+  (issue #17). A Crop Dataset export ships `experiment.xenium`,
+  `sdata_cached.zarr/`, `transcripts.parquet` and `transcript_cache/` — and
+  nothing `spatialdata_io.xenium` can read. It also shipped **no
+  `.xv_manifest.json`**, so freshness fell back to comparing `experiment.xenium`'s
+  mtime against the cache directory's, which a `cp -r`, an unzip or a cloud-sync
+  restore reorders. Three separate branches then attempted a rebuild that cannot
+  happen, and **two of them renamed the only copy of the data aside first**:
+  - `tab_cache._on_rebuild` — the reported case. It checked only that the cache
+    existed and that there was disk space, moved the store to
+    `sdata_cached_prev_<stamp>.zarr`, and told the user to restart. The next
+    launch died in h5py on a `cell_feature_matrix.h5` they never had, and the
+    dataset stayed unopenable until someone renamed the folder back by hand.
+  - the silent mtime-staleness branch (`_stale_preference` returning `None`),
+    which left the cache in place but raised on every launch, permanently.
+  - `_ask_corrupt_cache`, whose only non-quit answers both move the cache aside.
+
+  The fix makes "this has no raw source" a fact rather than an inference.
+  `loader.has_raw_xenium_source()` is now the single definition — it replaces an
+  inline `cells.zarr.zip` check that existed but guarded only the `--no-cache`
+  override, which is why every rebuild path walked past it. It is deliberately
+  conservative: `True` unless *none* of `cells.zarr.zip`,
+  `cell_feature_matrix.h5`, `cell_feature_matrix/`, `morphology_focus/` is
+  present, because partially-missing raw output is broken raw output and should
+  keep raising the error that says so.
+
+  For such a dataset the loader skips the staleness question entirely (the cache
+  *is* the source of record), refuses with a new `NoRawSourceError` naming the
+  recovery routes instead of offering a rebuild when the cache will not open, and
+  carries a precondition immediately before `spatialdata_io.xenium` so any branch
+  added later is safe by construction. Nothing is ever moved — asserted with a
+  `shutil.move` spy rather than a source grep, since what matters is that no
+  rename happens.
+- **Crop Dataset exports now stamp their manifest at export time**, with
+  `cache_only: true` and `derived_from`. That alone closes the mtime trigger for
+  new exports; the predicate covers the ones already on disk, and stamps them on
+  their next successful load.
+- **Force Rebuild is disabled, with the reason as its tooltip**, on a cache-only
+  dataset, and re-guarded inside the callback — `_set_busy(False)` re-enables
+  every mutating button when a worker finishes, and this is the one that must
+  stay off. The precondition lives in a pure `_rebuild_blocked_reason()` so it is
+  testable; `_on_rebuild` itself opens a modal. The Cache tab header and
+  `xenium-build-cache --check` both report the dataset as cache-only, and
+  `--check` reports freshness as *not applicable* rather than stale — condemning
+  the cache would be advising a rebuild that cannot happen.
+- **Tools → Dataset stops calling a crop export's own files "original 10x output
+  — the viewer never modifies it".** The viewer wrote them. They stay
+  non-deletable (they are the only copy), but that wording was the same wrong
+  mental model that let Force Rebuild loose on these datasets. A test docstring
+  in `test_loader_policy.py` carried the mirror-image error — "a Crop Dataset
+  export has no `experiment.xenium`" — and is corrected too.
 
 ## [Unreleased] — 2026-08-17 (headless cache build)
 
