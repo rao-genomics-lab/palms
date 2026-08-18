@@ -181,7 +181,7 @@ def crop_and_export(
     from spatialdata import SpatialData
     from spatialdata.models import Image2DModel, Labels2DModel, TableModel, PointsModel
     from spatialdata.transformations import Identity, Scale
-    from xenium_viewer.loader import _convert_arrow_strings
+    from xenium_viewer.loader import _convert_arrow_strings, write_manifest
     from xenium_viewer.preprocess import preprocess
 
     _progress(0, f"Validating region '{name}'...")
@@ -432,6 +432,19 @@ def crop_and_export(
         # out into a separate write just to give them back full concurrency.
         with dask.config.set(scheduler="threads", num_workers=_TRANSCRIPT_WRITE_WORKERS):
             new_sdata.write(str(staging_dir / "sdata_cached.zarr"), overwrite=True)
+
+            # Stamp the manifest here rather than leaving it to the first load.
+            # Without one, freshness falls back to comparing experiment.xenium's
+            # mtime against the cache directory's — and an export that is copied,
+            # unzipped or synced has those timestamps reordered, which used to
+            # send the loader into a rebuild with no raw files to rebuild from.
+            # `cache_only` says the same thing declaratively, for readers that
+            # would otherwise have to infer it from absent files.
+            write_manifest(
+                staging_dir / "sdata_cached.zarr",
+                staging_dir / "experiment.xenium",
+                extra={"cache_only": True, "derived_from": str(ctx.data_path)},
+            )
 
             _progress(90, "Writing transcripts.parquet...")
             parquet_path = staging_dir / "transcripts.parquet"

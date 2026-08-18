@@ -368,7 +368,21 @@ def _raw_section(data_path: Path, cache_path: Optional[Path]) -> Section:
     By exclusion, never by a hardcoded Xenium file list: a vendor file nobody
     has heard of must show up read-only, not become selectable.
     """
+    from xenium_viewer.loader import has_raw_xenium_source
+
     owned = _viewer_owned_names(data_path, cache_path)
+    # In a Crop Dataset export the "raw" files (experiment.xenium,
+    # transcripts.parquet) were written by the viewer itself. They stay
+    # read-only — they are still the only copy — but calling them 10x output
+    # the viewer never touched is simply untrue, and it is the same wrong
+    # mental model that let Force Rebuild loose on these datasets.
+    cache_only = not has_raw_xenium_source(data_path)
+    reason = (
+        "the only copy of this dataset's source data — a Crop Dataset export "
+        "has no 10x output to fall back on"
+        if cache_only else
+        "original 10x output — the viewer never modifies it"
+    )
     nodes: list[Node] = []
     try:
         entries = sorted(data_path.iterdir())
@@ -384,11 +398,12 @@ def _raw_section(data_path: Path, cache_path: Optional[Path]) -> Section:
             size_bytes=_entry_size(entry),
             path=entry,
             deletable=False,
-            blocked_reason="original 10x output — the viewer never modifies it",
+            blocked_reason=reason,
         ))
     total = human_bytes(sum(n.size_bytes or 0 for n in nodes))
+    title = "Dataset source files" if cache_only else "Original Xenium output"
     return Section(
-        "Original Xenium output",
+        title,
         f"{total} · read-only, never modified by the viewer",
         tuple(nodes),
     )

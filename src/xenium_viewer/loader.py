@@ -86,6 +86,58 @@ class CacheLoadAborted(RuntimeError):
     """The user chose to quit rather than rebuild a cache."""
 
 
+class NoRawSourceError(RuntimeError):
+    """A rebuild was requested for a dataset that has nothing to rebuild from.
+
+    Raised instead of letting ``spatialdata_io.xenium`` fail on a missing
+    ``cell_feature_matrix.h5`` — the h5py error names a file the user never had
+    and says nothing about what to do next.
+    """
+
+
+# The files ``spatialdata_io.xenium`` actually reads. A Crop Dataset export has
+# none of them: it ships ``experiment.xenium`` (which the app requires) plus the
+# zarr cache and derived transcripts, and that is the whole dataset.
+_RAW_XENIUM_MARKERS = (
+    "cells.zarr.zip",
+    "cell_feature_matrix.h5",
+    "cell_feature_matrix",
+    "morphology_focus",
+)
+
+
+def has_raw_xenium_source(path: Path) -> bool:
+    """Can this directory be rebuilt from raw 10x output?
+
+    Deliberately conservative — ``True`` unless *none* of the markers is present.
+    A dataset missing only some of them is broken raw output, and should keep
+    raising whatever error describes that, rather than being reclassified as a
+    Crop Dataset export.
+
+    This is the single definition. It used to be an inline
+    ``not (path / "cells.zarr.zip").exists()`` guarding only the ``--no-cache``
+    override, which is why every rebuild path walked straight into a read that
+    could not work.
+    """
+    path = Path(path)
+    return any((path / marker).exists() for marker in _RAW_XENIUM_MARKERS)
+
+
+def _no_raw_source_message(path: Path, reason: str) -> str:
+    return (
+        f"{reason}\n\n"
+        f"{path} holds no raw Xenium output — no cells.zarr.zip, no "
+        "cell_feature_matrix, no morphology_focus. It is most likely a Crop "
+        "Dataset export, whose zarr cache is the only copy of the data, so "
+        "there is nothing to rebuild from.\n\n"
+        "Nothing has been moved or deleted. If the cache itself is damaged, "
+        "run `xenium-build-cache --check` on this directory to see what is "
+        "wrong, and look for a sdata_cached_backup_*.zarr or "
+        "sdata_cached_prev_*.zarr sibling to recover from — an earlier forced "
+        "rebuild may have left one."
+    )
+
+
 _SHAPE_LABELS = {
     "rois": "ROIs",
     "he_xenium_landmarks": "H&E landmarks (Xenium side)",
@@ -502,13 +554,21 @@ def _source_fingerprint(experiment_path: Path) -> dict:
     }
 
 
-def write_manifest(cache_path: Path, experiment_path: Path) -> None:
-    """Record what this cache was built from, so staleness can be exact."""
+def write_manifest(cache_path: Path, experiment_path: Path,
+                   extra: Optional[dict] = None) -> None:
+    """Record what this cache was built from, so staleness can be exact.
+
+    ``extra`` is merged in for facts the fingerprint cannot carry — Crop Dataset
+    exports stamp ``cache_only``/``derived_from`` so a reader knows the cache is
+    the source of record rather than a derivative of files sitting beside it.
+    """
     from datetime import datetime, timezone
 
     from xenium_viewer.utils.zarr_safe import MANIFEST_FILE, atomic_json
 
     manifest = {"built_at": datetime.now(timezone.utc).isoformat()}
+    if extra:
+        manifest.update(extra)
     try:
         import spatialdata
         import zarr as _zarr
@@ -721,16 +781,33 @@ def load_sdata(
     # can only ever be loaded from its zarr cache; there's nothing to rebuild
     # from. Use the cache even if the caller asked for use_cache=False (e.g.
     # launched with --no-cache), rather than failing on a missing cells.zarr.zip.
-    if not use_cache and cache_path.exists() and not (path / "cells.zarr.zip").exists():
+    cache_only = not has_raw_xenium_source(path)
+    if not use_cache and cache_path.exists() and cache_only:
         print(
             "No raw Xenium files found in this directory (likely a Crop Dataset "
             "export) — loading from the zarr cache regardless of --no-cache."
         )
         use_cache = True
 
+    if cache_only and not cache_path.exists():
+        raise NoRawSourceError(_no_raw_source_message(
+            path, "There is no zarr cache to load and no raw Xenium output to build one from."
+        ))
+
     # Try loading from zarr cache if it exists and is fresh
     if use_cache and cache_path.exists():
-        stale, certain = _is_cache_stale(cache_path, experiment_path)
+        # A cache-only dataset is never "stale": the cache *is* the source of
+        # record, and experiment.xenium is a copy carried along beside it. Asking
+        # the staleness question at all is what armed the trap — the mtime
+        # fallback (no manifest, a copy or a touch reorders the timestamps) sent
+        # crop exports into a rebuild branch with nothing to rebuild from.
+        if cache_only:
+            stale, certain = False, True
+            print("No raw Xenium output beside this cache (likely a Crop Dataset "
+                  "export) — the cache is the source of record, so it is never "
+                  "rebuilt.")
+        else:
+            stale, certain = _is_cache_stale(cache_path, experiment_path)
         user_data = _detect_user_data(cache_path)
         preference = None
 
@@ -748,12 +825,25 @@ def load_sdata(
                     write_manifest(cache_path, experiment_path)
                 elif not certain:
                     write_manifest(cache_path, experiment_path)
+                elif cache_only:
+                    # Stamp exports made before this change, so the next reader
+                    # gets the fact from the manifest rather than re-deriving it.
+                    write_manifest(cache_path, experiment_path,
+                                   extra={"cache_only": True})
                 print(sdata)
                 return sdata
             except Exception as e:
                 from xenium_viewer.utils import cache_repair
-                choice = _ask_corrupt_cache(e, cache_repair.verify(cache_path),
-                                            user_data, preset=on_stale)
+                report = cache_repair.verify(cache_path)
+                if cache_only:
+                    # Every answer _ask_corrupt_cache can give other than
+                    # 'quit' moves the cache aside and then rebuilds. Here that
+                    # renames away the only copy of the data and fails anyway.
+                    raise NoRawSourceError(_no_raw_source_message(
+                        path,
+                        f"The zarr cache could not be opened:\n  {e}\n\n{report.summary()}",
+                    )) from e
+                choice = _ask_corrupt_cache(e, report, user_data, preset=on_stale)
                 if choice == "quit":
                     raise CacheLoadAborted(
                         "Cancelled at the user's request; the cache was left untouched."
@@ -775,6 +865,15 @@ def load_sdata(
             shutil.move(str(cache_path), str(kept_aside))
             print(f"Previous cache kept at:\n  {kept_aside}\n"
                   "Rebuilding without restoring user data...")
+
+    # The one line that makes every route safe, including any added later: below
+    # this point the only way to produce an sdata is to read the raw output.
+    # Reaching here without it used to surface as h5py failing to open a
+    # cell_feature_matrix.h5 the user never had.
+    if cache_only:
+        raise NoRawSourceError(_no_raw_source_message(
+            path, "A cache rebuild was requested, but it cannot be done."
+        ))
 
     from spatialdata_io import xenium
 
@@ -1040,17 +1139,31 @@ def _check_cache(data_path: Path) -> int:
     cache_path = data_path / "sdata_cached.zarr"
     experiment_path = data_path / "experiment.xenium"
 
+    cache_only = not has_raw_xenium_source(data_path)
+
     print(f"Dataset: {data_path}")
     if not cache_path.exists():
         print(f"No zarr cache at {cache_path}.")
-        print("Run this command without --check to build it.")
+        if cache_only:
+            print("There is no raw Xenium output here either, so one cannot be "
+                  "built. If this was a Crop Dataset export, its cache is the "
+                  "only copy of the data — look for a sdata_cached_*.zarr "
+                  "sibling before assuming it is lost.")
+        else:
+            print("Run this command without --check to build it.")
         return 1
 
     print(f"Cache:   {cache_path}")
     ok = True
 
     stale, certain = _is_cache_stale(cache_path, experiment_path)
-    if not experiment_path.exists():
+    if cache_only:
+        # Not "unknown": the answer is known and is "not applicable". Reporting
+        # this cache as stale would be advising a rebuild that cannot happen.
+        print("Freshness: n/a — cache-only dataset (no raw Xenium output beside "
+              "it, likely a Crop Dataset export). The cache is the source of "
+              "record and is never rebuilt.")
+    elif not experiment_path.exists():
         print("Freshness: unknown — no experiment.xenium to compare against.")
     elif stale and certain:
         print("Freshness: STALE — experiment.xenium has changed since the build.")

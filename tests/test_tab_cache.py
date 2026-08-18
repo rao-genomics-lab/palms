@@ -439,6 +439,38 @@ def test_the_tab_offers_a_reload_after_recovering(tiny_sdata, qapp):
     assert "File → Open Dataset" in source
 
 
+# ── Force Rebuild needs something to rebuild from (issue #17) ────────────────
+#
+# _on_rebuild renames the store to sdata_cached_prev_<stamp>.zarr and tells the
+# user to restart. On a Crop Dataset export there are no raw 10x files, so the
+# next launch cannot rebuild and the dataset is unopenable until someone renames
+# the folder back by hand. The precondition lives in a pure helper because
+# _on_rebuild itself opens a modal.
+
+def test_rebuild_is_allowed_on_a_dataset_that_has_raw_output(tmp_path):
+    (tmp_path / "experiment.xenium").write_text("{}")
+    (tmp_path / "cells.zarr.zip").write_bytes(b"PK")
+    assert tab_cache._rebuild_blocked_reason(_ctx(data_path=tmp_path)) is None
+
+
+def test_rebuild_is_blocked_on_a_crop_export(tmp_path):
+    (tmp_path / "experiment.xenium").write_text("{}")
+    (tmp_path / "transcripts.parquet").write_bytes(b"PAR1")
+
+    reason = tab_cache._rebuild_blocked_reason(_ctx(data_path=tmp_path))
+    assert reason
+    # It has to say what to do instead, or the tab just looks broken.
+    assert "Recover from Backup" in reason
+
+
+def test_a_busy_worker_finishing_does_not_re_arm_a_blocked_rebuild():
+    """_set_busy(False) re-enables every mutating button; this is the one that
+    must stay off."""
+    source = Path(tab_cache.__file__).read_text()
+    body = source.split("def _set_busy", 1)[1].split("def ", 1)[0]
+    assert "rebuild_blocked" in body
+
+
 # ── the guard the whole feature exists for ───────────────────────────────────
 
 def test_the_tab_never_deletes_a_cache_or_backup():
