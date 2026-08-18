@@ -26,15 +26,25 @@
   flagged stale — which is what a changed upstream step is supposed to do.
 
 ### Corrected
+- **Raised the squidpy floor to `>=1.8.2`** in `environment.yml` and `pyproject.toml`.
+  The first cut of this change left it at `>=1.8` on the strength of
+  `spatial_neighbors`'s own `.. deprecated:: 1.7.0` directive, read as "the replacements
+  exist from 1.7.0". They do not. Checked against the wheels,
+  `spatial_neighbors_knn` is absent from **1.7.0, 1.8.0 and 1.8.1** and first appears in
+  **1.8.2** — so the old pin permitted two versions on which every Nhood and
+  Ligand-Receptor run would raise `AttributeError`. The lesson is narrow and worth
+  keeping: a `deprecated::` directive dates the *deprecation*, not the *replacement*.
+  `test_the_squidpy_floor_is_a_version_that_has_spatial_neighbors_knn` now checks both
+  the installed module and the declared floors, and fails on the old pin.
+
 - The 2026-08-17 tracking entry below, and `docs/squidpy-spatial-neighbors-migration.md`,
   both said **three** tabs broke together. Co-occurrence was never a dependent:
   `tab_co_occurrence` declares only `deps=[clustering:…]` and `spatial.cooccur.tmpl`
   calls `sq.gr.co_occurrence`, which computes its own radii and needs no `obsp` graph.
-  Two tabs, not three. Also: no version-pin bump was needed (the replacements are
-  `deprecated:: 1.7.0`, below the existing `squidpy>=1.8` floor), the `cnv` extra
-  contains no squidpy, and `tests/test_notebook_replay.py` *does* cover this path — it
-  replays a `spatial_neighbors` node in a clean kernel, which is the gate the doc said
-  did not exist.
+  Two tabs, not three. Also: the `cnv` extra contains no squidpy, and
+  `tests/test_notebook_replay.py` *does* cover this path — it replays a
+  `spatial_neighbors` node in a clean kernel, which is the gate the doc said did not
+  exist.
 
 ## [Unreleased] — 2026-08-17 (headless cache build)
 

@@ -75,9 +75,26 @@ Recorded because each was stated confidently and each was checkable:
    `deps=[f"clustering:{key}"]` and `spatial.cooccur.tmpl` calls `sq.gr.co_occurrence`,
    which computes its own radii and needs no `obsp` graph. Two tabs, not three:
    Neighbourhood Enrichment and Ligand-Receptor.
-2. **No version-pin bump was needed.** The deprecation directive in
-   `squidpy/gr/_build.py` reads `.. deprecated:: 1.7.0`, so the replacements predate the
-   existing `squidpy>=1.8` floor in `environment.yml` and `pyproject.toml`.
+2. **The version floor did need raising — and the doc's own evidence was a trap.**
+   `spatial_neighbors`'s docstring says `.. deprecated:: 1.7.0`, which reads as "the
+   replacements exist from 1.7.0". They do not. Checked against the actual wheels,
+   `spatial_neighbors_knn` is **absent from 1.7.0, 1.8.0 and 1.8.1, and first appears in
+   1.8.2**:
+
+   ```
+   squidpy 1.7.0  no spatial_neighbors_knn
+   squidpy 1.8.0  no spatial_neighbors_knn
+   squidpy 1.8.1  no spatial_neighbors_knn
+   squidpy 1.8.2  spatial_neighbors_knn present
+   ```
+
+   The old `squidpy>=1.8` pin therefore permitted two versions that would raise
+   `AttributeError` on every Nhood or Ligand-Receptor run. Both `environment.yml` and
+   `pyproject.toml` now pin `squidpy>=1.8.2`, and
+   `test_the_squidpy_floor_is_a_version_that_has_spatial_neighbors_knn` checks both the
+   installed module and the declared floors so this cannot drift again. Verify a
+   replacement against the wheel that is supposed to contain it, not against a
+   `deprecated::` directive — the directive dates the *deprecation*, not the replacement.
 3. **The `cnv` extra contains no squidpy**, contrary to the old checklist. Nothing to
    change there.
 4. **`tests/test_notebook_replay.py` does cover this path** — it runs a

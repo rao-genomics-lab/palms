@@ -109,6 +109,44 @@ def _replay(ex, adata=None):
 
 # ── spatial neighbours ───────────────────────────────────────────────────────
 
+def test_the_squidpy_floor_is_a_version_that_has_spatial_neighbors_knn():
+    """The declared floor must actually provide the function we call.
+
+    This was wrong once and shipped: `spatial_neighbors`'s own docstring says
+    ``.. deprecated:: 1.7.0``, which reads as "the replacements exist from
+    1.7.0". They do not — `spatial_neighbors_knn` first appears in **1.8.2**
+    (verified against the 1.7.0/1.8.0/1.8.1/1.8.2 wheels). With the old
+    `squidpy>=1.8` pin, anyone resolving 1.8.0 or 1.8.1 got an AttributeError
+    on every Nhood or Ligand-Receptor run.
+
+    Two halves, because either alone would have missed it: the installed
+    squidpy must have the function, and the *declared* floor must be high
+    enough that a fresh resolve cannot land below it.
+    """
+    import re
+
+    import squidpy as sq
+
+    assert hasattr(sq.gr, "spatial_neighbors_knn")
+
+    repo = Path(__file__).resolve().parent.parent
+    floors = {}
+    for name, pattern in (
+        ("environment.yml", r"^\s*-\s*squidpy>=([\d.]+)\s*$"),
+        ("pyproject.toml", r'"squidpy>=([\d.]+)"'),
+    ):
+        match = re.search(pattern, (repo / name).read_text(), re.MULTILINE)
+        assert match, f"no squidpy floor found in {name}"
+        floors[name] = tuple(int(n) for n in match.group(1).split("."))
+
+    for name, floor in floors.items():
+        assert floor >= (1, 8, 2), (
+            f"{name} pins squidpy>={'.'.join(map(str, floor))}, but "
+            "spatial_neighbors_knn does not exist before 1.8.2"
+        )
+    assert len(set(floors.values())) == 1, f"floors disagree: {floors}"
+
+
 def test_spatial_neighbors_builds_the_graph_on_the_object_consumers_use():
     """Regression: the old node built the graph on `adata`, but every consumer
     was handed `adata_norm` — so a replay ran nhood against no graph at all."""
