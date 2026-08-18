@@ -1,5 +1,64 @@
 # Changelog
 
+## [Unreleased] — 2026-08-18 (dataset rename)
+
+### Added
+- **`xenium-rename-dataset`** — a console script that renames or moves a dataset
+  directory and rewrites the absolute paths recorded inside it
+  (`src/xenium_viewer/scripts/rename_dataset.py`).
+
+  Nothing stores a dataset *name*: not the AnnData table, not the SpatialData store,
+  not the cache manifest — the folder name reaches only the napari window title.
+  Cache freshness is a content hash of `experiment.xenium`, so moving a dataset never
+  triggers a rebuild, and every cache/sidecar location is re-derived from `data_path`
+  at launch. Verified directly: every `zarr.json` / `.zattrs` / `.zgroup` /
+  `.zmetadata` under a real `sdata_cached.zarr` was grepped for an absolute path and
+  none contains one.
+
+  What a bare `mv` *does* break is the paths recorded in the provenance graph — the
+  `preamble` node's `data_path = Path(r"…")` and each `clustering:<key>` node's
+  `read_csv` of `analysis/clustering/<key>/clusters.csv` — plus the session's
+  `he_path` / `arms_*_path` attrs. And it does not stay quiet: `app.py` re-emits the
+  preamble for the current `data_path` on every launch, so `ProvGraph.upsert` flags
+  **every transitive descendant stale** and the first launch after a manual rename
+  marks the whole notebook ⚠ despite nothing being recomputed. Repairing the graph
+  before that launch is the point.
+
+  ```
+  xenium-rename-dataset /data/old_name new_name      # rename in place
+  xenium-rename-dataset /data/old_name /other/place  # move
+  xenium-rename-dataset /data/new_name --repair      # fix one moved by hand
+  xenium-rename-dataset ... --dry-run                # report, write nothing
+  ```
+
+  `--repair` infers the previous path from the recorded preamble, so the common case
+  needs no extra argument. Substitution is **path-prefix only**, which is what leaves
+  an H&E or GeoJSON living outside the dataset directory untouched — that file did not
+  move. `analysis.py` and `analysis_notebook.ipynb` are regenerated from the repaired
+  graph (the same recipe `app.py` uses on session restore) rather than string-patched,
+  and only when they already exist.
+
+  Store writes go through `safe_group_update` / `atomic_json` only — a source guard
+  parses the module and fails on a bare `zarr.open`, `shutil.move`, or any `unlink`.
+  `is_dataset_dir` reuses `loader.has_raw_xenium_source` (issue #17) rather than
+  re-testing `cells.zarr.zip`, so a Crop Dataset export — whose zarr *is* the data —
+  is recognised by the one definition rather than a second copy of it.
+
+  It refuses rather than half-acting: an existing destination, a running CopyKAT job
+  (`plots/copykat_RUNNING.txt`), unreadable root metadata, a cross-device move (no
+  `shutil.move` fallback — a half-copied multi-gigabyte zarr is worse than a clear
+  message), or a directory that is not a dataset. Interrupted safe writes are
+  recovered before the move.
+
+### Fixed
+- **The rename tool's derived-file writes now swap an inode instead of truncating
+  one.** Found by probing the real tool against a `cp -al` snapshot of a live dataset:
+  `analysis.py` and the notebook were the only writes not going through
+  `atomic_json`, so regenerating them wrote *through* the hardlink and silently edited
+  the snapshot too. Both now use a temp file plus `os.replace`.
+  `test_derived_outputs_are_replaced_not_written_in_place` states the property —
+  a hardlink taken before the rename still holds the old bytes after it — and fails
+  against the previous version.
 ## [Unreleased] — 2026-08-17 (squidpy 1.9 readiness)
 
 ### Changed

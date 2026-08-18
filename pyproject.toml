@@ -80,6 +80,7 @@ dev = ["xenium-viewer[test]", "ruff"]
 xenium-viewer = "xenium_viewer.app:main"
 xenium-preprocess = "xenium_viewer.preprocess:main"
 xenium-build-cache = "xenium_viewer.loader:main"
+xenium-rename-dataset = "xenium_viewer.scripts.rename_dataset:main"
 xenium-fetch-references = "xenium_viewer.scripts.fetch_reference_datasets:main"
 xenium-build-custom-segmentation = "xenium_viewer.scripts.build_custom_segmentation:main"
 
