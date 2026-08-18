@@ -169,20 +169,20 @@ class PreflightError(RuntimeError):
 def is_dataset_dir(path: Path) -> bool:
     """A raw Xenium output, or a cache-only export from the Crop Dataset tool.
 
-    The second test mirrors the inline one in ``loader.load_sdata``: a directory
-    with a zarr cache and no ``cells.zarr.zip`` can only ever be loaded from that
-    cache, and is still a dataset worth renaming.
+    Both are worth renaming, and the second is exactly why this does not simply
+    test for raw files: a Crop Dataset export's zarr *is* the data.
 
-    **Swap this for ``loader.has_raw_xenium_source`` when issue #17 lands.** That
-    branch (``fix/cache-only-dataset-rebuild``) replaces the ``cells.zarr.zip``
-    test with the single conservative definition — ``True`` unless *none* of
-    ``cells.zarr.zip`` / ``cell_feature_matrix.h5`` / ``cell_feature_matrix/`` /
-    ``morphology_focus/`` exists — precisely because a predicate applied in one
-    place is not a guarantee. This is one more place applying it.
+    ``loader.has_raw_xenium_source`` is the single definition of "raw output is
+    present" (issue #17) — deliberately conservative, ``True`` unless *none* of
+    its markers exists, because partial raw output is broken raw output. Reusing
+    it here rather than re-testing ``cells.zarr.zip`` is the point of that fix:
+    a predicate applied in one place is not a guarantee.
     """
+    from xenium_viewer.loader import has_raw_xenium_source
+
     if (path / "experiment.xenium").exists():
         return True
-    return (path / "sdata_cached.zarr").exists() and not (path / "cells.zarr.zip").exists()
+    return (path / "sdata_cached.zarr").exists() and not has_raw_xenium_source(path)
 
 
 def copykat_is_running(data_path: Path) -> bool:

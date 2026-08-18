@@ -47,6 +47,31 @@ def _cache_path(ctx) -> "Path | None":
     return None
 
 
+def _rebuild_blocked_reason(ctx) -> "str | None":
+    """Why Force Rebuild must not run here, or ``None`` if it may.
+
+    Pure and Qt-free so it can be tested: ``_on_rebuild`` itself opens a modal,
+    which is why the precondition that used to be missing lives out here rather
+    than inline. A Crop Dataset export has no raw 10x files, so the rebuild it
+    stages for the next launch cannot happen — and the staging step renames the
+    only copy of the data aside first.
+    """
+    from xenium_viewer.loader import has_raw_xenium_source
+
+    data_path = getattr(ctx, "data_path", None)
+    if data_path is None:
+        return None
+    if has_raw_xenium_source(Path(data_path)):
+        return None
+    return (
+        "This dataset has no raw Xenium output (no cells.zarr.zip, no "
+        "cell_feature_matrix, no morphology_focus) — most likely a Crop Dataset "
+        "export. Its zarr cache is the only copy of the data, so there is "
+        "nothing to rebuild from. Use Verify, Re-consolidate or Recover from "
+        "Backup instead."
+    )
+
+
 def build_tab(ctx: ViewerContext) -> tuple:
     state = ctx.state
     status = StatusProxy(ctx.viewer)
@@ -70,12 +95,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     mutating = (consolidate_btn, recover_btn, rebuild_btn)
 
+    rebuild_blocked = _rebuild_blocked_reason(ctx)
+    if rebuild_blocked:
+        rebuild_btn.enabled = False
+        rebuild_btn.tooltip = rebuild_blocked
+
     def _set_busy(busy: bool):
         progress.setVisible(busy)
         for button in (verify_btn, *mutating):
             button.enabled = not busy
         if not busy:
             recover_btn.enabled = bool(backup_widget.choices)
+            # Re-enabling everything after a worker finishes must not undo the
+            # precondition — this is the button that renames the cache aside.
+            if rebuild_blocked:
+                rebuild_btn.enabled = False
 
     def _no_cache_message() -> str:
         if ctx.no_cache:
@@ -103,9 +137,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
             built = manifest.get("built_at", "?")[:19].replace("T", " ")
             lines.append(f"Built {built} · spatialdata "
                          f"{manifest.get('spatialdata_version', '?')}")
-        else:
+        elif not rebuild_blocked:
             lines.append("No build manifest — freshness falls back to file "
                          "timestamps, which a copy also changes.")
+        if rebuild_blocked:
+            # Worth saying up front rather than only on a disabled button: for
+            # this dataset the cache is the data, not a derivative of it.
+            lines.append("<b>Cache-only dataset</b> — no raw Xenium output "
+                         "beside it, so this cache is the only copy of the data "
+                         "and is never rebuilt.")
         if report is not None:
             lines.append("Status: <b>healthy</b>" if report.ok
                          else "Status: <b>needs attention</b> (see below)")
@@ -248,6 +288,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _on_rebuild():
         cache_path = _cache_path(ctx)
         if cache_path is None:
+            return
+        blocked = _rebuild_blocked_reason(ctx)
+        if blocked:
+            # The button is already disabled; this is the guard that matters,
+            # since what follows renames the store before anything checks that
+            # the rebuild it stages is even possible.
+            QMessageBox.information(None, "Force Rebuild", blocked)
+            report_text.setPlainText(blocked)
             return
         described = cache_repair.describe_store(cache_path)
         size = described["size_bytes"]

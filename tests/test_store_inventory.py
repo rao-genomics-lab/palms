@@ -106,6 +106,7 @@ def _by_key(sections):
 
 def test_all_five_sections_are_present_even_without_a_cache(tmp_path):
     (tmp_path / "experiment.xenium").write_text("{}")
+    (tmp_path / "cells.zarr.zip").write_bytes(b"PK")
     sections = si.build_inventory(tmp_path, None)
     assert [s.title for s in sections] == [
         "Original Xenium output", "Viewer cache", "Session state",
@@ -114,6 +115,24 @@ def test_all_five_sections_are_present_even_without_a_cache(tmp_path):
     for section in sections[1:]:
         if not section.nodes:
             assert section.note, f"{section.title} must explain why it is empty"
+
+
+def test_a_crop_export_is_not_described_as_untouched_10x_output(tmp_path):
+    """Its experiment.xenium and transcripts.parquet were written by the viewer.
+
+    Still not deletable — they are the only copy — but the old wording claimed
+    the viewer never modifies them, which is the same wrong mental model that
+    let Force Rebuild loose on these datasets.
+    """
+    (tmp_path / "experiment.xenium").write_text("{}")
+    (tmp_path / "transcripts.parquet").write_bytes(b"PAR1")
+
+    raw = si.build_inventory(tmp_path, None)[0]
+    assert raw.title == "Dataset source files"
+    assert raw.nodes
+    for node in raw.nodes:
+        assert node.deletable is False
+        assert "only copy" in node.blocked_reason
 
 
 def test_raw_files_are_listed_and_none_of_them_is_deletable(dataset):

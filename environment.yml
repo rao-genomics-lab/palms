@@ -20,7 +20,7 @@ dependencies:
   # Spatial / single-cell
   - anndata>=0.12
   - scanpy>=1.12
-  - squidpy>=1.8
+  - squidpy>=1.8.2
   - spatialdata>=0.7
   - dask>=2024.0
   - dask-image

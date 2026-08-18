@@ -40,6 +40,10 @@
 
   Store writes go through `safe_group_update` / `atomic_json` only — a source guard
   parses the module and fails on a bare `zarr.open`, `shutil.move`, or any `unlink`.
+  `is_dataset_dir` reuses `loader.has_raw_xenium_source` (issue #17) rather than
+  re-testing `cells.zarr.zip`, so a Crop Dataset export — whose zarr *is* the data —
+  is recognised by the one definition rather than a second copy of it.
+
   It refuses rather than half-acting: an existing destination, a running CopyKAT job
   (`plots/copykat_RUNNING.txt`), unreadable root metadata, a cross-device move (no
   `shutil.move` fallback — a half-copied multi-gigabyte zarr is worse than a clear
@@ -55,6 +59,105 @@
   `test_derived_outputs_are_replaced_not_written_in_place` states the property —
   a hardlink taken before the rename still holds the old bytes after it — and fails
   against the previous version.
+## [Unreleased] — 2026-08-17 (squidpy 1.9 readiness)
+
+### Changed
+- **`sq.gr.spatial_neighbors` → `sq.gr.spatial_neighbors_knn`** (issue #19), before
+  squidpy 1.9 removes the old name. Two call sites that had to change together —
+  `utils/spatial_analysis.py::compute_spatial_neighbors` (what the GUI runs) and
+  `step_templates/builtin/spatial_neighbors.tmpl` (what the exported notebook replays) —
+  plus the `coord_type='generic'` prose in `scripts/generate_docs.py` and the regenerated
+  `docs/Analysis-Templates.md`, which carries the template body verbatim.
+  `compute_spatial_neighbors` keeps its signature, so `tab_annot_nhood` is untouched.
+
+  **No result changes and nothing to recompute.** Re-measured on the installed squidpy
+  1.8.2: `spatial_neighbors_knn(n_neighs=6)` and
+  `spatial_neighbors(coord_type='generic', n_neighs=6)` write byte-identical
+  `spatial_connectivities` and `spatial_distances` and the same
+  `uns['spatial_neighbors']` — the new function still records `coord_type: 'generic'`
+  there, so even code reading that key is unaffected. `coord_type='generic'` with
+  `n_neighs=k` *is* k-nearest-neighbours.
+
+  A notebook **already exported to disk** keeps the old call, because a provenance node
+  stores the code verbatim from when it ran. This self-heals rather than needing a
+  migration: the next session that opens Neighbourhood Enrichment or Ligand-Receptor
+  re-runs `ensure_spatial_neighbors`, `upsert` revises the node, and its descendants are
+  flagged stale — which is what a changed upstream step is supposed to do.
+
+### Corrected
+- **Raised the squidpy floor to `>=1.8.2`** in `environment.yml` and `pyproject.toml`.
+  The first cut of this change left it at `>=1.8` on the strength of
+  `spatial_neighbors`'s own `.. deprecated:: 1.7.0` directive, read as "the replacements
+  exist from 1.7.0". They do not. Checked against the wheels,
+  `spatial_neighbors_knn` is absent from **1.7.0, 1.8.0 and 1.8.1** and first appears in
+  **1.8.2** — so the old pin permitted two versions on which every Nhood and
+  Ligand-Receptor run would raise `AttributeError`. The lesson is narrow and worth
+  keeping: a `deprecated::` directive dates the *deprecation*, not the *replacement*.
+  `test_the_squidpy_floor_is_a_version_that_has_spatial_neighbors_knn` now checks both
+  the installed module and the declared floors, and fails on the old pin.
+
+- The 2026-08-17 tracking entry below, and `docs/squidpy-spatial-neighbors-migration.md`,
+  both said **three** tabs broke together. Co-occurrence was never a dependent:
+  `tab_co_occurrence` declares only `deps=[clustering:…]` and `spatial.cooccur.tmpl`
+  calls `sq.gr.co_occurrence`, which computes its own radii and needs no `obsp` graph.
+  Two tabs, not three. Also: the `cnv` extra contains no squidpy, and
+  `tests/test_notebook_replay.py` *does* cover this path — it replays a
+  `spatial_neighbors` node in a clean kernel, which is the gate the doc said did not
+  exist.
+## [Unreleased] — 2026-08-17 (cache-only datasets)
+
+### Fixed
+- **A dataset with no raw Xenium output is never told to rebuild its cache**
+  (issue #17). A Crop Dataset export ships `experiment.xenium`,
+  `sdata_cached.zarr/`, `transcripts.parquet` and `transcript_cache/` — and
+  nothing `spatialdata_io.xenium` can read. It also shipped **no
+  `.xv_manifest.json`**, so freshness fell back to comparing `experiment.xenium`'s
+  mtime against the cache directory's, which a `cp -r`, an unzip or a cloud-sync
+  restore reorders. Three separate branches then attempted a rebuild that cannot
+  happen, and **two of them renamed the only copy of the data aside first**:
+  - `tab_cache._on_rebuild` — the reported case. It checked only that the cache
+    existed and that there was disk space, moved the store to
+    `sdata_cached_prev_<stamp>.zarr`, and told the user to restart. The next
+    launch died in h5py on a `cell_feature_matrix.h5` they never had, and the
+    dataset stayed unopenable until someone renamed the folder back by hand.
+  - the silent mtime-staleness branch (`_stale_preference` returning `None`),
+    which left the cache in place but raised on every launch, permanently.
+  - `_ask_corrupt_cache`, whose only non-quit answers both move the cache aside.
+
+  The fix makes "this has no raw source" a fact rather than an inference.
+  `loader.has_raw_xenium_source()` is now the single definition — it replaces an
+  inline `cells.zarr.zip` check that existed but guarded only the `--no-cache`
+  override, which is why every rebuild path walked past it. It is deliberately
+  conservative: `True` unless *none* of `cells.zarr.zip`,
+  `cell_feature_matrix.h5`, `cell_feature_matrix/`, `morphology_focus/` is
+  present, because partially-missing raw output is broken raw output and should
+  keep raising the error that says so.
+
+  For such a dataset the loader skips the staleness question entirely (the cache
+  *is* the source of record), refuses with a new `NoRawSourceError` naming the
+  recovery routes instead of offering a rebuild when the cache will not open, and
+  carries a precondition immediately before `spatialdata_io.xenium` so any branch
+  added later is safe by construction. Nothing is ever moved — asserted with a
+  `shutil.move` spy rather than a source grep, since what matters is that no
+  rename happens.
+- **Crop Dataset exports now stamp their manifest at export time**, with
+  `cache_only: true` and `derived_from`. That alone closes the mtime trigger for
+  new exports; the predicate covers the ones already on disk, and stamps them on
+  their next successful load.
+- **Force Rebuild is disabled, with the reason as its tooltip**, on a cache-only
+  dataset, and re-guarded inside the callback — `_set_busy(False)` re-enables
+  every mutating button when a worker finishes, and this is the one that must
+  stay off. The precondition lives in a pure `_rebuild_blocked_reason()` so it is
+  testable; `_on_rebuild` itself opens a modal. The Cache tab header and
+  `xenium-build-cache --check` both report the dataset as cache-only, and
+  `--check` reports freshness as *not applicable* rather than stale — condemning
+  the cache would be advising a rebuild that cannot happen.
+- **Tools → Dataset stops calling a crop export's own files "original 10x output
+  — the viewer never modifies it".** The viewer wrote them. They stay
+  non-deletable (they are the only copy), but that wording was the same wrong
+  mental model that let Force Rebuild loose on these datasets. A test docstring
+  in `test_loader_policy.py` carried the mirror-image error — "a Crop Dataset
+  export has no `experiment.xenium`" — and is corrected too.
 
 ## [Unreleased] — 2026-08-17 (headless cache build)
 

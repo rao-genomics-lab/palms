@@ -501,19 +501,23 @@ reproducibility defect rather than a kernel-discovery one.
 
 ## Pending upstream deprecations (act before upgrading)
 
-Both are **tracked, not fixed**. Neither fails today; both fail on a routine dependency
-upgrade, and `squidpy` and `napari` are pinned with no upper bound.
-
-- ⚠️ **`sq.gr.spatial_neighbors` is removed in squidpy 1.9** — `docs/squidpy-spatial-neighbors-migration.md`.
-  **Highest priority of the two**, because the neighbour graph is a *dependency*: Nhood
-  Enrichment, Co-occurrence and Ligand-Receptor all break together, and so does every
-  **already-exported notebook**, whose recorded cell calls the removed function. Two call
-  sites (`utils/spatial_analysis.py:35` and the `spatial_neighbors` template) which must
-  change together. Measured on 1.8.2, `spatial_neighbors_knn(n_neighs=k)` produces a
-  **byte-identical graph** to `spatial_neighbors(coord_type='generic', n_neighs=k)`, so the
-  swap is a rename rather than a change of results — confirm the version floor first.
-- **napari drops the PyQt5 backend in fall 2026** — `docs/pyqt6-migration.md`. Smaller: all
-  Qt access already goes through `qtpy`, so it is a pin change plus 8 unscoped enums.
+- ✅ **`sq.gr.spatial_neighbors` (removed in squidpy 1.9) — done**, issue #19. Now
+  `sq.gr.spatial_neighbors_knn`, in `utils/spatial_analysis.py` and the
+  `spatial_neighbors` template, which had to change together (the template is what the
+  notebook replays). Measured identical graph, so no saved result was invalidated.
+  `docs/squidpy-spatial-neighbors-migration.md` keeps the measurement, and the four
+  things the original assessment got wrong — chief among them that Co-occurrence was
+  never a dependent: it calls `sq.gr.co_occurrence`, which computes its own radii.
+- **napari drops the PyQt5 backend in fall 2026** — `docs/pyqt6-migration.md`. Tracked,
+  not fixed; it does not fail today, and `napari` is pinned with no upper bound. All Qt
+  access already goes through `qtpy`, so it is a pin change plus scoped-enum edits — but
+  **that doc's inventory is understated**: it says 8 unscoped enums and 7 `exec_()`, and
+  the tree has ~29 unscoped `Qt.*` enums, ~52 unscoped enums on other classes
+  (`QMessageBox.Yes`, `QDialog.Accepted`, `QHeaderView.Stretch`, …) that it does not
+  mention at all, and 8 `exec_()` sites; every line number in it has drifted. The enum
+  and `exec()` edits are valid under PyQt5 5.11+, so they can land ahead of the pin flip,
+  and `QT_API=pyside6 pytest` smoke-tests strict enums today (PySide6 is already in the
+  env as a matplotlib dependency).
 
 ## Known Compatibility Patches
 

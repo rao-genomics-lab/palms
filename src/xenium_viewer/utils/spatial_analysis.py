@@ -31,10 +31,16 @@ def compute_spatial_neighbors(
     adata_norm: sc.AnnData,
     n_neighs: int = 6,
 ) -> None:
-    """Compute spatial neighbor graph (modifies adata_norm in-place)."""
-    sq.gr.spatial_neighbors(
-        adata_norm, coord_type='generic', n_neighs=n_neighs,
-    )
+    """Compute spatial neighbor graph (modifies adata_norm in-place).
+
+    ``spatial_neighbors_knn`` replaces ``spatial_neighbors(coord_type='generic')``,
+    removed in squidpy 1.9. Measured on 1.8.2, the two produce byte-identical
+    ``spatial_connectivities`` and ``spatial_distances`` and the same
+    ``uns['spatial_neighbors']`` — ``coord_type='generic'`` with ``n_neighs=k``
+    *is* k-nearest-neighbours. Keep this in step with the ``spatial_neighbors``
+    template, which is what the exported notebook replays.
+    """
+    sq.gr.spatial_neighbors_knn(adata_norm, n_neighs=n_neighs)
 
 
 

@@ -87,7 +87,7 @@ sc.pp.pca(adata_norm)
 
 **Run by:** [Neighborhood Enrichment](Tab-Neighborhood-Enrichment) and [Ligand-Receptor](Tab-Ligand-Receptor)
 
-Builds the spatial neighbour graph squidpy's spatial statistics need, on `adata_norm`, with `coord_type='generic'` and *k* nearest neighbours.
+Builds the spatial neighbour graph squidpy's spatial statistics need, on `adata_norm`, from each cell's *k* nearest neighbours. Uses `spatial_neighbors_knn`, which replaced `spatial_neighbors(coord_type='generic')` — removed in squidpy 1.9. The two produce an identical graph, so results recorded before the change still match.
 
 This is the one template with no live preview in the [Templates](Tab-Templates) tab. *k* comes from whichever tab called `ctx.ensure_spatial_neighbors()`, and two tabs have their own slider, so a preview provider would have to pick one of them arbitrarily. It declares a `sample-params` value instead and the preview says so.
 
@@ -105,7 +105,7 @@ This is the one template with no live preview in the [Templates](Tab-Templates) 
 
 ```python
 # Spatial neighbor graph (k=$n_neighs)
-sq.gr.spatial_neighbors(adata_norm, coord_type='generic', n_neighs=$n_neighs)
+sq.gr.spatial_neighbors_knn(adata_norm, n_neighs=$n_neighs)
 ```
 
 ## Clustering

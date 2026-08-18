@@ -1,117 +1,123 @@
-# TODO: `sq.gr.spatial_neighbors` is removed in squidpy 1.9 — migrate before upgrading
+# `sq.gr.spatial_neighbors` → `spatial_neighbors_knn` — done
 
-Status: **not started / tracked** (as of 2026-08-17). Priority: **do this before any
-squidpy upgrade past 1.8.x.** No code changes made yet.
+Status: **done (2026-08-17)**, issue #19. Kept as the record of what was measured and
+what turned out to be wrong in the original assessment, because the equivalence claim is
+the reason no saved result had to be recomputed.
 
-## Why this matters more than a usual deprecation
+## What changed
 
-squidpy 1.8.2 prints, on every neighbour-graph build:
+Two call sites, changed together — the template is what the notebook replays, the
+function is what the GUI runs:
 
-> `FutureWarning: Calling 'spatial_neighbors' is deprecated and will be removed in squidpy
-> v1.9.0. Use 'spatial_neighbors_knn', 'spatial_neighbors_radius',
-> 'spatial_neighbors_delaunay', 'spatial_neighbors_grid', or
-> 'spatial_neighbors_from_builder' instead.`
+```python
+# was
+sq.gr.spatial_neighbors(adata_norm, coord_type='generic', n_neighs=k)
+# now
+sq.gr.spatial_neighbors_knn(adata_norm, n_neighs=k)
+```
 
-The spatial neighbour graph is a **dependency of three analyses**, not a leaf feature.
-`ctx.ensure_spatial_neighbors()` builds it, and Neighbourhood Enrichment, Co-occurrence and
-Ligand-Receptor all declare `deps=["spatial_neighbors"]`. When squidpy 1.9 lands, all three
-tabs stop working at once — and so does **every exported notebook**, including ones already
-written, because the recorded `spatial_neighbors` cell calls the removed function. That is
-the part that makes this worth doing early: the provenance graph's promise is that an old
-notebook still replays.
+1. `src/xenium_viewer/utils/step_templates/builtin/spatial_neighbors.tmpl` — the recorded
+   code, reached through `ctx.ensure_spatial_neighbors()` in `tabs/_helpers.py`.
+2. `src/xenium_viewer/utils/spatial_analysis.py::compute_spatial_neighbors` — used
+   directly by `tabs/tab_annot_nhood.py`, whose call is unrecorded. Its signature
+   (`adata_norm`, `n_neighs=6`) is unchanged, so that tab needed no edit.
 
-`environment.yml` and `pyproject.toml` both pin `squidpy>=1.8` with no upper bound, so a
-routine `conda env update` is enough to break it. Nothing here is failing today.
+Two more that the original note missed: `scripts/generate_docs.py` hard-codes the
+`coord_type='generic'` prose, and `docs/Analysis-Templates.md` carries the template body
+verbatim — `tests/test_generated_docs.py` byte-compares the regenerated page, so the
+generator must be edited and `python scripts/generate_docs.py` re-run.
 
-## The good news: measured, the swap is result-preserving
+`adata_norm` is passed **positionally**: the replacement names its first parameter
+`data`, not `adata`, and everything after it is keyword-only.
 
-The concern that would make this risky — a different graph, hence different enrichment
-z-scores and invalidated saved results — **does not apply to how this codebase calls it.**
-Measured on 500 random points, squidpy 1.8.2:
+## Why it was safe
+
+squidpy 1.8.2 warned that `spatial_neighbors` would be removed in 1.9.0, naming five
+replacements. The graph is a *dependency*, not a leaf feature, so the concern worth
+checking was whether the swap changes results — which would invalidate saved
+neighbourhood-enrichment and ligand-receptor output.
+
+It does not. Measured on 500 random points under squidpy 1.8.2:
 
 | | `spatial_neighbors(coord_type='generic', n_neighs=6)` | `spatial_neighbors_knn(n_neighs=6)` |
 |---|---|---|
 | `obsp` keys | `spatial_connectivities`, `spatial_distances` | same |
-| `uns` keys | `spatial_neighbors` | same |
+| `uns` keys | `spatial_neighbors` | same, **including** `params: {'coord_type': 'generic', …}` |
 | `spatial_connectivities` | 3000 nnz | 3000 nnz, **identical matrix** |
 | `spatial_distances` | 3000 nnz | 3000 nnz, **identical matrix** |
 
-`sq.gr.nhood_enrichment` then runs unchanged against the new graph. So for our one call
-shape this is a rename, not a behaviour change: `coord_type='generic'` with `n_neighs=k`
-*is* k-nearest-neighbours, and that is exactly what `spatial_neighbors_knn` does.
+`coord_type='generic'` with `n_neighs=k` *is* k-nearest-neighbours. Re-run the check
+below against whatever squidpy version is current before trusting this table again:
 
-Reproduce with the comparison in the "Verification" section below before trusting this —
-it was measured against 1.8.2 and the replacement's behaviour could still shift before 1.9.
+```python
+import numpy as np, anndata as ad, squidpy as sq
+rng = np.random.default_rng(0)
+coords = rng.random((500, 2)) * 1000
 
-## Call sites
+def build(fn, **kw):
+    a = ad.AnnData(rng.random((500, 20)).astype("float32"))
+    a.obsm["spatial"] = coords.copy()
+    fn(a, **kw)
+    return a
 
-Only two, and they must change together — the template is what the notebook replays, the
-function is what the GUI runs:
+old = build(sq.gr.spatial_neighbors, coord_type="generic", n_neighs=6)
+new = build(sq.gr.spatial_neighbors_knn, n_neighs=6)
+for k in ("spatial_connectivities", "spatial_distances"):
+    assert (old.obsp[k] != new.obsp[k]).nnz == 0, k
+```
 
-1. **`src/xenium_viewer/utils/spatial_analysis.py:35`** — `compute_spatial_neighbors()`,
-   used directly by `tabs/tab_annot_nhood.py:175`.
-2. **`src/xenium_viewer/utils/step_templates/builtin/spatial_neighbors.tmpl:15`** — the
-   recorded code, reached through `ctx.ensure_spatial_neighbors()` in `tabs/_helpers.py`.
+## Four things the original assessment got wrong
 
-**Not a call site:** `tabs/tab_novae.py` calls `novae.spatial_neighbors()`, which is the
-Novae library's own function and has nothing to do with squidpy. Leave it alone.
+Recorded because each was stated confidently and each was checkable:
 
-## Checklist
+1. **Co-occurrence was never affected.** The note and `CHANGELOG.md` both said three tabs
+   break together. `tabs/tab_co_occurrence.py` declares only
+   `deps=[f"clustering:{key}"]` and `spatial.cooccur.tmpl` calls `sq.gr.co_occurrence`,
+   which computes its own radii and needs no `obsp` graph. Two tabs, not three:
+   Neighbourhood Enrichment and Ligand-Receptor.
+2. **The version floor did need raising — and the doc's own evidence was a trap.**
+   `spatial_neighbors`'s docstring says `.. deprecated:: 1.7.0`, which reads as "the
+   replacements exist from 1.7.0". They do not. Checked against the actual wheels,
+   `spatial_neighbors_knn` is **absent from 1.7.0, 1.8.0 and 1.8.1, and first appears in
+   1.8.2**:
 
-1. **Confirm the version floor.** `spatial_neighbors_knn` exists in 1.8.2; check whether it
-   exists in **1.8.0**, the current floor in `environment.yml` and `pyproject.toml`. If not,
-   raise the pin to the first version that has it in *both* files and in the `cnv` extra —
-   otherwise the swap breaks anyone on an older 1.8.x.
-2. **Re-run the equivalence check** below against whatever squidpy version is current.
-3. **Change the template first**, since it is the harder half:
-   ```python
-   # was
-   sq.gr.spatial_neighbors(adata_norm, coord_type='generic', n_neighs=$n_neighs)
-   # becomes
-   sq.gr.spatial_neighbors_knn(adata_norm, n_neighs=$n_neighs)
    ```
-   Note the replacements are **keyword-only** after the first argument, and `coord_type` is
-   gone entirely. The `params` contract (`n_neighs:int`) is unchanged, so no
-   `check_step` breakage — but `tests/test_template_registry.py` renders every template
-   against every declared assembly and will catch a typo.
-4. **Change `compute_spatial_neighbors()`** to match, keeping its signature
-   (`adata_norm`, `n_neighs=6`) so `tab_annot_nhood.py` needs no edit.
-5. **Users with a customised `spatial_neighbors` template will be flagged for review**
-   automatically — `overrides.json` records the hash of the shipped block they forked, so
-   the Templates tab shows **⚠ review** and offers "Take new default". That is the
-   mechanism working as designed; no extra migration step is needed for them.
-6. **Old caches keep working.** The graph lives in `obsp`, is rebuilt per session by
-   `ensure_spatial_neighbors`, and is not persisted — so there is nothing on disk to migrate.
+   squidpy 1.7.0  no spatial_neighbors_knn
+   squidpy 1.8.0  no spatial_neighbors_knn
+   squidpy 1.8.1  no spatial_neighbors_knn
+   squidpy 1.8.2  spatial_neighbors_knn present
+   ```
 
-## Verification
+   The old `squidpy>=1.8` pin therefore permitted two versions that would raise
+   `AttributeError` on every Nhood or Ligand-Receptor run. Both `environment.yml` and
+   `pyproject.toml` now pin `squidpy>=1.8.2`, and
+   `test_the_squidpy_floor_is_a_version_that_has_spatial_neighbors_knn` checks both the
+   installed module and the declared floors so this cannot drift again. Verify a
+   replacement against the wheel that is supposed to contain it, not against a
+   `deprecated::` directive — the directive dates the *deprecation*, not the replacement.
+3. **The `cnv` extra contains no squidpy**, contrary to the old checklist. Nothing to
+   change there.
+4. **`tests/test_notebook_replay.py` does cover this path** — it runs a
+   `spatial_neighbors` step and an `nhood:` step and replays both in a clean kernel. The
+   note claimed it did not, and sent the reader to `scripts/verify_notebook.py` as the
+   only real gate.
 
-- `pytest tests/test_notebook_replay.py` — the real gate. It executes the exported notebook
-  in a clean kernel, so a removed-or-renamed squidpy call fails there rather than in a user's
-  session. It does not currently cover the spatial tabs, so **also** run
-  `scripts/verify_notebook.py <dataset>` against a dataset that has a recorded
-  `spatial_neighbors` node.
-- Run Neighbourhood Enrichment, Co-occurrence and Ligand-Receptor in the GUI and confirm
-  the z-scores match what the dataset already has saved — identical, not merely similar,
-  given the equivalence measured above.
-- The equivalence check itself:
-  ```python
-  import numpy as np, anndata as ad, squidpy as sq
-  rng = np.random.default_rng(0)
-  coords = rng.random((500, 2)) * 1000
+## Known limitation
 
-  def build(fn, **kw):
-      a = ad.AnnData(rng.random((500, 20)).astype("float32"))
-      a.obsm["spatial"] = coords.copy()
-      fn(a, **kw)
-      return a
+A notebook **already exported to disk** keeps the removed call: a provenance node stores
+the code verbatim from when it ran, so re-exporting from the stored graph reproduces the
+old cell. This self-heals rather than needing a migration — the next session that opens
+Neighbourhood Enrichment or Ligand-Receptor re-runs `ensure_spatial_neighbors`, `upsert`
+revises the node with the new code, and its descendants are flagged stale, which is
+exactly what a changed upstream step is supposed to do.
 
-  old = build(sq.gr.spatial_neighbors, coord_type="generic", n_neighs=6)
-  new = build(sq.gr.spatial_neighbors_knn, n_neighs=6)
-  for k in ("spatial_connectivities", "spatial_distances"):
-      assert (old.obsp[k] != new.obsp[k]).nnz == 0, k
-  ```
+Users with a customised `spatial_neighbors` template are flagged automatically:
+`overrides.json` records the hash of the shipped block they forked, so the Templates tab
+shows **⚠ review** and offers "Take new default".
+
+Nothing on disk needed migrating — the graph lives in `obsp` and is rebuilt per session.
 
 ## Related
 
-- `docs/pyqt6-migration.md` — the other tracked upstream deprecation (napari drops PyQt5 in
-  fall 2026).
+- `docs/pyqt6-migration.md` — the other tracked upstream deprecation (napari drops PyQt5
+  in fall 2026). Note that its own inventory is understated; see the issue.
