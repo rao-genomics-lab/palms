@@ -1,5 +1,50 @@
 # Changelog
 
+## [Unreleased] — 2026-08-17 (squidpy 1.9 readiness)
+
+### Changed
+- **`sq.gr.spatial_neighbors` → `sq.gr.spatial_neighbors_knn`** (issue #19), before
+  squidpy 1.9 removes the old name. Two call sites that had to change together —
+  `utils/spatial_analysis.py::compute_spatial_neighbors` (what the GUI runs) and
+  `step_templates/builtin/spatial_neighbors.tmpl` (what the exported notebook replays) —
+  plus the `coord_type='generic'` prose in `scripts/generate_docs.py` and the regenerated
+  `docs/Analysis-Templates.md`, which carries the template body verbatim.
+  `compute_spatial_neighbors` keeps its signature, so `tab_annot_nhood` is untouched.
+
+  **No result changes and nothing to recompute.** Re-measured on the installed squidpy
+  1.8.2: `spatial_neighbors_knn(n_neighs=6)` and
+  `spatial_neighbors(coord_type='generic', n_neighs=6)` write byte-identical
+  `spatial_connectivities` and `spatial_distances` and the same
+  `uns['spatial_neighbors']` — the new function still records `coord_type: 'generic'`
+  there, so even code reading that key is unaffected. `coord_type='generic'` with
+  `n_neighs=k` *is* k-nearest-neighbours.
+
+  A notebook **already exported to disk** keeps the old call, because a provenance node
+  stores the code verbatim from when it ran. This self-heals rather than needing a
+  migration: the next session that opens Neighbourhood Enrichment or Ligand-Receptor
+  re-runs `ensure_spatial_neighbors`, `upsert` revises the node, and its descendants are
+  flagged stale — which is what a changed upstream step is supposed to do.
+
+### Corrected
+- **Raised the squidpy floor to `>=1.8.2`** in `environment.yml` and `pyproject.toml`.
+  The first cut of this change left it at `>=1.8` on the strength of
+  `spatial_neighbors`'s own `.. deprecated:: 1.7.0` directive, read as "the replacements
+  exist from 1.7.0". They do not. Checked against the wheels,
+  `spatial_neighbors_knn` is absent from **1.7.0, 1.8.0 and 1.8.1** and first appears in
+  **1.8.2** — so the old pin permitted two versions on which every Nhood and
+  Ligand-Receptor run would raise `AttributeError`. The lesson is narrow and worth
+  keeping: a `deprecated::` directive dates the *deprecation*, not the *replacement*.
+  `test_the_squidpy_floor_is_a_version_that_has_spatial_neighbors_knn` now checks both
+  the installed module and the declared floors, and fails on the old pin.
+
+- The 2026-08-17 tracking entry below, and `docs/squidpy-spatial-neighbors-migration.md`,
+  both said **three** tabs broke together. Co-occurrence was never a dependent:
+  `tab_co_occurrence` declares only `deps=[clustering:…]` and `spatial.cooccur.tmpl`
+  calls `sq.gr.co_occurrence`, which computes its own radii and needs no `obsp` graph.
+  Two tabs, not three. Also: the `cnv` extra contains no squidpy, and
+  `tests/test_notebook_replay.py` *does* cover this path — it replays a
+  `spatial_neighbors` node in a clean kernel, which is the gate the doc said did not
+  exist.
 ## [Unreleased] — 2026-08-17 (cache-only datasets)
 
 ### Fixed
