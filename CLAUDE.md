@@ -21,6 +21,11 @@ xenium-preprocess /path/to/xenium/output/
 # it on first launch anyway). --check reports on an existing one and writes nothing.
 xenium-build-cache /path/to/xenium/output/
 
+# Rename or move a dataset. Nothing stores a dataset *name*, but the provenance
+# graph records absolute paths; this rewrites them. --dry-run writes nothing.
+xenium-rename-dataset /path/to/xenium/output/ new_name
+xenium-rename-dataset /path/that/was/moved/ --repair
+
 # Launch viewer (file dialog opens if no path given)
 xenium-viewer [/path/to/xenium/output/]
 
@@ -28,7 +33,7 @@ xenium-viewer [/path/to/xenium/output/]
 xenium-viewer /path/to/xenium/output/ --no-cache
 ```
 
-The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-build-cache`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
+The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-build-cache`, `xenium-rename-dataset`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
 
 There is a `pytest` suite in `tests/` (~320 tests) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -155,6 +160,33 @@ rather than rebuilding, since copying a dataset changes mtime without changing c
 hierarchy walk warn on every consolidation, and a rebuild would delete them. Write via
 `adata_persistence.sidecar_write_path()`; read via `find_sidecar()` / `glob_sidecars()`,
 which fall back to the legacy in-store location for existing datasets.
+
+### Renaming a dataset (`scripts/rename_dataset.py`)
+
+**Nothing stores a dataset name.** Not `adata`, not `sdata`, not the cache manifest;
+the folder name reaches only `viewer.title`. Cache freshness is a content hash of
+`experiment.xenium`, and every cache/sidecar path is re-derived from `data_path` at
+launch — verified: no `zarr.json`/`.zattrs`/`.zgroup`/`.zmetadata` under a real store
+contains an absolute path. So a renamed dataset opens fine and does not rebuild.
+
+What a bare `mv` breaks is the **absolute paths recorded in the provenance graph** —
+the `preamble` node's `data_path = Path(r"…")` and each `clustering:<key>` node's
+`read_csv` — plus the session's `he_path`/`arms_*_path` attrs and the (write-only)
+CopyKAT result JSONs. It does not stay quiet: `app.py` re-emits the preamble for the
+current `data_path` on every launch, so `upsert` flags **every descendant stale** and
+the first launch after a manual rename marks the whole notebook ⚠ for nothing.
+`xenium-rename-dataset` repairs all of it before that launch; `--repair` infers the
+old path from the recorded preamble.
+
+Two rules carry the safety, both under test:
+- **Substitution is path-prefix only** (`/d/foo` must not match `/d/foobar` or
+  `/d/foo.bak`), which is what leaves a file living *outside* the dataset directory
+  untouched — that file did not move.
+- **Every write swaps an inode**: `safe_group_update` / `atomic_json` for the store,
+  and `_atomic_replace` for `analysis.py` / the notebook. Writing those two in place
+  mutated a `cp -al` snapshot of the dataset through the hardlink — found by probing
+  the real tool against a real dataset, and pinned by
+  `test_derived_outputs_are_replaced_not_written_in_place`.
 
 ### Deleting components (`utils/store_inventory.py`, `tabs/tab_dataset.py`)
 
