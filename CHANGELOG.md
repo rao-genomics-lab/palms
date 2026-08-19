@@ -1,5 +1,77 @@
 # Changelog
 
+## [Unreleased] — 2026-08-19 (H&E image memory)
+
+### Fixed
+- **Loading an H&E built RAM fast enough to kill the session.** Measured on a
+  16384x12288 RGB TIFF: load + write to the cache peaked at **2.61 GB**, and the
+  session restore of the same image at **1.71 GB** — for a 604 MB image. On a real
+  slide that scales to tens of GB, and the failure mode is a killed terminal with no
+  traceback (`journalctl -u systemd-oomd`), not an error.
+
+  **This was never a regression in the H&E code.** `utils/registration.py` — the only
+  code that reads an H&E from disk — had not changed since `564179c` (2026-05-07), and
+  that commit only swapped `da.from_zarr(store)` for `zarr.open` + `da.from_array`
+  to survive zarr 3; dask's `from_zarr` *is* `from_array(z, z.chunks, name=…)`, so it
+  is inert for memory. `_save_he_to_sdata`'s `np.asarray(pyramid[0])` had been there
+  verbatim since the March decomposition. What changed is that the 2026-08-17 memory
+  work — the tiled read in `raster_io`, `loader._reopen_written_cache`, and
+  `sdata_write`'s per-element caps — all stop at the loader/morphology boundary, and
+  every H&E entry point sits outside it. Morphology got quiet; H&E did not.
+
+  Two sites, both eager, both fixed:
+
+  - **The cache write** (`tabs/tab_he_registration.py`, `tabs/tab_arms.py`) did
+    `np.asarray(pyramid[0])` — the full-resolution slide as dense numpy, on the **Qt
+    main thread** — then a second full copy via a numpy `.astype(np.uint8)`, then
+    handed `Image2DModel.parse` a dense base whose four `scale_factors` levels
+    spatialdata computes in a single `da.compute` through float64. Now
+    `registration.parse_rgb_image_for_store()`, shared by both tabs and built on the
+    same `da.map_blocks` detach that `adata_persistence.save_external_image_to_sdata`
+    already used. **2.61 GB → 0.91 GB**, and the written element is **byte-identical**
+    to what the eager version produced (asserted per level, both tiled and untiled).
+  - **The session restore** (`_load_he_from_sdata`) called `.compute()` on *every*
+    level including `scale0`, then transposed each into a second array — on every
+    launch of a dataset with an `he_image`. It now hands napari dask, which is what
+    the line-for-line identical ARMS code has done since `9cad210` (2026-03-11); the
+    H&E copy beside it was missed for five months. **1.71 GB → 0.49 GB.**
+
+- **`app._warn_if_pyramid_is_not_stored` now covers every image element**, not just
+  `morphology_focus`. `he_image`, `arms_he_image` and the `ext_*` images reach napari
+  the same way and cost the same when their levels are a computation; scoping the
+  warning to one element is why an H&E could kill a session without the viewer having
+  said anything first. The "one task per chunk means it was read, not built" test is
+  now `raster_io.level_is_computed()`, shared rather than inline.
+
+- **The H&E/ARMS/external-image tabs log what they loaded**
+  (`registration.describe_pyramid`): level count, base shape and dtype, chunking,
+  whether the levels are the file's own or a chain, and — the fact that actually
+  predicts the memory — whether the base is **tiled**. "The viewer died loading an
+  H&E" carried no information about the file that killed it.
+
+### Investigated, no change
+- **The `da.coarsen` chain `load_he_pyramid` synthesises for a TIFF with no internal
+  pyramid is *not* the problem, and materialising each level as it is built makes
+  things worse.** This looked like the morphology bug wearing a different hat — napari
+  draws the smallest level first (`_data_level = len(data) - 1`), so touching it walks
+  the chain — and it was implemented before being measured. It is not the same:
+  morphology's chain stood on **whole-page** dask chunks (5.93 GB each, per
+  `utils/raster_io.py`), whereas a coarsen over a *tile-chunked* base streams. Measured
+  peak, load + write, same 604 MB image:
+
+  | | tiled | untiled (one strip) |
+  |---|---|---|
+  | before | 2.61 GB | 2.55 GB |
+  | lazy write only (shipped) | **0.91 GB** | 2.69 GB |
+  | + materialise each built level | 2.14 GB | 2.88 GB |
+
+  So the materialisation was reverted and the chain left lazy. For an **untiled** H&E
+  nothing here helps: the floor is tifffile decoding the whole plane (1.34 GB of the
+  2.67 GB peak is the decode alone, before any pyramid exists), and decoding once and
+  re-exposing it as tiles was measured too — 2.67 GB, no better. That is the same
+  conclusion `--no-cache` morphology reached, so it warns rather than pretending
+  otherwise.
+
 ## [Unreleased] — 2026-08-18 (dataset rename)
 
 ### Added

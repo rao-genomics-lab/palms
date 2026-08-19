@@ -18,6 +18,10 @@ import tifffile
 import cv2
 
 
+#: Extra levels synthesised for a TIFF that carries no internal pyramid.
+_SYNTHETIC_LEVELS = 4
+
+
 def _aszarr_dask(store):
     """Wrap a tifffile ZarrTiffStore as a dask array, working around the
     fact that dask.array.from_zarr uses RegularChunkGrid, which was
@@ -27,6 +31,33 @@ def _aszarr_dask(store):
     z = zarr.open(store, mode="r")
     chunks = getattr(z, "chunks", None) or "auto"
     return da.from_array(z, chunks=chunks)
+
+
+def describe_pyramid(pyramid, label: str = "image") -> str:
+    """One-line summary of what a loaded pyramid will cost to draw.
+
+    ``load_he_pyramid`` can hand back either the file's own stored levels or
+    levels it synthesised, and the memory behaviour is completely different
+    between the two. Nothing said so before, which is why "the viewer died while
+    loading an H&E" carried no information about the file that killed it.
+    """
+    from xenium_viewer.utils.raster_io import level_is_computed
+
+    base = pyramid[0]
+    chained = any(level_is_computed(level) for level in pyramid)
+    chunk = getattr(base, "chunksize", None)
+    note = ""
+    if chunk is not None and base.dtype.itemsize * int(np.prod(chunk)) > 512 << 20:
+        # tifffile gives one chunk per plane for a file that is not tiled, so
+        # nothing downstream can stream — the same shape of problem raster_io.py
+        # documents for morphology_focus.
+        note = " — NOT TILED, one chunk is the whole plane"
+    return (
+        f"{label}: {len(pyramid)} level(s), base {tuple(base.shape)} {base.dtype}, "
+        f"chunks {chunk}, "
+        f"levels {'CHAINED (materialise on draw)' if chained else 'stored in the file'}"
+        f"{note}"
+    )
 
 
 def load_he_pyramid(path):
@@ -60,23 +91,23 @@ def load_he_pyramid(path):
             arr = _aszarr_dask(level_store)
             pyramid.append(arr)
     else:
-        # No internal pyramid — build one via 2x mean-pooling
+        # No internal pyramid — build one via 2x mean-pooling. Deliberately left
+        # lazy: measured on a 16384x12288 RGB TIFF, materialising each level as
+        # it is built cost *more* (tiled 0.83 -> 2.14 GB peak, strip-encoded
+        # 2.63 -> 2.88 GB) because a coarsen over a tile-chunked base already
+        # streams. Unlike morphology_focus's whole-page chunks, this chain is
+        # not the expensive part — see describe_pyramid for what is.
         base = _aszarr_dask(store)
         pyramid = [base]
         current = base
-        for _ in range(4):  # build 4 additional levels
+        for _ in range(_SYNTHETIC_LEVELS):
             # Trim to even dimensions
             h, w = current.shape[0], current.shape[1]
             trimmed = current[:h - h % 2, :w - w % 2]
-            if current.ndim == 3:
-                # (Y, X, C) — coarsen spatial dims only
-                current = da.coarsen(
-                    np.mean, trimmed, {0: 2, 1: 2}, trim_excess=True,
-                ).astype(current.dtype)
-            else:
-                current = da.coarsen(
-                    np.mean, trimmed, {0: 2, 1: 2}, trim_excess=True,
-                ).astype(current.dtype)
+            # (Y, X, C) or (Y, X) — either way, coarsen the leading spatial dims.
+            current = da.coarsen(
+                np.mean, trimmed, {0: 2, 1: 2}, trim_excess=True,
+            ).astype(base.dtype)
             pyramid.append(current)
 
     return pyramid, tif
@@ -172,7 +203,7 @@ def load_multichannel_pyramid(path):
     # Build extra pyramid levels when none are present (multichannel-safe coarsen)
     if n_levels == 1 and pyramid[0].ndim >= 2:
         current = pyramid[0]
-        for _ in range(4):
+        for _ in range(_SYNTHETIC_LEVELS):
             # Determine which axes are spatial (all non-channel axes of size > 1)
             axes_to_coarsen = {
                 ax: 2 for ax in range(current.ndim)
@@ -195,6 +226,47 @@ def load_multichannel_pyramid(path):
             pyramid.append(current)
 
     return pyramid, tif, channel_axis, channel_names
+
+
+def parse_rgb_image_for_store(level):
+    """Parse an H&E/ARMS base level into an ``Image2DModel`` element, lazily.
+
+    Returns ``(parsed, (height, width))``.
+
+    The eager version of this — ``np.asarray(pyramid[0])``, then a numpy
+    ``.astype(np.uint8)`` copy — pulled the full-resolution slide into RAM twice
+    on the Qt main thread before a byte reached disk, and then handed
+    ``Image2DModel.parse`` a dense array whose four ``scale_factors`` levels
+    spatialdata computes in a single ``da.compute``. Keeping it dask means the
+    write streams chunk by chunk; the dims, scale factors and chunking below are
+    unchanged, so what lands in the store is byte-identical to before.
+
+    ``da.map_blocks`` detaches the graph from tifffile's ``ZarrTiffStore``, which
+    has no ``.root`` for zarr v3 / spatialdata to introspect — the same guard
+    ``adata_persistence.save_external_image_to_sdata`` already carries. It hides
+    the store; it does not detach the *file*, so the ``TiffFile`` returned by
+    ``load_he_pyramid`` must stay alive until the write completes. The tabs keep
+    it in ``he_state["he_tif"]`` / ``arms_state["he_tif"]`` for exactly that.
+    """
+    from spatialdata.models import Image2DModel
+
+    base = level
+    if not isinstance(base, da.Array):
+        base = da.asarray(base)
+    base = da.map_blocks(lambda x: x, base, dtype=base.dtype)
+
+    if base.ndim == 3 and base.shape[-1] in (3, 4):
+        shape_yx = (base.shape[0], base.shape[1])
+        base_cyx = da.transpose(base, (2, 0, 1))
+    else:
+        shape_yx = (base.shape[-2], base.shape[-1])
+        base_cyx = base
+
+    parsed = Image2DModel.parse(
+        base_cyx.astype(np.uint8), dims=("c", "y", "x"),
+        scale_factors=[2, 2, 2, 2], chunks=(3, 1024, 1024),
+    )
+    return parsed, shape_yx
 
 
 def compute_landmark_affine(xenium_pts_yx, he_pts_yx):

@@ -25,7 +25,9 @@ from napari.qt.threading import thread_worker
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.zarr_safe import safe_delete_element
 from xenium_viewer.tabs._helpers import make_tab
-from xenium_viewer.utils.registration import load_multichannel_pyramid, compute_landmark_affine
+from xenium_viewer.utils.registration import (
+    load_multichannel_pyramid, compute_landmark_affine, describe_pyramid,
+)
 from xenium_viewer.utils.composite import (
     build_composite_pyramid, default_channel_colors, auto_contrast,
 )
@@ -583,6 +585,7 @@ def build_tab(ctx: "ViewerContext"):
 
     def _on_loaded(result, display_name, path):
         pyramid, tif, channel_axis, channel_names = result
+        print(f"  {describe_pyramid(pyramid, Path(path).name)}")
         # Build initial channel states
         colors = default_channel_colors(channel_names)
         clims = auto_contrast(pyramid, channel_axis=channel_axis or 0)

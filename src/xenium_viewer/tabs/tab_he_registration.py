@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 from xenium_viewer.utils.registration import (
     load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
     extract_tissue_mask_fluorescence, extract_tissue_mask_he, compute_coarse_affine,
+    describe_pyramid, parse_rgb_image_for_store,
 )
+from xenium_viewer.utils.reporting import report_write_failure
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -141,16 +143,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if sdata is None or no_cache:
             return
         try:
-            from spatialdata.models import Image2DModel
-            base = np.asarray(pyramid[0])
-            if base.ndim == 3 and base.shape[-1] in (3, 4):
-                base_cyx = np.transpose(base, (2, 0, 1))
-            else:
-                base_cyx = base
-            parsed = Image2DModel.parse(
-                base_cyx.astype(np.uint8), dims=("c", "y", "x"),
-                scale_factors=[2, 2, 2, 2], chunks=(3, 1024, 1024),
-            )
+            parsed, shape_yx = parse_rgb_image_for_store(pyramid[0])
             safe_write_element(sdata, "he_image", parsed)
             zarr_path = data_path / "sdata_cached.zarr"
             import zarr as zarr_mod
@@ -158,10 +151,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
             if "viewer_session" not in store:
                 store.create_group("viewer_session")
             store["viewer_session"].attrs["he_filename"] = he_filename
-            store["viewer_session"].attrs["he_shape_yx"] = list(base.shape[:2])
-            print(f"  H&E image saved to sdata zarr cache ({base_cyx.shape})")
+            store["viewer_session"].attrs["he_shape_yx"] = list(shape_yx)
+            print(f"  H&E image saved to sdata zarr cache ({shape_yx[0]}x{shape_yx[1]})")
         except Exception as e:
-            print(f"  Warning: could not save H&E to sdata: {e}")
+            report_write_failure(e, "H&E image")
 
     def _save_he_affine_to_sdata():
         if sdata is None or no_cache or "he_image" not in sdata.images:
@@ -222,6 +215,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_load_button.enabled = True
         coarse_align_button.enabled = morph_thumb is not None
         shape_str = "x".join(str(s) for s in pyramid[0].shape)
+        print(f"  {describe_pyramid(pyramid, f'H&E {Path(path).name}')}")
         he_status_label.value = f"H&E loaded: {Path(path).name} ({shape_str}, {len(pyramid)} levels)"
         ctx.record_node(
             "he:load",
@@ -542,14 +536,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
             @thread_worker
             def _load_he_from_sdata():
+                # Lazy on purpose: the eager version computed every level,
+                # scale0 included, into dense numpy on every launch. The ARMS
+                # copy of this was fixed in 9cad210 and this one was missed.
+                # napari fetches only the tiles it draws from a dask multiscale.
+                import dask.array as da
                 he_dt = sdata.images["he_image"]
                 pyramid = _extract_dt_scales(he_dt)
                 pyramid_rgb = []
                 for arr in pyramid:
-                    computed = arr.compute() if hasattr(arr, 'compute') else np.asarray(arr)
-                    if computed.ndim == 3 and computed.shape[0] in (3, 4):
-                        computed = np.transpose(computed, (1, 2, 0))
-                    pyramid_rgb.append(computed)
+                    if not isinstance(arr, da.Array):
+                        arr = da.from_array(arr)
+                    if arr.ndim == 3 and arr.shape[0] in (3, 4):
+                        arr = da.transpose(arr, (1, 2, 0))
+                    pyramid_rgb.append(arr)
                 return pyramid_rgb
 
             worker = _load_he_from_sdata()
