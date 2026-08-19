@@ -21,7 +21,9 @@ if TYPE_CHECKING:
 
 from xenium_viewer.utils.registration import (
     load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
+    describe_pyramid, parse_rgb_image_for_store,
 )
+from xenium_viewer.utils.reporting import report_write_failure
 from xenium_viewer.utils.gene_analysis import compute_arms_tile_deg
 
 import matplotlib.pyplot as _plt
@@ -204,6 +206,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_load_he_button.enabled = True
         arms_load_geojson_button.enabled = True
         shape_str = "x".join(str(s) for s in pyramid[0].shape)
+        print(f"  {describe_pyramid(pyramid, f'ARMS H&E {Path(path).name}')}")
         arms_status_label.value = f"ARMS H&E loaded: {Path(path).name} ({shape_str}, {len(pyramid)} levels)"
         ctx.record_node(
             "arms:load",
@@ -370,27 +373,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if sdata is None or no_cache:
             return
         try:
-            from spatialdata.models import Image2DModel
-            base = np.asarray(pyramid[0])
-            if base.ndim == 3 and base.shape[-1] in (3, 4):
-                base_cyx = np.transpose(base, (2, 0, 1))
-            else:
-                base_cyx = base
-            parsed = Image2DModel.parse(
-                base_cyx.astype(np.uint8), dims=("c", "y", "x"),
-                scale_factors=[2, 2, 2, 2], chunks=(3, 1024, 1024),
-            )
-            safe_write_element(sdata, "arms_he_image", parsed)
+            parsed, shape_yx = parse_rgb_image_for_store(pyramid[0])
+            # See _save_he_to_sdata: the old layer is gone by the time we run.
+            safe_write_element(sdata, "arms_he_image", parsed, replace_backed=True)
             zarr_p = data_path / "sdata_cached.zarr"
             import zarr as zarr_mod
             store = zarr_mod.open_group(str(zarr_p), mode="r+", use_consolidated=False)
             if "viewer_session" not in store:
                 store.create_group("viewer_session")
             store["viewer_session"].attrs["arms_he_filename"] = he_filename
-            store["viewer_session"].attrs["arms_he_shape_yx"] = list(base.shape[:2])
-            print(f"  ARMS H&E image saved to sdata zarr cache ({base_cyx.shape})")
+            store["viewer_session"].attrs["arms_he_shape_yx"] = list(shape_yx)
+            print(f"  ARMS H&E image saved to sdata zarr cache ({shape_yx[0]}x{shape_yx[1]})")
         except Exception as e:
-            print(f"  Warning: could not save ARMS H&E to sdata: {e}")
+            report_write_failure(e, "ARMS H&E image")
 
     def _save_arms_affine_to_sdata():
         if sdata is None or no_cache or "arms_he_image" not in sdata.images:

@@ -432,7 +432,8 @@ def _reopen_written_cache(sdata, cache_path: Path):
     Never raises: a cache that was just written should open, but if it does not,
     the caller is better off with the in-memory object than with an exception
     that loses a build. In that case the path is set the old way, and the layers
-    are built from the chain — slowly, and capped by `app._populate_viewer`.
+    are built from the chain — slowly, and only warned about by
+    `app._warn_if_pyramid_is_not_stored`; nothing caps it.
     """
     try:
         reopened = _open_cache(cache_path)

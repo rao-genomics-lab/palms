@@ -244,7 +244,7 @@ def _extract_dt_scales(dt):
 def _warn_if_pyramid_is_not_stored(sdata):
     """Say so before building layers from a pyramid that is still a computation.
 
-    Normally every level of `morphology_focus` is an array on disk, and napari
+    Normally every level of an image element is an array on disk, and napari
     reads a few chunks of the smallest one. When the dataset did not come from a
     cache (`--no-cache`, or a build whose write failed) only `scale0` holds data;
     the rest is a chained `coarsen().mean()`. napari draws the *smallest* level
@@ -260,26 +260,29 @@ def _warn_if_pyramid_is_not_stored(sdata):
     full-slide dataset needs that memory, and the failure mode is a killed
     session rather than an error, which is worth a sentence of warning.
     """
-    element = sdata.images.get("morphology_focus") if sdata.images else None
-    if element is None or not hasattr(element, "children"):
-        return
-    scales = _extract_dt_scales(element)
-    if len(scales) < 2:
-        return
-    smallest = scales[-1]
-    # One task per chunk (plus a bookkeeping key) means it is read, not built.
-    if len(smallest.dask) <= smallest.npartitions + 1:
-        return
-    msg = ("morphology_focus has no stored pyramid — its lower levels will be "
-           "computed from the full-resolution image while the layers are built. "
-           "On a full slide this needs tens of GB; if the session dies without "
-           "a traceback, check `journalctl -u systemd-oomd`.")
-    print(f"  Warning: {msg}")
-    try:
-        from xenium_viewer.utils import reporting
-        reporting.get_logger().warning(msg)
-    except Exception:
-        pass
+    from xenium_viewer.utils.raster_io import level_is_computed
+
+    # Every image element, not just morphology_focus: he_image, arms_he_image
+    # and the ext_* images reach napari the same way and cost the same when
+    # their levels are a computation. Scoping this to one element is why an H&E
+    # could kill a session without the viewer having said anything first.
+    for name in list(sdata.images or {}):
+        element = sdata.images.get(name)
+        if element is None or not hasattr(element, "children"):
+            continue
+        scales = _extract_dt_scales(element)
+        if len(scales) < 2 or not level_is_computed(scales[-1]):
+            continue
+        msg = (f"{name} has no stored pyramid — its lower levels will be "
+               "computed from the full-resolution image while the layers are built. "
+               "On a full slide this needs tens of GB; if the session dies without "
+               "a traceback, check `journalctl -u systemd-oomd`.")
+        print(f"  Warning: {msg}")
+        try:
+            from xenium_viewer.utils import reporting
+            reporting.get_logger().warning(msg)
+        except Exception:
+            pass
 
 
 def _add_layers_manually(viewer, sdata):

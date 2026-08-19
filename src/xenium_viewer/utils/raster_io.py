@@ -50,6 +50,22 @@ from typing import Optional
 DEFAULT_CHUNKS = (1, 4096, 4096)
 
 
+def level_is_computed(level) -> bool:
+    """True if *level* is built from a coarsen chain rather than read from disk.
+
+    A stored level needs one task per chunk (plus a bookkeeping key); a level
+    standing on a chain of ``coarsen().mean()`` carries the tasks of every level
+    below it, so touching it materialises the largest one. That is the whole of
+    the first-load crash ``loader._reopen_written_cache`` exists to prevent, and
+    the same test applies to any pyramid from any source — an H&E TIFF with no
+    internal levels included — so it lives here rather than inline in ``app.py``.
+    """
+    dask_graph = getattr(level, "dask", None)
+    if dask_graph is None:
+        return False
+    return len(dask_graph) > level.npartitions + 1
+
+
 def find_morphology_tiff(data_path: Path) -> Optional[Path]:
     """The OME-TIFF holding morphology_focus, across Xenium output layouts."""
     focus_dir = data_path / "morphology_focus"
