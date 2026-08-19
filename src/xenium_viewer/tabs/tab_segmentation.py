@@ -174,7 +174,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
                 @thread_worker
                 def _save():
-                    save_custom_seg_to_sdata(ctx, new_adata, scales)
+                    # A different segmentation than whatever is cached, and
+                    # _apply_custom_segmentation already removed the old layer.
+                    save_custom_seg_to_sdata(
+                        ctx, new_adata, scales, replace_backed=True,
+                    )
 
                 def _save_done(_):
                     status.value = (

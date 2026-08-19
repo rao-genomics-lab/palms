@@ -374,7 +374,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         try:
             parsed, shape_yx = parse_rgb_image_for_store(pyramid[0])
-            safe_write_element(sdata, "arms_he_image", parsed)
+            # See _save_he_to_sdata: the old layer is gone by the time we run.
+            safe_write_element(sdata, "arms_he_image", parsed, replace_backed=True)
             zarr_p = data_path / "sdata_cached.zarr"
             import zarr as zarr_mod
             store = zarr_mod.open_group(str(zarr_p), mode="r+", use_consolidated=False)

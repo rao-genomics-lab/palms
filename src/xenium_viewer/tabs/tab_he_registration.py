@@ -144,7 +144,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         try:
             parsed, shape_yx = parse_rgb_image_for_store(pyramid[0])
-            safe_write_element(sdata, "he_image", parsed)
+            # replace_backed: _on_he_loaded removed the old layer before calling
+            # us, so the only thing still holding the stored element is the
+            # sdata binding this write replaces. Without it, loading a second
+            # H&E over one restored from the cache was refused and silently
+            # never persisted.
+            safe_write_element(sdata, "he_image", parsed, replace_backed=True)
             zarr_path = data_path / "sdata_cached.zarr"
             import zarr as zarr_mod
             store = zarr_mod.open_group(str(zarr_path), mode="r+", use_consolidated=False)

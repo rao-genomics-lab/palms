@@ -357,6 +357,78 @@ def test_refuses_to_move_a_dask_backed_element(tiny_sdata):
         safe_write_element(lazy, "lab", lazy["lab"])
 
 
+# ── replacing an element the store still backs ───────────────────────────────
+#
+# The reported bug: loading a second H&E over one restored from the cache
+# displayed the new image and silently never persisted it, so the next launch
+# brought back the old one. `_assert_not_dask_backed` inspects `sdata`'s own
+# element dicts and nothing else, so a caller that has already torn down every
+# reader still trips it — purely because `sdata.images[name]` is the element it
+# is about to replace.
+
+def _new_labels(value):
+    from spatialdata.models import Labels2DModel
+    return Labels2DModel.parse(np.full((4, 4), value, dtype=np.int32))
+
+
+def _lab_value(sdata):
+    return int(np.asarray(sdata["lab"].data).flat[0])
+
+
+def test_replace_backed_rewrites_a_store_backed_element(tiny_sdata):
+    cache = Path(tiny_sdata.path)
+    lazy = _reread(cache)
+    safe_write_element(lazy, "lab", _new_labels(3), replace_backed=True)
+
+    assert _lab_value(_reread(cache)) == 3, "the new element must reach disk"
+    assert _lab_value(lazy) == 3, "and the in-memory object must agree with it"
+
+
+def test_replace_backed_still_refuses_the_element_itself(tiny_sdata):
+    """'I have torn down every reader' cannot be true of the value being written.
+
+    Without this the flag would rename the live files into the trash while the
+    new element's own dask graph still pointed at them — it would then read the
+    replacement's bytes rather than fail.
+    """
+    lazy = _reread(Path(tiny_sdata.path))
+    with pytest.raises(ZarrSafeError, match="backed by its own files"):
+        safe_write_element(lazy, "lab", lazy["lab"], replace_backed=True)
+
+
+def test_replace_backed_restores_the_binding_when_the_write_fails(tiny_sdata, monkeypatch):
+    """A failed write must not leave sdata missing an element still on disk.
+
+    This is what the hand-rolled `del ctx.sdata[name]` in
+    ``save_external_image_to_sdata`` got wrong: it swallowed its own failure and
+    never put the element back.
+    """
+    cache = Path(tiny_sdata.path)
+    lazy = _reread(cache)
+    original = lazy["lab"]
+
+    def boom(*a, **k):
+        raise OSError("simulated staging failure")
+
+    # zarr_safe imports SpatialData inside the function, so patch the class.
+    monkeypatch.setattr("spatialdata.SpatialData.write", boom)
+    with pytest.raises(OSError):
+        safe_write_element(lazy, "lab", _new_labels(5), replace_backed=True)
+    monkeypatch.undo()
+
+    assert "lab" in lazy.labels, "the previous binding must be restored"
+    assert lazy["lab"] is original
+    assert _lab_value(_reread(cache)) == 0, "and the store must be untouched"
+
+
+def test_replace_backed_keeps_the_new_binding_after_a_successful_write(tiny_sdata):
+    """The rollback must not fire once the swap has committed."""
+    lazy = _reread(Path(tiny_sdata.path))
+    new = _new_labels(7)
+    safe_write_element(lazy, "lab", new, replace_backed=True)
+    assert lazy["lab"] is new
+
+
 # ── grouped (non-element) updates ────────────────────────────────────────────
 
 def test_safe_group_update_commits(tiny_sdata):

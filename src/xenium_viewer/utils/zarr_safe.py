@@ -250,6 +250,41 @@ def _assert_not_dask_backed(sdata, live: Path, name: str) -> None:
         )
 
 
+def _unbind_backed(sdata, etype: str, name: str, live: Path, element: Any):
+    """Drop the in-memory binding that makes *live* look in use; return it.
+
+    ``_assert_not_dask_backed`` inspects ``sdata``'s own element dicts and nothing
+    else — not napari layers, not open file handles. So a caller that has already
+    torn down every reader still trips the guard purely because
+    ``sdata.images[name]`` is the element it is about to replace. Removing that
+    binding is both necessary and sufficient; removing the napari layer is
+    neither (``tab_dataset._release_layers`` drops layers, closes tifs and
+    collects, and deletion still raises).
+
+    Refuses when *element* is itself backed by *live*: "I have torn down every
+    reader" cannot be true of the value being written, and the rename would leave
+    the new element's own graph pointing into the trash.
+
+    The returned value is the caller's rollback — restore it if the write fails
+    before it commits, or the in-memory object silently loses an element that is
+    still on disk.
+    """
+    try:
+        from spatialdata._io._utils import _backed_elements_contained_in_path
+    except ImportError:  # pragma: no cover - upstream layout change
+        return None
+    if element is not None and any(
+        _backed_elements_contained_in_path(path=live, object=element)
+    ):
+        raise ZarrSafeError(
+            f"cannot rewrite {name!r} with a value backed by its own files; "
+            "load it into memory first"
+        )
+    previous = getattr(sdata, etype, {}).get(name)
+    _drop_in_memory(sdata, etype, name)
+    return previous
+
+
 def _ensure_type_group(cache_path: Path, etype: str, stage_store: Path) -> None:
     """Make sure ``<cache>/<etype>`` is a real zarr group before renaming into it.
 
@@ -321,20 +356,59 @@ def safe_write_element(
     *,
     keep_backup: bool = True,
     max_backup_bytes: int = DEFAULT_MAX_TRASH_BYTES,
+    replace_backed: bool = False,
 ) -> None:
     """Write *element* into the store under *name*, without a loss window.
 
     Replaces ``sdata.delete_element_from_disk(name); sdata.write_element(name)``.
     Also updates the in-memory ``sdata`` so it stays consistent with disk.
-    """
-    from spatialdata import SpatialData
 
+    Pass ``replace_backed=True`` to **assert that every live reader of the old
+    element has already been torn down** — the napari layer above all. It is not
+    "ignore the guard": the store files are renamed into the trash, and a dask
+    graph resolves lazily *by path*, so a surviving reader would go on to read
+    the new element's bytes rather than fail. The flag exists because the guard
+    inspects only ``sdata``'s element dicts, and so cannot tell a caller that has
+    done the teardown from one that has not. Loading a second H&E over one
+    restored from the cache is the case it was added for: the write was refused,
+    the image displayed, and nothing persisted.
+    """
     cache_path = cache_path_of(sdata)
     if element is None:
         element = sdata[name]
     etype = element_type_of(sdata, name, element)
 
     live = cache_path / etype / name
+    previous = _unbind_backed(sdata, etype, name, live, element) if replace_backed else None
+    committed = False
+    try:
+        _write_element_locked(
+            sdata, name, element, etype, cache_path, live,
+            keep_backup=keep_backup, max_backup_bytes=max_backup_bytes,
+        )
+        committed = True
+    finally:
+        # Only before the commit. A failure in ``consolidate`` happens after the
+        # rename, when the new data is already live, and re-binding the old
+        # element would then describe the store incorrectly.
+        if replace_backed and not committed and previous is not None:
+            _set_in_memory(sdata, etype, name, previous)
+
+
+def _write_element_locked(
+    sdata,
+    name: str,
+    element: Any,
+    etype: str,
+    cache_path: Path,
+    live: Path,
+    *,
+    keep_backup: bool,
+    max_backup_bytes: int,
+) -> None:
+    """Stage, journal, swap. Split out only so the rollback above can wrap it."""
+    from spatialdata import SpatialData
+
     _assert_not_dask_backed(sdata, live, name)
 
     uid = uuid.uuid4().hex[:12]

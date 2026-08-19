@@ -343,7 +343,9 @@ def _persist_adata_norm(ctx: ViewerContext, adata_norm) -> None:
         report_write_failure(e, "normalized expression cache")
 
 
-def save_custom_seg_to_sdata(ctx: ViewerContext, new_adata, scales: list) -> None:
+def save_custom_seg_to_sdata(
+    ctx: ViewerContext, new_adata, scales: list, *, replace_backed: bool = False,
+) -> None:
     """Persist custom segmentation labels and AnnData to the sdata zarr cache.
 
     Writes:
@@ -355,6 +357,11 @@ def save_custom_seg_to_sdata(ctx: ViewerContext, new_adata, scales: list) -> Non
     labels updated but the table not (the lock is reentrant, so the nested
     ``safe_write_element`` calls re-enter it).
     scales: list of arrays (highest→lowest resolution) as loaded from source zarr.
+
+    ``replace_backed`` is for the caller that has just torn down the old labels
+    layer and is writing a *different* segmentation. It must stay False for the
+    caller that writes ``ctx.cell_labels_layer.data`` back — there the on-screen
+    layer is the stored element, and the guard is right to refuse.
     """
     if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
         return
@@ -369,7 +376,9 @@ def save_custom_seg_to_sdata(ctx: ViewerContext, new_adata, scales: list) -> Non
             n = len(scales)
             scale_factors = [2] * (n - 1) if n > 1 else None
             parsed = LabelsModel.parse(arr, dims=("y", "x"), scale_factors=scale_factors)
-            safe_write_element(ctx.sdata, CUSTOM_LABELS_KEY, parsed)
+            safe_write_element(
+                ctx.sdata, CUSTOM_LABELS_KEY, parsed, replace_backed=replace_backed,
+            )
             print(f"Custom labels saved to sdata.labels['{CUSTOM_LABELS_KEY}']")
         except Exception as e:
             report_write_failure(e, "custom segmentation labels")
@@ -1357,13 +1366,6 @@ def save_external_image_to_sdata(
     try:
         from spatialdata.models import Image2DModel
 
-        # Remove existing element if possible (may fail if backed by active files)
-        if element_name in ctx.sdata:
-            try:
-                del ctx.sdata[element_name]
-            except Exception:
-                pass
-
         import dask.array as da
 
         base = pyramid[0]
@@ -1389,7 +1391,11 @@ def save_external_image_to_sdata(
             base, dims=dims, scale_factors=scale_factors,
             c_coords=list(channel_names) if channel_names else None,
         )
-        safe_write_element(ctx.sdata, element_name, parsed)
+        # replace_backed replaces a hand-rolled `del ctx.sdata[element_name]`
+        # that swallowed its own failure and never restored the binding, so a
+        # failed write left the in-memory object without an element that was
+        # still on disk.
+        safe_write_element(ctx.sdata, element_name, parsed, replace_backed=True)
     except Exception as e:
         report_write_failure(e, f"external image '{element_name}'")
 

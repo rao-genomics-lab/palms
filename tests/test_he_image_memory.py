@@ -176,3 +176,43 @@ def test_pyramid_warning_covers_every_image_element():
     src = _function_source(SRC / "app.py", "_warn_if_pyramid_is_not_stored")
     assert "sdata.images.get('morphology_focus')" not in src.replace('"', "'")
     assert "for name in list(sdata.images" in src
+
+
+# ── replacing an H&E that the cache already holds ────────────────────────────
+
+@pytest.mark.parametrize("module, func, element", [
+    ("tabs/tab_he_registration.py", "_save_he_to_sdata", "he_image"),
+    ("tabs/tab_arms.py", "_save_arms_he_to_sdata", "arms_he_image"),
+])
+def test_image_writers_can_replace_a_stored_element(module, func, element):
+    """Loading a second H&E over a restored one must actually persist.
+
+    `safe_write_element`'s guard inspects `sdata`'s element dicts, so a restored
+    `he_image` makes the rewrite look unsafe even after the old napari layer is
+    gone. Without `replace_backed=True` the write is refused, the new image
+    displays, and the next launch brings back the old one.
+    """
+    src = _function_source(SRC / module, func)
+    assert "replace_backed=True" in src, (
+        f"{func} must tell safe_write_element it has torn down the old layer"
+    )
+    assert element in src
+
+
+def test_custom_segmentation_only_opts_in_where_the_layer_is_gone():
+    """`_on_update_sdata` writes the on-screen layer's own arrays; it must not."""
+    load_path = SRC / "tabs" / "tab_segmentation.py"
+    tree = ast.parse(load_path.read_text())
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "save_custom_seg_to_sdata"
+    ]
+    assert len(calls) == 2, "two callers, and they differ in what is safe"
+    opted_in = [
+        any(kw.arg == "replace_backed" for kw in c.keywords) for c in calls
+    ]
+    assert sorted(opted_in) == [False, True], (
+        "exactly one caller may opt in: the one loading a *different* "
+        "segmentation after _apply_custom_segmentation removed the old layer"
+    )

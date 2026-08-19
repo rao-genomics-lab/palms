@@ -3,6 +3,43 @@
 ## [Unreleased] — 2026-08-19 (H&E image memory)
 
 ### Fixed
+- **Loading a second H&E over one restored from the cache displayed the new image but
+  never persisted it** — the next launch brought back the old one, and any landmarks
+  placed in between were saved against an image the cache did not hold. The same defect
+  hit **ARMS H&E**, **external images**, and **custom segmentation labels**.
+
+  `safe_write_element` opens with `_assert_not_dask_backed`, which refuses to rename an
+  element's directory into `.xv_trash/` while something still reads it. That guard is
+  right — a dask graph resolves lazily *by path*, so a surviving reader would go on to
+  read the *new* element's bytes rather than fail cleanly. But it inspects only
+  `sdata._gen_spatial_element_values()` — **not napari layers, not open file handles** —
+  so a caller that has already torn down every reader still tripped it, purely because
+  `sdata.images["he_image"]` was the element it was about to replace. The guard runs
+  before staging, so the write was a clean no-op: the symptom was silence.
+
+  `safe_write_element(..., replace_backed=True)` is how a caller says it has done the
+  teardown. It drops the in-memory binding (`_unbind_backed`, built on the existing
+  `_drop_in_memory`) and **restores it if the write fails before it commits** — not
+  after, since a failure in `consolidate()` happens once the new data is already live.
+  It still refuses when the element being written *is* the store-backed one, so
+  `test_refuses_to_move_a_dask_backed_element` holds with the flag set: "I have torn down
+  every reader" cannot be true of the value being written.
+
+  Passed at the three sites where the old napari layer is provably gone by the time the
+  write runs — `_save_he_to_sdata`, `_save_arms_he_to_sdata`, and
+  `save_external_image_to_sdata`. The last of those had **hand-rolled the same unbind**
+  (`del ctx.sdata[element_name]` under a bare `except: pass`, with a comment admitting it
+  did not know whether it worked); it now gets rollback and stops swallowing.
+
+- **Loading a new custom segmentation over a cached one had the identical bug.**
+  `save_custom_seg_to_sdata` takes `replace_backed` and only the safe caller passes it:
+  `_on_done` writes a *different* segmentation after `_apply_custom_segmentation` has
+  removed the old labels layer. **Tools → Update SpatialData deliberately does not** — it
+  writes `ctx.cell_labels_layer.data` back while that layer is on screen, so the guard is
+  correct to refuse there. Pinned by a test that parses both call sites and requires
+  exactly one to opt in.
+
+### Fixed (memory)
 - **Loading an H&E built RAM fast enough to kill the session.** Measured on a
   16384x12288 RGB TIFF: load + write to the cache peaked at **2.61 GB**, and the
   session restore of the same image at **1.71 GB** — for a 604 MB image. On a real
