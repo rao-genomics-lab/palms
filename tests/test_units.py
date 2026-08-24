@@ -189,6 +189,52 @@ def test_a_scaled_unit_string_silently_loses_its_magnitude():
     )
 
 
+# ── the display-level route, and why it is not available ─────────────────────
+#
+# The obvious fix is to tell the scale bar the pixel size and change nothing
+# else. That is exactly what napari <= 0.5 supported, and it is the first thing
+# anyone will reach for. These two tests record that napari removed it, so the
+# question is answered by the suite rather than by memory — and so that the day
+# napari brings it back, they fail and prompt simplifying utils/units.py.
+
+
+def test_the_scale_bar_can_no_longer_be_told_a_unit():
+    """``scale_bar.unit`` is a deprecated no-op, removed in napari 0.9.0.
+
+    It used to hold a ``pint.Quantity``, so ``"0.2125 um"`` carried its magnitude
+    and did the whole job. The unit is now derived from the layers instead
+    (``_vispy/overlays/scale_bar.py``: ``unit = viewer.layers.units[-1]`` then
+    ``self._unit = unit * 1``) — a ``pint.Unit`` promoted to a Quantity of
+    magnitude *one*. There is nowhere left to put a scale factor except the world
+    coordinates, which is the entire reason utils/units.py exists.
+
+    Setting it does not raise; it warns and does nothing.
+    """
+    from napari.components.overlays import ScaleBarOverlay
+
+    bar = ScaleBarOverlay()
+    with pytest.warns(FutureWarning, match="no longer has any effect"):
+        bar.unit = "0.2125 um"
+    with pytest.warns(FutureWarning, match="always returns None"):
+        assert bar.unit is None
+
+
+def test_relabelling_the_layer_list_does_not_convert_anything():
+    """The other display-level candidate: ``viewer.layers.units``.
+
+    It sets labels, never scales — and on layers still in pixels it does not even
+    do that, because ``pixel`` is dimensionless and ``um`` is a length.
+    """
+    from napari.components.layerlist import LayerList
+
+    layers = LayerList()
+    layers.append(_layer())
+    assert all(str(u) == "pixel" for u in layers.units)
+
+    with pytest.raises(ValueError, match="dimensionality"):
+        layers.units = ("um", "um")
+
+
 # ── the minimap, which reads the camera ──────────────────────────────────────
 
 def test_minimap_maps_a_click_to_world_not_to_pixels():

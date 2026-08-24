@@ -519,6 +519,18 @@ reproducibility defect rather than a kernel-discovery one.
   and `QT_API=pyside6 pytest` smoke-tests strict enums today (PySide6 is already in the
   env as a matplotlib dependency).
 
+- **`ScaleBarOverlay.unit` is removed in napari 0.9.0** — **no action needed**, recorded
+  so nobody re-derives it. The viewer no longer touches that attribute: it is already a
+  deprecated no-op (its setter warns and does nothing; napari's own test asserts it reads
+  back `None`). It matters only as the reason `utils/units.py` exists. The unit used to be
+  a `pint.Quantity` on the overlay, so `scale_bar.unit = "0.2125 um"` carried its magnitude
+  and converted the bar at display level with nothing else changed; it is now derived from
+  the layers as a `pint.Unit` × 1, i.e. magnitude forced to one. That is why the pixel size
+  has to live in `layer.scale`, and therefore why every stored pixel affine needs converting
+  at the napari boundary. `tests/test_units.py` pins the removed levers — **when 0.9.0 drops
+  the attribute, re-check whether a display-level route has come back**, because if it has,
+  `utils/units.py` and its ~11 call sites can be deleted rather than maintained.
+
 ## Known Compatibility Patches
 
 - **ICE/X11 disconnect** — handled at startup of `src/xenium_viewer/app.py`

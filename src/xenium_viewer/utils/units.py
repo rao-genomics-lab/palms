@@ -6,7 +6,32 @@ Xenium morphology pixel. Giving each layer ``scale = (pixel_size, pixel_size)``
 and ``units = ("um", "um")`` makes one world unit a micrometre and the scale bar
 correct, in µm or mm as the zoom warrants.
 
-That change is not free, and the cost is concentrated in one place.
+That change is not free, and the cost is concentrated in one place. It is also not
+a choice — the display-level route it replaces is the obvious one, and napari
+removed it.
+
+Why there is no display-level fix
+---------------------------------
+The natural approach is to tell the scale bar the pixel size and change nothing
+else. napari <= 0.5 supported exactly that: ``viewer.scale_bar.unit`` held a
+``pint.Quantity``, and the bar's reading is computed as ``self._unit *
+desired_length`` (``_vispy/overlays/scale_bar.py``), so ``"0.2125 um"`` carried
+its own magnitude and did the whole job.
+
+That attribute is now a deprecated no-op — its setter warns and does nothing, and
+napari's own test asserts it reads back ``None``; it disappears in napari 0.9.0.
+The unit is derived from the layers instead: ``unit = viewer.layers.units[-1]``
+followed by ``self._unit = unit * 1`` — a ``pint.Unit``, which carries a dimension
+but no magnitude, promoted to a Quantity of magnitude *one*.
+
+So the conversion factor has nowhere left to live except the world coordinates
+themselves, which is what makes ``layer.scale`` the only lever. (The same
+narrowing one level down is why ``layer.units = "0.2125 um"`` silently keeps only
+``micrometer``, see :data:`MICRON`. And ``viewer.layers.units`` is no help either:
+it relabels axes and never converts scales, and on layers still in pixels it
+raises, because ``pixel`` is dimensionless while ``um`` is a length.)
+``tests/test_units.py`` pins all three, so if napari restores a display-level
+route this module can be deleted rather than quietly kept.
 
 Why the affines have to be converted
 ------------------------------------
