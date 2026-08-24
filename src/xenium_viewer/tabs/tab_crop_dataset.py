@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from xenium_viewer.utils.prov_graph import NOTE
-from magicgui.widgets import PushButton
+from magicgui.widgets import CheckBox, PushButton
 from qtpy.QtWidgets import QLabel, QFileDialog, QInputDialog, QLineEdit, QMessageBox
 from qtpy.QtCore import QThread, Signal as QtSignal
 
@@ -28,13 +28,14 @@ class _CropExportWorker(QThread):
     """Runs crop_and_export for each job in sequence on a background thread."""
 
     progress = QtSignal(int, str)
-    job_done = QtSignal(int, bool, str)   # job index, success, result-path-or-error
+    job_done = QtSignal(int, bool, str, str)  # index, success, path-or-error, overlay notes
     finished_all = QtSignal()
 
-    def __init__(self, ctx, jobs):
+    def __init__(self, ctx, jobs, include_overlays: bool = True):
         super().__init__()
         self.ctx = ctx
         self.jobs = jobs   # list of (polygon_yx, output_dir, name)
+        self.include_overlays = include_overlays
 
     def run(self):
         from xenium_viewer.utils.crop_export import crop_and_export, CropExportError
@@ -48,16 +49,17 @@ class _CropExportWorker(QThread):
                 self.progress.emit(overall, f"[{_i + 1}/{_n}] {msg}")
 
             try:
-                result_path = crop_and_export(
+                result_path, notes = crop_and_export(
                     self.ctx, polygon_yx, output_dir, name, progress_cb=_cb,
+                    include_overlays=self.include_overlays,
                 )
-                self.job_done.emit(i, True, str(result_path))
+                self.job_done.emit(i, True, str(result_path), "; ".join(notes))
             except CropExportError as exc:
-                self.job_done.emit(i, False, str(exc))
+                self.job_done.emit(i, False, str(exc), "")
             except Exception as exc:
                 import traceback
                 traceback.print_exc()
-                self.job_done.emit(i, False, f"Unexpected error: {exc}")
+                self.job_done.emit(i, False, f"Unexpected error: {exc}", "")
         self.finished_all.emit()
 
 
@@ -69,12 +71,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
         "\"Crop & Export\". You'll be asked to choose an output folder and a "
         "dataset name for each drawn region, in order. Each region is exported "
         "as its own standalone dataset (image + cell/nucleus labels + "
-        "transcripts + table) that can be opened directly with xenium-viewer."
+        "transcripts + table) that can be opened directly with xenium-viewer. "
+        "Anything you registered or drew is cropped to the same region and "
+        "comes along unless you untick the box below."
     )
     instructions.setWordWrap(True)
 
     draw_btn = PushButton(label="Activate Draw Polygon Tool")
     clear_btn = PushButton(label="Clear All Regions")
+    overlays_cb = CheckBox(
+        value=True,
+        label="Include registered overlays and regions",
+        tooltip=(
+            "Carry the H&E, ARMS section, external images, patch overlays, ROIs, "
+            "annotations, ARMS tiles and registration landmarks into the exported "
+            "dataset, cropped to the same region. Turn off for a bare core export."
+        ),
+    )
     export_btn = PushButton(label="Crop && Export")   # "&&" escapes to a literal "&" (Qt mnemonic syntax)
 
     def _on_draw():
@@ -171,31 +184,38 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
 
         dlg, bar, lbl = make_progress_dialog("Cropping Dataset(s)")
-        worker = _CropExportWorker(ctx, jobs)
+        worker = _CropExportWorker(ctx, jobs, include_overlays=bool(overlays_cb.value))
         results = []
 
         def _on_progress(pct, msg):
             bar.setValue(pct)
             lbl.setText(msg)
 
-        def _on_job_done(i, success, info):
-            results.append((jobs[i][2], success, info))
+        def _on_job_done(i, success, info, notes):
+            results.append((jobs[i][2], success, info, notes))
 
         def _on_finished_all():
             dlg.accept()
             lines = []
             n_ok = 0
-            for name, success, info in results:
+            want_overlays = bool(overlays_cb.value)
+            for name, success, info, notes in results:
                 if success:
                     n_ok += 1
                     lines.append(f"✓ {name} -> {info}")
+                    if notes:
+                        lines.append(f"    not carried: {notes}")
+                    carried = ("with every registered overlay and drawn region, cropped to "
+                               "the same region" if want_overlays else "core elements only")
                     ctx.record_node(
                         f"crop_export:{name}",
                         f"\n# Crop & Export dataset '{name}' (writes a standalone dataset)\n"
                         f"# from xenium_viewer.utils.crop_export import crop_and_export\n"
                         f"# crop_and_export(ctx, polygon_yx=<region drawn in the \"Crop Regions\" layer>,\n"
-                        f"#                 output_dir=Path({str(Path(info).parent)!r}), name={name!r})\n"
-                        f"# -> wrote standalone dataset to \"{info}\"",
+                        f"#                 output_dir=Path({str(Path(info).parent)!r}), name={name!r},\n"
+                        f"#                 include_overlays={want_overlays!r})\n"
+                        f"# -> wrote standalone dataset to \"{info}\" ({carried})"
+                        + (f"\n# -> not carried: {notes}" if notes else ""),
                         deps=["preamble"],
                         kind=NOTE,
                         label=f"Crop & export: {name}",
@@ -215,5 +235,5 @@ def build_tab(ctx: ViewerContext) -> tuple:
     clear_btn.clicked.connect(_on_clear)
     export_btn.clicked.connect(_on_export)
 
-    widget = make_tab(instructions, draw_btn, clear_btn, export_btn)
+    widget = make_tab(instructions, draw_btn, clear_btn, overlays_cb, export_btn)
     return widget, {"restore_session": lambda session: None}

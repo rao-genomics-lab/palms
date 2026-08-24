@@ -1,5 +1,57 @@
 # Changelog
 
+## [Unreleased] — 2026-08-24 (crop carries the overlays)
+
+### Added
+- **Crop & Export now carries every registered overlay and drawn region** (issue #27).
+  A crop used to keep five core elements and silently drop the rest, so exporting a
+  core threw away the registered H&E, the ARMS tiles and the ROIs — the work that
+  made the dataset worth cropping. `utils/crop_overlays.py` brings them along, each
+  cropped to the same region, and a checkbox on the tab turns it off for a bare
+  core-only export.
+
+  **What decides how an element is carried is the element itself.** An overlay with
+  its own affine holds coordinates in its own pixel space, so its geometry is left
+  alone and the crop is composed into its transform; an element with no
+  transformation is already in Xenium pixels, so its geometry moves into the crop
+  frame. That is derived rather than listed, because the loader's own comments
+  record that a fixed name list has already gone stale once, and `ext_*` / `patch_*`
+  elements are named per file precisely so they cannot be enumerated up front.
+
+  Three things that are wrong in ways that raise no error, each pinned by a test:
+
+  - **H&E-space landmarks carry no transformation on disk.**
+    `save_overlay_affine_to_sdata` is only ever called with an image or patch
+    element's name, and `_save_he_affine_to_sdata` writes only to
+    `images["he_image"]` — so `he_he_landmarks`, `arms_he_landmarks` and `*_image_lm`
+    arrive looking exactly like Xenium-space geometry. Read by the rule above they
+    would be translated by the crop origin, corrupting the registration they exist
+    to reconstruct. They are recognised by name and passed through verbatim.
+  - **Landmarks are never filtered.** Dropping a landmark that falls outside the crop
+    re-fits the registration: the affine is a least-squares fit over the whole set,
+    so a subset yields a different transform than the one the export ships with.
+  - **`cell_circles` is stored in microns**, with a 1/pixel_size scale, and patch
+    overlays in their source image's pixels. Carrying either whole would ship circles
+    and patches covering cells the exported table no longer contains, so the crop
+    region is mapped down into each element's own frame and the clip happens there.
+
+  Rasters stay lazy end to end — the level-0 dask array is sliced, never computed —
+  for the same reason the core crop does; an overlay is no smaller than the
+  morphology image it was registered against.
+
+  `crop_and_export` now returns `(path, overlay_notes)`. An overlay that cannot be
+  carried is skipped and named in the summary dialog and in the recorded provenance
+  note, rather than failing an export the user did get most of.
+
+### Notes
+Tested against synthetic elements (`tests/test_crop_overlays.py`, 21 tests) rather
+than a dataset: a rotated, scaled, registered overlay is exactly what no local
+dataset has, and the failure mode is geometric — a misplaced overlay still exports
+cleanly, still opens, and still looks like a registered H&E. The tests assert where
+a known pixel lands, and the two subtlest guards (the image-space landmark rule and
+the (y, x) → (x, y) transposition when mapping the region into a rotated frame) were
+each confirmed to fail when mutated.
+
 ## [Unreleased] — 2026-08-19 (H&E image memory)
 
 ### Fixed

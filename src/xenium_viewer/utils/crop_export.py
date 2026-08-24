@@ -11,6 +11,7 @@ the drawn shape.
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -27,6 +28,8 @@ from shapely.affinity import scale as shapely_scale
 from shapely.geometry import Polygon
 
 from xenium_viewer.utils import sdata_write
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -144,21 +147,73 @@ def _polygon_pixel_bbox(polygon_yx: np.ndarray, shape_yx: tuple) -> tuple:
     return row_min, row_max, col_min, col_max
 
 
+def _collect_overlays(ctx, crop_bbox, poly_xy, progress) -> tuple[dict, dict, dict, list]:
+    """Crop every registered overlay and drawn region the store holds.
+
+    Returns ``(images, labels, shapes, notes)`` ready to hand to ``SpatialData``.
+    A single overlay that cannot be carried is skipped and named in *notes*
+    rather than failing the export: the core dataset is the thing the user asked
+    for, and losing it over one unregistered stray image would be the worse
+    trade. The report is what keeps that from being silent.
+    """
+    from xenium_viewer.utils import crop_overlays
+
+    images, labels, shapes, notes = {}, {}, {}, []
+    names = crop_overlays.user_overlay_names(ctx.sdata)
+    total = sum(len(v) for v in names.values())
+    if not total:
+        return images, labels, shapes, notes
+
+    done = 0
+    for group in ("images", "labels", "shapes"):
+        for elem_name in names[group]:
+            done += 1
+            progress(int(76 + 6 * done / total), f"Cropping overlay '{elem_name}'...")
+            try:
+                element = ctx.sdata[elem_name]
+                if group == "shapes":
+                    out = crop_overlays.crop_vector_overlay(
+                        element, elem_name, crop_bbox, poly_xy)
+                    if out is None:
+                        notes.append(f"{elem_name}: nothing inside the crop")
+                        continue
+                    shapes[elem_name] = out
+                else:
+                    out = crop_overlays.crop_raster_overlay(
+                        element, crop_bbox, _safe_scale_factors)
+                    if out is None:
+                        notes.append(f"{elem_name}: does not overlap the crop")
+                        continue
+                    parsed, is_labels = out
+                    (labels if is_labels else images)[elem_name] = parsed
+            except Exception as e:
+                log.warning("could not carry overlay %r through the crop: %s", elem_name, e)
+                notes.append(f"{elem_name}: skipped ({e})")
+    return images, labels, shapes, notes
+
+
 def crop_and_export(
     ctx: "ViewerContext",
     polygon_yx: np.ndarray,
     output_dir: Path,
     name: str,
     progress_cb: Callable[[int, str], None] | None = None,
+    include_overlays: bool = True,
 ) -> Path:
     """Crop the loaded dataset to *polygon_yx* and write a standalone
     xenium-viewer data directory at ``output_dir / name``.
+
+    With *include_overlays* (the default), every registered overlay and drawn
+    region travels with the crop — see ``utils/crop_overlays.py``.
 
     Read-only with respect to *ctx* — safe to call from a background thread.
     Writes to a hidden staging directory first and only moves it into place
     on full success, so a failure never leaves a partial dataset on disk.
 
-    Returns the final output path.
+    Returns ``(final_path, overlay_notes)`` — the second is one line per overlay
+    that could *not* be carried, empty when everything travelled. It is returned
+    rather than only logged because a partly-populated export has to be
+    describable to the person who asked for it.
     """
     def _progress(pct, msg):
         if progress_cb is not None:
@@ -403,12 +458,26 @@ def crop_and_export(
         overwrite_metadata=True,
     )
 
+    # ── Registered overlays and drawn regions ────────────────────────────────
+    # A crop that keeps only the five core elements throws away the registered
+    # H&E, the ARMS tiles, the ROIs — the work that made the dataset worth
+    # cropping in the first place. See utils/crop_overlays.py for how each is
+    # carried across; the short version is that an element's own transformation
+    # says which coordinate space it is in, and the crop composes with it.
+    overlay_images, overlay_labels, overlay_shapes, overlay_notes = {}, {}, {}, []
+    if include_overlays:
+        _progress(76, "Cropping registered overlays...")
+        overlay_images, overlay_labels, overlay_shapes, overlay_notes = _collect_overlays(
+            ctx, (row_min, row_max, col_min, col_max), poly_xy, _progress,
+        )
+
     # ── Assemble and write to a staging directory ────────────────────────────
-    _progress(75, "Writing dataset...")
+    _progress(82, "Writing dataset...")
     new_sdata = SpatialData(
-        images={"morphology_focus": img_element},
-        labels={"cell_labels": cl_element, "nucleus_labels": nl_element},
+        images={"morphology_focus": img_element, **overlay_images},
+        labels={"cell_labels": cl_element, "nucleus_labels": nl_element, **overlay_labels},
         points={"transcripts": points_element},
+        shapes=overlay_shapes,
         tables={"table": table_element},
     )
     _convert_arrow_strings(new_sdata)
@@ -486,4 +555,7 @@ def crop_and_export(
     shutil.move(str(staging_dir), str(final_dir))
 
     _progress(100, f"Done: {final_dir}")
-    return final_dir
+    if overlay_notes:
+        log.info("crop %r: %d overlay(s) not carried: %s",
+                 name, len(overlay_notes), "; ".join(overlay_notes))
+    return final_dir, overlay_notes
