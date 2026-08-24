@@ -2,6 +2,37 @@
 
 ## [Unreleased] — 2026-08-24 (PyQt6)
 
+### Fixed (post-review)
+- **CI came up on PyQt5 despite `pyqt6` in `environment.yml`** — `napari 0.8.0 |
+  qtpy PyQt5 5.15.15`, with PyQt6 6.8.1 also installed. Two things combined:
+
+  **qtpy resolves in the order PyQt5, PySide2, PyQt6, PySide6**, so any environment
+  that merely *contains* PyQt5 runs on it, whatever the environment file asked for.
+
+  **conda-forge's `matplotlib` metapackage bundles a Qt binding, and which one
+  depends on the version resolved** — 3.9.1 depends on `pyqt >=5.10` (Qt5), while
+  3.9.3+ depend on `pyside6`. CI landed on 3.9.1 and got Qt5; a local solve landed
+  on 3.10.9 and got PySide6. Same file, different answer, which is why this
+  reproduced in CI and not on a developer machine.
+
+  `environment.yml` now asks for **`matplotlib-base`**, which never depends on a Qt
+  binding. Nothing here needed the metapackage: scanpy, squidpy and
+  matplotlib-scalebar all depend on `matplotlib-base`, and this app supplies its own
+  binding. The solved environment now contains PyQt6 alone — no PyQt5, no PySide6,
+  no Qt5 stack at all, which also removes ~70 MB of duplicate Qt.
+
+- **The Qt backend is now stated rather than inherited.** `xenium_viewer/__init__.py`
+  sets `QT_API=pyqt6` via `setdefault`, and only when PyQt6 is importable — so an
+  explicit `QT_API` still wins and an environment with only PySide6 is left alone.
+  Fixing `environment.yml` fixes a *fresh* env; this covers an existing one that a
+  user upgrades in place, where whatever binding is already installed would
+  otherwise keep winning silently.
+
+  `tests/test_qt_backend.py` pins all of it, including a source guard that fails if
+  a bare `matplotlib` dependency comes back. Verified in both environments:
+  PyQt5 1047 passed / 25 skipped, PyQt6 1048 passed / 24 skipped (the differing
+  skip is the backend-specific test in each).
+
 ### Changed
 - **Migrated the Qt backend from PyQt5 to PyQt6** (issue #15). napari deprecated the
   PyQt5 backend for removal in autumn 2026 and warns about it at every startup, along

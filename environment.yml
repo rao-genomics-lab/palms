@@ -12,7 +12,13 @@ dependencies:
   - scipy
   - scikit-learn
   - scikit-image
-  - matplotlib
+  # matplotlib-base, NOT matplotlib: the metapackage bundles a Qt binding, and
+  # *which* one depends on the version the solver happens to pick — 3.9.1 pulls
+  # `pyqt` (Qt5), 3.9.3+ pulls `pyside6`. CI landed on 3.9.1, so PyQt5 appeared
+  # beside PyQt6 and qtpy silently chose it (its preference order is PyQt5 first).
+  # Nothing here needs the metapackage: scanpy, squidpy and matplotlib-scalebar
+  # all depend on matplotlib-base, and this app supplies its own Qt binding.
+  - matplotlib-base
   - colorcet
   - pillow
   - xarray
