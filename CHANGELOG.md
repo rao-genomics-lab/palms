@@ -1,5 +1,46 @@
 # Changelog
 
+## [Unreleased] — 2026-08-24 (PyQt6)
+
+### Changed
+- **Migrated the Qt backend from PyQt5 to PyQt6** (issue #15). napari deprecated the
+  PyQt5 backend for removal in autumn 2026 and warns about it at every startup, along
+  with a second warning that system theme detection needs Qt6.
+
+  `environment.yml` now asks for `pyqt6`, `pyproject.toml` for `PyQt6`, and all 98
+  unscoped Qt enum sites plus 8 `.exec_()` calls are in their Qt6 form. The
+  replacement map was derived from the live bindings rather than written by hand — for
+  each `Klass.MEMBER` in the tree, look up which nested enum of `Klass` defines MEMBER
+  — and every scoped form was checked to evaluate to the same integer under PyQt5
+  before anything was rewritten, so the edits were a no-op on the old backend.
+
+- **`napari` is now pinned `>=0.8`.** With `pyqt6` swapped in, the solver quietly
+  resolved napari to **0.7.0** — not a Qt conflict, but the solver easing the unrelated
+  `zarr>=3.0,<3.2` pin by walking napari back a minor version. `napari=0.8.0` + `pyqt6`
+  solves cleanly on its own. A silent downgrade of the thing this application *is* was
+  worth closing off.
+
+- **CI asserts the resolved backend** before running the suite — that qtpy reports
+  PyQt6 and that napari is still >=0.8. Both regressions are silent, both happened
+  once during this migration, and a green suite on the wrong backend is exactly what
+  the migration was for.
+
+### Notes
+`docs/pyqt6-migration.md` was rewritten from a plan into a record, because the plan was
+wrong in both directions. It listed 8 unscoped enums (there were 98) and treated those
+edits as the work — but qtpy's `enums_compat.promote_enums()` and its `exec_` aliases
+mean the *pre-migration* code would have run unchanged under PyQt6. The edits were
+hygiene; the dependency solve was the real task, and the plan did not mention it.
+
+Two packaging facts cost the most time and are recorded so they cannot cost it again:
+conda-forge ships PyQt6 as **`pyqt6`**, not as a 6.x of `pyqt` (which stops at 5.15, so
+`pyqt=6` fails as though PyQt6 were unavailable); and **`QT_API=pyside6 pytest` never
+smoke-tested strict enums** as previously claimed — PySide6 runs in forgiveness mode and
+accepts every unscoped form.
+
+Verified: full suite green on PyQt5 (1045 passed, 24 skipped) before the pin flip, and
+again on a real PyQt6 6.8.1 / Qt 6.8.1 / napari 0.8.0 environment after it.
+
 ## [Unreleased] — 2026-08-19 (H&E image memory)
 
 ### Fixed

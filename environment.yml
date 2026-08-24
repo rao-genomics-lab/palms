@@ -36,8 +36,13 @@ dependencies:
   - ipykernel         # the kernel that replay runs in
 
   # GUI / Qt stack
-  - napari
-  - pyqt=5
+  # napari is pinned because the solver otherwise happily drops to 0.7.0 to ease
+  # an unrelated constraint (the zarr<3.2 pin above) — a silent downgrade of the
+  # thing this app *is*. napari deprecated the PyQt5 backend for removal in
+  # autumn 2026 and names PyQt6/PySide6 as the replacements; conda-forge ships
+  # PyQt6 as `pyqt6`, not as a 6.x of `pyqt` (which stops at 5.15).
+  - napari>=0.8
+  - pyqt6
   - qtpy
   - magicgui
   - superqt
