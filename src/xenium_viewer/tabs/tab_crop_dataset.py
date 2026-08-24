@@ -102,7 +102,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         while True:
             name_str, ok = QInputDialog.getText(
                 None, f"Name for region {i + 1}/{n}",
-                "Dataset folder name:", QLineEdit.Normal, default_name,
+                "Dataset folder name:", QLineEdit.EchoMode.Normal, default_name,
             )
             if not ok:
                 return None
@@ -117,9 +117,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 reply = QMessageBox.question(
                     None, "Overwrite?",
                     f"{folder / name_str} already exists. Overwrite it?",
-                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
-                if reply != QMessageBox.Yes:
+                if reply != QMessageBox.StandardButton.Yes:
                     continue
             return folder, name_str
 
@@ -138,9 +138,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 reply = QMessageBox.warning(
                     None, "Invalid region",
                     f"Region {i + 1}/{n} has fewer than 3 points and will be skipped. Continue?",
-                    QMessageBox.Ok | QMessageBox.Cancel,
+                    QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
                 )
-                if reply == QMessageBox.Cancel:
+                if reply == QMessageBox.StandardButton.Cancel:
                     return
                 continue
 
@@ -149,9 +149,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 reply = QMessageBox.question(
                     None, "Skip region?",
                     f"No destination chosen for region {i + 1}/{n}. Skip it and continue with the rest?",
-                    QMessageBox.Yes | QMessageBox.Cancel,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 )
-                if reply == QMessageBox.Cancel:
+                if reply == QMessageBox.StandardButton.Cancel:
                     return
                 continue
 
@@ -209,7 +209,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         worker.job_done.connect(_on_job_done)
         worker.finished_all.connect(_on_finished_all)
         worker.start()
-        dlg.exec_()
+        dlg.exec()
 
     draw_btn.clicked.connect(_on_draw)
     clear_btn.clicked.connect(_on_clear)

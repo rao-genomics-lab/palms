@@ -97,8 +97,8 @@ class NotebookEngine:
         canvas.draw()
         buf = canvas.buffer_rgba()
         w, h = canvas.get_width_height()
-        qimg = QImage(bytes(buf), w, h, 4 * w, QImage.Format_RGBA8888)
+        qimg = QImage(bytes(buf), w, h, 4 * w, QImage.Format.Format_RGBA8888)
         pixmap = QPixmap.fromImage(qimg)
         if pixmap.width() > max_width:
-            pixmap = pixmap.scaledToWidth(max_width, Qt.SmoothTransformation)
+            pixmap = pixmap.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
         return pixmap
