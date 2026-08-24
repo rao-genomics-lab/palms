@@ -1,5 +1,47 @@
 # Changelog
 
+## [Unreleased] — 2026-08-24 (readthedocs)
+
+### Added
+- **The docs site builds** (issue #16). `mkdocs.yml` had shipped a complete 44-page
+  nav for months and `site_url` already pointed at `xenium-viewer.readthedocs.io` —
+  but the site had **never been built**, and would not have worked if it had.
+
+  `docs/` is authored as GitHub Wiki source, where links are extensionless
+  (`[Clustering](Tab-Clustering)`). The wiki resolves those; mkdocs reads them as
+  paths to files that do not exist. Measured: **158 dead cross-links** — every
+  cross-reference on the rendered site.
+
+  `mkdocs_hooks.py` rewrites them at build time, so `docs/` keeps *one* link
+  convention rather than gaining a second one that the wiki publisher does not check.
+  The hook lives at the repo root, not in `docs/`, because the publish script selects
+  wiki pages by filename convention and a stray module there has leaked to the public
+  wiki before.
+
+- `.readthedocs.yaml` and `requirements-docs.txt`. The build needs no conda env, no
+  scanpy and no Qt — `Analysis-Templates.md` and `API-Reference.md` are generated and
+  checked in — and that separation is deliberate: a docs build that needs the
+  application is a docs build that breaks whenever the application does.
+
+- **CI builds the site with `--strict`** on every push, in the *lint* job.
+  `mkdocs.yml` also raises link validation to `warn`, without which a dead link is an
+  INFO line and the build still "passes" — which is exactly how this shipped broken.
+
+- `exclude_docs` keeps internal planning notes and the wiki's `_Sidebar.md` out of
+  the published site, using the same lower-case/Title-Case convention
+  `scripts/push_to_wiki.sh` already uses.
+
+### Notes
+**Connecting the Read the Docs project needs the repository to be public** — RTD
+Community does not build private repos. Everything above is done and verified; the
+connection is the one step that cannot be. `docs/readthedocs-setup.md` records the
+remaining steps. That unblocks with the preprint plan's Phase A rather than needing
+anything bought.
+
+`tests/test_docs_links.py` gained 11 tests covering the rewrite rule, including that
+every bare link in `docs/` rewrites onto a page that actually exists — derived from
+the files present, not from a list.
+
 ## [Unreleased] — 2026-08-19 (H&E image memory)
 
 ### Fixed
