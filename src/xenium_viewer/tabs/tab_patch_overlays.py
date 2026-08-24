@@ -23,6 +23,7 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtCore import Qt
 
+from xenium_viewer.utils.units import layer_affine_px, px_affine_to_world
 from xenium_viewer.tabs._helpers import make_tab
 from xenium_viewer.utils.coloring import PATCH_PALETTES
 from xenium_viewer.utils.affine_linking import (
@@ -545,7 +546,7 @@ def build_tab(ctx: "ViewerContext"):
             # Persist to sdata
             save_overlay_affine_to_sdata(
                 ctx, entry["element_name"],
-                entry["shapes_layer"].affine.affine_matrix,
+                layer_affine_px(entry["shapes_layer"], ctx.pixel_size),
             )
         except Exception as e:
             print(f"  Warning: could not link patch affine: {e}")
@@ -678,7 +679,8 @@ def build_tab(ctx: "ViewerContext"):
                 saved_affine = ui.get("affine_matrix")  # fallback: session attrs
             if saved_affine is not None:
                 try:
-                    shapes_layer.affine = np.array(saved_affine, dtype=np.float64)
+                    shapes_layer.affine = px_affine_to_world(
+                        np.array(saved_affine, dtype=np.float64), ctx.pixel_size)
                 except Exception:
                     pass
 
@@ -716,7 +718,7 @@ def build_tab(ctx: "ViewerContext"):
                     try:
                         e["affine_disconnect"] = link_affine(lyr, src, viewer=viewer)
                         save_overlay_affine_to_sdata(
-                            ctx, e["element_name"], lyr.affine.affine_matrix,
+                            ctx, e["element_name"], layer_affine_px(lyr, ctx.pixel_size),
                         )
                     except Exception:
                         pass

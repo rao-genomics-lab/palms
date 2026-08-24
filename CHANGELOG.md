@@ -1,5 +1,61 @@
 # Changelog
 
+## [Unreleased] — 2026-08-24 (scale bar in micrometres)
+
+### Added
+- **The canvas scale bar now reads in micrometres**, switching to millimetres as you
+  zoom out (issue #25). It is on from the moment a dataset loads, and the conversion
+  comes from `pixel_size` in `experiment.xenium` — nothing is assumed.
+
+  napari 0.8 has no `scale_bar.unit`; units live on the layers (`layer.units`,
+  pint-backed) and the *magnitude* has to live in `layer.scale`. The napari-0.5-era
+  shortcut of a scaled unit string is worse than unavailable — `layer.units =
+  "0.2125 um"` is **accepted and silently discards the magnitude**, leaving one pixel
+  labelled as one micrometre: a wrong scale bar with no error anywhere. A test pins
+  that behaviour so nobody reintroduces it.
+
+  So every layer is given `scale = (pixel_size, pixel_size)`, which makes napari's
+  world coordinates micrometres. Applied through the viewer's `layers.inserted` event
+  rather than at each `add_*` call site: there are more than twenty of those across
+  eight modules, and one missed would leave that layer in pixels — *misplaced*
+  relative to everything else, not merely mislabelled.
+
+### Fixed
+- **Registered overlays would have silently moved.** napari composes
+  `world = affine(scale(data))` — the affine is applied *after* the scale, so its
+  translation is in world units, while every affine this codebase stores is in Xenium
+  pixels (registration fits it from landmark pixels; `adata_persistence` writes it to
+  the zarr in that frame; the crop export composes with it there). Switching the world
+  to micrometres without touching them would shift every H&E, ARMS section, external
+  image and patch overlay by ~4.7×, with nothing raised and nothing logged.
+
+  `utils/units.py` is that boundary and the only place the two frames meet: stored
+  affines stay in pixels, napari layer affines are in world units. The conversion is
+  a similarity conjugation, which reduces to scaling the translation column — a
+  rotation is the same rotation in any unit, an offset of 100 px is 21.25 µm.
+
+  Copying an affine between layers (`utils/affine_linking.py`, `img_lm.affine =
+  lyr.affine`) is unit-agnostic and deliberately left alone; converting there would
+  be a double-scaling bug.
+
+- **The minimap read the camera as if world units were pixels.** Its viewport
+  rectangle and click-to-navigate both convert between `camera.center` and the
+  morphology shape, so both would have been off by ~4.7× — landing inside the tissue,
+  plausibly, which is what would have made it easy to miss. It now works in world
+  units throughout, and defaults to `pixel_size=1.0` so an unscaled viewer is
+  unchanged.
+
+### Notes
+Layer **data** is still in Xenium pixels everywhere, so nothing that reads
+`layer.data` — the crop export, the ROI tab, the ARMS tile ingest — is affected.
+
+`tests/test_units.py` (16 tests) asserts *placement*, not labelling: a test that only
+checked "the scale bar says µm" would pass with every overlay in the wrong place. It
+also pins the upstream premise (`napari` applies affine after scale), since the whole
+conversion rests on a behaviour we do not control. The tests build bare
+`napari.layers.Image` objects rather than a `Viewer`, so they need no OpenGL context
+and run in CI.
+
 ## [Unreleased] — 2026-08-19 (H&E image memory)
 
 ### Fixed
