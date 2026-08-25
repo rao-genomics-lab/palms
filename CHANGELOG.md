@@ -1,5 +1,103 @@
 # Changelog
 
+## [Unreleased] — 2026-08-24 (PyQt6)
+
+### Fixed (post-review)
+- **napari aborted at startup under Qt6 on a remote X display** — `Could not initialize
+  GLX`, `SIGABRT`, no Python traceback. This nearly got the migration shelved as a
+  Qt6-versus-remote-X incompatibility. It is neither: it is a library-loading conflict, and
+  the display is incidental.
+
+  conda's `libglx` provides only `libGLX.so.0`; the unversioned `libGLX.so` lives in
+  `libglx-devel`. PyOpenGL's loader tries the unversioned name **first**, with `RTLD_GLOBAL`,
+  so without that package it misses the env and loads the *host's*
+  `/usr/lib/.../libGLX.so`. Two glvnd builds then share one process, Qt's GLX plugin
+  resolves `glX*` across both, `glXGetVisualFromFBConfig()` returns NULL for a config the
+  other library allocated, and Qt calls `qFatal`.
+
+  Reduced to a reproduction where only the import order differs — `import PyQt6.QtGui` then
+  `import OpenGL.GL` aborts; the reverse works — with no napari and no vispy involved.
+  napari triggers it because it imports Qt and then PyOpenGL; bare vispy never imports
+  PyOpenGL at all, which is why vispy rendered fine on the same display.
+
+  `environment.yml` now depends on **`libglx-devel`**. `/proc/self/maps` goes from two
+  `libGLX.so.0.0.0` mappings to one, and the viewer launches, restores its session and
+  renders on the display that previously dumped core.
+
+  **PyQt5 maps the same two copies and merely tolerates them**, so this was latent long
+  before the migration and will not appear as a regression in a PyQt5 run. No environment
+  variable fixes it — roughly fifteen were tried — because none creates the missing name
+  inside the env. `tests/test_qt_backend.py` guards the dependency.
+
+- **CI came up on PyQt5 despite `pyqt6` in `environment.yml`** — `napari 0.8.0 |
+  qtpy PyQt5 5.15.15`, with PyQt6 6.8.1 also installed. Two things combined:
+
+  **qtpy resolves in the order PyQt5, PySide2, PyQt6, PySide6**, so any environment
+  that merely *contains* PyQt5 runs on it, whatever the environment file asked for.
+
+  **conda-forge's `matplotlib` metapackage bundles a Qt binding, and which one
+  depends on the version resolved** — 3.9.1 depends on `pyqt >=5.10` (Qt5), while
+  3.9.3+ depend on `pyside6`. CI landed on 3.9.1 and got Qt5; a local solve landed
+  on 3.10.9 and got PySide6. Same file, different answer, which is why this
+  reproduced in CI and not on a developer machine.
+
+  `environment.yml` now asks for **`matplotlib-base`**, which never depends on a Qt
+  binding. Nothing here needed the metapackage: scanpy, squidpy and
+  matplotlib-scalebar all depend on `matplotlib-base`, and this app supplies its own
+  binding. The solved environment now contains PyQt6 alone — no PyQt5, no PySide6,
+  no Qt5 stack at all, which also removes ~70 MB of duplicate Qt.
+
+- **The Qt backend is now stated rather than inherited.** `xenium_viewer/__init__.py`
+  sets `QT_API=pyqt6` via `setdefault`, and only when PyQt6 is importable — so an
+  explicit `QT_API` still wins and an environment with only PySide6 is left alone.
+  Fixing `environment.yml` fixes a *fresh* env; this covers an existing one that a
+  user upgrades in place, where whatever binding is already installed would
+  otherwise keep winning silently.
+
+  `tests/test_qt_backend.py` pins all of it, including a source guard that fails if
+  a bare `matplotlib` dependency comes back. Verified in both environments:
+  PyQt5 1047 passed / 25 skipped, PyQt6 1048 passed / 24 skipped (the differing
+  skip is the backend-specific test in each).
+
+### Changed
+- **Migrated the Qt backend from PyQt5 to PyQt6** (issue #15). napari deprecated the
+  PyQt5 backend for removal in autumn 2026 and warns about it at every startup, along
+  with a second warning that system theme detection needs Qt6.
+
+  `environment.yml` now asks for `pyqt6`, `pyproject.toml` for `PyQt6`, and all 98
+  unscoped Qt enum sites plus 8 `.exec_()` calls are in their Qt6 form. The
+  replacement map was derived from the live bindings rather than written by hand — for
+  each `Klass.MEMBER` in the tree, look up which nested enum of `Klass` defines MEMBER
+  — and every scoped form was checked to evaluate to the same integer under PyQt5
+  before anything was rewritten, so the edits were a no-op on the old backend.
+
+- **`napari` is now pinned `>=0.8`.** With `pyqt6` swapped in, the solver quietly
+  resolved napari to **0.7.0** — not a Qt conflict, but the solver easing the unrelated
+  `zarr>=3.0,<3.2` pin by walking napari back a minor version. `napari=0.8.0` + `pyqt6`
+  solves cleanly on its own. A silent downgrade of the thing this application *is* was
+  worth closing off.
+
+- **CI asserts the resolved backend** before running the suite — that qtpy reports
+  PyQt6 and that napari is still >=0.8. Both regressions are silent, both happened
+  once during this migration, and a green suite on the wrong backend is exactly what
+  the migration was for.
+
+### Notes
+`docs/pyqt6-migration.md` was rewritten from a plan into a record, because the plan was
+wrong in both directions. It listed 8 unscoped enums (there were 98) and treated those
+edits as the work — but qtpy's `enums_compat.promote_enums()` and its `exec_` aliases
+mean the *pre-migration* code would have run unchanged under PyQt6. The edits were
+hygiene; the dependency solve was the real task, and the plan did not mention it.
+
+Two packaging facts cost the most time and are recorded so they cannot cost it again:
+conda-forge ships PyQt6 as **`pyqt6`**, not as a 6.x of `pyqt` (which stops at 5.15, so
+`pyqt=6` fails as though PyQt6 were unavailable); and **`QT_API=pyside6 pytest` never
+smoke-tested strict enums** as previously claimed — PySide6 runs in forgiveness mode and
+accepts every unscoped form.
+
+Verified: full suite green on PyQt5 (1045 passed, 24 skipped) before the pin flip, and
+again on a real PyQt6 6.8.1 / Qt 6.8.1 / napari 0.8.0 environment after it.
+
 ## [Unreleased] — 2026-08-19 (H&E image memory)
 
 ### Fixed

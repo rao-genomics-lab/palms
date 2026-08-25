@@ -41,9 +41,9 @@ class MinimapWidget(QWidget):
         scaled_h = int(thumb_h * scale)
 
         # Convert to QPixmap
-        img = QImage(dapi.data, thumb_w, thumb_h, thumb_w, QImage.Format_Grayscale8)
+        img = QImage(dapi.data, thumb_w, thumb_h, thumb_w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(img).scaled(
-            scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            scaled_w, scaled_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
         self._pixmap = pixmap
         self._thumb_display_size = (scaled_w, scaled_h)
@@ -51,8 +51,8 @@ class MinimapWidget(QWidget):
         # Widget setup
         self.setFixedSize(self._WIDGET_W, self._WIDGET_H)
         self.setStyleSheet("background: rgba(0, 0, 0, 160);")
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
-        self.setWindowFlags(Qt.SubWindow)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setWindowFlags(Qt.WindowType.SubWindow)
 
         # Connect camera events
         viewer.camera.events.center.connect(self._on_camera_changed)
@@ -71,7 +71,7 @@ class MinimapWidget(QWidget):
     # ── Qt event handling ─────────────────────────────────────────────────
 
     def eventFilter(self, obj, event):
-        if obj is self._canvas_native and event.type() == QEvent.Resize:
+        if obj is self._canvas_native and event.type() == QEvent.Type.Resize:
             self._reposition()
         return False
 

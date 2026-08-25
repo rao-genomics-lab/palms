@@ -115,7 +115,7 @@ class NotebookCell(QFrame):
         self.node_id = node_id
         self.edited_by_user = False
         self._loading = True
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setLineWidth(1)
 
         layout = QVBoxLayout()
@@ -219,7 +219,7 @@ class NotebookCell(QFrame):
             lbl = QLabel(f"Out: {result.result_repr}")
             lbl.setFont(mono)
             lbl.setWordWrap(True)
-            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.output_layout.addWidget(lbl)
             has_output = True
 
@@ -228,7 +228,7 @@ class NotebookCell(QFrame):
             lbl = QLabel(result.stdout.rstrip())
             lbl.setFont(mono)
             lbl.setWordWrap(True)
-            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.output_layout.addWidget(lbl)
             has_output = True
 
@@ -236,7 +236,7 @@ class NotebookCell(QFrame):
         for pixmap in result.figures:
             fig_lbl = QLabel()
             fig_lbl.setPixmap(pixmap)
-            fig_lbl.setAlignment(Qt.AlignLeft)
+            fig_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
             self.output_layout.addWidget(fig_lbl)
             has_output = True
 
@@ -246,7 +246,7 @@ class NotebookCell(QFrame):
             err_lbl.setFont(mono)
             err_lbl.setStyleSheet("color: red;")
             err_lbl.setWordWrap(True)
-            err_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            err_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.output_layout.addWidget(err_lbl)
             has_output = True
         elif result.stderr.strip():
@@ -254,7 +254,7 @@ class NotebookCell(QFrame):
             err_lbl.setFont(mono)
             err_lbl.setStyleSheet("color: #CC6600;")
             err_lbl.setWordWrap(True)
-            err_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            err_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.output_layout.addWidget(err_lbl)
             has_output = True
 
@@ -297,7 +297,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     scroll = QScrollArea()
     scroll.setWidget(cell_container)
     scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
     outer_layout.addWidget(scroll)
     outer.setLayout(outer_layout)
 

@@ -337,6 +337,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     scroll = QScrollArea()
     scroll.setWidget(container)
     scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
 
     return scroll, {"restore_session": _restore_session}

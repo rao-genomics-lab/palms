@@ -42,7 +42,7 @@ dependencies = [
     "opencv-python",
     "shapely>=2",
     "qtpy",
-    "PyQt5",
+    "PyQt6",
     "magicgui",
     "superqt",
     "matplotlib",
