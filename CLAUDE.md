@@ -4,13 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-**Xenium Viewer** is a napari-based spatial transcriptomics viewer for Xenium 3.x output data — a Linux equivalent to the commercial Xenium Explorer. It visualizes high-resolution spatial gene expression data with cell-level resolution.
+**Xenium Viewer** is a napari-based spatial transcriptomics viewer for Xenium 3.x output data — an open alternative to the commercial Xenium Explorer, which has no Linux build. It visualizes high-resolution spatial gene expression data with cell-level resolution. Supported on **Linux, macOS and WSL2**; Linux is the primary development platform and native Windows is not supported.
 
 ## Running the Viewer
 
 ```bash
-# First-time setup
-conda env create -f environment.yml
+# First-time setup. install.sh is `conda env create -f environment.yml` plus, on
+# Linux/WSL only, `conda env update -f environment-linux.yml`. That overlay carries
+# libglx-devel, which is linux-only and made environment.yml unsolvable on macOS
+# while it lived there — conda env files have no platform selectors, hence a script.
+./scripts/install.sh
 conda activate xenium_viewer
 
 # Optional one-time transcript preprocessing per dataset (~30-60 min)
@@ -535,7 +538,19 @@ reproducibility defect rather than a kernel-discovery one.
 
 ## Known Compatibility Patches
 
-- **ICE/X11 disconnect** — handled at startup of `src/xenium_viewer/app.py`
+- **ICE/X11 disconnect** — handled at startup of `src/xenium_viewer/app.py`, gated on
+  `sys.platform.startswith('linux')` (macOS has no session manager, so clearing
+  `SESSION_MANAGER` there would be an unexplained edit to the user's environment).
+- **Missing `libglx-devel`** — `utils/gl_check.py`, called from `app.py` *before*
+  `import napari`, because that import is what aborts. It lives in its own module so it can
+  be tested without importing napari. It only reports; it does **not** repair: preloading the
+  env's `libGLX.so.0` with `RTLD_GLOBAL` does not work, because PyOpenGL still `dlopen`s the
+  host's *unversioned* `libGLX.so` as a separate mapping — only the unversioned name existing
+  inside the env fixes it. It fires only when both halves of the collision are present (env
+  lacks the name, host has a copy); warning on the missing package alone would fire on every
+  correctly-working box with no `libglx-dev` installed. **Both checks are for the unversioned
+  name**: `ctypes.util.find_library('GLX')` returns `libGLX.so.0`, which every working box
+  has, so it cannot answer this question — hence the globbed path list.
 - **pandas 3.0 PyArrow strings** — `_convert_arrow_strings()` in `src/xenium_viewer/loader.py`
 - **NumPy 2.0** — `np.NAN` fallback for omnipath compatibility
 - **matplotlib 3.9 `cm.get_cmap` removal** — `_patch_matplotlib_cm_compat()` in

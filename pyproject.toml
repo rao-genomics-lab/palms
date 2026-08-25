@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "xenium-viewer"
 version = "0.1.0"
-description = "napari-based spatial transcriptomics viewer for Xenium 3.x output (Linux equivalent of Xenium Explorer)"
+description = "napari-based spatial transcriptomics viewer for Xenium 3.x output (open alternative to Xenium Explorer, which has no Linux build)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -14,9 +14,11 @@ keywords = ["xenium", "spatial-transcriptomics", "napari", "single-cell", "10x"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: X11 Applications :: Qt",
+    "Environment :: MacOS X :: Cocoa",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",

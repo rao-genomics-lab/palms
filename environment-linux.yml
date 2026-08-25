@@ -1,0 +1,43 @@
+# Linux-only overlay for the main viewer env. Applies ON TOP of environment.yml:
+#
+#     conda env create -f environment.yml
+#     conda env update -n xenium_viewer -f environment-linux.yml   # Linux/WSL only
+#
+# `scripts/install.sh` does both, branching on `uname -s`, so normally you never
+# run this by hand.
+#
+# This is an OVERLAY, not a second copy of environment.yml. conda's env files have
+# no platform selectors (`# [linux]` is a conda-*build* meta.yaml feature that
+# `conda env create` ignores), and the one package below has no macOS build — its
+# presence in environment.yml made that file unsolvable on macOS:
+#
+#     $ conda search -c conda-forge --platform osx-arm64 libglx-devel
+#     PackagesNotFoundError: The following packages are not available ...
+#
+# Keeping the shared dependency list in exactly one file is the point: the two
+# cannot drift.
+#
+# ── Why libglx-devel ─────────────────────────────────────────────────────────
+# It ships $CONDA_PREFIX/lib/libGLX.so — the *unversioned* name, which conda's
+# libglx does not provide (it has only libGLX.so.0). PyOpenGL's loader tries the
+# unversioned name FIRST, so without this it misses the env entirely and dlopens
+# the host's /usr/lib/.../libGLX.so (Ubuntu's libglx-dev) with RTLD_GLOBAL. Two
+# different glvnd builds then live in one process, Qt's GLX plugin resolves glX*
+# across both, glXGetVisualFromFBConfig() returns NULL for a config the other
+# library allocated, and Qt6 responds with qFatal -> SIGABRT, no traceback.
+# Measured on this project: napari aborted at startup on Qt6 over a remote X
+# display until this package was added. PyQt5 loads the same two copies and
+# merely tolerates it, so the defect was latent there too.
+#
+# Full root cause and the ~15 environment-variable workarounds that do NOT fix it:
+# docs/pyqt6-migration.md. If this overlay is missing, app.py says so at startup
+# instead of letting the process abort with nothing to debug.
+#
+# macOS needs none of this: there is no GLX on macOS at all — Qt uses the cocoa
+# platform plugin and PyOpenGL loads the system OpenGL framework.
+name: xenium_viewer
+channels:          # `env update` does not inherit environment.yml's channels
+  - conda-forge
+  - nodefaults
+dependencies:
+  - libglx-devel

@@ -104,12 +104,21 @@ import PyQt6.QtGui   # then  import OpenGL.GL   -> Could not initialize GLX, SIG
 import OpenGL.GL     # then  import PyQt6.QtGui -> context created: True
 ```
 
-**The fix is `libglx-devel` in `environment.yml`** — it provides the unversioned name inside
-the env, so PyOpenGL and Qt share one libGLX. Verified: `/proc/self/maps` goes from two
-`libGLX.so.0.0.0` mappings to one, the reproduction passes in both orders, and the viewer
-launches and renders on the display that previously dumped core.
+**The fix is `libglx-devel`** — it provides the unversioned name inside the env, so PyOpenGL
+and Qt share one libGLX. Verified: `/proc/self/maps` goes from two `libGLX.so.0.0.0`
+mappings to one, the reproduction passes in both orders, and the viewer launches and renders
+on the display that previously dumped core.
 
-Two things worth remembering:
+> **Update (2026-08-25):** the dependency has moved out of `environment.yml` into
+> `environment-linux.yml`, applied by `scripts/install.sh` on Linux and WSL. It is a
+> linux-only conda-forge package, and while it sat in `environment.yml` that file could not
+> be solved on macOS *at all* — the migration made the app uninstallable there. conda env
+> files have no platform selectors, hence an overlay plus a script. `app.py` now warns
+> before `import napari` when the name is missing and a host copy exists, so a skipped
+> overlay is a message rather than the traceback-free abort described above. Nothing about
+> the root cause below changes.
+
+Three things worth remembering:
 
 - **PyQt5 maps the same two copies and merely tolerates them.** The defect was latent long
   before this migration; Qt6 is only what made it fatal. So it will not show up as a
@@ -118,6 +127,10 @@ Two things worth remembering:
   `QT_OPENGL=software`, `LIBGL_ALWAYS_INDIRECT`, `PYOPENGL_PLATFORM`, `LD_LIBRARY_PATH`,
   removing PySide6 — none of them create the missing name inside the env, so PyOpenGL keeps
   loading the host copy. Roughly fifteen combinations were tried before the cause was found.
+- **Nor can preloading it from Python.** Loading conda's `libGLX.so.0` with `RTLD_GLOBAL`
+  before Qt does not help either: PyOpenGL still `dlopen`s the host's *unversioned*
+  `libGLX.so` as a second mapping. Only the unversioned name existing inside the env fixes
+  it — which is why `app.py`'s check reports the missing package rather than repairing it.
 
 Upstream reports (root cause is PyOpenGL's loader ordering; napari's import order exposes it)
 are drafted in `/media/srao/InternalBac2/software_development/napari_issue/`.
@@ -125,7 +138,7 @@ are drafted in `/media/srao/InternalBac2/software_development/napari_issue/`.
 ## How to reproduce the verification
 
 ```bash
-mamba env create -f environment.yml     # now resolves the Qt6 stack
+./scripts/install.sh                    # now resolves the Qt6 stack, on Linux and macOS
 conda activate xenium_viewer
 python -c "import qtpy; print(qtpy.API_NAME, qtpy.QT_VERSION)"   # PyQt6 6.8.1
 pytest

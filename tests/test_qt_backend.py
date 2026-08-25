@@ -34,6 +34,18 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 ENVIRONMENT_YML = REPO / "environment.yml"
+ENVIRONMENT_LINUX_YML = REPO / "environment-linux.yml"
+INSTALL_SH = REPO / "scripts" / "install.sh"
+
+
+def _env_deps(path: Path) -> set[str]:
+    """Top-level package names from a conda env file, comments and pins stripped."""
+    lines = [ln.split("#", 1)[0].strip() for ln in path.read_text().splitlines()]
+    return {
+        re.sub(r"[<>=!].*$", "", ln[2:]).strip()
+        for ln in lines
+        if ln.startswith("- ")
+    }
 
 
 def test_the_qt_backend_is_stated_not_inherited():
@@ -92,11 +104,7 @@ def test_environment_asks_for_matplotlib_base_not_the_metapackage():
     binding on some solver runs and not others — which is the worst kind of
     dependency bug, because it reproduces only sometimes.
     """
-    lines = [
-        ln.split("#", 1)[0].strip()
-        for ln in ENVIRONMENT_YML.read_text().splitlines()
-    ]
-    deps = {re.sub(r"[<>=!].*$", "", ln[2:]).strip() for ln in lines if ln.startswith("- ")}
+    deps = _env_deps(ENVIRONMENT_YML)
 
     assert "matplotlib-base" in deps, "environment.yml should depend on matplotlib-base"
     assert "matplotlib" not in deps, (
@@ -107,7 +115,7 @@ def test_environment_asks_for_matplotlib_base_not_the_metapackage():
     )
 
 
-def test_environment_ships_the_unversioned_libglx_name():
+def test_the_linux_overlay_ships_the_unversioned_libglx_name():
     """A source guard for the crash that nearly shelved the Qt6 migration.
 
     conda's ``libglx`` provides only ``libGLX.so.0``. PyOpenGL's loader
@@ -123,15 +131,135 @@ def test_environment_ships_the_unversioned_libglx_name():
     until this package was added, and started rendering immediately once it was.
     PyQt5 maps the same two copies and merely tolerates them, so dropping this
     dependency would look harmless right up until the backend changed.
-    """
-    lines = [
-        ln.split("#", 1)[0].strip()
-        for ln in ENVIRONMENT_YML.read_text().splitlines()
-    ]
-    deps = {re.sub(r"[<>=!].*$", "", ln[2:]).strip() for ln in lines if ln.startswith("- ")}
 
-    assert "libglx-devel" in deps, (
-        "environment.yml must depend on libglx-devel. Without it PyOpenGL loads "
-        "the host's libGLX beside conda's, and Qt6 aborts with "
+    It lives in the overlay rather than ``environment.yml`` because it is a
+    linux-only conda-forge package — see the next test.
+    """
+    assert "libglx-devel" in _env_deps(ENVIRONMENT_LINUX_YML), (
+        "environment-linux.yml must depend on libglx-devel. Without it PyOpenGL "
+        "loads the host's libGLX beside conda's, and Qt6 aborts with "
         '"Could not initialize GLX" and no traceback.'
+    )
+
+
+def test_the_main_environment_stays_solvable_off_linux():
+    """The other half of the split: the linux-only package must not creep back.
+
+    ``libglx-devel`` has no ``osx-arm64``/``osx-64`` build, so while it sat in
+    ``environment.yml`` the solve failed on macOS before it reached the Qt stack —
+    ``conda env create -f environment.yml`` was simply impossible there. conda env
+    files have no platform selectors (``# [linux]`` is a conda-*build* feature),
+    which is why the fix is an overlay file rather than a conditional line.
+    """
+    assert "libglx-devel" not in _env_deps(ENVIRONMENT_YML), (
+        "libglx-devel is back in environment.yml. It is a linux-only package, so "
+        "this makes the file unsolvable on macOS. Put it in environment-linux.yml."
+    )
+
+
+class TestLibglxCollisionWarning:
+    """``utils.gl_check`` turns a traceback-free SIGABRT into a sentence.
+
+    The overlay split means a Linux user can now create the environment without
+    ``libglx-devel`` — ``conda env create -f environment.yml`` alone does it. That
+    is only safe because this check exists: the failure it replaces is napari
+    calling ``qFatal`` during ``import``, which produces no Python traceback and
+    no clue about the cause.
+
+    Both halves of the collision must be present. Warning on a missing package
+    alone would fire on every correctly-working machine that simply has no host
+    ``libglx-dev`` installed, and a warning that is usually wrong is a warning
+    people learn to scroll past.
+    """
+
+    @staticmethod
+    def _prefix_without_the_name(tmp_path):
+        (tmp_path / "lib").mkdir()
+        return tmp_path
+
+    def test_warns_when_the_env_lacks_it_and_the_host_has_it(self, tmp_path):
+        from xenium_viewer.utils import gl_check
+
+        host = tmp_path / "host-libGLX.so"
+        host.write_text("")
+        msg = gl_check.libglx_collision_message(
+            prefix=self._prefix_without_the_name(tmp_path),
+            host_paths=(str(host),),
+            platform="linux",
+        )
+        assert msg is not None
+        # The point of the message is the command, not the diagnosis.
+        assert "environment-linux.yml" in msg
+        assert str(host) in msg
+
+    def test_silent_when_the_env_has_the_unversioned_name(self, tmp_path):
+        from xenium_viewer.utils import gl_check
+
+        prefix = self._prefix_without_the_name(tmp_path)
+        (prefix / "lib" / "libGLX.so").write_text("")
+        host = tmp_path / "host-libGLX.so"
+        host.write_text("")
+        assert gl_check.libglx_collision_message(
+            prefix=prefix, host_paths=(str(host),), platform="linux"
+        ) is None
+
+    def test_silent_when_there_is_no_host_copy_to_collide_with(self, tmp_path):
+        from xenium_viewer.utils import gl_check
+
+        assert gl_check.libglx_collision_message(
+            prefix=self._prefix_without_the_name(tmp_path),
+            host_paths=(str(tmp_path / "nope.so"),),
+            platform="linux",
+        ) is None
+
+    def test_silent_on_macos_even_in_the_defective_shape(self, tmp_path):
+        """macOS has no GLX at all — Qt uses cocoa and PyOpenGL uses the framework.
+
+        Without this branch the warning would fire on every Mac, telling users to
+        install a package that has no macOS build.
+        """
+        from xenium_viewer.utils import gl_check
+
+        host = tmp_path / "host-libGLX.so"
+        host.write_text("")
+        assert gl_check.libglx_collision_message(
+            prefix=self._prefix_without_the_name(tmp_path),
+            host_paths=(str(host),),
+            platform="darwin",
+        ) is None
+
+    def test_the_checked_paths_are_the_unversioned_name(self):
+        """``libGLX.so.0`` is present on every working box; it proves nothing.
+
+        ``ctypes.util.find_library('GLX')`` returns exactly that versioned soname,
+        which is why this module globs known paths instead of using it. A check
+        that matched ``.so.0`` would warn universally.
+        """
+        from xenium_viewer.utils import gl_check
+
+        assert gl_check.HOST_LIBGLX_PATHS
+        for path in gl_check.HOST_LIBGLX_PATHS:
+            assert path.endswith("/libGLX.so"), path
+
+
+def test_the_installer_applies_the_linux_overlay():
+    """An overlay nothing applies is an overlay nobody gets.
+
+    The split only works because ``scripts/install.sh`` branches on ``uname -s``
+    and runs ``env update`` with the overlay on Linux. If that reference is lost,
+    every Linux install silently reverts to the pre-``libglx-devel`` state, whose
+    symptom is a SIGABRT with no traceback.
+    """
+    assert INSTALL_SH.exists(), "scripts/install.sh is the OS-aware install path"
+    script = INSTALL_SH.read_text()
+
+    assert "environment-linux.yml" in script, (
+        "scripts/install.sh no longer references environment-linux.yml, so the "
+        "Linux GL overlay would never be applied"
+    )
+    assert "env update" in script, (
+        "scripts/install.sh must apply the overlay with `env update`"
+    )
+    assert re.search(r"uname\s+-s", script), (
+        "scripts/install.sh must branch on the OS; the overlay is Linux-only"
     )

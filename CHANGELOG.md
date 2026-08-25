@@ -1,5 +1,72 @@
 # Changelog
 
+## [Unreleased] — 2026-08-25 (installable on macOS)
+
+### Fixed
+- **`conda env create -f environment.yml` failed to solve on macOS.** The PyQt6
+  migration added `libglx-devel` to fix a Qt6 startup abort on remote X displays, but
+  that package is part of conda-forge's linux-only glvnd stack — there is no
+  `osx-arm64` or `osx-64` build — so the solve failed on a Mac before it reached the
+  Qt stack at all. **PyQt6 itself was never the problem**: `pyqt6` publishes 6.8.1 and
+  6.11.0 builds for `osx-arm64` on py310–py314, and every other dependency
+  (napari 0.8.0, spatialdata 0.8.0, squidpy 1.8.2, scanpy 1.12.3, zarr 3.1.5 within
+  the `<3.2` pin, `py-opencv` on a `qt6_` build) resolves there too. So this was
+  packaging, not a reason to walk the Qt backend back.
+
+  conda env files have **no platform selectors** — `# [linux]` is a conda-*build*
+  `meta.yaml` feature that `conda env create` ignores — so the fix is a split:
+  `environment.yml` is now cross-platform, and `environment-linux.yml` is a small
+  *overlay* carrying `libglx-devel` alone. An overlay rather than a second full copy,
+  so the shared dependency list stays in exactly one file and the two cannot drift.
+
+  `scripts/install.sh` does both steps, branching on `uname -s`, so the install is one
+  command on every platform. **WSL2 is covered for free** — `uname -s` is `Linux`
+  there and conda installs `linux-64` packages, so it takes the Linux branch.
+
+  Skipping the overlay on Linux is no longer silent. New `utils/gl_check.py`, called
+  from `app.py` *before* `import napari` (the import that aborts), checks whether the
+  env is missing the unversioned `libGLX.so` while a host copy exists, and prints the
+  `env update` command. It deliberately only reports: preloading conda's `libGLX.so.0`
+  with `RTLD_GLOBAL` does not help, because PyOpenGL still `dlopen`s the host's
+  unversioned copy as a separate mapping. Both halves of the collision must be present
+  before it says anything — a warning that fires on every working machine is a warning
+  people learn to scroll past. Note the check is for the *unversioned* name on both
+  sides: `ctypes.util.find_library('GLX')` returns `libGLX.so.0`, which every box with
+  working graphics has, so it cannot answer this question.
+
+- **A live CopyKAT worker was reported as `interrupted` on macOS.** `tab_cnv`'s
+  liveness probe reads `/proc/<pid>/cmdline` with a documented `os.kill(pid, 0)`
+  fallback for non-Linux — but on macOS `open("/proc/...")` raises `FileNotFoundError`,
+  an `OSError` subclass caught *first* by the "no such process" branch, so the fallback
+  was unreachable. The platform check now comes before `/proc` is touched.
+
+- **The whole test suite ran offscreen on macOS.** `tests/conftest.py` forced
+  `QT_QPA_PLATFORM=offscreen` when `DISPLAY` was unset, and `DISPLAY` is an X11
+  variable that is absent on a Mac with a perfectly good screen. Same flaw in
+  `test_units.py::_has_real_display()`, where it silently skipped every
+  `requires_display` test. Both now special-case `darwin`.
+
+### Changed
+- The ICE/X11 startup patch in `app.py` is gated on Linux. It was setting
+  `SESSION_MANAGER=''` unconditionally, including on macOS, which has no session
+  manager.
+- CI gains a **macOS (arm64) leg** that builds `environment.yml` *without* the overlay
+  and asserts the resolved Qt backend, then runs the suite under `cocoa`. A
+  Linux-only matrix cannot see this class of breakage — the first report of it was a
+  user whose MacBook could not create the env. The Linux leg now applies
+  `environment-linux.yml` after creating the env, so it keeps testing the stack a real
+  Linux user actually gets.
+- README, `docs/Installation.md`, `docs/Home.md` and the `pyproject.toml` classifiers
+  now say Linux/macOS/WSL2 rather than Linux. **The CopyKAT second environment stays
+  Linux-only** and is documented as such: `r-dlm` is published only on the Anaconda `r`
+  channel, which has no `osx-arm64` builds. inferCNV runs in the main env and is
+  unaffected everywhere.
+
+### Known limitations on macOS
+- Per-element memory reporting degrades to "unknown": `utils/mem_probe.py` reads
+  `/proc/self/statm` and `/proc/self/status`, and resolves `malloc_trim` from libc.
+  All three already fail soft, so this is a missing number rather than an error.
+
 ## [Unreleased] — 2026-08-25 (quiet the units warning)
 
 ### Fixed

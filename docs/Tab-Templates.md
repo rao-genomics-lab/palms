@@ -46,7 +46,7 @@ Inspect and edit the analysis code every other tab runs. Each analysis step is a
 
 ## Notes
 
-- Overrides are written to the user config directory — on Linux typically `~/.config/xenium-viewer/templates/<template.id>.tmpl`. The directory is not created until your first save. A manifest alongside them records which shipped version each edited block was forked from, which is what makes the **⚠ review** flag possible.
+- Overrides are written to the user config directory, located with `platformdirs`: on Linux typically `~/.config/xenium-viewer/templates/<template.id>.tmpl`, and on macOS `~/Library/Application Support/xenium-viewer/templates/<template.id>.tmpl`. The directory is not created until your first save. A manifest alongside them records which shipped version each edited block was forked from, which is what makes the **⚠ review** flag possible.
 - **An override is resolved per block, not per file.** This is what lets you change one step of an analysis without freezing the rest of it at the version you forked.
 - **An invalid override is skipped, never fatal.** The shipped template runs, the tab badges it **✕ not used**, a napari warning appears once per session, and the [Cache](Tab-Cache) tab's header counts it among the session's failures.
 - The strictest check is that a **required parameter the template no longer mentions is a hard error** — a template like that runs, succeeds, and silently ignores the setting you chose in the GUI, which is worse than failing.

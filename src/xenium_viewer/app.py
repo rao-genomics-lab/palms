@@ -32,25 +32,43 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 
+import ctypes
+import ctypes.util
+
+_IS_LINUX = sys.platform.startswith('linux')   # WSL reports 'linux' too
+
 # ─── Prevent ICE/X11 EPIPE crash on Linux ────────────────────────────────
 # libICE's default IO error handler calls exit() when it encounters a
 # broken pipe on the X11 session manager socket. Override it to a no-op
 # so the application survives the (harmless) session manager disconnect.
-os.environ['SESSION_MANAGER'] = ''  # disable SM connection entirely
+#
+# Guarded to Linux: macOS has no session manager, and clearing SESSION_MANAGER
+# there would be an unexplained edit to the user's environment.
+if _IS_LINUX:
+    os.environ['SESSION_MANAGER'] = ''  # disable SM connection entirely
 
-import ctypes
-import ctypes.util
-_ice_lib_path = ctypes.util.find_library('ICE')
-if _ice_lib_path:
-    try:
-        _libICE = ctypes.CDLL(_ice_lib_path)
-        _ICE_IO_ERROR_HANDLER = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
-        def _ice_io_error_noop(conn):
-            pass  # swallow the error instead of calling exit()
-        _ice_handler = _ICE_IO_ERROR_HANDLER(_ice_io_error_noop)
-        _libICE.IceSetIOErrorHandler(_ice_handler)
-    except (OSError, AttributeError):
-        pass  # libICE not available — not a problem
+    _ice_lib_path = ctypes.util.find_library('ICE')
+    if _ice_lib_path:
+        try:
+            _libICE = ctypes.CDLL(_ice_lib_path)
+            _ICE_IO_ERROR_HANDLER = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
+            def _ice_io_error_noop(conn):
+                pass  # swallow the error instead of calling exit()
+            _ice_handler = _ICE_IO_ERROR_HANDLER(_ice_io_error_noop)
+            _libICE.IceSetIOErrorHandler(_ice_handler)
+        except (OSError, AttributeError):
+            pass  # libICE not available — not a problem
+# ──────────────────────────────────────────────────────────────────────────
+
+
+# ─── Warn before the GLX double-load aborts the process ───────────────────
+# Must run BEFORE `import napari`: that import is what triggers the abort, so a
+# check placed after it never executes. The logic lives in utils.gl_check so it
+# can be tested without importing napari. It reports only — see that module for
+# why preloading conda's libGLX.so.0 does not repair the collision.
+from xenium_viewer.utils.gl_check import warn_if_libglx_will_collide
+
+warn_if_libglx_will_collide()
 # ──────────────────────────────────────────────────────────────────────────
 
 import numpy as np

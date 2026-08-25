@@ -111,14 +111,23 @@ def _copykat_run_state(plots_dir: "Path") -> "tuple[str, int | None]":
     pid = _copykat_worker_pid(running)
     if pid is None:
         return ("unknown", None)
-    try:
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
-        alive = "cnv_copykat_worker" in cmdline
-    except FileNotFoundError:
-        alive = False  # no such process
-    except OSError:
-        # /proc unreadable (non-Linux, permissions) — fall back to a bare liveness probe.
+    # The /proc route is Linux-only, and the platform check has to come *first*:
+    # on macOS `open("/proc/...")` raises FileNotFoundError, which is an OSError
+    # subclass caught by the "no such process" branch below — so a live worker was
+    # reported as "interrupted" there rather than falling through to os.kill().
+    alive = None
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+            # Confirms identity too, so a reused PID belonging to an unrelated
+            # process is treated as gone.
+            alive = "cnv_copykat_worker" in cmdline
+        except FileNotFoundError:
+            alive = False  # no such process
+        except OSError:
+            alive = None   # /proc unreadable (permissions, container) — probe below
+    if alive is None:
         try:
             os.kill(pid, 0)
             alive = True

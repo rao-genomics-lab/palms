@@ -5,8 +5,9 @@
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 
 A napari-based spatial transcriptomics viewer for 10x Genomics Xenium 3.x output —
-the Linux equivalent of the commercial Xenium Explorer. Visualises high-resolution
-spatial gene expression at cell-level resolution with:
+an open alternative to the commercial Xenium Explorer, which does not ship a Linux
+build. Runs on Linux, macOS and WSL2. Visualises high-resolution spatial gene
+expression at cell-level resolution with:
 
 - **Cell visualisation** — colour by gene expression, cluster, or metadata; load
   per-gene transcript point clouds and density heatmaps; linked UMAP window
@@ -31,7 +32,7 @@ zarr, dask, Qt). The recommended way to install is via conda:
 git clone https://github.com/sraorao/xenium_viewer.git
 cd xenium_viewer
 
-conda env create -f environment.yml
+./scripts/install.sh
 conda activate xenium_viewer
 ```
 
@@ -39,6 +40,20 @@ The env file installs the core stack via conda-forge and `xenium-viewer` itself
 in editable mode, so source edits in this checkout are picked up immediately.
 It also installs the CNV inference stack (`infercnvpy` and `insitucnv`), so the
 CNV tab's **inferCNV** backend works out of the box — no extra step needed.
+
+`install.sh` is just `conda env create -f environment.yml` plus one OS-dependent
+step: on **Linux and WSL** it also applies `environment-linux.yml`, which adds
+`libglx-devel`. That package fixes a Qt6 startup abort on remote X displays but
+is linux-only, so it cannot live in `environment.yml` — with it there, the file
+does not solve on macOS at all. If you prefer to run conda yourself:
+
+```bash
+conda env create -f environment.yml                              # all platforms
+conda env update -n xenium_viewer -f environment-linux.yml       # Linux/WSL only
+```
+
+Skipping the second line on Linux is not silent: the viewer checks for it at
+startup and tells you what to run.
 
 ### Optional extras
 
@@ -77,6 +92,10 @@ lives in a second environment:
 conda env create -f environment-copykat.yml   # creates 'xenium_viewer_copykat'
 ```
 
+**Linux only.** This env is not solvable on Apple Silicon: `r-dlm` (a CopyKAT
+dependency) comes from the Anaconda `r` channel, which publishes no `osx-arm64`
+builds. inferCNV runs in the main env and is unaffected on every platform.
+
 The viewer finds that environment by name and launches CopyKAT there as a
 detached background job, which survives the GUI closing. The `copykat` R package
 itself is GitHub-only and installs automatically on first run. To point the
@@ -95,7 +114,7 @@ conda env remove -n xenium_viewer
 
 git clone https://github.com/sraorao/xenium_viewer.git
 cd xenium_viewer
-conda env create -f environment.yml
+./scripts/install.sh
 conda activate xenium_viewer
 ```
 
