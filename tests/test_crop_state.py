@@ -34,11 +34,13 @@ class _Ctx:
     """The handful of ViewerContext fields the capture reads."""
 
     def __init__(self, he_state=None, arms_state=None,
-                 external_images_state=None, patch_overlays_state=None):
+                 external_images_state=None, patch_overlays_state=None,
+                 pixel_size=1.0):
         self.he_state = he_state or {}
         self.arms_state = arms_state or {}
         self.external_images_state = external_images_state or []
         self.patch_overlays_state = patch_overlays_state or []
+        self.pixel_size = pixel_size
         self.sdata = None          # _morphology_shape returns None, which is fine
 
 
@@ -165,3 +167,48 @@ def test_the_napari_and_spatialdata_affine_conventions_agree():
 
     np.testing.assert_allclose(a.affine_matrix, m)
     np.testing.assert_allclose(a([2.0, 3.0]), (m @ np.array([2.0, 3.0, 1.0]))[:2])
+
+
+# ── the world/pixel boundary ─────────────────────────────────────────────────
+
+def test_a_layer_affine_is_converted_out_of_world_units():
+    """`layer.affine` is in micrometres; everything downstream is in pixels.
+
+    Since the scale bar work every layer carries `scale = (pixel_size,)*ndim`, and
+    napari applies a layer's affine *after* its scale — so `layer.affine` is a
+    world-unit matrix. `crop_translation` and `overlay_pixel_bbox` are both in
+    pixels. Passing the raw matrix through is a silent misplacement by a factor of
+    1/pixel_size: on the real H&E registration below that is 27000 x 42000 px, a
+    crop of the wrong part of the slide.
+
+    Every other affine-persisting call site already goes through
+    `units.layer_affine_px`; this is the one that has to as well.
+    """
+    from xenium_viewer.utils.units import px_affine_to_world
+
+    px = 0.2125
+    reg_px = np.array([[-2.3535, 0.0, 34396.65],
+                       [0.0, -2.3535, 53689.95],
+                       [0.0, 0.0, 1.0]])
+    # A layer placed exactly as the viewer places it: pixels -> world at the boundary.
+    layer = _Layer("H&E (slide.tif)", px_affine_to_world(reg_px, px))
+
+    got = capture_overlay_frames(
+        _Ctx(he_state={"he_layer": layer}, pixel_size=px)).frames["he_image"]
+
+    np.testing.assert_allclose(got, reg_px, atol=1e-6)
+
+
+def test_a_stored_state_affine_is_already_in_pixels_and_is_not_converted():
+    """The asymmetry: only the *layer* is in world units.
+
+    `he_state["affine_3x3"]` is the pixel-space matrix the store holds, so
+    converting it too would break it in the opposite direction.
+    """
+    reg_px = np.array([[2.0, 0.0, 100.0], [0.0, 2.0, 200.0], [0.0, 0.0, 1.0]])
+
+    got = capture_overlay_frames(
+        _Ctx(he_state={"he_layer": None, "affine_3x3": reg_px},
+             pixel_size=0.2125)).frames["he_image"]
+
+    np.testing.assert_allclose(got, reg_px)

@@ -47,20 +47,29 @@ class OverlayFrames(NamedTuple):
     xenium_shape_yx: tuple | None
 
 
-def _layer_affine(layer):
-    """The 3x3 (y, x) affine of a napari layer, or None if it has none.
+def _layer_affine(layer, pixel_size: float):
+    """The 3x3 (y, x) affine of a napari layer **in Xenium pixels**, or None.
 
-    Delegates to ``affine_linking._affine_matrix``, which already handles the
-    ``ndim > 2`` case. Identity comes back as ``None`` rather than ``eye(3)``:
-    "this layer is unregistered" and "this layer is registered to the identity"
-    are the same thing, and the caller wants to fall through to the element.
+    ``layer.affine`` is in *world* units — micrometres, since every layer carries
+    ``scale = (pixel_size, pixel_size)`` and napari applies a layer's affine after
+    its scale. Everything downstream of here is in pixels: ``crop_translation`` is
+    a pixel offset and ``overlay_pixel_bbox`` maps a pixel bounding box. Handing
+    the raw world matrix on is a silent misplacement by a factor of
+    ``1 / pixel_size`` — measured at 27000 x 42000 px on a real H&E registration,
+    which is a crop of the wrong part of the slide, not a slightly wrong one.
+
+    So the conversion happens here, through ``units.layer_affine_px``, the one
+    function that owns that boundary. Identity comes back as ``None`` rather than
+    ``eye(3)``: "this layer is unregistered" and "this layer is registered to the
+    identity" are the same thing, and the caller wants to fall through to the
+    element.
     """
     if layer is None:
         return None
     try:
-        from xenium_viewer.utils.affine_linking import _affine_matrix
+        from xenium_viewer.utils.units import layer_affine_px
 
-        m = _affine_matrix(layer)
+        m = layer_affine_px(layer, pixel_size)
     except Exception:                                  # pragma: no cover - defensive
         return None
     if m is None or np.allclose(m, np.eye(3), atol=1e-6):
@@ -68,16 +77,17 @@ def _layer_affine(layer):
     return np.asarray(m, dtype=np.float64)
 
 
-def _state_affine(state, flip_builder=None):
+def _state_affine(state, pixel_size: float):
     """The placement recorded in ``he_state`` / ``arms_state``.
 
     Prefers the live layer, because that is what is on screen; falls back to the
-    stored ``affine_3x3``. The layer's affine already includes the flip, so it is
-    used whole rather than recomposed.
+    stored ``affine_3x3``. The stored copy is **already in pixels** — that is the
+    frame the store and this module use — so only the layer needs converting,
+    which is exactly the asymmetry ``_layer_affine`` encodes.
     """
     if not state:
         return None
-    live = _layer_affine(state.get("he_layer"))
+    live = _layer_affine(state.get("he_layer"), pixel_size)
     if live is not None:
         return live
     for key in ("affine_3x3", "coarse_affine"):
@@ -95,11 +105,14 @@ def capture_overlay_frames(ctx) -> OverlayFrames:
     other two, because they need the element and this function deliberately does
     not touch the store.
     """
+    # Every layer affine read below is converted to pixels against this.
+    pixel_size = float(getattr(ctx, "pixel_size", 1.0) or 1.0)
+
     frames: dict = {}
     companions: dict = {}
 
     # ── H&E and its landmarks ────────────────────────────────────────────────
-    he = _state_affine(getattr(ctx, "he_state", None))
+    he = _state_affine(getattr(ctx, "he_state", None), pixel_size)
     if he is not None:
         frames["he_image"] = he
     # The landmark set is in H&E pixels whether or not we resolved an affine —
@@ -108,7 +121,7 @@ def capture_overlay_frames(ctx) -> OverlayFrames:
     companions["he_he_landmarks"] = "he_image"
 
     # ── ARMS: image, its landmarks, and the tiles ────────────────────────────
-    arms = _state_affine(getattr(ctx, "arms_state", None))
+    arms = _state_affine(getattr(ctx, "arms_state", None), pixel_size)
     if arms is not None:
         frames["arms_he_image"] = arms
     companions["arms_he_landmarks"] = "arms_he_image"
@@ -122,7 +135,7 @@ def capture_overlay_frames(ctx) -> OverlayFrames:
         name = entry.get("element_name")
         if not name:
             continue
-        m = _layer_affine(entry.get("layer_ref"))
+        m = _layer_affine(entry.get("layer_ref"), pixel_size)
         if m is None and entry.get("affine_matrix") is not None:
             m = np.asarray(entry["affine_matrix"], dtype=np.float64)
         if m is not None:
@@ -155,7 +168,7 @@ def capture_overlay_frames(ctx) -> OverlayFrames:
         else:
             # Linked to something we cannot name as an element — keep the matrix
             # so the geometry is at least placed, without a slice origin.
-            m = _layer_affine(entry.get("shapes_layer"))
+            m = _layer_affine(entry.get("shapes_layer"), pixel_size)
             if m is None and entry.get("affine_matrix") is not None:
                 m = np.asarray(entry["affine_matrix"], dtype=np.float64)
             if m is not None:
