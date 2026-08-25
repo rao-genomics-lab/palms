@@ -330,7 +330,7 @@ def _ask_rebuild_preference(user_data: dict, certain: bool = True) -> str:
     msg.addButton("Rebuild without restoring", message_box.DestructiveRole)
     keep_btn = msg.addButton("Keep existing cache", message_box.RejectRole)
     msg.setDefaultButton(keep_btn if not certain else restore_btn)
-    msg.exec_()
+    msg.exec()
 
     clicked = msg.clickedButton()
     if clicked is restore_btn:
@@ -399,7 +399,7 @@ def _ask_corrupt_cache(error: Exception, report, user_data: dict,
     msg.addButton("Rebuild without restoring", message_box.DestructiveRole)
     quit_btn = msg.addButton("Quit", message_box.RejectRole)
     msg.setDefaultButton(restore_btn)
-    msg.exec_()
+    msg.exec()
 
     clicked = msg.clickedButton()
     if clicked is restore_btn:

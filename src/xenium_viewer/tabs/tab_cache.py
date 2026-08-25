@@ -250,8 +250,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             )
         if QMessageBox.question(
             None, "Recover from Backup", question,
-            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
-        ) != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
             return
 
         _set_busy(True)
@@ -312,8 +312,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"and user-generated data is restored into the new one.\n\n"
             f"This re-reads the whole dataset and can take a long time."
             f"{warning}\n\nThe viewer must be restarted afterwards.",
-            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
-        ) != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
             return
 
         # The rebuild replaces the object every layer and manager is holding, so
@@ -360,8 +360,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "They are on disk but not yet loaded — reload the dataset now to "
             "see them?\n\nThis rebuilds the layers and tabs from disk and "
             "takes a few seconds.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
-        ) != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes,
+        ) != QMessageBox.StandardButton.Yes:
             report_text.append(
                 "\n\nRecovered data is on disk. Reopen this dataset "
                 "(File → Open Dataset) when you want to see it."

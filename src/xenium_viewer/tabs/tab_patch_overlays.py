@@ -23,6 +23,7 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtCore import Qt
 
+from xenium_viewer.utils.units import layer_affine_px, px_affine_to_world
 from xenium_viewer.tabs._helpers import make_tab
 from xenium_viewer.utils.coloring import PATCH_PALETTES
 from xenium_viewer.utils.affine_linking import (
@@ -58,12 +59,12 @@ def _confirm_patch_size(parent, inferred: Optional[int], stride: Optional[int]) 
     spin.setRange(1, 8192)
     spin.setValue(inferred or stride or 128)
     layout.addWidget(spin)
-    btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
     btns.accepted.connect(dlg.accept)
     btns.rejected.connect(dlg.reject)
     layout.addWidget(btns)
     dlg.setLayout(layout)
-    if dlg.exec_() == QDialog.Accepted:
+    if dlg.exec() == QDialog.DialogCode.Accepted:
         return int(spin.value())
     return None
 
@@ -182,7 +183,7 @@ def build_tab(ctx: "ViewerContext"):
 
     edge_row = QHBoxLayout()
     edge_row.addWidget(QLabel("Edge width:"))
-    edge_slider = QSlider(Qt.Horizontal)
+    edge_slider = QSlider(Qt.Orientation.Horizontal)
     edge_slider.setRange(0, 20)
     edge_slider.setValue(2)
     edge_row.addWidget(edge_slider)
@@ -192,7 +193,7 @@ def build_tab(ctx: "ViewerContext"):
 
     op_row = QHBoxLayout()
     op_row.addWidget(QLabel("Opacity:"))
-    opacity_slider = QSlider(Qt.Horizontal)
+    opacity_slider = QSlider(Qt.Orientation.Horizontal)
     opacity_slider.setRange(0, 100)
     opacity_slider.setValue(80)
     op_row.addWidget(opacity_slider)
@@ -201,7 +202,7 @@ def build_tab(ctx: "ViewerContext"):
     conf_row = QHBoxLayout()
     conf_label = QLabel("Confidence ≥ 0.00:")
     conf_row.addWidget(conf_label)
-    conf_slider = QSlider(Qt.Horizontal)
+    conf_slider = QSlider(Qt.Orientation.Horizontal)
     conf_slider.setRange(0, 100)
     conf_slider.setValue(0)
     conf_row.addWidget(conf_slider)
@@ -545,7 +546,7 @@ def build_tab(ctx: "ViewerContext"):
             # Persist to sdata
             save_overlay_affine_to_sdata(
                 ctx, entry["element_name"],
-                entry["shapes_layer"].affine.affine_matrix,
+                layer_affine_px(entry["shapes_layer"], ctx.pixel_size),
             )
         except Exception as e:
             print(f"  Warning: could not link patch affine: {e}")
@@ -678,7 +679,8 @@ def build_tab(ctx: "ViewerContext"):
                 saved_affine = ui.get("affine_matrix")  # fallback: session attrs
             if saved_affine is not None:
                 try:
-                    shapes_layer.affine = np.array(saved_affine, dtype=np.float64)
+                    shapes_layer.affine = px_affine_to_world(
+                        np.array(saved_affine, dtype=np.float64), ctx.pixel_size)
                 except Exception:
                     pass
 
@@ -716,7 +718,7 @@ def build_tab(ctx: "ViewerContext"):
                     try:
                         e["affine_disconnect"] = link_affine(lyr, src, viewer=viewer)
                         save_overlay_affine_to_sdata(
-                            ctx, e["element_name"], lyr.affine.affine_matrix,
+                            ctx, e["element_name"], layer_affine_px(lyr, ctx.pixel_size),
                         )
                     except Exception:
                         pass

@@ -255,9 +255,9 @@ def _notify(message: str) -> None:
 def _event_loop_running() -> bool:
     """True when the main thread is actually inside a Qt event loop.
 
-    ``QMessageBox.exec_()`` starts a *nested* event loop and returns only when
+    ``QMessageBox.exec()`` starts a *nested* event loop and returns only when
     something dismisses the dialog. In a process where nobody ever called
-    ``app.exec_()`` there is no window manager, no user and no other loop to
+    ``app.exec()`` there is no window manager, no user and no other loop to
     deliver that click, so it never returns.
 
     ``QThread.loopLevel()`` is the direct answer — 0 outside any event loop, ≥1
@@ -282,7 +282,7 @@ def _headless() -> bool:
 
     ``QApplication.instance() is not None`` is not enough: a test run, a
     headless script or CI creates one with no event loop and no human, and
-    ``QMessageBox.exec_()`` then blocks forever with nothing able to dismiss it.
+    ``QMessageBox.exec()`` then blocks forever with nothing able to dismiss it.
     That is not hypothetical — it hung the test suite for an hour once a fixture
     started creating the QApplication before the tests that inject write
     failures. The notification still fires; only the modal is suppressed.
@@ -326,12 +326,12 @@ def _surface(kind: str, operation: str, message: str, show_modal: bool) -> None:
         try:
             from qtpy.QtWidgets import QMessageBox
             box = QMessageBox()
-            box.setIcon(QMessageBox.Warning)
+            box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Could Not Save")
             box.setText(f"Could not save {operation}.")
             box.setInformativeText(_GUIDANCE[kind])
             box.setDetailedText(message)
-            box.exec_()
+            box.exec()
         except Exception:  # pragma: no cover - defensive
             pass
 

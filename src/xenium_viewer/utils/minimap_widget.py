@@ -20,10 +20,18 @@ class MinimapWidget(QWidget):
     _MARGIN = 10
 
     def __init__(self, viewer, morph_thumb: np.ndarray,
-                 morph_full_shape_yx: tuple, canvas_native: QWidget):
+                 morph_full_shape_yx: tuple, canvas_native: QWidget,
+                 pixel_size: float = 1.0):
         super().__init__(canvas_native)
         self._viewer = viewer
         self._morph_full_shape_yx = morph_full_shape_yx  # (H, W) in data pixels
+        # The camera reports *world* coordinates, and the viewer's world is
+        # micrometres (utils/units.py), while the morphology shape is in pixels.
+        # Everything below works in world units so the two cannot be mixed up;
+        # the default of 1.0 keeps an unscaled viewer behaving as it always did.
+        self._pixel_size = float(pixel_size)
+        self._world_shape_yx = (morph_full_shape_yx[0] * self._pixel_size,
+                                morph_full_shape_yx[1] * self._pixel_size)
         self._canvas_native = canvas_native
 
         # Build grayscale QPixmap from DAPI channel (morph_thumb[0])
@@ -41,9 +49,9 @@ class MinimapWidget(QWidget):
         scaled_h = int(thumb_h * scale)
 
         # Convert to QPixmap
-        img = QImage(dapi.data, thumb_w, thumb_h, thumb_w, QImage.Format_Grayscale8)
+        img = QImage(dapi.data, thumb_w, thumb_h, thumb_w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(img).scaled(
-            scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            scaled_w, scaled_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
         self._pixmap = pixmap
         self._thumb_display_size = (scaled_w, scaled_h)
@@ -51,8 +59,8 @@ class MinimapWidget(QWidget):
         # Widget setup
         self.setFixedSize(self._WIDGET_W, self._WIDGET_H)
         self.setStyleSheet("background: rgba(0, 0, 0, 160);")
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
-        self.setWindowFlags(Qt.SubWindow)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setWindowFlags(Qt.WindowType.SubWindow)
 
         # Connect camera events
         viewer.camera.events.center.connect(self._on_camera_changed)
@@ -71,7 +79,7 @@ class MinimapWidget(QWidget):
     # ── Qt event handling ─────────────────────────────────────────────────
 
     def eventFilter(self, obj, event):
-        if obj is self._canvas_native and event.type() == QEvent.Resize:
+        if obj is self._canvas_native and event.type() == QEvent.Type.Resize:
             self._reposition()
         return False
 
@@ -92,26 +100,26 @@ class MinimapWidget(QWidget):
 
         # Compute viewport rectangle in data coords
         try:
-            center = self._viewer.camera.center  # (z, y, x) in data pixels
-            zoom = self._viewer.camera.zoom      # canvas pixels per data pixel
+            center = self._viewer.camera.center  # (z, y, x) in world units
+            zoom = self._viewer.camera.zoom      # canvas pixels per world unit
             canvas_h = self._canvas_native.height()
             canvas_w = self._canvas_native.width()
 
-            half_h_data = canvas_h / (2.0 * zoom)
-            half_w_data = canvas_w / (2.0 * zoom)
+            half_h_world = canvas_h / (2.0 * zoom)
+            half_w_world = canvas_w / (2.0 * zoom)
 
-            full_h, full_w = self._morph_full_shape_yx
+            full_h, full_w = self._world_shape_yx
             scale_x = sw / full_w
             scale_y = sh / full_h
 
             # Viewport in minimap pixel coords
-            cy_data = center[-2] if len(center) >= 2 else center[0]
-            cx_data = center[-1] if len(center) >= 1 else center[0]
+            cy_world = center[-2] if len(center) >= 2 else center[0]
+            cx_world = center[-1] if len(center) >= 1 else center[0]
 
-            rect_y = int((cy_data - half_h_data) * scale_y) + oy
-            rect_x = int((cx_data - half_w_data) * scale_x) + ox
-            rect_h = int(2 * half_h_data * scale_y)
-            rect_w = int(2 * half_w_data * scale_x)
+            rect_y = int((cy_world - half_h_world) * scale_y) + oy
+            rect_x = int((cx_world - half_w_world) * scale_x) + ox
+            rect_h = int(2 * half_h_world * scale_y)
+            rect_w = int(2 * half_w_world * scale_x)
 
             # Clip to minimap bounds
             rect_x = max(ox, min(rect_x, ox + sw))
@@ -139,15 +147,15 @@ class MinimapWidget(QWidget):
         if click_x < 0 or click_y < 0 or click_x > sw or click_y > sh:
             return
 
-        full_h, full_w = self._morph_full_shape_yx
+        full_h, full_w = self._world_shape_yx
         scale_x = sw / full_w
         scale_y = sh / full_h
 
-        data_x = click_x / scale_x
-        data_y = click_y / scale_y
+        world_x = click_x / scale_x
+        world_y = click_y / scale_y
 
-        # napari camera.center is (z, y, x)
+        # napari camera.center is (z, y, x), in world units
         center = list(self._viewer.camera.center)
-        center[-2] = data_y
-        center[-1] = data_x
+        center[-2] = world_y
+        center[-1] = world_x
         self._viewer.camera.center = tuple(center)

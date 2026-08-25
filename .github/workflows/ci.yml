@@ -26,6 +26,22 @@ jobs:
           cache-environment: true    # cache the solved env across runs
           cache-downloads: true
 
+      # The solver reaching for PyQt5, or walking napari back a minor version to
+      # ease an unrelated pin, is silent otherwise — and both have happened. A
+      # green suite on the wrong backend is exactly the regression this migration
+      # was for, so assert the resolved stack before testing it.
+      - name: Assert the resolved Qt backend
+        run: |
+          python - <<'EOF'
+          import napari, qtpy
+          from packaging.version import Version
+          print("napari", napari.__version__, "| qtpy", qtpy.API_NAME, qtpy.QT_VERSION)
+          assert qtpy.API_NAME == "PyQt6", f"expected PyQt6, got {qtpy.API_NAME}"
+          # Version(), not a string compare: "0.10.0" < "0.8" lexically.
+          assert Version(napari.__version__) >= Version("0.8"), \
+              f"napari downgraded to {napari.__version__}"
+          EOF
+
       - name: Run test suite
         env:
           MPLBACKEND: Agg            # headless matplotlib; no X server needed
