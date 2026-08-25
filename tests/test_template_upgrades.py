@@ -224,7 +224,7 @@ def _row(widget, template_id):
     for g in range(tree.topLevelItemCount()):
         group = tree.topLevelItem(g)
         for c in range(group.childCount()):
-            if group.child(c).data(0, Qt.UserRole) == template_id:
+            if group.child(c).data(0, Qt.ItemDataRole.UserRole) == template_id:
                 return tree, group.child(c)
     raise AssertionError(f"{template_id} not listed")
 

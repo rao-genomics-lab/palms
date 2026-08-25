@@ -59,12 +59,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
     table_label = QLabel("Annotation types (click colour to change):")
     type_table = QTableWidget(0, 3)
     type_table.setHorizontalHeaderLabels(["Type", "Count", "Colour"])
-    type_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-    type_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-    type_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+    type_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    type_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+    type_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
     type_table.setMaximumHeight(200)
-    type_table.setEditTriggers(QTableWidget.NoEditTriggers)
-    type_table.setSelectionBehavior(QTableWidget.SelectRows)
+    type_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    type_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
 
     # ── Action buttons ────────────────────────────────────────────────────────
     btn_row1 = QWidget()
@@ -240,9 +240,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         reply = QMessageBox.question(
             None, "Clear annotations",
             "Remove all annotations? This cannot be undone.",
-            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
-        if reply != QMessageBox.Yes:
+        if reply != QMessageBox.StandardButton.Yes:
             return
         layer.data = []
         layer.properties = {"annotation_type": []}
@@ -406,6 +406,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
     scroll = QScrollArea()
     scroll.setWidget(container)
     scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
 
     return scroll, {"restore_session": _restore_session}

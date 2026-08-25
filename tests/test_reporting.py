@@ -188,7 +188,7 @@ def test_a_display_without_an_event_loop_is_still_headless(monkeypatch, qapp):
     ``conftest.py`` deliberately leaves ``QT_QPA_PLATFORM`` unset when there is
     a ``DISPLAY``, so the platform check — the only signal there used to be —
     saw nothing wrong. But a `pytest` process has no event loop, so the
-    permission modal's ``exec_()`` had nothing to dismiss it and blocked
+    permission modal's ``exec()`` had nothing to dismiss it and blocked
     forever. It reproduced deterministically in
     ``test_persistence_safety.py::test_a_failed_persist_leaves_the_table_readable``
     once any earlier test had created the QApplication.
@@ -222,7 +222,7 @@ def test_a_real_event_loop_is_detected(monkeypatch, qapp):
         qapp.quit()
 
     QTimer.singleShot(0, _inside)
-    qapp.exec_()
+    qapp.exec()
 
     assert seen["loop"] is True
     assert seen["headless"] is False, "a real GUI must still get its dialog"
@@ -251,7 +251,7 @@ def test_no_modal_is_raised_when_qt_is_headless(tmp_path, monkeypatch, qapp):
 
     ``QApplication.instance() is not None`` was the only guard, so once a
     fixture created one before the tests that inject write failures, the
-    permission dialog's ``exec_()`` blocked with no event loop and no human able
+    permission dialog's ``exec()`` blocked with no event loop and no human able
     to dismiss it. The failure must still be logged and notified — only the
     modal is suppressed.
     """

@@ -76,7 +76,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     tree.setHeaderLabels(["Item", "Size", "Detail"])
     # Check state is the selection mechanism; a row highlight on top of it only
     # invites the reading that the highlighted row is the one about to go.
-    tree.setSelectionMode(QTreeWidget.NoSelection)
+    tree.setSelectionMode(QTreeWidget.SelectionMode.NoSelection)
     tree.setColumnWidth(0, 240)
     tree.setColumnWidth(1, 80)
     tree.setMinimumHeight(320)
@@ -115,8 +115,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             item = stack.pop()
             if item is None:
                 continue
-            key = item.data(0, Qt.UserRole)
-            if key and item.checkState(0) == Qt.Checked:
+            key = item.data(0, Qt.ItemDataRole.UserRole)
+            if key and item.checkState(0) == Qt.CheckState.Checked:
                 found.add(key)
             stack += [item.child(i) for i in range(item.childCount())]
         return found
@@ -192,9 +192,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         answer = QMessageBox.question(
             None, title, store_inventory.describe_plan(plan),
-            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel,
         )
-        if answer != QMessageBox.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
             status.value = "Deletion cancelled."
             return
 
@@ -243,9 +243,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"{len(result.removed)} item(s) were removed from the store.\n\n"
             "Reload the dataset now? The viewer still has the old elements "
             "loaded until you do.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes,
         )
-        if answer != QMessageBox.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
             report_text.append(
                 "\n\nNot reloaded. Reopen the dataset when convenient.")
             return
@@ -313,7 +313,7 @@ def _dim_brush():
     app = QApplication.instance()
     if app is None:
         return None
-    return QBrush(app.palette().color(QPalette.Disabled, QPalette.Text))
+    return QBrush(app.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text))
 
 
 def _add_node(tree_parent, node, restore: set[str]) -> QTreeWidgetItem:
@@ -321,14 +321,14 @@ def _add_node(tree_parent, node, restore: set[str]) -> QTreeWidgetItem:
     item.setText(0, _display_name(node))
     item.setText(1, human_bytes(node.size_bytes) if node.size_bytes else "")
     item.setText(2, node.detail or node.blocked_reason)
-    item.setData(0, Qt.UserRole, node.key)
+    item.setData(0, Qt.ItemDataRole.UserRole, node.key)
     if node.deletable:
-        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(0, Qt.Checked if node.key in restore else Qt.Unchecked)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(0, Qt.CheckState.Checked if node.key in restore else Qt.CheckState.Unchecked)
         if node.recoverable == store_inventory.RECOVER_NONE:
             item.setToolTip(0, "Not recoverable — no copy is kept.")
     else:
-        item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
         # Dimmed, never setDisabled(True): Qt propagates a disabled item down
         # its whole subtree, so blocking `group:tables` and `tables/table` also
         # greyed out every clustering underneath them — the one thing this tab

@@ -88,7 +88,7 @@ def make_tab(*widgets_and_natives) -> QWidget:
     scroll = QScrollArea()
     scroll.setWidget(inner)
     scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
     return scroll
 
 
@@ -117,7 +117,7 @@ def make_progress_dialog(title: str, parent=None):
     from qtpy.QtCore import Qt
     dlg = QDialog(parent)
     dlg.setWindowTitle(title)
-    dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowCloseButtonHint)
+    dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
     dlg.setMinimumWidth(500)
     layout = _QVBoxLayout(dlg)
     lbl = QLabel("Starting…")
@@ -777,14 +777,14 @@ def create_shared_helpers(ctx: ViewerContext):
         scroll.setWidget(scroll_content)
         outer_layout.addWidget(scroll)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         outer_layout.addWidget(buttons)
         dialog.setLayout(outer_layout)
         dialog.resize(min(800, 250 * n_cols), min(600, 30 * n_per_col + 60))
 
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             new_labels = {cid: e.text() for cid, e in edits.items()}
             if "cluster_labels" not in state or not isinstance(state["cluster_labels"], dict):
                 state["cluster_labels"] = {}
@@ -908,7 +908,7 @@ def create_view_menu(viewer, _app):
         try:
             if checked:
                 from qtpy.QtCore import Qt
-                viewer.window._qt_window.addDockWidget(Qt.RightDockWidgetArea, dw)
+                viewer.window._qt_window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dw)
                 dw.show()
             else:
                 dw.hide()

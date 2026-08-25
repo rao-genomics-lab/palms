@@ -48,7 +48,7 @@ def test_every_registered_template_is_listed(tab):
     for i in range(tree.topLevelItemCount()):
         group = tree.topLevelItem(i)
         for j in range(group.childCount()):
-            listed.add(group.child(j).data(0, Qt.UserRole))
+            listed.add(group.child(j).data(0, Qt.ItemDataRole.UserRole))
     assert listed == set(builtin_ids())
 
 
@@ -714,7 +714,7 @@ def test_a_frozen_block_edit_is_reported(editable):
         tree.topLevelItem(g).child(c)
         for g in range(tree.topLevelItemCount())
         for c in range(tree.topLevelItem(g).childCount())
-        if tree.topLevelItem(g).child(c).data(0, Qt.UserRole) == "genes.cnv_infercnv"
+        if tree.topLevelItem(g).child(c).data(0, Qt.ItemDataRole.UserRole) == "genes.cnv_infercnv"
     )
     tree.setCurrentItem(cnv)
 

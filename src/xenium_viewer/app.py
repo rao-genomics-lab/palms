@@ -497,7 +497,7 @@ def _build_control_panel(ctx: ViewerContext):
     tools_tabs.addTab(templates_widget, "Templates")
 
     for _group in (cells_tabs, genes_tabs, spatial_tabs, images_tabs, tools_tabs):
-        _group.setTabPosition(QTabWidget.South)
+        _group.setTabPosition(QTabWidget.TabPosition.South)
 
     tab_widget = QTabWidget()
     tab_widget.addTab(cells_tabs,   "Cells")
@@ -1324,11 +1324,11 @@ def run_viewer(data_path=None, no_cache: bool = False):
             "Stop them now, or let them continue in the background after the app closes "
             "(results will be picked up next time you open this dataset)?"
         )
-        stop_btn = box.addButton("Stop analysis", QMessageBox.DestructiveRole)
-        cont_btn = box.addButton("Continue in background", QMessageBox.AcceptRole)
-        cancel_btn = box.addButton("Cancel", QMessageBox.RejectRole)
+        stop_btn = box.addButton("Stop analysis", QMessageBox.ButtonRole.DestructiveRole)
+        cont_btn = box.addButton("Continue in background", QMessageBox.ButtonRole.AcceptRole)
+        cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(cont_btn)
-        box.exec_()
+        box.exec()
         clicked = box.clickedButton()
         if clicked is stop_btn:
             return "stop"
@@ -1544,9 +1544,9 @@ def run_viewer(data_path=None, no_cache: bool = False):
             )
         reply = QMessageBox.question(
             None, "Preprocess Dataset", msg,
-            QMessageBox.Ok | QMessageBox.Cancel,
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         )
-        if reply != QMessageBox.Ok:
+        if reply != QMessageBox.StandardButton.Ok:
             return
 
         # Clear viewer to free memory before heavy I/O
@@ -1581,7 +1581,7 @@ def run_viewer(data_path=None, no_cache: bool = False):
         worker.progress.connect(_on_progress)
         worker.finished.connect(_on_finished)
         worker.start()
-        dlg.exec_()  # blocks Qt event loop until dlg.accept() is called
+        dlg.exec()  # blocks Qt event loop until dlg.accept() is called
 
     # ── File / View menus — added once to napari's native menus ─────────────
     create_file_menu(viewer, _on_open_dataset, _on_preprocess_dataset)
