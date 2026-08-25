@@ -255,3 +255,134 @@ def test_minimap_maps_a_click_to_world_not_to_pixels():
     assert scaled._world_shape_yx == pytest.approx((4000 * PX, 5000 * PX))
     # An unscaled viewer (pixel_size=1.0) must behave exactly as before.
     assert (full_shape[0] * 1.0, full_shape[1] * 1.0) == full_shape
+
+
+# ── the console noise the conversion used to cost ────────────────────────────
+#
+# Every layer added after the first emitted:
+#
+#     Inconsistent units across layers; units will not be used for rendering.
+#
+# ~20 times on a real dataset load. It is spurious: the new layer briefly carries
+# napari's default pixel units while the rest are in µm, napari's canvas handler
+# triggers a draw inside that window, and by the next draw everything agrees.
+
+@pytest.fixture
+def viewer():
+    """A real offscreen napari Viewer, created and torn down per test.
+
+    napari's own ``make_napari_viewer`` needs ``pytest-qt``, which this env does
+    not have. These two tests genuinely need a Viewer — the behaviour under test
+    is what napari's *canvas* does during layer insertion, which no stub
+    reproduces.
+    """
+    napari = pytest.importorskip("napari")
+    v = napari.Viewer(show=False)
+    try:
+        yield v
+    finally:
+        v.close()
+
+
+def test_adding_layers_does_not_warn_about_inconsistent_units(viewer, monkeypatch):
+    """The whole point: a normal dataset load must not produce that message."""
+    import napari._vispy.canvas as canvas_mod
+    from xenium_viewer.app import _install_unit_scaling
+
+    _install_unit_scaling(viewer, PX)
+
+    seen = []
+    real = canvas_mod.show_warning
+    monkeypatch.setattr(canvas_mod, "show_warning", lambda m, *a, **k: seen.append(str(m)))
+
+    for name in ("morphology_focus", "cell_labels", "nucleus_labels", "he_image"):
+        viewer.add_image(np.zeros((16, 16), dtype=np.uint8), name=name)
+
+    noisy = [m for m in seen if "Inconsistent units" in m]
+    assert noisy == [], (
+        f"adding layers emitted {len(noisy)} spurious units warning(s); the world is "
+        "consistent by the next draw, so the message describes a state that is over"
+    )
+    assert viewer.layers.extent.units is not None, "units must still actually agree"
+
+
+def test_a_real_mismatch_outside_an_insertion_still_warns(viewer, monkeypatch):
+    """Suppression is a window, not a mute.
+
+    If it silenced the message outright, a layer genuinely stuck in pixels would
+    become invisible — which is a worse outcome than the noise.
+    """
+    import napari._vispy.canvas as canvas_mod
+    from xenium_viewer.app import _install_unit_scaling
+
+    _install_unit_scaling(viewer, PX)
+    viewer.add_image(np.zeros((16, 16), dtype=np.uint8), name="a")
+    viewer.add_image(np.zeros((16, 16), dtype=np.uint8), name="b")
+
+    seen = []
+    monkeypatch.setattr(canvas_mod, "show_warning", lambda m, *a, **k: seen.append(str(m)))
+
+    viewer.layers["b"].units = ("pixel", "pixel")          # a genuine disagreement
+    viewer.window._qt_viewer.canvas._update_world_units()
+
+    assert any("Inconsistent units" in m for m in seen), (
+        "a mismatch outside the insertion window must reach the user"
+    )
+
+
+def test_the_suppression_window_always_closes():
+    """A stuck counter would mute the warning for the rest of the session."""
+    quiet = units.quiet_insertion()
+    before = quiet._depth
+    try:
+        with quiet:
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    assert quiet._depth == before, "the depth must unwind even when the body raises"
+
+
+# ── the failure the suppression must not hide ────────────────────────────────
+
+def test_apply_to_layer_reports_whether_it_took():
+    from napari.layers import Image
+
+    layer = Image(np.zeros((4, 4), dtype=np.uint8))
+    assert units.apply_to_layer(layer, PX) is True
+    assert str(layer.units[0]) == "micrometer"
+
+
+def test_a_layer_that_refuses_the_scale_is_reported_not_swallowed(monkeypatch):
+    """The one case napari's warning was right about, said better.
+
+    A layer left in pixels really is misplaced relative to every other layer, so
+    this must be surfaced — naming the layer, which napari's message does not.
+    """
+    from xenium_viewer.utils import reporting
+
+    class _Stubborn:
+        name = "wont_scale"
+        ndim = 2
+
+        @property
+        def scale(self):
+            return (1.0, 1.0)
+
+        @scale.setter
+        def scale(self, value):
+            raise ValueError("this layer does not do scales")
+
+    assert units.apply_to_layer(_Stubborn(), PX) is False
+
+    notified = []
+    monkeypatch.setattr(reporting, "_notify", lambda m: notified.append(m))
+    reporting._layer_scaling_failures.discard("wont_scale")
+    reporting.report_layer_scaling_failure("wont_scale")
+
+    assert notified and "wont_scale" in notified[0]
+    assert "pixel coordinates" in notified[0]
+    assert "wont_scale" in reporting.layer_scaling_failures()
+
+    notified.clear()
+    reporting.report_layer_scaling_failure("wont_scale")
+    assert notified == [], "once per layer per session, not once per redraw"

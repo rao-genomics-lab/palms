@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased] — 2026-08-25 (quiet the units warning)
+
+### Fixed
+- **Loading a dataset no longer prints `Inconsistent units across layers` once per
+  layer.** Roughly twenty lines on a real load, and spurious every time: a new layer
+  arrives carrying napari's default pixel units while every existing layer is already
+  in micrometres, and napari's own canvas handler triggers a draw inside that window —
+  `on_draw -> _update_scenegraph -> add_layer_visual_mapping -> _update_world_units` —
+  which reads `viewer.layers.extent.units`, finds the disagreement, and warns. By the
+  next draw the layer is stamped and everything agrees; measured, `extent.units`
+  settles to micrometres and the scale bar renders correctly. The message describes a
+  state that has already stopped being true.
+
+  Connection order does not fix it (`position="first"` on `inserted` changes nothing —
+  the draw is not ordered by it), and setting units at the ~20 `add_*` call sites is
+  the design `utils/units.py` exists to avoid, because one missed site leaves that
+  layer *misplaced* rather than merely mislabelled.
+
+  So the message is dropped for the span of one insertion — `inserting` to the end of
+  the `inserted` handler — and only that message. A genuine mismatch outside that
+  window still reaches the user; there is a test for each direction.
+
+  **The one real failure this could have masked is now reported better than the
+  message it replaces.** A layer that refuses the µm scale really does leave the world
+  inconsistent, so `apply_to_layer` returns whether it took, and
+  `reporting.report_layer_scaling_failure` names the layer and says what it means —
+  which napari's message never did. Once per layer per session.
+
 ## [Unreleased] — 2026-08-25 (a cropped dataset opens like a dataset)
 
 ### Fixed

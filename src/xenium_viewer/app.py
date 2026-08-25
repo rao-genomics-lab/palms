@@ -655,11 +655,30 @@ def _install_unit_scaling(viewer, pixel_size: float) -> None:
     from xenium_viewer.utils import units as _units
 
     def _stamp(layer):
-        _units.apply_to_layer(layer, pixel_size)
+        if _units.apply_to_layer(layer, pixel_size):
+            return
+        # The one case napari's own warning would have been right about. Reported
+        # here instead, because this names the layer and that one does not — and
+        # because the window that suppresses it closes on the next line.
+        from xenium_viewer.utils import reporting
+        reporting.report_layer_scaling_failure(str(getattr(layer, "name", "?")))
+
+    # napari evaluates unit consistency mid-insertion, before the new layer has
+    # been stamped, and warns about a state that is over by the next draw. See
+    # utils/units.py for the trace and why connection order cannot fix it.
+    def _on_inserting(_event=None):
+        _units.quiet_insertion().__enter__()
+
+    def _on_inserted(event):
+        try:
+            _stamp(event.value)
+        finally:
+            _units.quiet_insertion().__exit__(None, None, None)
 
     for layer in viewer.layers:
         _stamp(layer)
-    viewer.layers.events.inserted.connect(lambda e: _stamp(e.value))
+    viewer.layers.events.inserting.connect(_on_inserting)
+    viewer.layers.events.inserted.connect(_on_inserted)
 
     viewer.scale_bar.visible = True
     viewer.scale_bar.colored = False
