@@ -371,3 +371,69 @@ def test_tab_pages_follow_the_house_style(page: Path):
         f"{page.name} has sections {headings}, expected "
         "['## Controls', '## Workflow', '## Notes']"
     )
+
+
+# ── mkdocs: the wiki link style, rendered ────────────────────────────────────
+#
+# docs/ is authored for the GitHub Wiki, where links are extensionless. mkdocs
+# reads those as paths to files that do not exist, so the built site had 158 dead
+# cross-links — the reason `mkdocs.yml` could ship a complete nav for months while
+# nothing on the rendered site actually worked. `mkdocs_hooks.py` rewrites them at
+# build time so the source keeps one convention.
+#
+# These tests exercise the hook directly rather than running mkdocs: the rewrite
+# rule is what can be wrong, and CI builds the site for real in the lint job.
+
+sys.path.insert(0, str(REPO))
+import mkdocs_hooks  # noqa: E402
+
+
+def test_bare_wiki_links_gain_an_extension():
+    out = mkdocs_hooks.on_page_markdown("see [Clustering](Tab-Clustering) for more")
+    assert "(Tab-Clustering.md)" in out
+
+
+def test_an_anchor_survives_the_rewrite():
+    """`Analysis-Templates#normalize` is a real link in API-Reference.md."""
+    out = mkdocs_hooks.on_page_markdown("[normalize](Analysis-Templates#normalize)")
+    assert "(Analysis-Templates.md#normalize)" in out
+
+
+@pytest.mark.parametrize("target", [
+    "https://example.com/x",
+    "http://example.com/x",
+    "mailto:someone@example.com",
+    "#a-heading-on-this-page",
+    "screenshots/tab-cnv.png",
+    "Tab-CNV.md",
+    "./relative.md",
+    "/absolute",
+])
+def test_links_that_already_mean_what_they_say_are_untouched(target):
+    src = f"[x]({target})"
+    assert mkdocs_hooks.on_page_markdown(src) == src
+
+
+def test_images_are_left_alone():
+    """An image target carries an extension, and must never gain `.md`."""
+    src = "![Crop Dataset](screenshots/tab-crop-dataset.png)"
+    assert mkdocs_hooks.on_page_markdown(src) == src
+
+
+def test_every_bare_link_in_docs_rewrites_onto_a_real_page():
+    """The rewrite has to land on a file, or the site 404s as before.
+
+    Derived from the pages actually present, not from a remembered list — the
+    same rule the rest of this module follows.
+    """
+    pages = {p.name for p in DOCS.glob("*.md")}
+    missing = set()
+    for md in sorted(DOCS.glob("*.md")):
+        for target in LINK_RE.findall(md.read_text()):
+            rewritten = mkdocs_hooks._rewrite(target)
+            if rewritten == target:
+                continue                       # untouched: external, anchor, has an extension
+            page = rewritten.split("#", 1)[0]
+            if page not in pages:
+                missing.add(f"{md.name} -> {target}")
+    assert not missing, f"links that rewrite onto a page that does not exist: {sorted(missing)}"

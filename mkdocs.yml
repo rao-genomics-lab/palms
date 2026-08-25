@@ -5,6 +5,33 @@ repo_url: https://github.com/sraorao/xenium_viewer
 repo_name: sraorao/xenium_viewer
 
 docs_dir: docs
+
+# docs/ doubles as the GitHub Wiki source, and internal planning notes live there
+# too. Same convention the publish script uses (scripts/push_to_wiki.sh): a page is
+# Title-Case-With-Hyphens.md, an internal note is lower-case. _Sidebar.md is a wiki
+# nav construct and mkdocs has its own nav.
+exclude_docs: |
+  [a-z]*.md
+  _*.md
+
+# Without this a dead cross-link is only an INFO line and the build still "passes",
+# which is how a nav for 44 pages shipped for months while every cross-link on the
+# rendered site would have 404'd. Measured: 158 of them. --strict turns these into
+# build failures.
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
+# docs/ is authored as GitHub Wiki source, where links are extensionless
+# ([Clustering](Tab-Clustering)). mkdocs reads those as paths to files that do not
+# exist. The hook appends .md at build time, which keeps one link convention in the
+# source rather than two.
+hooks:
+  - mkdocs_hooks.py
+
 theme:
   name: readthedocs
 

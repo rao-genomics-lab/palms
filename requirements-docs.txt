@@ -1,0 +1,8 @@
+# Read the Docs builds the site from docs/ alone.
+#
+# Analysis-Templates.md and API-Reference.md are *generated and checked in*
+# (scripts/generate_docs.py, guarded by tests/test_generated_docs.py), so the
+# build never imports xenium_viewer — no conda env, no scanpy, no Qt. Keep it
+# that way: a docs build that needs the application is a docs build that breaks
+# whenever the application does.
+mkdocs>=1.5

@@ -68,3 +68,18 @@ jobs:
       # without style churn on the existing codebase.
       - name: Ruff (E9, F63, F7, F82)
         run: ruff check --select E9,F63,F7,F82 src tests scripts
+
+      # The docs site had never been built. Its nav listed 44 pages while every
+      # cross-link on the rendered site would have 404'd — 158 of them — because
+      # docs/ is authored in the extensionless GitHub-Wiki link style. --strict
+      # plus the link validation in mkdocs.yml makes that a build failure.
+      #
+      # Deliberately in the lint job, not the conda one: the pages that carry
+      # code are generated and checked in, so the site builds from docs/ alone
+      # with no scanpy, no Qt and no conda env. A docs build that needs the
+      # application is a docs build that breaks whenever the application does.
+      - name: Install docs toolchain
+        run: pip install -r requirements-docs.txt
+
+      - name: Build the docs site (strict)
+        run: mkdocs build --strict --site-dir /tmp/site
