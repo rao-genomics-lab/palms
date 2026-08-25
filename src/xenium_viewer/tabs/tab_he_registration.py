@@ -171,6 +171,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         try:
             from spatialdata.transformations import Affine as SdAffine, set_transformation
+            from xenium_viewer.utils.adata_persistence import _load_affine_from_sdata_element
             flip = _build_flip_affine()
             fine = he_state["affine_3x3"]
             coarse = he_state["coarse_affine"]
@@ -180,6 +181,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 combined = coarse @ flip
             else:
                 combined = flip
+            # See the twin guard in tab_arms._save_arms_affine_to_sdata: an
+            # identity built from an empty he_state must never overwrite a
+            # registration the element already carries.
+            if fine is None and coarse is None and np.allclose(combined, np.eye(3), atol=1e-6):
+                if _load_affine_from_sdata_element(sdata, "he_image") is not None:
+                    return
             sd_affine = SdAffine(combined, input_axes=("y", "x"), output_axes=("y", "x"))
             set_transformation(sdata.images["he_image"], sd_affine, "global")
             sdata.write_transformations("he_image")
@@ -500,15 +507,33 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_state["he_filename"] = he_filename
         he_state["he_path"] = None
         base = pyramid_rgb[0]
-        he_state["he_shape_yx"] = session_he_data.get("he_shape_yx") or (base.shape[0], base.shape[1])
+        # Resolve the placement before the flip widgets are read: on a store with
+        # no viewer_session the element's own transform is the only record of the
+        # registration, and it already contains the flip. See utils/registration_seed.
+        from xenium_viewer.utils.registration_seed import seed_registration
+        reg = seed_registration(
+            session_he_data, sdata, "he_image",
+            affine_key="affine_3x3", coarse_key="coarse_affine",
+            flip_v_key="flip_v", flip_h_key="flip_h", shape_key="he_shape_yx",
+            element_shape_yx=(base.shape[0], base.shape[1]),
+        )
+        he_state["he_shape_yx"] = reg.shape_yx or (base.shape[0], base.shape[1])
+        # Blocked: on_flip_changed writes the element transform and records a
+        # `he:flip` provenance node. Restoring a value the user chose earlier is
+        # not the user choosing it again.
+        with he_flip_v.changed.blocked(), he_flip_h.changed.blocked():
+            he_flip_v.value = reg.flip_v
+            he_flip_h.value = reg.flip_h
         he_layer = viewer.add_image(
             pyramid_rgb, name=f"H&E ({he_filename})",
             rgb=True, blending="translucent",
             opacity=he_opacity_slider.value / 100.0,
         )
         he_state["he_layer"] = he_layer
-        he_state["affine_3x3"] = session_he_data.get("affine_3x3")
-        he_state["coarse_affine"] = session_he_data.get("coarse_affine")
+        he_state["affine_3x3"] = reg.fine
+        he_state["coarse_affine"] = reg.coarse
+        he_state["flip_v"] = reg.flip_v
+        he_state["flip_h"] = reg.flip_h
         _apply_he_affine()
         _create_landmark_layers()
         xen_lm = session_he_data.get("xenium_landmarks")
@@ -521,15 +546,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_load_button.enabled = True
         coarse_align_button.enabled = morph_thumb is not None
         has_affine = he_state["affine_3x3"] is not None or he_state["coarse_affine"] is not None
-        he_status_label.value = f"H&E restored: {he_filename}" + (" (with registration)" if has_affine else "")
-        print(f"  Restored H&E from cache: {he_filename}" + (" with registration" if has_affine else ""))
+        how = ""
+        if has_affine:
+            how = (" (registration from the image itself)" if reg.source == "element"
+                   else " (with registration)")
+        he_status_label.value = f"H&E restored: {he_filename}{how}"
+        print(f"  Restored H&E from cache: {he_filename}"
+              + (f" with registration ({reg.source})" if has_affine else ""))
 
     def _restore_session(session):
         from xenium_viewer.tabs._helpers import StatusProxy as _SP  # noqa: avoid circular
 
         if sdata is not None and "he_image" in sdata.images:
-            he_flip_v.value = session.get("flip_v", False)
-            he_flip_h.value = session.get("flip_h", False)
+            # The flips are set in _on_he_restored_from_sdata, from the same
+            # record the affine comes from — setting them here too would pair a
+            # session flip with an element affine that already contains one.
             _session_he_data = {
                 "affine_3x3": session.get("affine_3x3"),
                 "coarse_affine": session.get("coarse_affine"),
@@ -537,6 +568,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 "he_landmarks": session.get("he_landmarks"),
                 "he_filename": session.get("he_filename", "H&E"),
                 "he_shape_yx": session.get("he_shape_yx"),
+                "flip_v": session.get("flip_v", False),
+                "flip_h": session.get("flip_h", False),
             }
             he_status_label.value = "Restoring H&E from cache..."
             gen = ctx.dataset_generation

@@ -11,6 +11,7 @@ the drawn shape.
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -27,6 +28,8 @@ from shapely.affinity import scale as shapely_scale
 from shapely.geometry import Polygon
 
 from xenium_viewer.utils import sdata_write
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -128,7 +131,11 @@ def _carry_over_clusterings(ctx: "ViewerContext", adata_cropped) -> None:
         adata_cropped.obs[col] = pd.Categorical(aligned)
 
         label_dict = cluster_labels.get(name)
-        if label_dict:
+        # `any(...)`, not just truthiness: a clustering whose names were all
+        # cleared still has a dict, and writing it produced a
+        # `cluster_labels_<name>` column of empty strings — which reads back as a
+        # named clustering with 24 blank names.
+        if label_dict and any(str(v).strip() for v in label_dict.values()):
             str_map = {str(k): str(v) for k, v in label_dict.items()}
             adata_cropped.obs[f"{CLUSTER_LABELS_PREFIX}{name}"] = (
                 adata_cropped.obs[col].astype(str).map(str_map).fillna("").astype(object)
@@ -144,21 +151,232 @@ def _polygon_pixel_bbox(polygon_yx: np.ndarray, shape_yx: tuple) -> tuple:
     return row_min, row_max, col_min, col_max
 
 
+def crop_export_note(name: str, output_dir, include_overlays: bool, notes) -> tuple:
+    """The `crop_export:<name>` provenance node, as ``(id, code, label)``.
+
+    One function because the node is built twice — once into the graph the export
+    carries, before the session is written, and once into the source dataset's own
+    graph after the worker returns. Two constructions of the same string is the
+    drift `run_step` exists to prevent, and here the two would be in different
+    files.
+    """
+    joined = "; ".join(notes) if notes else ""
+    carried = ("with every registered overlay and drawn region, cropped to "
+               "the same region" if include_overlays else "core elements only")
+    code = (
+        f"\n# Crop & Export dataset '{name}' (writes a standalone dataset)\n"
+        f"# from xenium_viewer.utils.crop_export import crop_and_export\n"
+        f"# crop_and_export(ctx, polygon_yx=<region drawn in the \"Crop Regions\" layer>,\n"
+        f"#                 output_dir=Path({str(output_dir)!r}), name={name!r},\n"
+        f"#                 include_overlays={include_overlays!r})\n"
+        f"# -> wrote standalone dataset to \"{Path(output_dir) / name}\" ({carried})"
+        + (f"\n# -> not carried: {joined}" if joined else "")
+    )
+    return f"crop_export:{name}", code, f"Crop & export: {name}"
+
+
+def _unresolved_note(elem_name, shape_yx, xenium_shape_yx) -> str:
+    """Why an overlay was not sliced, in terms the user can act on."""
+    return (
+        f"{elem_name}: frame unknown — the element declares an identity transform and "
+        f"its extent ({shape_yx[0]}x{shape_yx[1]}) is not the morphology grid "
+        f"({xenium_shape_yx[0]}x{xenium_shape_yx[1]}), and no registration for it was "
+        "found in the viewer. Not sliced, because slicing it would take a rectangle of "
+        "the wrong picture. Register it in the source dataset and re-export."
+    ) if xenium_shape_yx else (
+        f"{elem_name}: frame unknown and the morphology grid could not be read. Not sliced."
+    )
+
+
+def _collect_overlays(ctx, crop_bbox, poly_xy, progress,
+                      viewer_state=None) -> tuple[dict, dict, dict, list]:
+    """Crop every registered overlay and drawn region the store holds.
+
+    Returns ``(images, labels, shapes, notes)`` ready to hand to ``SpatialData``.
+    A single overlay that cannot be carried is skipped and named in *notes*
+    rather than failing the export: the core dataset is the thing the user asked
+    for, and losing it over one unregistered stray image would be the worse
+    trade. The report is what keeps that from being silent.
+
+    ``viewer_state`` is an :class:`~xenium_viewer.utils.crop_state.OverlayFrames`
+    captured on the GUI thread. Where it names a frame, that frame wins over the
+    element's stored transformation — see ``crop_state`` for why the element is
+    not trustworthy on its own.
+
+    Rasters are done before shapes because a shapes element written in a raster's
+    pixels needs that raster's slice origin, which only exists once it is cropped.
+    """
+    from xenium_viewer.utils import crop_overlays
+    from xenium_viewer.utils.crop_state import OverlayFrames, capture_overlay_frames
+
+    if viewer_state is None:
+        viewer_state = capture_overlay_frames(ctx)
+    if not isinstance(viewer_state, OverlayFrames):    # pragma: no cover - defensive
+        viewer_state = OverlayFrames(frames={}, companions={}, xenium_shape_yx=None)
+
+    frames = viewer_state.frames
+    companions = viewer_state.companions
+    xenium_shape = viewer_state.xenium_shape_yx
+
+    images, labels, shapes, notes = {}, {}, {}, []
+    origins: dict = {}
+    names = crop_overlays.user_overlay_names(ctx.sdata)
+    total = sum(len(v) for v in names.values())
+    if not total:
+        return images, labels, shapes, notes
+
+    def _frame_for(elem_name, element):
+        """live layer -> stored element transform -> identity."""
+        if elem_name in frames:
+            return np.asarray(frames[elem_name], dtype=np.float64)
+        return crop_overlays.element_affine(element)
+
+    done = 0
+    for group in ("images", "labels", "shapes"):
+        for elem_name in names[group]:
+            done += 1
+            progress(int(76 + 6 * done / total), f"Cropping overlay '{elem_name}'...")
+            try:
+                element = ctx.sdata[elem_name]
+                if group == "shapes":
+                    companion = companions.get(elem_name)
+                    if companion is not None and companion in origins:
+                        frame = crop_overlays.Frame(
+                            _frame_for(companion, ctx.sdata[companion]),
+                            origins[companion])
+                    elif companion is not None and companion in frames:
+                        frame = crop_overlays.Frame(
+                            np.asarray(frames[companion], dtype=np.float64), None)
+                    elif elem_name in frames:
+                        frame = crop_overlays.Frame(
+                            np.asarray(frames[elem_name], dtype=np.float64), None)
+                    else:
+                        frame = None
+                    out = crop_overlays.crop_vector_overlay(
+                        element, elem_name, crop_bbox, poly_xy, frame=frame)
+                    if out is None:
+                        notes.append(f"{elem_name}: nothing inside the crop")
+                        continue
+                    shapes[elem_name] = out
+                else:
+                    frame_affine = _frame_for(elem_name, element)
+                    shape_yx = _raster_shape_yx(element)
+                    if shape_yx is not None and not crop_overlays.frame_is_credible(
+                            frame_affine, shape_yx, xenium_shape):
+                        # Not a failure — an honest "I do not know where this goes".
+                        # Slicing on a guess is the one irreversible move here.
+                        notes.append(_unresolved_note(elem_name, shape_yx, xenium_shape))
+                        continue
+                    out = crop_overlays.crop_raster_overlay(
+                        element, crop_bbox, _safe_scale_factors,
+                        frame_affine=frame_affine)
+                    if out is None:
+                        notes.append(f"{elem_name}: does not overlap the crop")
+                        continue
+                    (labels if out.is_labels else images)[elem_name] = out.element
+                    origins[elem_name] = out.origin_yx
+            except Exception as e:
+                log.warning("could not carry overlay %r through the crop: %s", elem_name, e)
+                notes.append(f"{elem_name}: skipped ({e})")
+    return images, labels, shapes, notes
+
+
+def _write_session(ctx, staging_dir, name, output_dir, include_overlays,
+                   overlay_notes, new_sdata, adata_cropped) -> None:
+    """Give the export a `viewer_session` and its own copy of the graph.
+
+    Failing here must not fail the export — the dataset itself is written and
+    valid, and the session is recoverable by opening it once. So this reports
+    and returns rather than raising.
+    """
+    from xenium_viewer.utils import crop_session
+
+    try:
+        carried = set(new_sdata.images) | set(new_sdata.labels) | set(new_sdata.shapes)
+
+        labels = {}
+        try:
+            from xenium_viewer.utils.adata_persistence import load_cluster_labels_from_sdata
+            labels = load_cluster_labels_from_sdata(new_sdata) or {}
+        except Exception:
+            log.debug("could not read cluster labels for the export session", exc_info=True)
+
+        graph_items = []
+        graph = (getattr(ctx, "state", None) or {}).get("prov_graph")
+        if graph is not None and len(graph):
+            graph_items = crop_session.rewrite_graph_paths(
+                graph.to_list(), str(ctx.data_path), str(Path(output_dir) / name))
+            node_id, code, label = crop_export_note(
+                name, output_dir, include_overlays, overlay_notes)
+            graph_items = [g for g in graph_items if g.get("id") != node_id]
+            graph_items.append({
+                "id": node_id, "code": code, "deps": ["preamble"], "kind": "note",
+                "label": label, "params": {}, "stale": False,
+                "seq": len(graph_items) + 1,
+                "template_id": None, "template_origin": "builtin", "template_hash": None,
+            })
+
+        attrs = crop_session.build_session_attrs(
+            ctx,
+            carried_elements=carried,
+            cluster_labels=labels,
+            graph_items=graph_items,
+            he_shape_yx=_raster_shape_yx(new_sdata.images.get("he_image")),
+            arms_shape_yx=_raster_shape_yx(new_sdata.images.get("arms_he_image")),
+            roi_count=len(new_sdata.shapes["rois"]) if "rois" in new_sdata.shapes else 0,
+        )
+        crop_session.write_export_session(staging_dir, attrs, graph_items)
+    except Exception as e:
+        log.warning("could not write the export's session for %r: %s", name, e)
+        overlay_notes.append(
+            f"session/provenance not written ({e}) — the exported data is complete; "
+            "open it once and close it to write one"
+        )
+
+
+def _raster_shape_yx(element):
+    """``(y, x)`` of a raster element's full-resolution level, or None."""
+    if element is None:
+        return None
+    try:
+        scales = _extract_dt_scales(element)
+        if not scales:
+            return None
+        shape = scales[0].shape
+        return tuple(int(v) for v in (shape if len(shape) == 2 else shape[-2:]))
+    except Exception:                                  # pragma: no cover - defensive
+        return None
+
+
 def crop_and_export(
     ctx: "ViewerContext",
     polygon_yx: np.ndarray,
     output_dir: Path,
     name: str,
     progress_cb: Callable[[int, str], None] | None = None,
+    include_overlays: bool = True,
+    viewer_state=None,
 ) -> Path:
     """Crop the loaded dataset to *polygon_yx* and write a standalone
     xenium-viewer data directory at ``output_dir / name``.
+
+    With *include_overlays* (the default), every registered overlay and drawn
+    region travels with the crop — see ``utils/crop_overlays.py``.
+
+    *viewer_state* is an ``OverlayFrames`` captured on the GUI thread by
+    ``crop_state.capture_overlay_frames``. Passing it is how a caller running on
+    a worker thread avoids reading napari layers from that thread; omitting it
+    makes this function capture its own, which is right for a direct or test
+    call but not from inside ``_CropExportWorker``.
 
     Read-only with respect to *ctx* — safe to call from a background thread.
     Writes to a hidden staging directory first and only moves it into place
     on full success, so a failure never leaves a partial dataset on disk.
 
-    Returns the final output path.
+    Returns ``(final_path, overlay_notes)`` — the second is one line per overlay
+    that could *not* be carried, empty when everything travelled. It is returned
+    rather than only logged because a partly-populated export has to be
+    describable to the person who asked for it.
     """
     def _progress(pct, msg):
         if progress_cb is not None:
@@ -403,12 +621,28 @@ def crop_and_export(
         overwrite_metadata=True,
     )
 
+    # ── Registered overlays and drawn regions ────────────────────────────────
+    # A crop that keeps only the five core elements throws away the registered
+    # H&E, the ARMS tiles, the ROIs — the work that made the dataset worth
+    # cropping in the first place. See utils/crop_overlays.py for how each is
+    # carried across, and utils/crop_state.py for how its coordinate frame is
+    # decided — the element's own transformation is a fallback, not the
+    # authority, because a registration can live only in the viewer.
+    overlay_images, overlay_labels, overlay_shapes, overlay_notes = {}, {}, {}, []
+    if include_overlays:
+        _progress(76, "Cropping registered overlays...")
+        overlay_images, overlay_labels, overlay_shapes, overlay_notes = _collect_overlays(
+            ctx, (row_min, row_max, col_min, col_max), poly_xy, _progress,
+            viewer_state=viewer_state,
+        )
+
     # ── Assemble and write to a staging directory ────────────────────────────
-    _progress(75, "Writing dataset...")
+    _progress(82, "Writing dataset...")
     new_sdata = SpatialData(
-        images={"morphology_focus": img_element},
-        labels={"cell_labels": cl_element, "nucleus_labels": nl_element},
+        images={"morphology_focus": img_element, **overlay_images},
+        labels={"cell_labels": cl_element, "nucleus_labels": nl_element, **overlay_labels},
         points={"transcripts": points_element},
+        shapes=overlay_shapes,
         tables={"table": table_element},
     )
     _convert_arrow_strings(new_sdata)
@@ -432,6 +666,14 @@ def crop_and_export(
         # out into a separate write just to give them back full concurrency.
         with dask.config.set(scheduler="threads", num_workers=_TRANSCRIPT_WRITE_WORKERS):
             new_sdata.write(str(staging_dir / "sdata_cached.zarr"), overwrite=True)
+
+            # The session and the provenance graph, so the export opens as a
+            # dataset rather than as a bag of elements. Written after the store
+            # exists and before the manifest, so a failure here leaves staging
+            # to be discarded rather than a half-labelled export in place.
+            _progress(86, "Writing session and provenance...")
+            _write_session(ctx, staging_dir, name, output_dir, include_overlays,
+                           overlay_notes, new_sdata, adata_cropped)
 
             # Stamp the manifest here rather than leaving it to the first load.
             # Without one, freshness falls back to comparing experiment.xenium's
@@ -486,4 +728,7 @@ def crop_and_export(
     shutil.move(str(staging_dir), str(final_dir))
 
     _progress(100, f"Done: {final_dir}")
-    return final_dir
+    if overlay_notes:
+        log.info("crop %r: %d overlay(s) not carried: %s",
+                 name, len(overlay_notes), "; ".join(overlay_notes))
+    return final_dir, overlay_notes

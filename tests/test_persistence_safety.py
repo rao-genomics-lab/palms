@@ -190,5 +190,82 @@ def test_no_source_file_still_does_delete_then_write():
     )
 
 
+def test_restore_is_not_gated_on_a_stored_session():
+    """`restore_fn` must be reachable for a store that has no `viewer_session`.
+
+    The defect: `restore_fn(session)` sat inside `if session is not None:`, under
+    `if not no_cache and zarr_path.exists():`, with an `elif` that could therefore
+    never run while the zarr existed. A cropped export — elements on disk, no
+    session — opened with no H&E, no ROIs and no cluster names, and every
+    `load_*_from_sdata` result computed just above was silently discarded.
+
+    Parse the call rather than grep it: the property is *reachability*, and a
+    regression would look like ordinary code.
+    """
+    import ast
+
+    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "app.py"
+    tree = ast.parse(src.read_text(), str(src))
+
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "restore_fn"]
+    assert calls, "restore_fn is no longer called in app.py at all"
+
+    # Every enclosing `if` test for each call site, by line span.
+    def _guards_of(call):
+        out = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            body_lines = [n.lineno for b in node.body for n in ast.walk(b)
+                          if hasattr(n, "lineno")]
+            if body_lines and min(body_lines) <= call.lineno <= max(body_lines):
+                out.append(ast.unparse(node.test))
+        return out
+
+    for call in calls:
+        guards = _guards_of(call)
+        offending = [g for g in guards
+                     if "load_session" in g or "have_session" in g
+                     or "session is not None" in g or "stored is not None" in g]
+        assert not offending, (
+            f"restore_fn at app.py:{call.lineno} is gated on whether a stored session "
+            f"exists ({offending}). A store with no viewer_session still holds the "
+            "elements worth restoring."
+        )
+
+
+def test_an_empty_session_never_overwrites_a_stored_registration():
+    """Restoring must not downgrade the disk.
+
+    `_on_arms_restored` calls `_save_arms_affine_to_sdata()` on every restore. With
+    no session the affine is None, the composed transform is the identity, and that
+    identity used to be written over a real registration — losing it during a launch
+    that only meant to read. Both overlay tabs must consult the element first.
+    """
+    import re
+
+    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "tabs"
+    for name, element in (("tab_arms.py", "arms_he_image"),
+                          ("tab_he_registration.py", "he_image")):
+        text = (src / name).read_text()
+        fn = re.search(r"def _save_\w*affine_to_sdata\(\):(.*?)\n    def ", text, re.S)
+        assert fn, f"{name}: could not find the affine-saving function"
+        body = fn.group(1)
+        assert "_load_affine_from_sdata_element" in body, (
+            f"{name}: _save_*_affine_to_sdata writes a transform without first checking "
+            f"whether {element} already carries one. An identity composed from an empty "
+            "state must not overwrite a stored registration."
+        )
+        # The *call*, not the import — `set_transformation` is imported at the top
+        # of the same function, which would otherwise always sort first.
+        guard_at = body.index("_load_affine_from_sdata_element(sdata")
+        write_at = body.index("set_transformation(sdata")
+        assert guard_at < write_at, (
+            f"{name}: the stored-transform check must happen before set_transformation"
+        )
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

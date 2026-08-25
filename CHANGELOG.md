@@ -1,5 +1,128 @@
 # Changelog
 
+## [Unreleased] — 2026-08-25 (a cropped dataset opens like a dataset)
+
+### Fixed
+- **A store with no `viewer_session` restored nothing at all.** `restore_fn` — the call
+  that fans out to every tab's `restore_session`, and the only thing that adds the H&E,
+  ARMS, external-image and patch layers at startup — sat inside `if session is not None`,
+  under `if not no_cache and zarr_path.exists()`. The `elif` meant to catch a store with
+  elements but no session was attached to the *outer* `if`, so it could never run while
+  the zarr existed. A freshly exported crop therefore opened with no H&E, no ARMS, no
+  ROIs and no cluster names, while every `load_*_from_sdata` result computed immediately
+  above it was discarded. Restore is now unconditional and the session is an overlay on
+  top of what the elements already say. Not crop-specific: it hit any cache built by
+  `xenium-build-cache`, any store whose session node was deleted in Tools → Dataset, and
+  any recovered cache.
+- **An overlay can now place itself** (`utils/registration_seed.py`). Placement used to
+  come only from session state, so a store without one added the image at the origin.
+  The element's own transform is read back when the session offers no affine — and
+  strictly all-or-nothing: the element stores `fine @ flip` while the session stores
+  `fine` and re-derives the flip, so taking the affine from one and the flip from the
+  other applies the flip twice. When the element is the source the flips are forced
+  `False` and the shape is taken from the element.
+- **Restoring could overwrite a registration on disk.** `tab_arms._on_arms_restored`
+  calls `_save_arms_affine_to_sdata()` on every restore; with no session the affine is
+  `None`, the composed transform is the identity, and that identity was written over the
+  real one — losing a registration during a launch that only meant to read. Both overlay
+  tabs now refuse to write an identity over a stored transform. This had to land *before*
+  the restore fix above, which would otherwise have destroyed the one overlay a real
+  export got right.
+- **The crop sliced overlays out of the wrong region.** `crop_overlays` decided an
+  overlay's frame from its stored transformation, but a registration is only written
+  there when you re-register or flip — a real dataset's `he_image` declared `identity`
+  while its affine lived in the session. The Xenium crop box was therefore mapped
+  straight into H&E pixels: measured on an export, `he_image` came out as
+  `(3, 2254, 16371)` — rows 11436–13690 × cols 6721–23092 of a `13690 × 23092` slide, a
+  strip off the bottom-right corner unrelated to the cropped tissue. The external image
+  went the same way. Frames are now resolved from the live viewer
+  (`utils/crop_state.py`), falling back to the element, then to identity.
+- **`arms_tiles` and `patch_*` overlays were read as Xenium data.** Both hold an
+  overlay's pixels while declaring identity on disk, because they are drawn with a
+  *linked* layer's affine that is never written to the element. All three `patch_*`
+  elements in a real export were dropped as "nothing inside the crop", and 37 of 288
+  `arms_tiles` survived by numeric coincidence at meaningless coordinates. They are now
+  clipped in their companion image's frame.
+- **An overlay whose frame cannot be established is no longer sliced.** An identity
+  frame is credible only when the raster is on the morphology grid; otherwise the export
+  skips it and names both extents in the summary and the provenance note. Slicing on a
+  guess is the irreversible step — a transform can be corrected later, absent pixels
+  cannot.
+- **Image-space landmarks were offset by their companion's slice origin.** The exported
+  raster is re-origined so its pixel `(0, 0)` is the source's `(r0, c0)`, but landmarks
+  were passed through in *unsliced* pixels and are drawn with the image's affine. The two
+  agreed in the source store only because nothing was sliced; in an export they differed
+  by exactly `(r0, c0)` — 148 px on the regression fixture.
+- **A cropped export now carries a `viewer_session` and its own provenance graph**
+  (`utils/crop_session.py`), with paths rewritten to the export and a `crop_export:<name>`
+  node built by the same function the source dataset's graph uses. Registration affines
+  are deliberately *not* copied into it — the element owns placement, and a second copy
+  drifts as soon as anyone re-registers inside the export. `arms_geojson_path` /
+  `arms_csv_path` are nulled, because the ARMS restore falls back to those absolute paths
+  and would pull the whole slide's tiles into a crop.
+- `_carry_over_clusterings` no longer writes a `cluster_labels_*` column consisting
+  entirely of empty strings when a clustering's names have all been cleared.
+
+## [Unreleased] — 2026-08-24 (crop carries the overlays)
+
+### Added
+- **Crop & Export now carries every registered overlay and drawn region** (issue #27).
+  A crop used to keep five core elements and silently drop the rest, so exporting a
+  core threw away the registered H&E, the ARMS tiles and the ROIs — the work that
+  made the dataset worth cropping. `utils/crop_overlays.py` brings them along, each
+  cropped to the same region, and a checkbox on the tab turns it off for a bare
+  core-only export.
+
+  **What decides how an element is carried is the element itself.** An overlay with
+  its own affine holds coordinates in its own pixel space, so its geometry is left
+  alone and the crop is composed into its transform; an element with no
+  transformation is already in Xenium pixels, so its geometry moves into the crop
+  frame. That is derived rather than listed, because the loader's own comments
+  record that a fixed name list has already gone stale once, and `ext_*` / `patch_*`
+  elements are named per file precisely so they cannot be enumerated up front.
+
+  > **Superseded on 2026-08-25** — see the entry above. The element turned out not to
+  > be a trustworthy authority: a registration reaches the element only when you
+  > re-register or flip, and `arms_tiles` / `patch_*` never get one. Frames are now
+  > resolved from the live viewer, with the element as the fallback. The paragraphs
+  > below still describe the geometry correctly; only the *source* of the frame changed.
+
+  Three things that are wrong in ways that raise no error, each pinned by a test:
+
+  - **H&E-space landmarks carry no transformation on disk.**
+    `save_overlay_affine_to_sdata` is only ever called with an image or patch
+    element's name, and `_save_he_affine_to_sdata` writes only to
+    `images["he_image"]` — so `he_he_landmarks`, `arms_he_landmarks` and `*_image_lm`
+    arrive looking exactly like Xenium-space geometry. Read by the rule above they
+    would be translated by the crop origin, corrupting the registration they exist
+    to reconstruct. They are recognised by name and passed through verbatim.
+    (Since 2026-08-25 they also move by their companion raster's slice origin — the
+    exported image is re-origined, and they are drawn with *its* affine.)
+  - **Landmarks are never filtered.** Dropping a landmark that falls outside the crop
+    re-fits the registration: the affine is a least-squares fit over the whole set,
+    so a subset yields a different transform than the one the export ships with.
+  - **`cell_circles` is stored in microns**, with a 1/pixel_size scale, and patch
+    overlays in their source image's pixels. Carrying either whole would ship circles
+    and patches covering cells the exported table no longer contains, so the crop
+    region is mapped down into each element's own frame and the clip happens there.
+
+  Rasters stay lazy end to end — the level-0 dask array is sliced, never computed —
+  for the same reason the core crop does; an overlay is no smaller than the
+  morphology image it was registered against.
+
+  `crop_and_export` now returns `(path, overlay_notes)`. An overlay that cannot be
+  carried is skipped and named in the summary dialog and in the recorded provenance
+  note, rather than failing an export the user did get most of.
+
+### Notes
+Tested against synthetic elements (`tests/test_crop_overlays.py`, 21 tests) rather
+than a dataset: a rotated, scaled, registered overlay is exactly what no local
+dataset has, and the failure mode is geometric — a misplaced overlay still exports
+cleanly, still opens, and still looks like a registered H&E. The tests assert where
+a known pixel lands, and the two subtlest guards (the image-space landmark rule and
+the (y, x) → (x, y) transposition when mapping the region into a rotated frame) were
+each confirmed to fail when mutated.
+
 ## [Unreleased] — 2026-08-24 (PyQt6)
 
 ### Fixed (post-review)
