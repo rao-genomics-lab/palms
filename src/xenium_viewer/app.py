@@ -64,6 +64,7 @@ from xenium_viewer.utils.coloring import CellColorManager
 from xenium_viewer.utils.transcript_index import TranscriptLoader
 from xenium_viewer.utils.umap_widget import UMAPViewer
 from xenium_viewer.utils.viewer_context import ViewerContext
+from xenium_viewer.utils.units import layer_affine_px
 from xenium_viewer.tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu, create_view_menu
 from xenium_viewer.utils.prov_graph import ProvGraph
 from xenium_viewer import loader as _loader_mod
@@ -643,6 +644,27 @@ def _load_dataset(data_path: Path, no_cache: bool) -> dict:
     }
 
 
+def _install_unit_scaling(viewer, pixel_size: float) -> None:
+    """Put this viewer's world into micrometres and turn the scale bar on.
+
+    napari 0.8 has no ``scale_bar.unit``; the unit lives on the layers
+    (``layer.units``, pint-backed) and propagates to ``viewer.dims.units``, while
+    the magnitude has to live in ``layer.scale``. A scaled unit string is not an
+    option — ``"0.2125 um"`` is accepted and silently loses its magnitude.
+    """
+    from xenium_viewer.utils import units as _units
+
+    def _stamp(layer):
+        _units.apply_to_layer(layer, pixel_size)
+
+    for layer in viewer.layers:
+        _stamp(layer)
+    viewer.layers.events.inserted.connect(lambda e: _stamp(e.value))
+
+    viewer.scale_bar.visible = True
+    viewer.scale_bar.colored = False
+
+
 def _populate_viewer(viewer, data: dict) -> dict:
     """Add layers to the napari viewer from loaded data.
 
@@ -654,6 +676,14 @@ def _populate_viewer(viewer, data: dict) -> dict:
     pixel_size = data["pixel_size"]
 
     _warn_if_pyramid_is_not_stored(sdata)
+
+    # ── Physical units on the canvas ─────────────────────────────────────────
+    # Installed before the first layer exists, and left connected, so *every*
+    # layer any tab adds later is in micrometres too. There are more than twenty
+    # add_image/add_labels/add_points/add_shapes sites across eight modules; one
+    # of them missed would put that layer in pixels while the rest are in µm,
+    # which misplaces it rather than merely mislabelling it. See utils/units.py.
+    _install_unit_scaling(viewer, pixel_size)
 
     t0 = time.perf_counter()
     _add_layers_manually(viewer, sdata)
@@ -848,7 +878,9 @@ def _snapshot_layers(ctx: ViewerContext) -> dict:
         lyr = entry.get("layer_ref")
         if lyr is not None:
             try:
-                m = np.asarray(lyr.affine.affine_matrix, dtype=np.float64)
+                # Stored in pixels, like every other affine on disk — the layer's
+                # own copy is in µm. See utils/units.py.
+                m = layer_affine_px(lyr, ctx.pixel_size)
                 if not np.allclose(m, np.eye(m.shape[0]), atol=1e-6):
                     affine_matrix = m.tolist()
             except Exception:
@@ -888,7 +920,7 @@ def _snapshot_layers(ctx: ViewerContext) -> dict:
         lyr = entry.get("shapes_layer")
         if lyr is not None:
             try:
-                m = np.asarray(lyr.affine.affine_matrix, dtype=np.float64)
+                m = layer_affine_px(lyr, ctx.pixel_size)          # pixels, see above
                 if not np.allclose(m, np.eye(m.shape[0]), atol=1e-6):
                     affine_matrix = m.tolist()
             except Exception:
@@ -1213,7 +1245,8 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
             from xenium_viewer.utils.minimap_widget import MinimapWidget
             canvas_native = viewer.window._qt_viewer.canvas.native
             minimap = MinimapWidget(
-                ctx.viewer, ctx.morph_thumb, ctx.morph_full_shape_yx, canvas_native
+                ctx.viewer, ctx.morph_thumb, ctx.morph_full_shape_yx, canvas_native,
+                pixel_size=ctx.pixel_size,
             )
             minimap.show()
             _app["minimap"] = minimap

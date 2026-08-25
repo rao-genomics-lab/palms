@@ -12,6 +12,7 @@ from qtpy.QtWidgets import (
     QCheckBox, QGridLayout, QScrollArea,
 )
 from napari.qt.threading import thread_worker
+from xenium_viewer.utils.units import layer_affine_px, px_affine_to_world
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.zarr_safe import safe_write_element
@@ -119,12 +120,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
             combined = fine @ flip
         else:
             combined = flip
+        # Pixels for the store, world (µm) for the layers — see utils/units.py.
+        world = px_affine_to_world(combined, ctx.pixel_size)
         if arms_state["he_layer"] is not None:
-            arms_state["he_layer"].affine = combined
+            arms_state["he_layer"].affine = world
         if arms_state["he_lm_layer"] is not None:
-            arms_state["he_lm_layer"].affine = combined
+            arms_state["he_lm_layer"].affine = world
         if arms_state["shapes_layer"] is not None:
-            arms_state["shapes_layer"].affine = combined
+            arms_state["shapes_layer"].affine = world
 
     def on_arms_flip_changed(_value=None):
         _apply_arms_affine()
@@ -663,7 +666,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
             tile_data = [tile_data[i] for i in range(len(tile_data)) if keep_mask[i]]
             cluster_ids_arr = cluster_ids_arr[keep_mask]
 
-        affine_mat = arms_state["shapes_layer"].affine.affine_matrix
+        # Tile polygons are in ARMS-image pixels and are being mapped into Xenium
+        # pixels, so this needs the *pixel* affine, not the layer's world one.
+        affine_mat = layer_affine_px(arms_state["shapes_layer"], ctx.pixel_size)
 
         transformed_polys = []
         for poly_yx in tile_data:

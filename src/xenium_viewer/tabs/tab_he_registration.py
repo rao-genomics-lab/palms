@@ -9,6 +9,7 @@ import numpy as np
 from magicgui.widgets import CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
+from xenium_viewer.utils.units import px_affine_to_world
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.zarr_safe import safe_write_element
@@ -82,10 +83,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
             combined = coarse @ flip
         else:
             combined = flip
+        # `combined` is in Xenium pixels — that is what the store and the crop
+        # export expect. napari applies a layer's affine *after* its scale, so
+        # the layer's copy has to be in world (µm) units. See utils/units.py.
+        world = px_affine_to_world(combined, ctx.pixel_size)
         if he_state["he_layer"] is not None:
-            he_state["he_layer"].affine = combined
+            he_state["he_layer"].affine = world
         if he_state["he_lm_layer"] is not None:
-            he_state["he_lm_layer"].affine = combined
+            he_state["he_lm_layer"].affine = world
 
     def on_flip_changed(_value=None):
         _apply_he_affine()
