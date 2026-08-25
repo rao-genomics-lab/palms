@@ -12,7 +12,13 @@ dependencies:
   - scipy
   - scikit-learn
   - scikit-image
-  - matplotlib
+  # matplotlib-base, NOT matplotlib: the metapackage bundles a Qt binding, and
+  # *which* one depends on the version the solver happens to pick — 3.9.1 pulls
+  # `pyqt` (Qt5), 3.9.3+ pulls `pyside6`. CI landed on 3.9.1, so PyQt5 appeared
+  # beside PyQt6 and qtpy silently chose it (its preference order is PyQt5 first).
+  # Nothing here needs the metapackage: scanpy, squidpy and matplotlib-scalebar
+  # all depend on matplotlib-base, and this app supplies its own Qt binding.
+  - matplotlib-base
   - colorcet
   - pillow
   - xarray
@@ -36,11 +42,27 @@ dependencies:
   - ipykernel         # the kernel that replay runs in
 
   # GUI / Qt stack
-  - napari
-  - pyqt=5
+  # napari is pinned because the solver otherwise happily drops to 0.7.0 to ease
+  # an unrelated constraint (the zarr<3.2 pin above) — a silent downgrade of the
+  # thing this app *is*. napari deprecated the PyQt5 backend for removal in
+  # autumn 2026 and names PyQt6/PySide6 as the replacements; conda-forge ships
+  # PyQt6 as `pyqt6`, not as a 6.x of `pyqt` (which stops at 5.15).
+  - napari>=0.8
+  - pyqt6
   - qtpy
   - magicgui
   - superqt
+  # Ships $CONDA_PREFIX/lib/libGLX.so — the *unversioned* name, which conda's
+  # libglx does not provide (it has only libGLX.so.0). PyOpenGL's loader tries the
+  # unversioned name FIRST, so without this it misses the env entirely and dlopens
+  # the host's /usr/lib/.../libGLX.so (Ubuntu's libglx-dev) with RTLD_GLOBAL. Two
+  # different glvnd builds then live in one process, Qt's GLX plugin resolves glX*
+  # across both, glXGetVisualFromFBConfig() returns NULL for a config the other
+  # library allocated, and Qt6 responds with qFatal -> SIGABRT, no traceback.
+  # Measured on this project: napari aborted at startup on Qt6 over a remote X
+  # display until this package was added. PyQt5 loads the same two copies and
+  # merely tolerates it, so the defect was latent there too.
+  - libglx-devel
 
   # Image processing
   - py-opencv

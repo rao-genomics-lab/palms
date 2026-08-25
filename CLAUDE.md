@@ -508,16 +508,18 @@ reproducibility defect rather than a kernel-discovery one.
   `docs/squidpy-spatial-neighbors-migration.md` keeps the measurement, and the four
   things the original assessment got wrong — chief among them that Co-occurrence was
   never a dependent: it calls `sq.gr.co_occurrence`, which computes its own radii.
-- **napari drops the PyQt5 backend in fall 2026** — `docs/pyqt6-migration.md`. Tracked,
-  not fixed; it does not fail today, and `napari` is pinned with no upper bound. All Qt
-  access already goes through `qtpy`, so it is a pin change plus scoped-enum edits — but
-  **that doc's inventory is understated**: it says 8 unscoped enums and 7 `exec_()`, and
-  the tree has ~29 unscoped `Qt.*` enums, ~52 unscoped enums on other classes
-  (`QMessageBox.Yes`, `QDialog.Accepted`, `QHeaderView.Stretch`, …) that it does not
-  mention at all, and 8 `exec_()` sites; every line number in it has drifted. The enum
-  and `exec()` edits are valid under PyQt5 5.11+, so they can land ahead of the pin flip,
-  and `QT_API=pyside6 pytest` smoke-tests strict enums today (PySide6 is already in the
-  env as a matplotlib dependency).
+- ✅ **napari drops the PyQt5 backend in fall 2026 — done**, issue #15.
+  `environment.yml` is `pyqt6` + `napari>=0.8`, `pyproject.toml` is `PyQt6`, and all 98
+  unscoped enum sites and 8 `.exec_()` calls are in their scoped/Qt6 form.
+  `docs/pyqt6-migration.md` keeps the measurement and the three things the original
+  assessment got wrong. Two are worth carrying here, because both would mislead again:
+  **conda-forge ships PyQt6 as `pyqt6`, not as a 6.x of `pyqt`** (that package stops at
+  5.15, so `pyqt=6` fails as if PyQt6 did not exist), and **`QT_API=pyside6 pytest` never
+  smoke-tested strict enums** — PySide6 runs in forgiveness mode and accepts every
+  unscoped form, with qtpy supplying `exec_` on top. The same qtpy shim
+  (`enums_compat.promote_enums`) means the pre-migration code would have run unchanged
+  under PyQt6, so the enum edits were hygiene, not the blocker; the dependency solve was.
+  CI asserts the resolved backend rather than adding a second leg.
 
 - **`ScaleBarOverlay.unit` is removed in napari 0.9.0** — **no action needed**, recorded
   so nobody re-derives it. The viewer no longer touches that attribute: it is already a

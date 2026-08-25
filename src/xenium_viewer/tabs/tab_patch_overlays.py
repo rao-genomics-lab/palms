@@ -59,12 +59,12 @@ def _confirm_patch_size(parent, inferred: Optional[int], stride: Optional[int]) 
     spin.setRange(1, 8192)
     spin.setValue(inferred or stride or 128)
     layout.addWidget(spin)
-    btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
     btns.accepted.connect(dlg.accept)
     btns.rejected.connect(dlg.reject)
     layout.addWidget(btns)
     dlg.setLayout(layout)
-    if dlg.exec_() == QDialog.Accepted:
+    if dlg.exec() == QDialog.DialogCode.Accepted:
         return int(spin.value())
     return None
 
@@ -183,7 +183,7 @@ def build_tab(ctx: "ViewerContext"):
 
     edge_row = QHBoxLayout()
     edge_row.addWidget(QLabel("Edge width:"))
-    edge_slider = QSlider(Qt.Horizontal)
+    edge_slider = QSlider(Qt.Orientation.Horizontal)
     edge_slider.setRange(0, 20)
     edge_slider.setValue(2)
     edge_row.addWidget(edge_slider)
@@ -193,7 +193,7 @@ def build_tab(ctx: "ViewerContext"):
 
     op_row = QHBoxLayout()
     op_row.addWidget(QLabel("Opacity:"))
-    opacity_slider = QSlider(Qt.Horizontal)
+    opacity_slider = QSlider(Qt.Orientation.Horizontal)
     opacity_slider.setRange(0, 100)
     opacity_slider.setValue(80)
     op_row.addWidget(opacity_slider)
@@ -202,7 +202,7 @@ def build_tab(ctx: "ViewerContext"):
     conf_row = QHBoxLayout()
     conf_label = QLabel("Confidence ≥ 0.00:")
     conf_row.addWidget(conf_label)
-    conf_slider = QSlider(Qt.Horizontal)
+    conf_slider = QSlider(Qt.Orientation.Horizontal)
     conf_slider.setRange(0, 100)
     conf_slider.setValue(0)
     conf_row.addWidget(conf_slider)

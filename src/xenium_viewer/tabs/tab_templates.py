@@ -61,7 +61,7 @@ def _group_of(template_id: str) -> str:
 
 def _mono(widget) -> None:
     font = QFont("monospace")
-    font.setStyleHint(QFont.TypeWriter)
+    font.setStyleHint(QFont.StyleHint.TypeWriter)
     widget.setFont(font)
     widget.setTabStopDistance(28)
 
@@ -281,7 +281,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 groups[name] = parent
             item = QTreeWidgetItem(
                 parent, [template_id, _badge(template_id) or str(len(spec.blocks))])
-            item.setData(0, Qt.UserRole, template_id)
+            item.setData(0, Qt.ItemDataRole.UserRole, template_id)
             if template_id == keep:
                 chosen = item
         tree.blockSignals(False)
@@ -300,7 +300,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         items = tree.selectedItems()
         if not items:
             return
-        template_id = items[0].data(0, Qt.UserRole)
+        template_id = items[0].data(0, Qt.ItemDataRole.UserRole)
         current["id"] = template_id
         for widget in (validate_button, save_button, revert_button):
             widget.setEnabled(bool(template_id))
@@ -439,7 +439,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # Default beside Yours, so a customisation is read as a diff rather than as
     # a file with no reference point.
-    side_by_side = QSplitter(Qt.Horizontal)
+    side_by_side = QSplitter(Qt.Orientation.Horizontal)
     for label, pane in (("Default (read-only)", source), ("Yours (editable)", editor)):
         holder = QWidget()
         holder_layout = QVBoxLayout()
@@ -466,7 +466,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     lower_layout.addWidget(problems_list)
     lower.setLayout(lower_layout)
 
-    panes = QSplitter(Qt.Vertical)
+    panes = QSplitter(Qt.Orientation.Vertical)
     panes.addWidget(side_by_side)
     panes.addWidget(lower)
     panes.setStretchFactor(0, 2)
@@ -476,7 +476,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     right_layout.addWidget(panes, 1)
     right.setLayout(right_layout)
 
-    split = QSplitter(Qt.Horizontal)
+    split = QSplitter(Qt.Orientation.Horizontal)
     split.addWidget(tree)
     split.addWidget(right)
     split.setStretchFactor(1, 3)

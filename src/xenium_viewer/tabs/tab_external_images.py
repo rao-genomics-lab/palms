@@ -71,7 +71,7 @@ def build_tab(ctx: "ViewerContext"):
     # Opacity
     opacity_row = QHBoxLayout()
     opacity_row.addWidget(QLabel("Opacity:"))
-    opacity_slider = QSlider(Qt.Horizontal)
+    opacity_slider = QSlider(Qt.Orientation.Horizontal)
     opacity_slider.setRange(0, 100)
     opacity_slider.setValue(100)
     opacity_row.addWidget(opacity_slider)
@@ -245,7 +245,7 @@ def build_tab(ctx: "ViewerContext"):
             lo, hi = cs["clim"]
             data_min = cs.get("data_min", 0.0)
             data_max = cs.get("data_max", 65535.0)
-            range_slider = QDoubleRangeSlider(Qt.Horizontal)
+            range_slider = QDoubleRangeSlider(Qt.Orientation.Horizontal)
             range_slider.setRange(data_min, data_max)
             range_slider.setValue((lo, hi))
             ch_grid.addWidget(range_slider, row, 2)

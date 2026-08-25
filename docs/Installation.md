@@ -183,3 +183,31 @@ Caches built before content hashing existed fall back to comparing modification 
 
 **Where the viewer writes**
 Besides the zarr cache, a dataset directory accumulates `viewer_cache/` (normalised expression, CNV profiles, cached DEG tables, the analysis provenance graph), `plots/` (saved figures), `transcript_cache/` (per-gene transcript files), `analysis.py`, `analysis_notebook.ipynb`, and a rotating `xenium_viewer.log`. The [Dataset](Tab-Dataset) tab lists all of it with sizes and can delete the regenerable parts.
+
+
+## Troubleshooting: `Could not initialize GLX` / `Aborted (core dumped)`
+
+If the viewer dies immediately with
+
+```
+WARNING: Could not initialize GLX
+Aborted (core dumped)
+```
+
+your environment is missing **`libglx-devel`**. Current `environment.yml` includes it, so
+this only affects environments created before it was added:
+
+```bash
+conda activate xenium_viewer
+mamba install -c conda-forge libglx-devel
+```
+
+Why: conda ships `libGLX.so.0` but not the unversioned `libGLX.so`. PyOpenGL's loader looks
+for the unversioned name first, misses the environment, and loads your *system's* copy
+instead — leaving two different builds of the same library in one process. Qt6 then resolves
+GL calls across both and aborts. There is no Python traceback because the abort comes from
+Qt itself, and no environment variable can work around it: the fix has to put the missing
+name inside the environment.
+
+Most visible on remote desktops (ThinLinc/VNC/x2go/xrdp) on a machine that also has the
+system `libglx-dev` package, which is a common combination.
