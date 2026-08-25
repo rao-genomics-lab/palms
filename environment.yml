@@ -52,6 +52,17 @@ dependencies:
   - qtpy
   - magicgui
   - superqt
+  # Ships $CONDA_PREFIX/lib/libGLX.so — the *unversioned* name, which conda's
+  # libglx does not provide (it has only libGLX.so.0). PyOpenGL's loader tries the
+  # unversioned name FIRST, so without this it misses the env entirely and dlopens
+  # the host's /usr/lib/.../libGLX.so (Ubuntu's libglx-dev) with RTLD_GLOBAL. Two
+  # different glvnd builds then live in one process, Qt's GLX plugin resolves glX*
+  # across both, glXGetVisualFromFBConfig() returns NULL for a config the other
+  # library allocated, and Qt6 responds with qFatal -> SIGABRT, no traceback.
+  # Measured on this project: napari aborted at startup on Qt6 over a remote X
+  # display until this package was added. PyQt5 loads the same two copies and
+  # merely tolerates it, so the defect was latent there too.
+  - libglx-devel
 
   # Image processing
   - py-opencv

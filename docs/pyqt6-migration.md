@@ -64,6 +64,64 @@ PyQt6 leg rather than a PySide6 one.
 - Resolved stack, verified in a real env: napari 0.8.0, PyQt6 6.8.1 / Qt 6.8.1,
   qtpy 2.4.3, magicgui 0.10.2, superqt 0.8.2, spatialdata 0.8.0. No PyQt5 present.
 
+## The crash that nearly shelved this
+
+Flipping the pin was not the end of it. On a **remote X display** (ThinLinc/VNC, Mesa
+`llvmpipe`) napari aborted the moment it started, under both Qt6 bindings:
+
+```
+WARNING: Could not initialize GLX
+Aborted (core dumped)
+```
+
+No Python traceback — the message is Qt's `qFatal()`, which aborts the process.
+
+It looked like a Qt6-versus-remote-X incompatibility and very nearly got the migration
+shelved. It is not. **It is a library-loading conflict, and it has nothing to do with the
+display**:
+
+1. conda's `libglx` ships only `libGLX.so.0`. The *unversioned* `libGLX.so` — a link-time
+   name — lives in the separate `libglx-devel` package.
+2. PyOpenGL's loader (`OpenGL/platform/ctypesloader.py::_loadLibraryPosix`) tries the
+   unversioned name **first**, with `RTLD_GLOBAL`. It misses the env and falls through to
+   the ld.so cache, finding the *host's* `/usr/lib/x86_64-linux-gnu/libGLX.so` (Ubuntu's
+   `libglx-dev`).
+3. Two different glvnd builds now live in one process. Qt's `qxcb-glx-integration` resolves
+   `glX*` across both, so a `GLXFBConfig` allocated by one library reaches the other's
+   `glXGetVisualFromFBConfig()`, which returns `NULL`, and Qt calls `qFatal`
+   ([QTBUG-64645](https://bugreports.qt.io/browse/QTBUG-64645)).
+
+napari triggers it because it imports Qt and *then* PyOpenGL (`_vispy/visuals/markers.py`'s
+import-time `vispy.use(gl='gl+')`, and `_vispy/canvas.py`'s `from OpenGL.error import GLError`).
+Bare vispy never does — its default `gl2` backend uses its own ctypes bindings against the
+correctly versioned `libGL.so.1`, which is why vispy rendered fine on the same display while
+napari died.
+
+Reduced to a reproduction with no napari and no vispy, where only the *import order* differs:
+
+```python
+import PyQt6.QtGui   # then  import OpenGL.GL   -> Could not initialize GLX, SIGABRT
+import OpenGL.GL     # then  import PyQt6.QtGui -> context created: True
+```
+
+**The fix is `libglx-devel` in `environment.yml`** — it provides the unversioned name inside
+the env, so PyOpenGL and Qt share one libGLX. Verified: `/proc/self/maps` goes from two
+`libGLX.so.0.0.0` mappings to one, the reproduction passes in both orders, and the viewer
+launches and renders on the display that previously dumped core.
+
+Two things worth remembering:
+
+- **PyQt5 maps the same two copies and merely tolerates them.** The defect was latent long
+  before this migration; Qt6 is only what made it fatal. So it will not show up as a
+  regression in a PyQt5 test run.
+- Environment variables cannot fix it. `QT_XCB_GL_INTEGRATION`, `LIBGL_ALWAYS_SOFTWARE`,
+  `QT_OPENGL=software`, `LIBGL_ALWAYS_INDIRECT`, `PYOPENGL_PLATFORM`, `LD_LIBRARY_PATH`,
+  removing PySide6 — none of them create the missing name inside the env, so PyOpenGL keeps
+  loading the host copy. Roughly fifteen combinations were tried before the cause was found.
+
+Upstream reports (root cause is PyOpenGL's loader ordering; napari's import order exposes it)
+are drafted in `/media/srao/InternalBac2/software_development/napari_issue/`.
+
 ## How to reproduce the verification
 
 ```bash

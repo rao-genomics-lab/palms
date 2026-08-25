@@ -105,3 +105,33 @@ def test_environment_asks_for_matplotlib_base_not_the_metapackage():
         "3.9.3+ -> pyside6), so a second binding can appear and qtpy will prefer "
         "PyQt5 over PyQt6. Use matplotlib-base."
     )
+
+
+def test_environment_ships_the_unversioned_libglx_name():
+    """A source guard for the crash that nearly shelved the Qt6 migration.
+
+    conda's ``libglx`` provides only ``libGLX.so.0``. PyOpenGL's loader
+    (``OpenGL/platform/ctypesloader.py::_loadLibraryPosix``) tries the
+    *unversioned* ``libGLX.so`` first, so without ``libglx-devel`` it misses the
+    environment and ``dlopen``s the host's ``/usr/lib/.../libGLX.so`` with
+    ``RTLD_GLOBAL``. Two different glvnd builds then share one process, Qt's GLX
+    plugin resolves ``glX*`` across both, ``glXGetVisualFromFBConfig()`` returns
+    NULL for a config the other library allocated, and Qt6 calls ``qFatal`` —
+    ``SIGABRT``, no traceback, nothing to debug.
+
+    Measured here: napari aborted on startup under Qt6 over a remote X display
+    until this package was added, and started rendering immediately once it was.
+    PyQt5 maps the same two copies and merely tolerates them, so dropping this
+    dependency would look harmless right up until the backend changed.
+    """
+    lines = [
+        ln.split("#", 1)[0].strip()
+        for ln in ENVIRONMENT_YML.read_text().splitlines()
+    ]
+    deps = {re.sub(r"[<>=!].*$", "", ln[2:]).strip() for ln in lines if ln.startswith("- ")}
+
+    assert "libglx-devel" in deps, (
+        "environment.yml must depend on libglx-devel. Without it PyOpenGL loads "
+        "the host's libGLX beside conda's, and Qt6 aborts with "
+        '"Could not initialize GLX" and no traceback.'
+    )

@@ -3,6 +3,32 @@
 ## [Unreleased] — 2026-08-24 (PyQt6)
 
 ### Fixed (post-review)
+- **napari aborted at startup under Qt6 on a remote X display** — `Could not initialize
+  GLX`, `SIGABRT`, no Python traceback. This nearly got the migration shelved as a
+  Qt6-versus-remote-X incompatibility. It is neither: it is a library-loading conflict, and
+  the display is incidental.
+
+  conda's `libglx` provides only `libGLX.so.0`; the unversioned `libGLX.so` lives in
+  `libglx-devel`. PyOpenGL's loader tries the unversioned name **first**, with `RTLD_GLOBAL`,
+  so without that package it misses the env and loads the *host's*
+  `/usr/lib/.../libGLX.so`. Two glvnd builds then share one process, Qt's GLX plugin
+  resolves `glX*` across both, `glXGetVisualFromFBConfig()` returns NULL for a config the
+  other library allocated, and Qt calls `qFatal`.
+
+  Reduced to a reproduction where only the import order differs — `import PyQt6.QtGui` then
+  `import OpenGL.GL` aborts; the reverse works — with no napari and no vispy involved.
+  napari triggers it because it imports Qt and then PyOpenGL; bare vispy never imports
+  PyOpenGL at all, which is why vispy rendered fine on the same display.
+
+  `environment.yml` now depends on **`libglx-devel`**. `/proc/self/maps` goes from two
+  `libGLX.so.0.0.0` mappings to one, and the viewer launches, restores its session and
+  renders on the display that previously dumped core.
+
+  **PyQt5 maps the same two copies and merely tolerates them**, so this was latent long
+  before the migration and will not appear as a regression in a PyQt5 run. No environment
+  variable fixes it — roughly fifteen were tried — because none creates the missing name
+  inside the env. `tests/test_qt_backend.py` guards the dependency.
+
 - **CI came up on PyQt5 despite `pyqt6` in `environment.yml`** — `napari 0.8.0 |
   qtpy PyQt5 5.15.15`, with PyQt6 6.8.1 also installed. Two things combined:
 
