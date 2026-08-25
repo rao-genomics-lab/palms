@@ -392,12 +392,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         try:
             from spatialdata.transformations import Affine as SdAffine, set_transformation
+            from xenium_viewer.utils.adata_persistence import _load_affine_from_sdata_element
             flip = _build_arms_flip_affine()
             fine = arms_state["affine_3x3"]
             if fine is not None:
                 combined = fine @ flip
             else:
                 combined = flip
+            # A restore with no affine in hand must not overwrite a registration
+            # the element already carries. _on_arms_restored calls this on every
+            # restore, so on a store with no viewer_session (a crop export, a
+            # headless cache) `fine` is None, `combined` is the identity, and
+            # this used to write that identity over the real transform — losing
+            # the registration on disk during a launch that only meant to read.
+            if fine is None and np.allclose(combined, np.eye(3), atol=1e-6):
+                if _load_affine_from_sdata_element(sdata, "arms_he_image") is not None:
+                    return
             sd_affine = SdAffine(combined, input_axes=("y", "x"), output_axes=("y", "x"))
             set_transformation(sdata.images["arms_he_image"], sd_affine, "global")
             sdata.write_transformations("arms_he_image")
@@ -941,16 +951,31 @@ def build_tab(ctx: ViewerContext) -> tuple:
         arms_state["he_filename"] = he_filename
         arms_state["he_path"] = session_arms_data.get("he_path")
         base = pyramid_rgb[0]
-        arms_state["he_shape_yx"] = session_arms_data.get("he_shape_yx") or (base.shape[0], base.shape[1])
+        # Same rule as the H&E: on a store with no viewer_session the element's
+        # own transform is the only record of the registration, and it already
+        # contains the flip. See utils/registration_seed.
+        from xenium_viewer.utils.registration_seed import seed_registration
+        reg = seed_registration(
+            session_arms_data, sdata, "arms_he_image",
+            affine_key="affine_3x3", coarse_key=None,
+            flip_v_key="flip_v", flip_h_key="flip_h", shape_key="he_shape_yx",
+            element_shape_yx=(base.shape[0], base.shape[1]),
+        )
+        arms_state["he_shape_yx"] = reg.shape_yx or (base.shape[0], base.shape[1])
         arms_state["geojson_path"] = session_arms_data.get("geojson_path")
         arms_state["csv_path"] = session_arms_data.get("csv_path")
+        with arms_flip_v.changed.blocked(), arms_flip_h.changed.blocked():
+            arms_flip_v.value = reg.flip_v
+            arms_flip_h.value = reg.flip_h
+        arms_state["flip_v"] = reg.flip_v
+        arms_state["flip_h"] = reg.flip_h
         he_layer = viewer.add_image(
             pyramid_rgb, name=f"ARMS H&E ({he_filename})",
             rgb=True, blending="translucent",
             opacity=arms_opacity_slider.value / 100.0,
         )
         arms_state["he_layer"] = he_layer
-        arms_state["affine_3x3"] = session_arms_data.get("affine_3x3")
+        arms_state["affine_3x3"] = reg.fine
         _apply_arms_affine()
         _save_arms_affine_to_sdata()
         _create_arms_landmark_layers()
@@ -1031,9 +1056,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
                     arms_status_label.value = "ARMS H&E restored (tile files not found)"
 
         has_affine = arms_state["affine_3x3"] is not None
+        how = ""
+        if has_affine:
+            how = (" (registration from the image itself)" if reg.source == "element"
+                   else " (with registration)")
         if arms_status_label.value.startswith("Restoring"):
-            arms_status_label.value = f"ARMS restored: {he_filename}" + (" (with registration)" if has_affine else "")
-        print(f"  Restored ARMS from cache: {he_filename}" + (" with registration" if has_affine else ""))
+            arms_status_label.value = f"ARMS restored: {he_filename}{how}"
+        print(f"  Restored ARMS from cache: {he_filename}"
+              + (f" with registration ({reg.source})" if has_affine else ""))
 
     def _restore_session(session):
         # ARMS tile DEG
@@ -1046,10 +1076,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         # ARMS H&E from sdata cache
         if sdata is not None and "arms_he_image" in sdata.images:
-            arms_flip_v.value = session.get("arms_flip_v", False)
-            arms_flip_h.value = session.get("arms_flip_h", False)
+            # Flips are set in _on_arms_restored, from the same record the affine
+            # comes from — see the twin comment in tab_he_registration.
             _session_arms_data = {
                 "affine_3x3": session.get("arms_affine_3x3"),
+                "flip_v": session.get("arms_flip_v", False),
+                "flip_h": session.get("arms_flip_h", False),
                 "xenium_landmarks": session.get("arms_xenium_landmarks"),
                 "he_landmarks": session.get("arms_he_landmarks"),
                 "he_filename": session.get("arms_he_filename", "ARMS H&E"),

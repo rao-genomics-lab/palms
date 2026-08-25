@@ -102,7 +102,8 @@ def test_registered_overlay_lands_in_the_same_place_after_the_crop():
     own = (120.0, 200.0)
     before = _place(src, own)
 
-    out, is_labels = crop_overlays.crop_raster_overlay(src, CROP, _safe_scale_factors)
+    res = crop_overlays.crop_raster_overlay(src, CROP, _safe_scale_factors)
+    out, is_labels = res.element, res.is_labels
     assert not is_labels
 
     # The export sliced the overlay, so that same tissue point now sits at
@@ -121,7 +122,7 @@ def test_registered_overlay_lands_in_the_same_place_after_the_crop():
 def test_identity_overlay_is_translated_by_the_crop_origin():
     """An unregistered raster is already in Xenium pixels, so T alone applies."""
     src = _image(affine=None)
-    out, _ = crop_overlays.crop_raster_overlay(src, CROP, _safe_scale_factors)
+    out = crop_overlays.crop_raster_overlay(src, CROP, _safe_scale_factors).element
     a = crop_overlays.element_affine(out)
     # own-pixel (r0, c0) of the slice is Xenium (100, 150) -> crop-frame (0, 0)
     assert (a @ np.array([0.0, 0.0, 1.0]))[:2] == pytest.approx([0.0, 0.0])
@@ -130,7 +131,7 @@ def test_identity_overlay_is_translated_by_the_crop_origin():
 def test_label_overlay_round_trips_as_labels():
     out = crop_overlays.crop_raster_overlay(_labels(), CROP, _safe_scale_factors)
     assert out is not None
-    _, is_labels = out
+    is_labels = out.is_labels
     assert is_labels, "a 2-D raster must come back as a Labels element, not an Image"
 
 
@@ -143,8 +144,8 @@ def test_overlay_that_misses_the_crop_is_skipped_not_raised():
 def test_raster_crop_never_materialises_the_array():
     """crop_export's OOM history is the reason this stays lazy end to end."""
     import dask.array as da
-    out, _ = crop_overlays.crop_raster_overlay(
-        _image(shape_yx=(2000, 2000)), CROP, _safe_scale_factors)
+    out = crop_overlays.crop_raster_overlay(
+        _image(shape_yx=(2000, 2000)), CROP, _safe_scale_factors).element
     scales = [out[k].ds["image"].data for k in out.children] if hasattr(out, "children") else []
     assert scales, "expected a multiscale DataTree"
     for arr in scales:
@@ -381,8 +382,8 @@ def test_cropped_overlays_survive_a_write_and_reopen(tmp_path):
     import spatialdata as sd
 
     affine = _similarity(theta_deg=12.0, scale=0.9, ty=25.0, tx=-15.0)
-    img, _ = crop_overlays.crop_raster_overlay(
-        _image(affine=affine), CROP, _safe_scale_factors)
+    img = crop_overlays.crop_raster_overlay(
+        _image(affine=affine), CROP, _safe_scale_factors).element
     rois = crop_overlays.crop_vector_overlay(
         _shapes(gpd.GeoDataFrame({
             "geometry": [Polygon([(200, 150), (300, 150), (300, 250), (200, 250)])]})),
@@ -402,3 +403,135 @@ def test_cropped_overlays_survive_a_write_and_reopen(tmp_path):
     assert (reopened.shapes["rois"].geometry.iloc[0].bounds[0]
             == pytest.approx(200 - CROP[2]))
     assert [(p.x, p.y) for p in reopened.shapes["he_he_landmarks"].geometry] == [(10, 10), (20, 20)]
+
+
+# ── frames the element does not declare ──────────────────────────────────────
+#
+# Everything above builds its fixtures *with* an affine, so the whole suite only
+# ever describes a world where an element declares its own frame. That is why 22
+# green tests coexisted with an export whose H&E was sliced out of the wrong
+# region: on a real dataset `he_image`, `arms_tiles` and every `patch_*` element
+# carry an identity transform while holding an overlay's pixels, and the
+# registration lives in the viewer instead.
+
+def test_a_registered_raster_with_no_stored_transform_is_sliced_in_its_own_frame():
+    """The H&E defect, in miniature.
+
+    Measured on a real export: `he_image` declared identity, so the Xenium crop
+    box (rows 11436-29849, cols 6721-32095) was mapped straight into H&E pixels
+    and clipped to the H&E's own 13690x23092 extent, yielding a (3, 2254, 16371)
+    strip off the bottom-right corner. Supplying the frame is what turns that
+    back into the right rectangle of the right picture.
+    """
+    # 180 degrees + 2.35x, which is the shape of the real registration.
+    frame = _similarity(theta_deg=180.0, scale=2.3535, ty=900.0, tx=1400.0)
+    src = _image(shape_yx=(400, 500))          # identity on disk, H&E pixels
+
+    naive = crop_overlays.crop_raster_overlay(src, CROP, _safe_scale_factors)
+    framed = crop_overlays.crop_raster_overlay(
+        src, CROP, _safe_scale_factors, frame_affine=frame)
+
+    assert framed is not None
+    assert framed.origin_yx != naive.origin_yx, (
+        "reading the identity off the element sliced the same rectangle the crop "
+        "box names in Xenium space — the defect this test exists for"
+    )
+
+    # The crop's own corner must come back to (0, 0) of the exported raster.
+    a = crop_overlays.element_affine(framed.element)
+    r0, c0 = framed.origin_yx
+    landed = a @ np.array([0.0, 0.0, 1.0])
+    expected = frame @ np.array([float(r0), float(c0), 1.0])
+    assert landed[0] == pytest.approx(expected[0] - CROP[0], abs=1e-6)
+    assert landed[1] == pytest.approx(expected[1] - CROP[2], abs=1e-6)
+
+
+def test_tiles_in_an_overlay_frame_are_clipped_in_that_frame():
+    """`arms_tiles` holds ARMS/SVS pixels and declares identity.
+
+    Read by the element alone, a real export translated 288 tiles by the crop
+    origin and kept the 37 whose *numbers* happened to fall inside it — rows that
+    are real but whose selection is meaningless.
+    """
+    frame = _similarity(theta_deg=0.0, scale=0.25, ty=90.0, tx=140.0)
+    # In ARMS pixels: one tile that maps inside the crop, one that does not.
+    inside_own = (60.0, 60.0)
+    outside_own = (900.0, 900.0)
+    tiles = gpd.GeoDataFrame({
+        "geometry": [Point(inside_own[1], inside_own[0]).buffer(2.0),
+                     Point(outside_own[1], outside_own[0]).buffer(2.0)],
+        "cluster_id": np.array([7, 9], dtype=np.int64),
+    })
+
+    out = crop_overlays.crop_vector_overlay(
+        _shapes(tiles), "arms_tiles", CROP, _crop_polygon(),
+        frame=crop_overlays.Frame(frame, None))
+
+    assert out is not None and len(out) == 1, (
+        "exactly the tile that lands inside the crop should survive"
+    )
+    assert list(out["cluster_id"]) == [7], "the surviving tile kept its cluster column"
+
+
+def test_image_space_landmarks_move_with_their_companions_slice_origin():
+    """Defect 5: verbatim landmarks are offset by the raster's slice.
+
+    `crop_raster_overlay` re-origins the exported raster so its pixel (0, 0) is
+    the source's (r0, c0), but landmarks are passed through in *unsliced* source
+    pixels and drawn with the image's affine. In the source store the two agree
+    because nothing was sliced; in an export they disagree by exactly (r0, c0).
+    """
+    frame = _similarity(theta_deg=15.0, scale=1.4, ty=40.0, tx=-30.0)
+    raster = crop_overlays.crop_raster_overlay(
+        _image(shape_yx=(400, 500)), CROP, _safe_scale_factors, frame_affine=frame)
+    r0, c0 = raster.origin_yx
+    assert (r0, c0) != (0, 0), "fixture must actually slice, or this proves nothing"
+
+    lm_own = (120.0, 200.0)                     # unsliced overlay pixels
+    lms = gpd.GeoDataFrame({"geometry": [Point(lm_own[1], lm_own[0])], "radius": 1.0})
+
+    out = crop_overlays.crop_vector_overlay(
+        _shapes(lms), "he_he_landmarks", CROP, _crop_polygon(),
+        frame=crop_overlays.Frame(frame, raster.origin_yx))
+
+    assert len(out) == 1, "a landmark is a reference point and must never be clipped"
+
+    # Assert the way the *viewer* draws it. `_apply_he_affine` puts the image's
+    # affine on the landmark layer, so the landmark's own stored transform never
+    # reaches the screen — what has to be right is that its coordinates are in
+    # the frame that affine expects, which is the sliced one. Composing the
+    # landmark's own transform instead hides the defect completely: the origin
+    # translation and the transform cancel, and both branches look correct.
+    img_affine = crop_overlays.element_affine(raster.element)
+    g = out.geometry.iloc[0]
+    drawn = img_affine @ np.array([g.y, g.x, 1.0])
+    source = frame @ np.array([lm_own[0], lm_own[1], 1.0])
+    assert drawn[0] == pytest.approx(source[0] - CROP[0], abs=1e-6), (
+        "the landmark is offset by the companion raster's slice origin — measured "
+        "at 148 px on this fixture before the origin was carried across"
+    )
+    assert drawn[1] == pytest.approx(source[1] - CROP[2], abs=1e-6)
+
+    # And its transform must be the companion raster's, bit for bit — that is what
+    # makes a re-fit inside the export reproduce the registration it shipped with.
+    np.testing.assert_allclose(
+        crop_overlays.element_affine(out), img_affine, atol=1e-9)
+
+
+def test_an_identity_raster_off_the_morphology_grid_is_not_credible():
+    assert not crop_overlays.frame_is_credible(np.eye(3), (13690, 23092), (34103, 54036))
+
+
+def test_an_identity_raster_on_the_morphology_grid_is_credible():
+    assert crop_overlays.frame_is_credible(np.eye(3), (34103, 54036), (34103, 54036))
+
+
+def test_a_declared_frame_is_always_credible():
+    """Something recorded it deliberately; size is irrelevant."""
+    assert crop_overlays.frame_is_credible(
+        _similarity(30.0, 2.0, 5.0, 5.0), (13690, 23092), (34103, 54036))
+
+
+def test_an_unknown_morphology_grid_makes_identity_not_credible():
+    """No yardstick means no claim — the honest answer is 'I do not know'."""
+    assert not crop_overlays.frame_is_credible(np.eye(3), (400, 500), None)

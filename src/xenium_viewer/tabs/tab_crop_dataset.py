@@ -31,11 +31,14 @@ class _CropExportWorker(QThread):
     job_done = QtSignal(int, bool, str, str)  # index, success, path-or-error, overlay notes
     finished_all = QtSignal()
 
-    def __init__(self, ctx, jobs, include_overlays: bool = True):
+    def __init__(self, ctx, jobs, include_overlays: bool = True, viewer_state=None):
         super().__init__()
         self.ctx = ctx
         self.jobs = jobs   # list of (polygon_yx, output_dir, name)
         self.include_overlays = include_overlays
+        # Captured by the caller on the GUI thread: reading napari layer affines
+        # from this thread would be a cross-thread read of live objects.
+        self.viewer_state = viewer_state
 
     def run(self):
         from xenium_viewer.utils.crop_export import crop_and_export, CropExportError
@@ -52,6 +55,7 @@ class _CropExportWorker(QThread):
                 result_path, notes = crop_and_export(
                     self.ctx, polygon_yx, output_dir, name, progress_cb=_cb,
                     include_overlays=self.include_overlays,
+                    viewer_state=self.viewer_state,
                 )
                 self.job_done.emit(i, True, str(result_path), "; ".join(notes))
             except CropExportError as exc:
@@ -183,8 +187,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
             status.value = "No regions to export."
             return
 
+        # Resolve every overlay's coordinate frame here, on the GUI thread, while
+        # the napari layers are safe to read. The worker gets a snapshot.
+        viewer_state = None
+        if overlays_cb.value:
+            from xenium_viewer.utils.crop_state import capture_overlay_frames
+            viewer_state = capture_overlay_frames(ctx)
+
         dlg, bar, lbl = make_progress_dialog("Cropping Dataset(s)")
-        worker = _CropExportWorker(ctx, jobs, include_overlays=bool(overlays_cb.value))
+        worker = _CropExportWorker(ctx, jobs, include_overlays=bool(overlays_cb.value),
+                                   viewer_state=viewer_state)
         results = []
 
         def _on_progress(pct, msg):
@@ -205,21 +217,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
                     lines.append(f"✓ {name} -> {info}")
                     if notes:
                         lines.append(f"    not carried: {notes}")
-                    carried = ("with every registered overlay and drawn region, cropped to "
-                               "the same region" if want_overlays else "core elements only")
-                    ctx.record_node(
-                        f"crop_export:{name}",
-                        f"\n# Crop & Export dataset '{name}' (writes a standalone dataset)\n"
-                        f"# from xenium_viewer.utils.crop_export import crop_and_export\n"
-                        f"# crop_and_export(ctx, polygon_yx=<region drawn in the \"Crop Regions\" layer>,\n"
-                        f"#                 output_dir=Path({str(Path(info).parent)!r}), name={name!r},\n"
-                        f"#                 include_overlays={want_overlays!r})\n"
-                        f"# -> wrote standalone dataset to \"{info}\" ({carried})"
-                        + (f"\n# -> not carried: {notes}" if notes else ""),
-                        deps=["preamble"],
-                        kind=NOTE,
-                        label=f"Crop & export: {name}",
+                    # Built by crop_export.crop_export_note, which the exporter
+                    # also uses for the copy it writes into the export's own
+                    # graph — two constructions of the same string in two files
+                    # is exactly the drift that would go unnoticed.
+                    from xenium_viewer.utils.crop_export import crop_export_note
+                    node_id, code, label = crop_export_note(
+                        name, Path(info).parent, want_overlays,
+                        [notes] if notes else [],
                     )
+                    ctx.record_node(node_id, code, deps=["preamble"],
+                                    kind=NOTE, label=label)
                 else:
                     lines.append(f"✗ {name}: {info}")
             status.value = f"Crop & Export finished: {n_ok}/{len(results)} succeeded."
