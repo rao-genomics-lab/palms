@@ -14,6 +14,8 @@ wrong place.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
@@ -267,31 +269,10 @@ def test_minimap_maps_a_click_to_world_not_to_pixels():
 # napari's default pixel units while the rest are in µm, napari's canvas handler
 # triggers a draw inside that window, and by the next draw everything agrees.
 
-@pytest.fixture
-def viewer():
-    """A real offscreen napari Viewer, or a skip where there is no OpenGL.
-
-    napari's own ``make_napari_viewer`` needs ``pytest-qt``, which this env does
-    not have. More importantly a Viewer needs a GL context: CI's runner reports
-    ``QOpenGLWidget is not supported on this platform`` and vispy then returns
-    ``None`` from ``glGetParameter``. So the canvas-level tests run on a desktop
-    and skip in CI, and the logic they exercise is covered canvas-free below —
-    a skipped test guards nothing, so it must not be the only guard.
-    """
-    napari = pytest.importorskip("napari")
-    try:
-        v = napari.Viewer(show=False)
-    except Exception as exc:                    # pragma: no cover - CI path
-        pytest.skip(f"no usable OpenGL context for a napari canvas: {exc}")
-    try:
-        yield v
-    finally:
-        v.close()
-
-
-# ── the suppression mechanism, without a canvas (this is what CI runs) ───────
+# ── the suppression mechanism, canvas-free (this is what guards it in CI) ────
 
 def _canvas_module():
+    """napari's canvas module — importable without a GL context."""
     return pytest.importorskip("napari._vispy.canvas")
 
 
@@ -334,7 +315,7 @@ def test_the_target_message_outside_the_window_gets_through(monkeypatch):
     assert len(seen) == 1, "outside an insertion this message is real information"
 
 
-def test_inserting_opens_the_window_and_inserted_closes_it(monkeypatch):
+def test_inserting_opens_the_window_and_inserted_closes_it():
     """The wiring, canvas-free — this is what guards the fix in CI.
 
     Connecting only `inserted` is the bug: napari's canvas draws before it runs,
@@ -342,6 +323,8 @@ def test_inserting_opens_the_window_and_inserted_closes_it(monkeypatch):
     a callback exists on each event; firing `inserting` must actually open the
     suppression window, and `inserted` must close it again.
     """
+    from napari.layers import Image
+
     from xenium_viewer.app import _install_unit_scaling
 
     class _Emitter:
@@ -364,7 +347,6 @@ def test_inserting_opens_the_window_and_inserted_closes_it(monkeypatch):
     class _Event:
         def __init__(self, value): self.value = value
 
-    from napari.layers import Image
     v = _Viewer()
     _install_unit_scaling(v, PX)
     quiet = units.quiet_insertion()
@@ -382,106 +364,42 @@ def test_inserting_opens_the_window_and_inserted_closes_it(monkeypatch):
     assert str(layer.units[0]) == "micrometer", "and stamp the layer on the way"
 
 
+def _has_real_display() -> bool:
+    """Whether a GPU-backed napari canvas can be built here.
+
+    Deliberately a check on the *environment* rather than a probe, because probing
+    is not safe: CI constructs the `Viewer` fine and only fails on the first draw,
+    deep in vispy (`glGetParameter` returns None), and the run then ends in a
+    segfault at teardown — exit 139. There is nothing to catch that reliably, so
+    the Viewer is not built at all where there is no display.
+
+    This matches the project's standing position that the napari GUI proper has no
+    automated coverage; what these two tests add is desktop-only confirmation of
+    behaviour that is *also* covered canvas-free above.
+    """
+    if os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"):
+        return False
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+requires_display = pytest.mark.skipif(
+    not _has_real_display(),
+    reason="needs a GPU-backed napari canvas; covered canvas-free by the tests above",
+)
+
+
 @pytest.fixture
 def viewer():
-    """A real offscreen napari Viewer, or a skip where there is no OpenGL.
-
-    napari's own ``make_napari_viewer`` needs ``pytest-qt``, which this env does
-    not have. More importantly a Viewer needs a GL context: CI's runner reports
-    ``QOpenGLWidget is not supported on this platform`` and vispy then returns
-    ``None`` from ``glGetParameter``. So the canvas-level tests run on a desktop
-    and skip in CI, and the logic they exercise is covered canvas-free below —
-    a skipped test guards nothing, so it must not be the only guard.
-    """
+    """A real offscreen-window napari Viewer, torn down per test."""
     napari = pytest.importorskip("napari")
-    try:
-        v = napari.Viewer(show=False)
-    except Exception as exc:                    # pragma: no cover - CI path
-        pytest.skip(f"no usable OpenGL context for a napari canvas: {exc}")
+    v = napari.Viewer(show=False)
     try:
         yield v
     finally:
         v.close()
 
 
-# ── the suppression mechanism, without a canvas (this is what CI runs) ───────
-
-def _canvas_module():
-    return pytest.importorskip("napari._vispy.canvas")
-
-
-def test_the_target_message_is_dropped_inside_the_window(monkeypatch):
-    canvas_mod = _canvas_module()
-    seen = []
-    monkeypatch.setattr(canvas_mod, "show_warning",
-                        lambda m, *a, **k: seen.append(str(m)), raising=False)
-
-    with units.quiet_insertion():
-        canvas_mod.show_warning("Inconsistent units across layers; units will not be used.")
-
-    assert seen == [], "the transient message must not reach the user mid-insertion"
-
-
-def test_other_messages_are_never_dropped(monkeypatch):
-    """Suppression is one message, not a quiet mode."""
-    canvas_mod = _canvas_module()
-    seen = []
-    monkeypatch.setattr(canvas_mod, "show_warning",
-                        lambda m, *a, **k: seen.append(str(m)), raising=False)
-
-    with units.quiet_insertion():
-        canvas_mod.show_warning("something else entirely went wrong")
-
-    assert seen == ["something else entirely went wrong"]
-
-
-def test_the_target_message_outside_the_window_gets_through(monkeypatch):
-    """The window is the whole safety property: a real mismatch still reports."""
-    canvas_mod = _canvas_module()
-    seen = []
-    monkeypatch.setattr(canvas_mod, "show_warning",
-                        lambda m, *a, **k: seen.append(str(m)), raising=False)
-
-    with units.quiet_insertion():
-        pass
-    canvas_mod.show_warning("Inconsistent units across layers; units will not be used.")
-
-    assert len(seen) == 1, "outside an insertion this message is real information"
-
-
-def test_the_stamp_is_wired_to_both_ends_of_an_insertion():
-    """`inserting` opens the window and `inserted` closes it.
-
-    Connecting only `inserted` is the bug: napari's canvas draws before it runs,
-    which is precisely when the spurious warning is emitted.
-    """
-    from xenium_viewer.app import _install_unit_scaling
-
-    class _Emitter:
-        def __init__(self): self.callbacks = []
-        def connect(self, cb, **kw): self.callbacks.append(cb)
-
-    class _Events:
-        def __init__(self): self.inserting, self.inserted = _Emitter(), _Emitter()
-
-    class _Layers(list):
-        def __init__(self): super().__init__(); self.events = _Events()
-
-    class _ScaleBar:
-        visible = False
-        colored = True
-
-    class _Viewer:
-        def __init__(self): self.layers, self.scale_bar = _Layers(), _ScaleBar()
-
-    v = _Viewer()
-    _install_unit_scaling(v, PX)
-
-    assert v.layers.events.inserting.callbacks, "nothing opens the suppression window"
-    assert v.layers.events.inserted.callbacks, "nothing stamps the new layer"
-    assert v.scale_bar.visible is True
-
-
+@requires_display
 def test_adding_layers_does_not_warn_about_inconsistent_units(viewer, monkeypatch):
     """The whole point: a normal dataset load must not produce that message."""
     import napari._vispy.canvas as canvas_mod
@@ -504,6 +422,7 @@ def test_adding_layers_does_not_warn_about_inconsistent_units(viewer, monkeypatc
     assert viewer.layers.extent.units is not None, "units must still actually agree"
 
 
+@requires_display
 def test_a_real_mismatch_outside_an_insertion_still_warns(viewer, monkeypatch):
     """Suppression is a window, not a mute.
 

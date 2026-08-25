@@ -33,11 +33,14 @@
   was bound at first use, which made it order-dependent with anything else that
   rebinds the name — it surfaced as a test that passed alone and failed in a suite.
 
-  Note for anyone adding tests here: a napari `Viewer` needs a GL context, and CI's
-  runner has none (`QOpenGLWidget is not supported on this platform`, then vispy
-  returns `None` from `glGetParameter`). The two canvas-level tests skip there, so the
-  behaviour is *also* covered canvas-free — a skipped test guards nothing, and the
-  canvas-free one was verified to fail without the fix.
+  Note for anyone adding tests here: a napari `Viewer` needs a GL context and CI's
+  runner has none. It is worse than a clean failure — the `Viewer` *constructs*, then
+  vispy returns `None` from `glGetParameter` on the first draw and the run ends in a
+  segfault (exit 139), so there is nothing to catch. The two canvas-level tests are
+  therefore gated on a real `DISPLAY` and never build a Viewer in CI at all. Because a
+  skipped test guards nothing, the same property is covered canvas-free by driving the
+  wiring directly — and that one was verified to fail with the fix neutered, under
+  `QT_QPA_PLATFORM=offscreen`, which is exactly how CI runs.
 
 ## [Unreleased] — 2026-08-25 (a cropped dataset opens like a dataset)
 
