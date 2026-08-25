@@ -1138,93 +1138,97 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     sdata_arms_tile_deg = load_arms_tile_deg_from_sdata(data["sdata"]) if not no_cache else None
     sdata_cluster_labels = load_cluster_labels_from_sdata(data["sdata"]) if not no_cache else {}
 
-    # Restore session if available
-    if not no_cache and zarr_path.exists():
-        session = load_session(zarr_path)
-        if session is not None:
-            # One-time migration: copy zarr landmark arrays and GeoJSON/CSV tile
-            # data into sdata.shapes so they are portable without external files.
-            migrate_landmarks_to_sdata(zarr_path, data["sdata"], session)
-            # Load landmarks/tiles from sdata (captures newly migrated data too)
-            _sdata = data["sdata"]
-            he_xen_lm   = load_landmarks_from_sdata(_sdata, 'he_xenium_landmarks')
-            he_he_lm    = load_landmarks_from_sdata(_sdata, 'he_he_landmarks')
-            arms_xen_lm = load_landmarks_from_sdata(_sdata, 'arms_xenium_landmarks')
-            arms_he_lm  = load_landmarks_from_sdata(_sdata, 'arms_he_landmarks')
-            arms_tiles  = load_arms_tiles_from_sdata(_sdata)
-            # sdata values take priority over zarr array fallbacks
-            if sdata_rois:
-                session['rois'] = sdata_rois
-            if he_xen_lm is not None:
-                session['xenium_landmarks'] = he_xen_lm
-            if he_he_lm is not None:
-                session['he_landmarks'] = he_he_lm
-            if arms_xen_lm is not None:
-                session['arms_xenium_landmarks'] = arms_xen_lm
-            if arms_he_lm is not None:
-                session['arms_he_landmarks'] = arms_he_lm
-            if arms_tiles[0]:
-                session['arms_tiles_sdata'] = arms_tiles
-            # Inject DEG results from sdata (override None values from load_session)
-            if sdata_roi_deg is not None and session.get('roi_deg_df') is None:
-                session['roi_deg_df'] = sdata_roi_deg
-            if sdata_arms_tile_deg is not None and session.get('arms_tile_deg_df') is None:
-                session['arms_tile_deg_df'] = sdata_arms_tile_deg
-            # Migrate cluster labels from session attrs → sdata obs columns (one-time)
-            if not sdata_cluster_labels and session.get('cluster_labels'):
-                from xenium_viewer.utils.adata_persistence import save_cluster_labels_to_sdata
-                for _ck, _ld in session['cluster_labels'].items():
-                    if isinstance(_ld, dict):
-                        save_cluster_labels_to_sdata(ctx, _ck, _ld)
-                sdata_cluster_labels = load_cluster_labels_from_sdata(data["sdata"])
-                if sdata_cluster_labels:
-                    print(f"  Migrated cluster labels for: {list(sdata_cluster_labels)}")
-            # Inject cluster labels from sdata (sdata obs columns are authoritative)
-            if sdata_cluster_labels:
-                merged = dict(session.get('cluster_labels') or {})
-                merged.update(sdata_cluster_labels)  # sdata wins on conflict
-                session['cluster_labels'] = merged
-            # Restore the reproducible-code provenance graph so the analysis
-            # notebook accumulates across sessions (re-derive the flat journal
-            # and rewrite analysis.py from the restored graph).
-            # The sidecar is rewritten on every recorded step; the session attr
-            # only by save_session (dataset switch / exit), so it is behind
-            # whenever the last run ended in a crash, a kill, or a still-open
-            # viewer. Prefer the sidecar, fall back to the attr.
-            _prov_items = _load_prov_graph_items(ctx.data_path, session)
-            if _prov_items:
-                from xenium_viewer.utils.prov_graph import ProvGraph, graph_to_cells
-                _g = ProvGraph.from_list(_prov_items)
-                ctx.state["prov_graph"] = _g
-                # Re-emit the preamble for THIS launch's data_path (upsert; a
-                # no-op when the path is unchanged).
-                if ctx.state.get("record_code"):
-                    ctx.record_preamble()
-                ctx.state["code_journal"] = [
-                    c.source for c in graph_to_cells(_g) if c.cell_type == "code"
-                ]
-                try:
-                    _cp = ctx.data_path / ctx.state.get("code_file", "analysis.py")
-                    with open(_cp, "w") as _f:
-                        _f.write("\n".join(ctx.state["code_journal"]) + "\n")
-                except OSError:
-                    pass
-                _sync = ctx.state.get("_notebook_sync_fn")
-                if _sync:
-                    _sync()
-                print(f"Restored code provenance graph: {len(_g)} node(s)")
-            print("Restoring session from zarr cache...")
-            restore_fn(session)
-            print("Session restored.")
-    elif sdata_rois or sdata_roi_deg is not None or sdata_arms_tile_deg is not None or sdata_cluster_labels:
-        partial_session = {'rois': sdata_rois}
-        if sdata_roi_deg is not None:
-            partial_session['roi_deg_df'] = sdata_roi_deg
-        if sdata_arms_tile_deg is not None:
-            partial_session['arms_tile_deg_df'] = sdata_arms_tile_deg
+    # Restore. A store with no `viewer_session` is still a store worth restoring
+    # from: a crop export, a cache built by `xenium-build-cache`, a session node
+    # deleted in Tools -> Dataset, a recovered cache. All of those hold the
+    # elements — the registered H&E, the ROIs, the landmarks, the cluster label
+    # columns — and used to open with none of it shown, because the whole restore
+    # hung off `load_session()` returning something. It is the elements that are
+    # authoritative; the session only adds what has no element to live in.
+    stored = load_session(zarr_path) if (not no_cache and zarr_path.exists()) else None
+    have_session = stored is not None
+    session = stored or {}
+
+    if have_session:
+        # One-time migration of legacy zarr landmark arrays and GeoJSON/CSV tile
+        # data into sdata.shapes. Gated because it reads the group it migrates
+        # from — it self-guards on the group's absence, so this is documentation.
+        migrate_landmarks_to_sdata(zarr_path, data["sdata"], session)
+
+    # Load landmarks/tiles from sdata (captures newly migrated data too)
+    _sdata = data["sdata"]
+    he_xen_lm   = load_landmarks_from_sdata(_sdata, 'he_xenium_landmarks')
+    he_he_lm    = load_landmarks_from_sdata(_sdata, 'he_he_landmarks')
+    arms_xen_lm = load_landmarks_from_sdata(_sdata, 'arms_xenium_landmarks')
+    arms_he_lm  = load_landmarks_from_sdata(_sdata, 'arms_he_landmarks')
+    arms_tiles  = load_arms_tiles_from_sdata(_sdata)
+    # sdata values take priority over zarr array fallbacks
+    if sdata_rois:
+        session['rois'] = sdata_rois
+    if he_xen_lm is not None:
+        session['xenium_landmarks'] = he_xen_lm
+    if he_he_lm is not None:
+        session['he_landmarks'] = he_he_lm
+    if arms_xen_lm is not None:
+        session['arms_xenium_landmarks'] = arms_xen_lm
+    if arms_he_lm is not None:
+        session['arms_he_landmarks'] = arms_he_lm
+    if arms_tiles[0]:
+        session['arms_tiles_sdata'] = arms_tiles
+    # Inject DEG results from sdata (override None values from load_session)
+    if sdata_roi_deg is not None and session.get('roi_deg_df') is None:
+        session['roi_deg_df'] = sdata_roi_deg
+    if sdata_arms_tile_deg is not None and session.get('arms_tile_deg_df') is None:
+        session['arms_tile_deg_df'] = sdata_arms_tile_deg
+    # Migrate cluster labels from session attrs → sdata obs columns (one-time)
+    if not sdata_cluster_labels and session.get('cluster_labels'):
+        from xenium_viewer.utils.adata_persistence import save_cluster_labels_to_sdata
+        for _ck, _ld in session['cluster_labels'].items():
+            if isinstance(_ld, dict):
+                save_cluster_labels_to_sdata(ctx, _ck, _ld)
+        sdata_cluster_labels = load_cluster_labels_from_sdata(data["sdata"])
         if sdata_cluster_labels:
-            partial_session['cluster_labels'] = sdata_cluster_labels
-        restore_fn(partial_session)
+            print(f"  Migrated cluster labels for: {list(sdata_cluster_labels)}")
+    # Inject cluster labels from sdata (sdata obs columns are authoritative)
+    if sdata_cluster_labels:
+        merged = dict(session.get('cluster_labels') or {})
+        merged.update(sdata_cluster_labels)  # sdata wins on conflict
+        session['cluster_labels'] = merged
+
+    # Restore the reproducible-code provenance graph so the analysis
+    # notebook accumulates across sessions (re-derive the flat journal
+    # and rewrite analysis.py from the restored graph).
+    # The sidecar is rewritten on every recorded step; the session attr
+    # only by save_session (dataset switch / exit), so it is behind
+    # whenever the last run ended in a crash, a kill, or a still-open
+    # viewer. Prefer the sidecar, fall back to the attr.
+    _prov_items = _load_prov_graph_items(ctx.data_path, session)
+    if _prov_items:
+        from xenium_viewer.utils.prov_graph import ProvGraph, graph_to_cells
+        _g = ProvGraph.from_list(_prov_items)
+        ctx.state["prov_graph"] = _g
+        # Re-emit the preamble for THIS launch's data_path (upsert; a
+        # no-op when the path is unchanged).
+        if ctx.state.get("record_code"):
+            ctx.record_preamble()
+        ctx.state["code_journal"] = [
+            c.source for c in graph_to_cells(_g) if c.cell_type == "code"
+        ]
+        try:
+            _cp = ctx.data_path / ctx.state.get("code_file", "analysis.py")
+            with open(_cp, "w") as _f:
+                _f.write("\n".join(ctx.state["code_journal"]) + "\n")
+        except OSError:
+            pass
+        _sync = ctx.state.get("_notebook_sync_fn")
+        if _sync:
+            _sync()
+        print(f"Restored code provenance graph: {len(_g)} node(s)")
+
+    print("Restoring session from zarr cache..." if have_session
+          else "No stored session; restoring from the store's own elements...")
+    restore_fn(session)
+    print("Session restored.")
 
     # Only now may the graph be written back. Everything above this line runs
     # with whatever the tabs seeded — at minimum the preamble emitted during
