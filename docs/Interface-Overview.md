@@ -77,6 +77,21 @@ The viewer adds three menus to napari's own menu bar.
 | Show Xenium Controls (Ctrl+Shift+X) | Show or hide the control panel dock. On by default. |
 | Show Minimap | Show or hide the overview minimap. Off, and disabled until a minimap exists. |
 
+### Scale bar
+
+The canvas carries a scale bar reading in **micrometres**, switching to millimetres
+as you zoom out — a Xenium section is a few mm across, so both units get used. It is
+on from the moment a dataset loads and is napari's own scale bar, so it also responds
+to napari's scale-bar settings.
+
+The conversion comes from `pixel_size` in `experiment.xenium`; nothing is assumed.
+Every layer is given that scale and labelled in micrometres, which means napari's
+world coordinates — the ones the scale bar, the minimap and the camera all read —
+are micrometres rather than image pixels. Layer *data* is still in pixels, and so is
+every registration affine stored in the zarr; the two are converted at the napari
+boundary (`utils/units.py`). Nothing you have registered, drawn or exported changes
+position or meaning as a result.
+
 ### Preferences
 
 | Item | Description |

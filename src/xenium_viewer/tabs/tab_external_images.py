@@ -24,6 +24,7 @@ from napari.qt.threading import thread_worker
 
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.zarr_safe import safe_delete_element
+from xenium_viewer.utils.units import layer_affine_px, px_affine_to_world
 from xenium_viewer.tabs._helpers import make_tab
 from xenium_viewer.utils.registration import (
     load_multichannel_pyramid, compute_landmark_affine, describe_pyramid,
@@ -313,13 +314,16 @@ def build_tab(ctx: "ViewerContext"):
         flip = _build_flip_affine(entry)
         fine = entry.get("affine_3x3")
         combined = fine @ flip if fine is not None else flip
+        # `combined` is in Xenium pixels; the layer's copy is in world (µm)
+        # because napari applies affine *after* scale. See utils/units.py.
+        world = px_affine_to_world(combined, ctx.pixel_size)
         lyr = entry.get("layer_ref")
         if lyr is not None:
-            lyr.affine = combined
+            lyr.affine = world
         img_lm = entry.get("image_lm_layer")
         if img_lm is not None:
-            img_lm.affine = combined
-        # Persist to sdata
+            img_lm.affine = world
+        # Persist to sdata — in pixels, which is the store's contract.
         save_overlay_affine_to_sdata(ctx, entry["element_name"], combined)
 
     def _create_landmark_layers(entry):
@@ -463,7 +467,7 @@ def build_tab(ctx: "ViewerContext"):
             if img_lm is not None:
                 img_lm.affine = lyr.affine
             save_overlay_affine_to_sdata(
-                ctx, entry["element_name"], lyr.affine.affine_matrix,
+                ctx, entry["element_name"], layer_affine_px(lyr, ctx.pixel_size),
             )
         except Exception as e:
             print(f"  Warning: could not link external image affine: {e}")
@@ -817,7 +821,8 @@ def build_tab(ctx: "ViewerContext"):
                 saved_affine = ui.get("affine_matrix")
             if saved_affine is not None:
                 try:
-                    layer.affine = np.array(saved_affine, dtype=np.float64)
+                    layer.affine = px_affine_to_world(
+                        np.array(saved_affine, dtype=np.float64), ctx.pixel_size)
                 except Exception:
                     pass
 
@@ -862,7 +867,7 @@ def build_tab(ctx: "ViewerContext"):
                     try:
                         e["affine_disconnect"] = link_affine(lyr, src, viewer=viewer)
                         save_overlay_affine_to_sdata(
-                            ctx, e["element_name"], lyr.affine.affine_matrix,
+                            ctx, e["element_name"], layer_affine_px(lyr, ctx.pixel_size),
                         )
                     except Exception:
                         pass
