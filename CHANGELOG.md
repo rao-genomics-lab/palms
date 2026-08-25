@@ -28,6 +28,17 @@
   `reporting.report_layer_scaling_failure` names the layer and says what it means —
   which napari's message never did. Once per layer per session.
 
+  The patch is lifted when the window closes rather than left installed behind a depth
+  counter. The first version kept a permanent wrapper around whatever `show_warning`
+  was bound at first use, which made it order-dependent with anything else that
+  rebinds the name — it surfaced as a test that passed alone and failed in a suite.
+
+  Note for anyone adding tests here: a napari `Viewer` needs a GL context, and CI's
+  runner has none (`QOpenGLWidget is not supported on this platform`, then vispy
+  returns `None` from `glGetParameter`). The two canvas-level tests skip there, so the
+  behaviour is *also* covered canvas-free — a skipped test guards nothing, and the
+  canvas-free one was verified to fail without the fix.
+
 ## [Unreleased] — 2026-08-25 (a cropped dataset opens like a dataset)
 
 ### Fixed

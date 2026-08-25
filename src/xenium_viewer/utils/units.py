@@ -188,46 +188,54 @@ _TRANSIENT_UNITS_WARNING = "Inconsistent units across layers"
 
 
 class _InsertionQuiet:
-    """Drops napari's transient units warning while a layer is being inserted."""
+    """Drops napari's transient units warning while a layer is being inserted.
+
+    The patch exists **only for the span of the window** and the previous value is
+    restored exactly. A version of this that installed a permanent wrapper and
+    gated it on a depth counter worked, but it captured whatever ``show_warning``
+    happened to be bound at first use and kept wrapping it forever — which made it
+    order-dependent with anything else that rebinds the name, and it showed up as a
+    test that passed alone and failed in a suite. A wrapper that outlives the reason
+    for it is the wrong shape.
+    """
 
     def __init__(self):
         self._depth = 0
-        self._installed = False
+        self._module = None
+        self._saved = None
 
-    def _install(self) -> bool:
-        if self._installed:
-            return True
+    def __enter__(self):
+        if self._depth == 0:
+            self._patch()
+        self._depth += 1
+        return self
+
+    def _patch(self) -> None:
         try:
             import napari._vispy.canvas as canvas_mod
         except Exception:                              # pragma: no cover - defensive
-            return False
+            return
         original = getattr(canvas_mod, "show_warning", None)
         if not callable(original):
-            # napari moved it. Say nothing and warn about nothing: the console is
-            # noisier than it needs to be, which is not worth a crash at startup.
-            return False
+            # napari moved it. Say nothing and warn about nothing: a noisier console
+            # is not worth a crash at startup.
+            return
 
         def filtered(message, *args, **kwargs):
-            if self._depth > 0 and _TRANSIENT_UNITS_WARNING in str(message):
+            if _TRANSIENT_UNITS_WARNING in str(message):
                 return None
             return original(message, *args, **kwargs)
 
-        filtered._xv_original = original               # so a re-install can find it
+        self._module, self._saved = canvas_mod, original
         canvas_mod.show_warning = filtered
-        self._installed = True
-        return True
-
-    def __enter__(self):
-        if self._install():
-            self._depth += 1
-        return self
 
     def __exit__(self, *exc):
-        # Never leave the depth raised: a stuck counter would suppress the warning
-        # for the rest of the session, which is the failure this whole approach is
-        # supposed to avoid.
-        if self._depth > 0:
-            self._depth -= 1
+        # Never leave the window open: a stuck counter would suppress the warning for
+        # the rest of the session, which is the failure this approach exists to avoid.
+        self._depth = max(0, self._depth - 1)
+        if self._depth == 0 and self._module is not None:
+            self._module.show_warning = self._saved
+            self._module = self._saved = None
         return False
 
 
