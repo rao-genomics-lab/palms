@@ -128,14 +128,19 @@ def layer_affine_px(layer, pixel_size: float) -> np.ndarray:
     return world_affine_to_px(m, pixel_size)
 
 
-def apply_to_layer(layer, pixel_size: float) -> None:
-    """Put one napari layer into micrometres.
+def apply_to_layer(layer, pixel_size: float) -> bool:
+    """Put one napari layer into micrometres. True if it took.
 
     Applied to every layer as it is inserted (see ``app.py``) rather than at each
     ``add_image`` / ``add_shapes`` call site: there are more than twenty of those
     spread across eight modules, and a layer added by a tab written later would
     otherwise be silently left in pixels — misplaced relative to everything else,
     which is a worse failure than a wrong scale bar.
+
+    The return value exists so the caller can tell a layer that was converted from
+    one that refused. That distinction used to be invisible, and it is the whole
+    difference between napari's units warning being noise and being a real report
+    — see :func:`quiet_insertion`.
     """
     ndim = getattr(layer, "ndim", 2)
     p = float(pixel_size)
@@ -146,4 +151,97 @@ def apply_to_layer(layer, pixel_size: float) -> None:
         # A layer that will not take a scale is left alone rather than half-set;
         # a partially converted layer is misplaced, and misplacement is the thing
         # this module exists to prevent.
-        return
+        return False
+    return True
+
+
+# ── napari's transient units warning ─────────────────────────────────────────
+#
+# Adding a layer emits, once per layer after the first:
+#
+#     Inconsistent units across layers; units will not be used for rendering.
+#
+# It is spurious here, and the reason is a timing window we do not control. A new
+# layer arrives carrying napari's default (pixel) units while every existing layer
+# is already in micrometres. napari's own canvas handler runs on the same
+# `inserted` event and triggers a draw before ours has stamped the newcomer:
+#
+#     on_draw -> _update_scenegraph -> add_layer_visual_mapping -> _update_world_units
+#
+# which reads `viewer.layers.extent.units`, finds a disagreement, and warns. By the
+# time the next draw happens the layer is stamped and everything agrees — measured:
+# `extent.units` settles to micrometres and the scale bar renders correctly. So the
+# warning describes a state that has already stopped being true.
+#
+# Connection order does not help (tried: `position="first"` on `inserted` changes
+# nothing, because the draw is not ordered by it), and setting units at the ~20
+# `add_*` call sites is the design this module exists to avoid.
+#
+# So the message is dropped, but *only* for the span of one insertion — from
+# `inserting` to the end of our own `inserted` handler. A genuine mismatch outside
+# that window still reaches the user untouched. And the one real failure this could
+# have masked — a layer that refuses the scale, which really would leave the world
+# inconsistent — is reported explicitly instead, naming the layer, which is a better
+# message than the one being suppressed.
+
+_TRANSIENT_UNITS_WARNING = "Inconsistent units across layers"
+
+
+class _InsertionQuiet:
+    """Drops napari's transient units warning while a layer is being inserted.
+
+    The patch exists **only for the span of the window** and the previous value is
+    restored exactly. A version of this that installed a permanent wrapper and
+    gated it on a depth counter worked, but it captured whatever ``show_warning``
+    happened to be bound at first use and kept wrapping it forever — which made it
+    order-dependent with anything else that rebinds the name, and it showed up as a
+    test that passed alone and failed in a suite. A wrapper that outlives the reason
+    for it is the wrong shape.
+    """
+
+    def __init__(self):
+        self._depth = 0
+        self._module = None
+        self._saved = None
+
+    def __enter__(self):
+        if self._depth == 0:
+            self._patch()
+        self._depth += 1
+        return self
+
+    def _patch(self) -> None:
+        try:
+            import napari._vispy.canvas as canvas_mod
+        except Exception:                              # pragma: no cover - defensive
+            return
+        original = getattr(canvas_mod, "show_warning", None)
+        if not callable(original):
+            # napari moved it. Say nothing and warn about nothing: a noisier console
+            # is not worth a crash at startup.
+            return
+
+        def filtered(message, *args, **kwargs):
+            if _TRANSIENT_UNITS_WARNING in str(message):
+                return None
+            return original(message, *args, **kwargs)
+
+        self._module, self._saved = canvas_mod, original
+        canvas_mod.show_warning = filtered
+
+    def __exit__(self, *exc):
+        # Never leave the window open: a stuck counter would suppress the warning for
+        # the rest of the session, which is the failure this approach exists to avoid.
+        self._depth = max(0, self._depth - 1)
+        if self._depth == 0 and self._module is not None:
+            self._module.show_warning = self._saved
+            self._module = self._saved = None
+        return False
+
+
+def quiet_insertion() -> _InsertionQuiet:
+    """The suppression window. One shared instance, so nesting counts correctly."""
+    return _QUIET
+
+
+_QUIET = _InsertionQuiet()

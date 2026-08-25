@@ -221,6 +221,37 @@ def report_template_rejected(template_id: str, problems) -> None:
     )
 
 
+_layer_scaling_failures: set = set()
+
+
+def report_layer_scaling_failure(layer_name: str) -> None:
+    """Surface a layer that refused the µm scale and so sits in pixel coordinates.
+
+    This is the one genuine case behind napari's "Inconsistent units across
+    layers" warning, which ``utils/units.py`` otherwise suppresses because it
+    fires on every insertion for a state that is over by the next draw. Suppressing
+    a real report would be the wrong trade, so the real case is said here instead —
+    and said better, because it names the layer and the consequence, which the
+    napari message does not.
+
+    Once per layer name per session: a layer that will not take a scale will not
+    take one on the next redraw either, and repeating it adds nothing.
+    """
+    if layer_name in _layer_scaling_failures:
+        return
+    _layer_scaling_failures.add(layer_name)
+    msg = (f"layer {layer_name!r} would not take a micrometre scale, so it stays in "
+           "pixel coordinates — it is misplaced relative to every other layer, and "
+           "the scale bar does not describe it.")
+    _log.warning(msg)
+    _notify(msg)
+
+
+def layer_scaling_failures() -> set:
+    """Layer names reported by :func:`report_layer_scaling_failure` this session."""
+    return set(_layer_scaling_failures)
+
+
 def template_rejections() -> dict:
     """Customised templates skipped this session, keyed by template id."""
     return dict(_template_rejections)
