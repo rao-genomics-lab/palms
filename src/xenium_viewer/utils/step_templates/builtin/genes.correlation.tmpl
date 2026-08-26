@@ -8,10 +8,10 @@
 #          head+expr.log1p_cpm+stats+title.plain+tail |
 #          head+expr.log1p_cpm+filter+stats+title.filtered+tail
 # doc: Two-gene scatter with Pearson/Spearman, one expr.* block per normalisation.
-# requires: sc, plt, adata, adata_norm
+# requires: sc, plt, Path, adata, adata_norm
 # outputs: fig, x, pr, pp, sr, sp
 # params: gene_a:str, gene_b:str, norm_label:str, xlabel:str, ylabel:str,
-#         title_prefix:str, path:str, clustering:str?, selected:list?
+#         title_prefix:str, paths:list, clustering:str?, selected:list?
 
 #--- block head
 # Gene correlation ($norm_label): $gene_a vs $gene_b
@@ -67,4 +67,6 @@ ax.text(
     bbox={'boxstyle': 'round,pad=0.3', 'fc': 'white', 'alpha': 0.7},
 )
 fig.tight_layout()
-fig.savefig($path, dpi=300, bbox_inches='tight')
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, dpi=300, bbox_inches='tight')

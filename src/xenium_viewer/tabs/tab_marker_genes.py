@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING
 import json
 
 from magicgui.widgets import ComboBox, PushButton
-from qtpy.QtWidgets import QTextEdit, QFileDialog, QLabel as QtLabel
+from qtpy.QtWidgets import QTextEdit, QLabel as QtLabel
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
+from xenium_viewer.utils.plot_output import safe_stem
 from xenium_viewer.utils.prov_graph import TERMINAL
-from xenium_viewer.utils.steps import Step, StepError
+from xenium_viewer.utils.steps import Step
 from xenium_viewer.utils.step_templates import (
     Preview, builtin_assemble, step_template as _resolved,
 )
@@ -35,11 +36,16 @@ _PLACEHOLDER = '''\
 # sc.pl.correlation_matrix is the one that needs its statistic computed first,
 # and the one that ignores var_names.
 
-# Raster formats get an explicit dpi; SVG does not, where it means nothing.
-# This used to splice ``, dpi=150`` in by ``str.replace``-ing a fake
-# ``$dpi_kwarg`` token out of the tail before Step saw it — a token that is not
-# a param, and whose escape into a template would raise ``StepError`` naming a
-# param no call site declares. Two whole-line variants instead.
+# The save block used to come in two variants — one with ``dpi=150``, one
+# without — chosen by the tab's PNG/SVG combo. There is no such choice any more:
+# a plot is written in every format Preferences asks for, so the block loops over
+# a ``paths`` list and passes dpi unconditionally (PDF and SVG ignore it). That
+# is also what lets the notebook name the files the GUI actually wrote.
+#
+# The dpi variants themselves replaced an earlier trick — splicing ``, dpi=150``
+# in by ``str.replace``-ing a fake ``$dpi_kwarg`` token out of the tail before
+# Step saw it, hiding the template from ``Template.substitute``'s check. Neither
+# idiom should come back; ``tests/test_template_placeholders.py`` guards it.
 
 
 TEMPLATE_ID = "genes.marker_plot"
@@ -49,12 +55,12 @@ MARKER_PLOTS = ("dotplot", "heatmap", "matrixplot", "tracksplot",
                 "correlation_matrix")
 
 
-def _marker_plot_blocks(plot_name: str, relabel: bool, dpi: bool) -> list[str]:
+def _marker_plot_blocks(plot_name: str, relabel: bool) -> list[str]:
     return (["head"] + (["relabel"] if relabel else [])
-            + [f"call.{plot_name}"] + ["save.dpi" if dpi else "save.plain"])
+            + [f"call.{plot_name}", "save"])
 
 
-def _marker_plot_template(plot_name: str, relabel: bool, dpi: bool) -> str:
+def _marker_plot_template(plot_name: str, relabel: bool) -> str:
     """The *shipped* text for these options. Tests pin this.
 
     ``builtin_assemble`` is right here and wrong at the call site: a test that
@@ -64,7 +70,7 @@ def _marker_plot_template(plot_name: str, relabel: bool, dpi: bool) -> str:
     it, and watch nothing change.
     """
     return builtin_assemble(
-        TEMPLATE_ID, _marker_plot_blocks(plot_name, relabel, dpi))
+        TEMPLATE_ID, _marker_plot_blocks(plot_name, relabel))
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -84,8 +90,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     marker_text.setFontFamily("monospace")
     marker_text.setMinimumHeight(180)
 
-    # ── Format selector ──────────────────────────────────────────────────
-    fmt_widget = ComboBox(label="Save format", choices=["PNG", "SVG"], value="PNG")
+    # No format selector: Preferences → Plot format governs every figure the
+    # viewer writes, so a per-tab combo could only disagree with it.
 
     # ── Action buttons ───────────────────────────────────────────────────
     dot_button    = PushButton(label="Dotplot")
@@ -137,14 +143,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
         state["marker_genes_json"] = json.dumps(marker_dict, indent=2)
         return marker_dict
 
-    def _pick_save_path(plot_name: str) -> str | None:
-        fmt = fmt_widget.value.lower()
-        path, _ = QFileDialog.getSaveFileName(
-            None, f"Save {plot_name}",
-            f"{plot_name}.{fmt}",
-            f"{fmt_widget.value} Files (*.{fmt})",
-        )
-        return path or None
+    def _stem(plot_name: str, clustering_key) -> str:
+        """Keyed by clustering, so a second run does not overwrite the first."""
+        return f"{plot_name}_{safe_stem(clustering_key or 'none')}"
 
     def _display_categories(clustering_key: str) -> list | None:
         """Cluster display names as a literal list, or None if unnamed.
@@ -175,22 +176,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
             categories.append(str(label))
         return categories
 
-    def _marker_preview(plot_name: str = None, marker_dict: dict = None,
-                        path: str = None) -> Preview:
+    def _marker_preview(plot_name: str = None, marker_dict: dict = None) -> Preview:
         """What one of the five plot buttons would run, as the widgets stand.
 
         One expression of the current settings, called by ``_run_plot`` with the
         values it has validated, and by the Templates tab's preview pane with
         none — five buttons share this callback, so the pane shows the last one
         run (a dotplot until something else has been). The blocks belong with the
-        params: the plot type *is* a block, and so is the presence of the dpi
-        argument, so a params-only preview would show the wrong call.
+        params: the plot type *is* a block, so a params-only preview would show
+        the wrong call.
 
-        ``path`` only exists once the save dialog has returned, so the preview
-        shows the filename that dialog would propose and says so in its note.
+        The destination is no longer a dialog answer: every figure goes to
+        ``<dataset>/plots/`` in the configured formats, so the preview can show
+        the real paths rather than a filename a dialog might propose.
         """
         plot_name = plot_name or state.get("_mg_last_plot") or MARKER_PLOTS[0]
-        fmt = fmt_widget.value.lower()
         if marker_dict is None:
             # Best effort and side-effect free: the pane must render whatever is
             # in the box, without the status messages and state writes that
@@ -209,27 +209,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "plot_name": plot_name,
             "groupby": clustering_key,
             "markers": marker_dict,
-            "path": path or f"{plot_name}.{fmt}",
+            "paths": ctx.plot_paths(_stem(plot_name, clustering_key)),
         }
         if categories is not None:
             params["categories"] = categories
         return Preview(
-            _marker_plot_blocks(plot_name, relabel=categories is not None,
-                                dpi=fmt == "png"),
+            _marker_plot_blocks(plot_name, relabel=categories is not None),
             params,
-            note="" if path else "path chosen on save",
         )
 
     ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _marker_preview
 
     # ── Generic runner ───────────────────────────────────────────────────
     def _run_plot(plot_name: str):
-        """Validate inputs, ask for save path, then run the plot as a Step."""
+        """Validate inputs, then run the plot as a Step."""
         marker_dict = _parse_marker_dict()
         if marker_dict is None:
-            return
-        path = _pick_save_path(plot_name)
-        if not path:
             return
 
         clustering_key = mg_clustering_widget.value
@@ -254,7 +249,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         add_clustering_to_obs(_adata, _adata,
                               ctx.clusterings[clustering_key], clustering_key)
 
-        blocks, params, _ = _marker_preview(plot_name, marker_dict, path)
+        ctx.apply_plot_font_size()
+        blocks, params, _ = _marker_preview(plot_name, marker_dict)
 
         step = Step(
             id=f"plot:markers:{plot_name}:{clustering_key}",
@@ -263,33 +259,41 @@ def build_tab(ctx: ViewerContext) -> tuple:
             deps=["normalize", f"clustering:{clustering_key}"],
             kind=TERMINAL,
             label=f"Marker {plot_name}: {clustering_key}",
+            outputs=["fig"],
         )
 
+        # No ``matplotlib.use('Agg')`` here. It used to be set inside this
+        # worker and never restored, which silently disabled every later
+        # ``plt.show`` in the session — figures from other tabs simply stopped
+        # appearing. Display now goes through the Plots dock's own canvas, so
+        # the process-wide backend is nobody's business.
         @thread_worker
         def _run():
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
-
             ctx.ensure_normalized()
-            plt.close('all')
-            try:
-                ctx.run_step(step)
-            except StepError as e:
-                return str(e)
-            plt.close('all')
-            return path
+            return ctx.run_step(step)
+
+        def _done(out):
+            if ctx.dataset_generation != gen:
+                return
+            _enable()
+            paths = ctx.show_plot(
+                out["fig"], _stem(plot_name, clustering_key),
+                title=f"{plot_name}: {clustering_key}",
+                save=False, paths=params["paths"])
+            status_label.value = f"{plot_name} saved: {', '.join(paths)}"
+
+        def _failed(exc):
+            _enable()
+            status_label.value = f"{plot_name} failed: {exc}"
 
         worker = _run()
-        worker.returned.connect(
-            lambda p: _on_done(plot_name, p) if ctx.dataset_generation == gen else None
-        )
+        worker.returned.connect(_done)
+        worker.errored.connect(_failed)
         worker.start()
 
-    def _on_done(plot_name: str, path: str):
+    def _enable():
         for btn in (dot_button, heat_button, matrix_button, tracks_button, corr_button):
             btn.enabled = True
-        status_label.value = f"{plot_name} saved: {path}"
 
     dot_button.clicked.connect(lambda: _run_plot("dotplot"))
     heat_button.clicked.connect(lambda: _run_plot("heatmap"))
@@ -302,7 +306,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         mg_clustering_widget,
         input_label,
         marker_text,
-        fmt_widget,
         dot_button,
         heat_button,
         matrix_button,

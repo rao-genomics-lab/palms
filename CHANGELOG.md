@@ -1,5 +1,100 @@
 # Changelog
 
+## [Unreleased] — 2026-08-26 (plots)
+
+### Added
+- **A Plots dock** (issue #35). Every figure the viewer produces — dotplots, UMAPs,
+  neighbourhood-enrichment heatmaps, co-occurrence curves, L-R dotplots, CNV heatmaps,
+  the provenance DAG — now appears in one gallery at the bottom of the window, newest
+  first, each card carrying a thumbnail, the paths it was written to, and Open / Save
+  as… / Remove. Hidden until the first plot; **View → Show Plots** (`Ctrl+Shift+P`)
+  toggles it. Capped at 20 figures, because the viewer produces one per action and a
+  rank-genes heatmap is not small.
+
+  **Open** draws into the dock's own `FigureCanvasQTAgg` rather than calling
+  `plt.show`, which is what makes display independent of the process-wide matplotlib
+  backend — see the `matplotlib.use` fix below.
+
+- **UMAP coloured by gene expression** (issue #34). The UMAP tab gained a multi-gene
+  picker (up to 15) with a colormap and a column count: one gene renders as a single
+  panel with its colour bar, several as a grid. "Save UMAP Plot…" became **Plot UMAP by
+  cluster** — same template, no file dialog, and it no longer builds a throwaway AnnData
+  by hand. The gene list is session-persisted.
+
+  New `umap.plot` template. Its `embed.xenium` block reads
+  `analysis/umap/gene_expression_2_components/projection.csv` — **the same file the
+  viewer's UMAP window reads** — so a replayed notebook reproduces the figure that was on
+  screen. The old `plot:umap` node recorded `sc.pp.neighbors` + `sc.tl.umap` instead,
+  which produces an equally valid but *different* layout; `docs/Tab-UMAP.md` had to warn
+  about the discrepancy. `embed.recompute` remains for a Crop Dataset export, which has
+  no `analysis/` folder, and says so in a comment. Verified against a real dataset:
+  `reindex(obs_names)` matches 318,617 of 318,708 cells — the 91 Xenium's UMAP omits,
+  which become NaN rows that `sc.pl.umap` skips.
+
+### Changed
+- **One save policy: `<dataset>/plots/`, PNG and PDF.** Preferences → Plot format now
+  offers **PNG + PDF** (default), PNG, PDF and SVG, and every plot is written in each
+  chosen format. Previously six sites used `ctx.auto_save_plot` (one format), CNV
+  hard-coded PNG+PDF, UMAP and marker genes asked via `QFileDialog`, the three volcano
+  batches hard-coded PNG into a directory of the user's choosing, and the rank-genes
+  panel plot was **never saved at all** — the one figure in the app a user could not keep.
+
+  Names are now keyed by what the figure is about (`dotplot_leiden_r1.0`,
+  `nhood_enrichment_graphclust`, `umap_EPCAM_KRT5`). They were not, so a second
+  neighbourhood plot silently overwrote the first.
+
+  Volcano batches still ask for a directory — an N×N run is the one output people
+  routinely want elsewhere — but default to `<dataset>/plots/volcano_<key>/` and honour
+  the format setting. They stay out of the gallery on purpose: fifty figures would bury
+  everything else.
+
+- **Recorded `savefig` paths name the file that was actually written.** Every
+  hand-written `plot:*` node recorded a bare relative guess (`"dotplot.svg"`,
+  `"umap.png"`, `"nhood_enrichment.svg"`) that matched nothing on disk; the volcano nodes
+  recorded `Path("<basename of the chosen directory>")`. They now emit the real path
+  relative to the dataset, preceded by the `mkdir` that a replayed notebook needs —
+  `savefig` does not create its parent, so those cells would have failed on a clean
+  checkout anyway.
+
+- `genes.marker_plot` and `genes.correlation` take `paths: list` in place of
+  `path: str`, and marker_plot's `save.plain`/`save.dpi` pair collapsed into one `save`
+  block (20 assemblies → 10). A user override of those blocks is flagged **stale** by the
+  existing upgrade machinery rather than silently doing the wrong thing.
+
+- The two annotation plots (nhood, distance) recorded nothing at all and now record a
+  `NOTE`. Not a `TERMINAL`: both are computed over virtual cells sampled from shapes
+  drawn in the viewer, which a notebook cannot reach, so a cell calling
+  `plt.gcf().savefig(...)` with no preceding plot would replay as a silent no-op writing
+  an empty figure. `NOTE` says "not code, and not meant to be" and is counted apart from
+  the comment-only punch list.
+
+- `render_dag` no longer takes a `path=` — it returns the Figure and lets the caller
+  write it, the convention `make_cnv_heatmap` already documented.
+
+### Fixed
+- **`matplotlib.use('Agg')` leaked out of two workers and disabled plotting for the rest
+  of the session.** `tab_umap` and `tab_marker_genes` set it globally, from a background
+  thread, and never restored it — so once a user saved a UMAP or ran any marker plot,
+  every later `plt.show(block=False)` in the process became a silent no-op and figures
+  from *unrelated tabs* simply stopped appearing, with no error anywhere. This is a large
+  part of what issue #35 described as plots "showing up in completely different
+  interfaces". Both calls are gone, and nothing displays through pyplot any more.
+
+- **Two plots blocked the viewer.** `tab_annot_nhood` and `tab_annot_distance` called
+  bare `plt.show()`, which spins its own event loop: the window had to be closed before
+  the viewer responded again.
+
+- The CNV tab's "Show Heatmap" button now shows the heatmap. It built the figure, wrote
+  two files and closed it without ever putting it on screen.
+
+`tests/test_plot_consistency.py` is the source guard that keeps this from unravelling one
+tab at a time: it parses every `tabs/tab_*.py` and fails on any `plt.show`, any
+`matplotlib.use`, and any `savefig` outside `plot_output.save_figure` — plus a check that
+`<data_path>/plots` has exactly one definition, where five modules used to build it by
+hand. New `tests/test_plot_output.py` (pure logic) and `tests/test_plots_panel.py`
+(offscreen Qt, including the dock-minimum bound from the August resize fix, which a
+second dock inherits).
+
 ## [Unreleased] — 2026-08-26
 
 ### Fixed

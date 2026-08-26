@@ -411,20 +411,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
         return out
 
     def _on_show_dag():
-        import os
-        import matplotlib.pyplot as plt
         from xenium_viewer.utils.dag_view import render_dag
         graph = state.get("prov_graph")
         if graph is None or len(graph) == 0:
             ctx.set_status("Provenance graph is empty — record some steps first")
             return
-        plots_dir = os.path.join(str(ctx.data_path), "plots")
-        os.makedirs(plots_dir, exist_ok=True)
-        out = os.path.join(plots_dir, "provenance_dag.png")
         try:
-            render_dag(graph, out)
-            plt.show(block=False)
-            ctx.set_status(f"Provenance DAG ({len(graph)} nodes) — saved to {out}")
+            fig = render_dag(graph)
+            paths = ctx.show_plot(fig, "provenance_dag",
+                                  title=f"Provenance DAG ({len(graph)} nodes)")
+            ctx.set_status(f"Provenance DAG ({len(graph)} nodes) — "
+                           f"saved to {', '.join(paths)}")
         except Exception as e:
             ctx.set_status(f"DAG render failed: {e}")
 

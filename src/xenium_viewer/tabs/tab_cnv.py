@@ -18,6 +18,9 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.plot_output import (
+    plots_dir as _plots_dir, recorded_save_code, safe_stem,
+)
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, coerce
 from xenium_viewer.utils.step_templates import (
@@ -986,7 +989,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         # hours of CopyKAT compute along with the cache.
         from xenium_viewer.utils.adata_persistence import sidecar_dir
         cache_dir = sidecar_dir(ctx.data_path, create=True)
-        plots_dir = Path(ctx.data_path) / "plots"
+        plots_dir = _plots_dir(ctx.data_path)
         plots_dir.mkdir(parents=True, exist_ok=True)
         input_h5ad = cache_dir / "cnv_copykat_input.h5ad"
         params_json = cache_dir / "cnv_copykat_params.json"
@@ -1115,38 +1118,38 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         cnv_status.value = f"Building {_backend_label(backend)} heatmap ({_key_to_res_label(cluster_key)})..."
         heatmap_button.enabled = False
-        safe = re.sub(r"[^0-9A-Za-z._-]", "_", cluster_key)
+        safe = safe_stem(cluster_key)
+        stem = f"cnv_heatmap_{backend}_{safe}"
         # inferCNV binds adata_cnv (the step's own name); the CopyKAT
         # reconstruction node still uses adata_copykat.
         var = "adata_cnv" if backend == "infercnv" else "adata_copykat"
 
+        # The figure is built off-thread but neither saved nor closed there:
+        # ctx.show_plot does both on the GUI thread, so the heatmap this button
+        # promises actually appears rather than only landing in a file.
         @thread_worker
         def _build():
             from xenium_viewer.utils.cnv_analysis import make_cnv_heatmap
             ctx.apply_plot_font_size()
-            fig = make_cnv_heatmap(adata_cnv, cluster_key)
-            plots_dir = os.path.join(ctx.data_path, "plots")
-            os.makedirs(plots_dir, exist_ok=True)
-            png_path = os.path.join(plots_dir, f"cnv_heatmap_{backend}_{safe}.png")
-            pdf_path = os.path.join(plots_dir, f"cnv_heatmap_{backend}_{safe}.pdf")
-            fig.savefig(png_path, dpi=200, bbox_inches="tight")
-            fig.savefig(pdf_path, bbox_inches="tight")
-            import matplotlib.pyplot as _plt
-            _plt.close(fig)
-            return png_path, pdf_path
+            return make_cnv_heatmap(adata_cnv, cluster_key)
 
-        def _on_ready(paths):
+        def _on_ready(fig):
             heatmap_button.enabled = True
-            png_path, pdf_path = paths
-            cnv_status.value = f"{_backend_label(backend)} heatmap saved to {png_path} and {pdf_path}"
+            paths = ctx.show_plot(
+                fig, stem,
+                title=f"CNV heatmap ({_backend_label(backend)}, "
+                      f"{_key_to_res_label(cluster_key)})")
+            cnv_status.value = (f"{_backend_label(backend)} heatmap saved to "
+                                f"{', '.join(paths)}")
+            _saves = recorded_save_code(ctx.recorded_plot_paths(paths),
+                                        fig_expr="plt.gcf()")
             ctx.record_node(
                 f"plot:cnv_heatmap:{backend}:{cluster_key}",
                 f"\n# CNV chromosome heatmap ({_backend_label(backend)}, {_key_to_res_label(cluster_key)})\n"
                 f"import infercnvpy as cnv\n"
                 f"cnv.pl.chromosome_heatmap({var}, groupby='{cluster_key}', dendrogram=True, "
                 f"vmin=-0.4, vmax=0.4, show=False)\n"
-                f"plt.savefig('cnv_heatmap_{backend}_{safe}.png', dpi=200, bbox_inches='tight')\n"
-                f"plt.savefig('cnv_heatmap_{backend}_{safe}.pdf', bbox_inches='tight')",
+                f"{_saves}",
                 deps=[f"cnv:{backend}"],
                 kind=TERMINAL,
                 label=f"CNV heatmap ({_backend_label(backend)}, {_key_to_res_label(cluster_key)})",
@@ -1286,7 +1289,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         # stale marker a killed worker leaves behind (its finally-block cleanup
         # never runs on SIGTERM/SIGKILL).
         try:
-            plots_dir = Path(ctx.data_path) / "plots"
+            plots_dir = _plots_dir(ctx.data_path)
             st, pid = _copykat_run_state(plots_dir)
             if st == "running":
                 lines.append(f"  ⚠ a background CopyKAT job is still running (pid {pid}).")

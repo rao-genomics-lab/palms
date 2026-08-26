@@ -46,6 +46,29 @@ def templates_tab(qapp):
     return widget
 
 
+@pytest.fixture
+def umap_tab(qapp):
+    """The UMAP page, rebuilt for issue #34.
+
+    Worth measuring: it gained a ``QListWidget`` and five buttons, which is the
+    shape that pinned the dock twice before.
+    """
+    from xenium_viewer.tabs.tab_umap import build_tab
+    ctx = SimpleNamespace(
+        state={}, viewer=None, adata=None, data_path=None,
+        gene_names=[f"Gene{i}" for i in range(20)],
+        clusterings={}, clustering_widget=None,
+        get_labels_for=lambda key: {},
+        record_node=lambda *a, **k: None,
+        record_clustering=lambda *a, **k: None,
+        umap_viewer=None, dataset_generation=0,
+        plot_paths=lambda stem: [f"plots/{stem}.png"],
+        apply_plot_font_size=lambda: None,
+    )
+    widget, _ = build_tab(ctx)
+    return widget
+
+
 def _hint(widget):
     hint = widget.minimumSizeHint()
     return hint.width(), hint.height()
@@ -80,7 +103,13 @@ def test_the_templates_page_stays_small_with_every_button_shown(templates_tab):
     assert height <= MAX_MINIMUM, f"Templates page minimum height {height}px"
 
 
-def test_the_assembled_panel_can_shrink(qapp, notebook_tab, templates_tab):
+def test_the_umap_page_does_not_pin_the_dock(umap_tab):
+    width, height = _hint(umap_tab)
+    assert width <= MAX_MINIMUM, f"UMAP page minimum width {width}px"
+    assert height <= MAX_MINIMUM, f"UMAP page minimum height {height}px"
+
+
+def test_the_assembled_panel_can_shrink(qapp, notebook_tab, templates_tab, umap_tab):
     """The aggregate is what the dock inherits, so measure it the way app.py nests it."""
     from qtpy.QtWidgets import QTabWidget
 
@@ -90,6 +119,10 @@ def test_the_assembled_panel_can_shrink(qapp, notebook_tab, templates_tab):
     group.addTab(templates_tab, "Templates")
     panel = QTabWidget()
     panel.addTab(group, "Tools")
+    cells = QTabWidget()
+    cells.setTabPosition(QTabWidget.TabPosition.South)
+    cells.addTab(umap_tab, "UMAP")
+    panel.addTab(cells, "Cells")
 
     width, height = _hint(panel)
     assert width <= MAX_MINIMUM, f"Control panel minimum width {width}px"

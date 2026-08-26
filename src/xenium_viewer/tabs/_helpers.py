@@ -14,6 +14,9 @@ from xenium_viewer.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
 from xenium_viewer.utils.environment import environment_code, same_environment
+from xenium_viewer.utils.plot_output import (
+    plot_formats, recorded_paths, save_figure, save_paths,
+)
 from xenium_viewer.utils.reporting import get_logger, report_recording_failure
 from xenium_viewer.utils.step_templates import builtin_spec, builtin_text, check_base_namespace, step_template as _resolved
 from xenium_viewer.utils.steps import Step, StepExecutor, coerce
@@ -671,17 +674,59 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.ensure_spatial_neighbors = _ensure_spatial_neighbors
 
-    # ── auto_save_plot ───────────────────────────────────────────────────
-    def _auto_save_plot(fig, stem: str) -> str:
-        """Save fig to data_dir/plots/<stem>.<format>. Returns the save path."""
-        fmt = state.get("plot_format", "svg")
-        plots_dir = os.path.join(ctx.data_path, "plots")
-        os.makedirs(plots_dir, exist_ok=True)
-        path = os.path.join(plots_dir, f"{stem}.{fmt}")
-        fig.savefig(path, dpi=300, bbox_inches="tight")
-        return path
+    # ── show_plot ────────────────────────────────────────────────────────
+    @ensure_main_thread
+    def _add_to_plots_panel(fig, title: str, paths: list):
+        """Append to the Plots dock and reveal it. GUI thread only.
 
-    ctx.auto_save_plot = _auto_save_plot
+        Bounced through ``ensure_main_thread`` because building the thumbnail
+        touches ``QPixmap``: figures are routinely *built* in a napari worker,
+        and a caller that forgets to hop back would crash Qt rather than show a
+        plot.
+        """
+        panel = ctx.plots_panel
+        if panel is None:
+            return
+        panel.add_figure(fig, title, paths)
+        dock = state.get("_plots_dock")
+        if dock is not None and not dock.isVisible():
+            dock.setVisible(True)
+
+    def _show_plot(fig, stem: str, title: str = None, save: bool = True,
+                   paths=None) -> list[str]:
+        """Save *fig* under ``<data_path>/plots/`` and show it in the Plots dock.
+
+        The single route every figure takes. Replaces the old
+        ``auto_save_plot`` + ``plt.show(block=False)`` pair, which six tabs used,
+        four tabs did differently, and four tabs skipped entirely.
+
+        ``save=False`` is for a figure its own Step template already wrote — the
+        template must remain the thing that writes the file, or the recorded
+        code would stop being the code that ran. Pass the ``paths`` it wrote so
+        the card can still say where the figure went.
+
+        Returns the paths written, for the status line and for the recorded
+        ``savefig`` argument.
+        """
+        written = [str(p) for p in (paths or [])]
+        if save:
+            written = save_figure(
+                fig, save_paths(ctx.data_path, stem, state=state))
+        _add_to_plots_panel(fig, title or stem, written)
+        return written
+
+    ctx.show_plot = _show_plot
+
+    def _plot_paths(stem: str) -> list:
+        """Where ``stem`` will be written — for a template's ``paths`` param."""
+        return [str(p) for p in save_paths(ctx.data_path, stem, state=state)]
+
+    ctx.plot_paths = _plot_paths
+
+    def _recorded_plot_paths(paths) -> list[str]:
+        return recorded_paths(ctx.data_path, paths)
+
+    ctx.recorded_plot_paths = _recorded_plot_paths
 
     # ── refresh_clustering_choices ───────────────────────────────────────
     def _refresh_clustering_choices():
@@ -975,6 +1020,26 @@ def create_view_menu(viewer, _app):
     view_menu.addAction(minimap_action)
     _app["minimap_action"] = minimap_action
 
+    # Show/hide the Plots dock. Starts unchecked — the dock reveals itself when
+    # the first figure arrives, so an empty gallery never takes up the canvas.
+    plots_action = QAction("Show Plots", view_menu, checkable=True)
+    plots_action.setObjectName("xenium_plots_toggle")
+    plots_action.setChecked(False)
+    plots_action.setShortcut("Ctrl+Shift+P")
+
+    def _on_plots_toggled(checked):
+        dw = _app.get("plots_dock")
+        if dw is None:
+            return
+        try:
+            dw.setVisible(checked)
+        except RuntimeError:
+            pass          # C++ object deleted during a dataset reload
+
+    plots_action.toggled.connect(_on_plots_toggled)
+    view_menu.addAction(plots_action)
+    _app["plots_action"] = plots_action
+
 
 # ── Preferences menu ─────────────────────────────────────────────────────────
 
@@ -1002,17 +1067,25 @@ def create_preferences_menu(ctx: ViewerContext):
     else:
         prefs_menu.clear()
 
-    # Plot format
+    # Plot format. Every plot is written in each of the chosen formats, so the
+    # choices are combinations rather than a single extension — PNG to look at,
+    # PDF to publish, and the default writes both because asking a user to pick
+    # in advance is what left half the figures in a format they had to redo.
     format_menu = prefs_menu.addMenu("Plot format")
     format_group = QActionGroup(format_menu)
     format_group.setExclusive(True)
-    png_action = QAction("PNG", format_group, checkable=True)
-    svg_action = QAction("SVG", format_group, checkable=True, checked=True)
-    format_menu.addAction(png_action)
-    format_menu.addAction(svg_action)
+    current = plot_formats(state)
+    for label, formats in (("PNG + PDF", ["png", "pdf"]),
+                           ("PNG", ["png"]),
+                           ("PDF", ["pdf"]),
+                           ("SVG", ["svg"])):
+        act = QAction(label, format_group, checkable=True,
+                      checked=(formats == current))
+        act.setData(formats)
+        format_menu.addAction(act)
 
     def _on_format_changed(action):
-        state["plot_format"] = action.text().lower()
+        state["plot_formats"] = list(action.data())
     format_group.triggered.connect(_on_format_changed)
 
     # Font size

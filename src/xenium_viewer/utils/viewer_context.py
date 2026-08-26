@@ -22,6 +22,7 @@ class ViewerContext:
     color_manager: Any = None
     transcript_loader: Any = None
     umap_viewer: Any = None
+    plots_panel: Any = None          # the Plots dock gallery; set by app.py
     label_to_obs: np.ndarray | None = None
     centroids_yx: np.ndarray | None = None
     pixel_size: float = 1.0
@@ -89,7 +90,12 @@ class ViewerContext:
     ensure_spatial_neighbors: Any = None  # runs the "spatial_neighbors" step on adata_norm
     record_clustering: Any = None
     refresh_clustering_choices: Any = None
-    auto_save_plot: Any = None
+    # The one route a figure takes: saves it under <data_path>/plots/ in every
+    # configured format and shows it in the Plots dock. Replaced auto_save_plot,
+    # which only ever wrote a file, in one format, from six of eighteen sites.
+    show_plot: Any = None
+    plot_paths: Any = None            # where a stem will be written
+    recorded_plot_paths: Any = None   # the same, relative to data_path
     repopulate_cluster_checkboxes: Any = None
     get_selected_cluster_ids: Any = None
     make_cluster_mask: Any = None

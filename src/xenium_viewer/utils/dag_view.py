@@ -6,8 +6,6 @@ colored by node kind, with stale nodes outlined. No graphviz needed.
 """
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
 
 from xenium_viewer.utils.prov_graph import ProvGraph, SETUP, ARTIFACT, TERMINAL, NOTE
 
@@ -22,10 +20,12 @@ def _wrap(text: str, width: int = 22) -> str:
     return "\n".join(textwrap.wrap(text, width)) or text
 
 
-def render_dag(graph: ProvGraph, path: Optional[str | Path] = None):
-    """Build (and optionally save) a matplotlib Figure of the provenance DAG.
+def render_dag(graph: ProvGraph):
+    """Build a matplotlib Figure of the provenance DAG.
 
-    Returns the Figure, or None if the graph is empty.
+    Returns the Figure, or None if the graph is empty. Saving is the caller's
+    job — ``ctx.show_plot`` writes it wherever every other figure goes, and a
+    factory that also saved was one of the four save policies issue #35 named.
     """
     import networkx as nx
     import matplotlib.pyplot as plt
@@ -95,6 +95,4 @@ def render_dag(graph: ProvGraph, path: Optional[str | Path] = None):
     ax.axis("off")
     fig.tight_layout()
 
-    if path is not None:
-        fig.savefig(str(path), dpi=200, bbox_inches="tight")
     return fig

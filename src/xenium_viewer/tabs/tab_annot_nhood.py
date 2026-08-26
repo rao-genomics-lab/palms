@@ -18,6 +18,8 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.plot_output import safe_stem
+from xenium_viewer.utils.prov_graph import NOTE
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -242,14 +244,37 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if result is None:
             return
         ctx.apply_plot_font_size()
-        import matplotlib.pyplot as plt
         fig = make_nhood_enrichment_plot(result, mode=mode_widget.value)
         annot_types = result.get('_annot_types', [])
         fig.suptitle(f"Annotation Nhood Enrichment\n(annotation types: {', '.join(annot_types)})",
                      fontsize=10)
-        plt.tight_layout()
-        ctx.auto_save_plot(fig, "annot_nhood_enrichment")
-        plt.show()
+        fig.tight_layout()
+        # ``plt.show()`` here was *blocking* — the only plot in the app that
+        # froze the viewer until its window was closed.
+        cluster_key = result.get('_cluster_key', '')
+        paths = ctx.show_plot(
+            fig, f"annot_nhood_enrichment_{safe_stem(cluster_key)}",
+            title=f"Annotation nhood enrichment: {cluster_key}")
+        status.value = f"Heatmap displayed — saved to {', '.join(paths)}"
+        # This tab recorded nothing at all before, so the figure existed with no
+        # trace in the notebook. It is a NOTE rather than a TERMINAL because the
+        # enrichment is computed over virtual cells sampled from a napari shapes
+        # layer the notebook has no access to: there is no code to record yet,
+        # and a cell that ran `plt.gcf().savefig(...)` with no preceding plot
+        # would replay as a silent no-op writing an empty figure. NOTE says
+        # "not code, and not meant to be", renders as markdown, and is counted
+        # apart from the comment-only punch list.
+        ctx.record_node(
+            "viewer:annot_nhood_plot",
+            f"\n# Annotation neighbourhood enrichment heatmap "
+            f"(mode={mode_widget.value}, annotation types: {', '.join(annot_types)})\n"
+            f"# Computed over virtual cells sampled from annotation shapes drawn\n"
+            f"# in the viewer, which this notebook cannot reach. Figure written to:\n"
+            + "".join(f"#   {p}\n" for p in ctx.recorded_plot_paths(paths)),
+            deps=["preamble"],
+            kind=NOTE,
+            label="Annotation nhood heatmap",
+        )
 
     def _on_export():
         result = state.get("annot_nhood_result")

@@ -149,12 +149,36 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "clustering, and saves it."
         ),
         variants=(
-            "Twenty assemblies, which is just the product of three independent "
-            "choices: which of the five `call.*` plot types you picked, whether "
-            "the clusters have been given names (`relabel`), and whether the save "
-            "is at default resolution or 150 dpi. The dpi variant is a whole-line "
-            "block rather than a `$dpi_kwarg` placeholder, because a token that is "
-            "not a declared param escapes the check that every `$name` is real."
+            "Ten assemblies: which of the five `call.*` plot types you picked, "
+            "times whether the clusters have been given names (`relabel`). There "
+            "used to be twenty — a second axis for whether the save carried "
+            "`dpi=150` — but the output format is no longer a per-plot choice: "
+            "the `save` block loops over a `paths` list holding one file per "
+            "format Preferences asks for."
+        ),
+    ),
+    "umap.plot": TemplateNote(
+        group="Genes",
+        tab="[UMAP](Tab-UMAP)",
+        what=(
+            "Draws the UMAP embedding as a publication figure — one panel per "
+            "selected gene, each with its own colour scale, or a single panel "
+            "coloured by a clustering with the labels drawn on the points."
+        ),
+        reading=(
+            "`embed.xenium` reads `analysis/umap/gene_expression_2_components/"
+            "projection.csv`, which is where the viewer's own UMAP window gets "
+            "its coordinates. That matters more than it looks: recomputing the "
+            "embedding with `sc.tl.umap` gives an equally valid layout that is "
+            "not the one that was on screen, so the notebook would disagree with "
+            "the session it claims to reproduce."
+        ),
+        variants=(
+            "Six assemblies from three choices: whether the dataset ships "
+            "Xenium's UMAP or the embedding has to be recomputed (a Crop Dataset "
+            "export has no `analysis/` folder), whether the colour is a list of "
+            "genes or a clustering, and whether that clustering's clusters have "
+            "been given names."
         ),
     ),
     "genes.correlation": TemplateNote(

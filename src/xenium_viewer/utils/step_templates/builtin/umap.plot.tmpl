@@ -1,0 +1,56 @@
+# xenium-viewer template
+# id: umap.plot
+# schema-version: 1
+# assemblies: embed.xenium+color.genes+save |
+#          embed.recompute+color.genes+save |
+#          embed.xenium+color.clusters+save |
+#          embed.xenium+relabel+color.clusters+save |
+#          embed.recompute+color.clusters+save |
+#          embed.recompute+relabel+color.clusters+save
+# doc: UMAP scatter coloured by gene expression or by a clustering.
+# requires: sc, pd, plt, Path, adata, adata_norm, data_path
+# outputs: fig
+# params: color:list, cmap:str?, ncols:int?, paths:list, groupby:str?,
+#         categories:list?
+
+#--- block embed.xenium
+# UMAP: $color
+#
+# Xenium ships its own UMAP, and it is the one the viewer draws. Reading those
+# coordinates rather than recomputing an embedding is what makes this figure the
+# figure that was on screen — sc.tl.umap would produce a different, equally
+# valid layout, and the notebook would quietly disagree with the session.
+_umap = pd.read_csv(
+    data_path / 'analysis' / 'umap' / 'gene_expression_2_components' / 'projection.csv',
+    index_col=0)
+# Joined on obs['cell_id'], not on obs_names: spatialdata_io indexes the table
+# positionally ('0', '1', '2', ...) and keeps the barcode in a column, while the
+# projection is indexed by barcode. Reindexing on obs_names matches nothing at
+# all — every coordinate comes back NaN and the figure is empty.
+adata_norm.obsm['X_umap'] = (
+    _umap.reindex(adata_norm.obs['cell_id']).to_numpy(dtype='float32'))
+
+#--- block embed.recompute
+# UMAP: $color
+#
+# No analysis/ folder — a Crop Dataset export has none — so compute one.
+sc.pp.neighbors(adata_norm)
+sc.tl.umap(adata_norm, random_state=0)
+
+#--- block relabel
+adata_norm.obs[$groupby] = adata.obs[$groupby].values
+adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)
+
+#--- block color.genes
+# One panel per gene, each with its own colour bar; scanpy lays out the grid.
+fig = sc.pl.umap(adata_norm, color=$color, cmap=$cmap, ncols=$ncols,
+                 show=False, return_fig=True)
+
+#--- block color.clusters
+fig = sc.pl.umap(adata_norm, color=$color, legend_loc='on data',
+                 show=False, return_fig=True)
+
+#--- block save
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, dpi=300, bbox_inches='tight')

@@ -11,6 +11,7 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.plot_output import recorded_save_code, safe_stem
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
 
@@ -248,7 +249,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         groups = ctx.get_cluster_filter()
         lr_ck = state.get("_lr_params", {}).get("clustering_key", "")
         labels = ctx.get_labels_for(lr_ck)
-        import matplotlib.pyplot as _plt
         ctx.apply_plot_font_size()
         try:
             fig = make_ligrec_plot(
@@ -257,22 +257,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 cluster_labels=labels,
             )
             state["ligrec_fig"] = fig
-            _plt.show(block=False)
-            path = ctx.auto_save_plot(fig, "ligrec")
-            if groups:
-                lr_status.value = f"L-R plot displayed (clusters: {', '.join(groups)}) — saved to {path}"
-            else:
-                lr_status.value = f"L-R plot displayed — saved to {path}"
-
             _lr_ck = state.get("_lr_params", {}).get("clustering_key", "")
-            _lr_fmt = ctx.state.get("plot_format", "svg")
+            paths = ctx.show_plot(fig, f"ligrec_{safe_stem(_lr_ck)}",
+                                  title=f"Ligand-receptor: {_lr_ck}")
+            if groups:
+                lr_status.value = (f"L-R plot displayed (clusters: {', '.join(groups)}) "
+                                   f"— saved to {', '.join(paths)}")
+            else:
+                lr_status.value = f"L-R plot displayed — saved to {', '.join(paths)}"
+
+            _saves = recorded_save_code(ctx.recorded_plot_paths(paths))
             ctx.record_node(
                 f"plot:ligrec:{_lr_ck}",
                 f"\n# L-R dotplot (pvalue_threshold={pval_thresh})\n"
                 f"sq.pl.ligrec(ligrec_res, pvalue_threshold={pval_thresh}"
                 + (f", source_groups={groups}, target_groups={groups}" if groups else "")
                 + f")\nfig = plt.gcf()\n"
-                + f"fig.savefig(\"ligrec.{_lr_fmt}\", dpi=300, bbox_inches='tight')",
+                + _saves,
                 deps=[f"ligrec:{_lr_ck}"],
                 kind=TERMINAL,
                 label="Ligand-receptor dotplot",

@@ -90,11 +90,14 @@ def test_a_bare_dollar_is_reported_not_ignored():
         ("tab_gene_correlation", "_gene_corr_template",
          [(n, f) for n in ("Raw counts", "Fraction of total", "Log1p(CPM)")
           for f in (False, True)]),
+        # The dpi variant is gone: the save block now loops over a ``paths``
+        # list and passes dpi unconditionally, because the format is no longer
+        # a per-plot choice. Two variants per plot type instead of four.
         ("tab_marker_genes", "_marker_plot_template",
-         [(p, r, d)
+         [(p, r)
           for p in ("dotplot", "heatmap", "matrixplot", "tracksplot",
                     "correlation_matrix")
-          for r in (False, True) for d in (False, True)]),
+          for r in (False, True)]),
     ],
 )
 def test_every_variant_of_the_de_hacked_templates_renders(module, fn, variants):

@@ -10,6 +10,7 @@ from magicgui.widgets import ComboBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.plot_output import recorded_save_code, safe_stem
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
 from xenium_viewer.utils.step_templates import (
@@ -213,26 +214,29 @@ def build_tab(ctx: ViewerContext) -> tuple:
                         result, mode=ne_mode_widget.value,
                     )
             state["nhood_fig"] = fig
-            _plt.show(block=False)
-            path = ctx.auto_save_plot(fig, "nhood_enrichment")
+            _ne_ck = result.get('_cluster_key', '')
+            paths = ctx.show_plot(
+                fig, f"nhood_enrichment_{safe_stem(_ne_ck)}",
+                title=f"Neighborhood enrichment: {_ne_ck}")
             if groups:
-                ne_status.value = f"Heatmap displayed (clusters: {', '.join(groups)}) — saved to {path}"
+                ne_status.value = (f"Heatmap displayed (clusters: {', '.join(groups)}) "
+                                   f"— saved to {', '.join(paths)}")
             else:
-                ne_status.value = f"Heatmap displayed — saved to {path}"
+                ne_status.value = f"Heatmap displayed — saved to {', '.join(paths)}"
 
             _ne_mode = ne_mode_widget.value
-            _ne_ck = result.get('_cluster_key', '')
-            _ne_fmt = ctx.state.get("plot_format", "svg")
+            _saves = recorded_save_code(ctx.recorded_plot_paths(paths))
             # TERMINAL, still on the legacy recorder — plot nodes are the E4
             # view/analysis split. It reads adata_norm because that is where the
-            # nhood step now puts the result.
+            # nhood step now puts the result. The savefig lines name the files
+            # the viewer actually wrote, not a bare relative guess.
             ctx.record_node(
                 f"plot:nhood:{_ne_ck}",
                 f"\n# Nhood enrichment heatmap (mode={_ne_mode})\n"
                 f"sq.pl.nhood_enrichment(adata_norm, cluster_key=\"{_ne_ck}\", "
                 f"mode=\"{_ne_mode}\")\n"
                 f"fig = plt.gcf()\n"
-                f"fig.savefig(\"nhood_enrichment.{_ne_fmt}\", dpi=300, bbox_inches='tight')",
+                f"{_saves}",
                 deps=[f"nhood:{_ne_ck}"],
                 kind=TERMINAL,
                 label="Nhood enrichment heatmap",

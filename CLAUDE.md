@@ -124,9 +124,49 @@ fixed ~68px minimum whatever it holds, which is what keeps the floor low. The sa
 to a button row placed *outside* a tab's scroll area: buttons cannot shrink below their
 labels, so use `toolbar_row()`, which stays pinned but scrolls sideways.
 `tests/test_control_panel_size.py` measures it; both rules were once broken (Notebook and
-Templates, pinning the dock at 536×534).
+Templates, pinning the dock at 536×534). **The same rule applies to the Plots dock**,
+which is a second dock with the same failure mode — `utils/plots_panel.py` wraps its
+gallery in `scrollable()` and its buttons in `toolbar_row()` for exactly that reason.
 
 `src/xenium_viewer/tabs/_helpers.py` contains shared utilities (e.g., `StatusProxy`, `make_tab()`).
+
+### Figures (`utils/plot_output.py`, `utils/plots_panel.py`, `utils/fig_render.py`)
+
+**Every figure goes through `ctx.show_plot(fig, stem, title=)`.** It saves under
+`<data_path>/plots/` in each format the user chose (`plot_output.plot_formats`, default
+PNG **and** PDF), appends the figure to the **Plots** dock, reveals the dock, and returns
+the paths written. `save=False` is for a figure its own Step template already wrote —
+the template must stay the thing that writes the file, or the recorded code stops being
+the code that ran; pass the `paths` it used so the card can still say where it went.
+
+Four rules, each of which was a real defect (`tests/test_plot_consistency.py` is the
+source guard, in the idiom of `test_persistence_safety.py`):
+
+- **No tab may call `plt.show`.** Display draws into the dock's own `FigureCanvasQTAgg`
+  (`fig_render.open_figure_window`), so it does not depend on which backend pyplot
+  happens to be pointed at. Eighteen sites used four different display modes, two of them
+  *blocking*.
+- **No tab may call `matplotlib.use`.** It is process-wide and was never restored:
+  `tab_umap` and `tab_marker_genes` set `Agg` inside a worker, so after a user saved a
+  UMAP or ran a marker plot, every later `plt.show` in the session became a silent no-op
+  and figures from unrelated tabs stopped appearing. `cnv_copykat_worker.py` still calls
+  it, correctly — a detached process with no GUI.
+- **No `savefig` outside `plot_output.save_figure`** (the Plots dock's own "Save as…"
+  excepted — that is a copy to a place the *user* picked). A figure factory returns a
+  Figure and lets the caller write it; `render_dag` and `make_cnv_heatmap` both follow it.
+- **`plots_dir(data_path)` is the one definition of `<data_path>/plots`.** Five modules
+  built it by hand.
+
+A recorded `plot:*` node must name the file that was **actually written**, via
+`ctx.recorded_plot_paths(paths)` (relative to `data_path`) and `recorded_save_code`,
+which also emits the `mkdir` a replayed notebook needs — `savefig` does not create its
+parent. Every hand-written node used to record a bare `"dotplot.svg"` that matched
+nothing on disk. Stems are keyed by clustering/gene (`safe_stem`) so a second run does
+not silently overwrite the first.
+
+Batch outputs (the three pairwise-volcano generators) stay out of the gallery — an N×N
+run is fifty figures — but default their directory to `batch_dir(data_path, ...)` and
+honour the format setting.
 
 ### Key Utilities (`src/xenium_viewer/utils/`)
 
@@ -415,12 +455,16 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   the code that ran, so its cell says in-line that it is a reconstruction. `run_cnv_pipeline`
   is now the CopyKAT path only; the inferCNV template must stay in sync with it
   (`tests/test_cnv_step.py` pins both).
-  Still unmigrated: the **annotation-neighbourhood** tab (records nothing; its synthetic
-  virtual cells are sampled from a napari shapes layer the notebook has no access to —
-  resolving that needs E3's spatialdata shapes). **Plot/export terminals** across the
-  migrated tabs are still on `record_node` — that is fine where the cell is real code
-  (`sc.pl.*`, `to_csv`); what is not fine is a terminal whose cell is prose, which the
-  source guard above now catches.
+  Still unmigrated: the **annotation-neighbourhood** and **annotation-distance** tabs.
+  Their synthetic virtual cells are sampled from a napari shapes layer the notebook has no
+  access to — resolving that needs E3's spatialdata shapes. Their *figures* are now
+  recorded, as `viewer:annot_nhood_plot` / `viewer:annot_distance_plot`, and deliberately
+  as **`NOTE`**: a `TERMINAL` calling `plt.gcf().savefig(...)` with no preceding plot call
+  replays as a silent no-op writing an empty figure, which is worse than recording
+  nothing. **Plot/export terminals** across the migrated tabs are still on `record_node` —
+  that is fine where the cell is real code (`sc.pl.*`, `to_csv`); what is not fine is a
+  terminal whose cell is prose, which the source guard above now catches.
+  Also migrated: **UMAP plots** (`umap.plot`, both by gene and by cluster).
 - **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
   in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
   and executed code could drift. Re-running a step (same `id`) revises its node in place

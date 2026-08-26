@@ -59,7 +59,10 @@ def _adata(n_obs: int = 120, n_vars: int = 30):
 
 
 def _ns(adata=None):
+    # Mirrors EXECUTOR_BASE_NAMES: the plot templates create their output
+    # directory with ``Path``, which the notebook preamble binds.
     return {"sc": sc, "sq": sq, "sd": sd, "pd": pd, "np": np, "plt": plt,
+            "Path": Path,
             "adata": adata if adata is not None else _adata()}
 
 
@@ -267,13 +270,19 @@ MARKERS = {"A": ["gene0", "gene1"], "B": ["gene2"]}
 
 
 def _marker_step(plot_name="dotplot", relabel=False, tmp_path=None):
+    # Both formats, as the viewer writes them, into a plots/ dir that does not
+    # exist yet — the template has to make it, or a replayed notebook fails on
+    # the first savefig.
     params = {"plot_name": plot_name, "groupby": CLUSTER_KEY,
-              "markers": MARKERS, "path": str(tmp_path / f"{plot_name}.png")}
+              "markers": MARKERS,
+              "paths": [str(tmp_path / "plots" / f"{plot_name}.{ext}")
+                        for ext in ("png", "pdf")]}
     if relabel:
         params["categories"] = ["Tumour", "Stroma"]
     return Step(
         id=f"plot:markers:{plot_name}:{CLUSTER_KEY}",
-        template=_marker_plot_template(plot_name, relabel, dpi=True),
+        template=_marker_plot_template(plot_name, relabel),
+        outputs=["fig"],
         params=params, deps=["normalize", f"clustering:{CLUSTER_KEY}"],
         kind="terminal",
     )
@@ -286,7 +295,7 @@ def test_marker_plot_templates_execute_and_write_a_file(plot_name, tmp_path):
     """This tab recorded nothing at all before, despite being plain scanpy."""
     step = _marker_step(plot_name, tmp_path=tmp_path)
     ex = _run([_normalize_step(), _clustering_step(), step])
-    assert Path(step.params["path"]).exists()
+    assert all(Path(p).exists() for p in step.params["paths"])
     assert ex.graph.get(step.id).code == step.render()
     plt.close("all")
 
@@ -307,7 +316,8 @@ def test_marker_dict_survives_as_a_dict_literal(tmp_path):
 def _gene_corr_step(norm="Log1p(CPM)", filtered=False, tmp_path=None):
     params = {"gene_a": "gene0", "gene_b": "gene1", "norm_label": "log1p(CPM)",
               "xlabel": "gene0", "ylabel": "gene1", "title_prefix": "gene0 vs gene1",
-              "path": str(tmp_path / "corr.png")}
+              "paths": [str(tmp_path / "plots" / f"corr.{ext}")
+                        for ext in ("png", "pdf")]}
     if filtered:
         params["clustering"] = CLUSTER_KEY
         params["selected"] = ["0"]
@@ -323,7 +333,7 @@ def _gene_corr_step(norm="Log1p(CPM)", filtered=False, tmp_path=None):
 def test_gene_correlation_executes_for_every_normalisation(norm, tmp_path):
     step = _gene_corr_step(norm, tmp_path=tmp_path)
     ex = _run([_normalize_step(), step])
-    assert Path(step.params["path"]).exists()
+    assert all(Path(p).exists() for p in step.params["paths"])
     assert -1.0 <= ex.ns["pr"] <= 1.0
     plt.close("all")
 

@@ -84,6 +84,7 @@ from xenium_viewer.utils.umap_widget import UMAPViewer
 from xenium_viewer.utils.viewer_context import ViewerContext
 from xenium_viewer.utils.units import layer_affine_px
 from xenium_viewer.tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu, create_view_menu
+from xenium_viewer.utils.plot_output import DEFAULT_FORMATS
 from xenium_viewer.utils.prov_graph import ProvGraph
 from xenium_viewer import loader as _loader_mod
 from xenium_viewer import preprocess as _preprocess_mod
@@ -1001,8 +1002,10 @@ def _make_initial_state(gene_names: list, clustering_names: list) -> dict:
         "nhood_fig": None,
         "co_result": None,
         "co_fig": None,
-        "plot_format": "svg",
+        # Every plot is written in each of these; see utils/plot_output.py.
+        "plot_formats": list(DEFAULT_FORMATS),
         "plot_font_size": 10,
+        "umap_genes": [],
         # Global CPU-core budget for parallel analyses (currently CopyKAT's
         # parallelDist). Default to half the machine's cores, leaving headroom.
         "n_cores": max(1, (os.cpu_count() or 2) // 2),
@@ -1120,11 +1123,41 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
             pass
         _app["dock_widget"] = None
 
+    # Remove the old Plots dock too — its cards hold figures from the dataset
+    # being replaced, and its gallery would otherwise mix two datasets' plots.
+    if _app.get("plots_dock") is not None:
+        try:
+            viewer.window.remove_dock_widget(_app["plots_dock"])
+        except Exception:
+            pass
+        _app["plots_dock"] = None
+        _app["plots_panel"] = None
+
     panel, _state, _he_state, restore_fn = _build_control_panel(ctx)
     _app["dock_widget"] = viewer.window.add_dock_widget(
         panel, name="Xenium Controls", area="right"
     )
     _app["restore_fn"] = restore_fn
+
+    # The Plots dock: every figure any tab produces lands here. Built after the
+    # control panel so it docks below it, and hidden until the first plot —
+    # ``ctx.show_plot`` reveals it.
+    from xenium_viewer.utils.plots_panel import PlotsPanel
+    plots_panel = PlotsPanel()
+    plots_dock = viewer.window.add_dock_widget(
+        plots_panel, name="Plots", area="bottom"
+    )
+    plots_dock.setVisible(False)
+    _app["plots_panel"] = plots_panel
+    _app["plots_dock"] = plots_dock
+    ctx.plots_panel = plots_panel
+    ctx.state["_plots_dock"] = plots_dock
+    if hasattr(plots_dock, "visibilityChanged"):
+        def _on_plots_visibility(visible):
+            action = _app.get("plots_action")
+            if action is not None and action.isChecked() != visible:
+                action.setChecked(visible)
+        plots_dock.visibilityChanged.connect(_on_plots_visibility)
 
     # Sync the View menu checkbox when the dock is closed via its own close button
     _dw = _app["dock_widget"]
@@ -1362,6 +1395,8 @@ def run_viewer(data_path=None, no_cache: bool = False):
     # ── App-level mutable container ──────────────────────────────────────────
     _app = {
         "dock_widget": None,
+        "plots_dock": None,
+        "plots_panel": None,
         "restore_fn": None,
         "snapshot": {},
         "reload_in_progress": False,

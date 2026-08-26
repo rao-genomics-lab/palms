@@ -4,6 +4,8 @@
 
 **[Interface Overview](Interface-Overview)**
 
+**[Plots Window](Plots-Window)**
+
 ---
 
 **Reference**

@@ -47,6 +47,7 @@ substituted string for the settings currently in the owning tab.
 - [`genes.correlation`](#genescorrelation) — Two-gene scatter with Pearson/Spearman, one expr.* block per normalisation.
 - [`genes.marker_plot`](#genesmarker_plot) — Scanpy marker-gene figure; one call.* block per plot type.
 - [`genes.rank_genes`](#genesrank_genes) — Rank marker genes per cluster, keyed by clustering.
+- [`umap.plot`](#umapplot) — UMAP scatter coloured by gene expression or by a clustering.
 - [`spatial.cooccur`](#spatialcooccur) — Squidpy co-occurrence across increasing radii.
 - [`spatial.ligrec`](#spatialligrec) — Ligand-receptor permutation test (omnipath resources).
 - [`spatial.nhood`](#spatialnhood) — Squidpy neighbourhood enrichment z-scores.
@@ -308,11 +309,11 @@ The `expr.fraction` block calls `sc.pp.calculate_qc_metrics` with `inplace=False
 | `xlabel` | `str` | yes |
 | `ylabel` | `str` | yes |
 | `title_prefix` | `str` | yes |
-| `path` | `str` | yes |
+| `paths` | `list` | yes |
 | `clustering` | `str` | no |
 | `selected` | `list` | no |
 
-- **Requires:** `adata`, `adata_norm`, `plt`, `sc`
+- **Requires:** `Path`, `adata`, `adata_norm`, `plt`, `sc`
 - **Outputs:** `fig`, `x`, `pr`, `pp`, `sr`, `sp`
 - **Blocks:** `head`, `expr.raw`, `expr.fraction`, `expr.log1p_cpm`, `filter`, `stats`, `title.plain`, `title.filtered`, `tail`
 
@@ -384,7 +385,9 @@ ax.text(
     bbox={'boxstyle': 'round,pad=0.3', 'fc': 'white', 'alpha': 0.7},
 )
 fig.tight_layout()
-fig.savefig($path, dpi=300, bbox_inches='tight')
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, dpi=300, bbox_inches='tight')
 ```
 
 ### `genes.marker_plot`
@@ -400,37 +403,27 @@ Draws one scanpy marker-gene figure — dotplot, heatmap, matrixplot, tracksplot
 | `plot_name` | `str` | yes |
 | `groupby` | `str` | yes |
 | `markers` | `dict` | no |
-| `path` | `str` | yes |
+| `paths` | `list` | yes |
 | `categories` | `dict` | no |
 
-- **Requires:** `adata`, `adata_norm`, `plt`, `sc`
-- **Outputs:** _nothing (terminal step)_
-- **Blocks:** `head`, `relabel`, `call.dotplot`, `call.heatmap`, `call.matrixplot`, `call.tracksplot`, `call.correlation_matrix`, `save.plain`, `save.dpi`
+- **Requires:** `Path`, `adata`, `adata_norm`, `plt`, `sc`
+- **Outputs:** `fig`
+- **Blocks:** `head`, `relabel`, `call.dotplot`, `call.heatmap`, `call.matrixplot`, `call.tracksplot`, `call.correlation_matrix`, `save`
 
-**Variants** — 20 assemblies:
+**Variants** — 10 assemblies:
 
-Twenty assemblies, which is just the product of three independent choices: which of the five `call.*` plot types you picked, whether the clusters have been given names (`relabel`), and whether the save is at default resolution or 150 dpi. The dpi variant is a whole-line block rather than a `$dpi_kwarg` placeholder, because a token that is not a declared param escapes the check that every `$name` is real.
+Ten assemblies: which of the five `call.*` plot types you picked, times whether the clusters have been given names (`relabel`). There used to be twenty — a second axis for whether the save carried `dpi=150` — but the output format is no longer a per-plot choice: the `save` block loops over a `paths` list holding one file per format Preferences asks for.
 
-- `head + call.dotplot + save.plain`
-- `head + call.dotplot + save.dpi`
-- `head + relabel + call.dotplot + save.plain`
-- `head + relabel + call.dotplot + save.dpi`
-- `head + call.heatmap + save.plain`
-- `head + call.heatmap + save.dpi`
-- `head + relabel + call.heatmap + save.plain`
-- `head + relabel + call.heatmap + save.dpi`
-- `head + call.matrixplot + save.plain`
-- `head + call.matrixplot + save.dpi`
-- `head + relabel + call.matrixplot + save.plain`
-- `head + relabel + call.matrixplot + save.dpi`
-- `head + call.tracksplot + save.plain`
-- `head + call.tracksplot + save.dpi`
-- `head + relabel + call.tracksplot + save.plain`
-- `head + relabel + call.tracksplot + save.dpi`
-- `head + call.correlation_matrix + save.plain`
-- `head + call.correlation_matrix + save.dpi`
-- `head + relabel + call.correlation_matrix + save.plain`
-- `head + relabel + call.correlation_matrix + save.dpi`
+- `head + call.dotplot + save`
+- `head + relabel + call.dotplot + save`
+- `head + call.heatmap + save`
+- `head + relabel + call.heatmap + save`
+- `head + call.matrixplot + save`
+- `head + relabel + call.matrixplot + save`
+- `head + call.tracksplot + save`
+- `head + relabel + call.tracksplot + save`
+- `head + call.correlation_matrix + save`
+- `head + relabel + call.correlation_matrix + save`
 
 **Default source** — by block; an assembly above picks which of these run, in that order
 
@@ -458,11 +451,13 @@ sc.pl.tracksplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)
 sc.tl.dendrogram(adata_norm, $groupby)
 sc.pl.correlation_matrix(adata_norm, $groupby, show=False)
 
-#--- block save.plain
-plt.gcf().savefig($path, bbox_inches='tight')
-
-#--- block save.dpi
-plt.gcf().savefig($path, bbox_inches='tight', dpi=150)
+#--- block save
+# One figure, every configured format — the viewer writes a PNG to look at and
+# a PDF to publish, and the notebook writes the same files to the same places.
+fig = plt.gcf()
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, bbox_inches='tight', dpi=300)
 ```
 
 ### `genes.rank_genes`
@@ -501,6 +496,86 @@ sc.tl.rank_genes_groups(
     key_added=$rank_key,
 )
 rank_df = sc.get.rank_genes_groups_df(adata_norm, group=None, key=$rank_key)
+```
+
+### `umap.plot`
+
+**Run by:** [UMAP](Tab-UMAP)
+
+Draws the UMAP embedding as a publication figure — one panel per selected gene, each with its own colour scale, or a single panel coloured by a clustering with the labels drawn on the points.
+
+`embed.xenium` reads `analysis/umap/gene_expression_2_components/projection.csv`, which is where the viewer's own UMAP window gets its coordinates. That matters more than it looks: recomputing the embedding with `sc.tl.umap` gives an equally valid layout that is not the one that was on screen, so the notebook would disagree with the session it claims to reproduce.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `color` | `list` | yes |
+| `cmap` | `str` | no |
+| `ncols` | `int` | no |
+| `paths` | `list` | yes |
+| `groupby` | `str` | no |
+| `categories` | `list` | no |
+
+- **Requires:** `Path`, `adata`, `adata_norm`, `data_path`, `pd`, `plt`, `sc`
+- **Outputs:** `fig`
+- **Blocks:** `embed.xenium`, `embed.recompute`, `relabel`, `color.genes`, `color.clusters`, `save`
+
+**Variants** — 6 assemblies:
+
+Six assemblies from three choices: whether the dataset ships Xenium's UMAP or the embedding has to be recomputed (a Crop Dataset export has no `analysis/` folder), whether the colour is a list of genes or a clustering, and whether that clustering's clusters have been given names.
+
+- `embed.xenium + color.genes + save`
+- `embed.recompute + color.genes + save`
+- `embed.xenium + color.clusters + save`
+- `embed.xenium + relabel + color.clusters + save`
+- `embed.recompute + color.clusters + save`
+- `embed.recompute + relabel + color.clusters + save`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
+
+```python
+#--- block embed.xenium
+# UMAP: $color
+#
+# Xenium ships its own UMAP, and it is the one the viewer draws. Reading those
+# coordinates rather than recomputing an embedding is what makes this figure the
+# figure that was on screen — sc.tl.umap would produce a different, equally
+# valid layout, and the notebook would quietly disagree with the session.
+_umap = pd.read_csv(
+    data_path / 'analysis' / 'umap' / 'gene_expression_2_components' / 'projection.csv',
+    index_col=0)
+# Joined on obs['cell_id'], not on obs_names: spatialdata_io indexes the table
+# positionally ('0', '1', '2', ...) and keeps the barcode in a column, while the
+# projection is indexed by barcode. Reindexing on obs_names matches nothing at
+# all — every coordinate comes back NaN and the figure is empty.
+adata_norm.obsm['X_umap'] = (
+    _umap.reindex(adata_norm.obs['cell_id']).to_numpy(dtype='float32'))
+
+#--- block embed.recompute
+# UMAP: $color
+#
+# No analysis/ folder — a Crop Dataset export has none — so compute one.
+sc.pp.neighbors(adata_norm)
+sc.tl.umap(adata_norm, random_state=0)
+
+#--- block relabel
+adata_norm.obs[$groupby] = adata.obs[$groupby].values
+adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)
+
+#--- block color.genes
+# One panel per gene, each with its own colour bar; scanpy lays out the grid.
+fig = sc.pl.umap(adata_norm, color=$color, cmap=$cmap, ncols=$ncols,
+                 show=False, return_fig=True)
+
+#--- block color.clusters
+fig = sc.pl.umap(adata_norm, color=$color, legend_loc='on data',
+                 show=False, return_fig=True)
+
+#--- block save
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, dpi=300, bbox_inches='tight')
 ```
 
 ## Spatial
