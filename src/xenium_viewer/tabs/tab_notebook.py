@@ -17,6 +17,7 @@ from qtpy.QtWidgets import (
 from qtpy.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 from qtpy.QtCore import Qt
 
+from xenium_viewer.tabs._helpers import toolbar_row
 from xenium_viewer.utils.prov_graph import NOTE, TEMPLATE_HAND_EDITED
 
 if TYPE_CHECKING:
@@ -275,17 +276,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
     outer_layout = QVBoxLayout()
     outer_layout.setContentsMargins(4, 4, 4, 4)
 
-    # Toolbar
-    toolbar = QHBoxLayout()
+    # Toolbar. Pinned above the cells but horizontally scrollable — six buttons
+    # in a plain row cannot shrink below their labels, which made this tab the
+    # floor for the whole control dock's width.
     sync_btn = QPushButton("Sync Graph")
     add_btn = QPushButton("+ Cell")
     run_all_btn = QPushButton("Run All")
     clear_btn = QPushButton("Clear Outputs")
     dag_btn = QPushButton("Show DAG")
     export_btn = QPushButton("Export .ipynb")
-    for btn in [sync_btn, add_btn, run_all_btn, clear_btn, dag_btn, export_btn]:
-        toolbar.addWidget(btn)
-    outer_layout.addLayout(toolbar)
+    outer_layout.addWidget(toolbar_row(
+        sync_btn, add_btn, run_all_btn, clear_btn, dag_btn, export_btn
+    ))
 
     # Scrollable cell area
     cell_container = QWidget()

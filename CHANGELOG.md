@@ -1,5 +1,42 @@
 # Changelog
 
+## [Unreleased] — 2026-08-26
+
+### Fixed
+- **The Xenium Controls dock could not be resized.** Dragging the separator between the
+  panel and the canvas did nothing: the control panel reported a minimum size of
+  **536 × 534 px** (up to ~617 wide once the Templates tab's "Take new default for
+  changed blocks" button appeared), so there was nothing left to give. Now **131 × 175**,
+  and the dock itself reports 127 × 190 instead of ~540 × 534.
+
+  This is the March fix at `CHANGELOG.md:2889` (*Console not resizable when opened*)
+  recurring on the width axis, and for the same reason. The panel is a `QTabWidget` of
+  `QTabWidget`s, and **a stacked widget's minimum is the maximum over all its pages,
+  hidden ones included** — so one unwrapped page sets the floor for the whole dock, even
+  when the user never opens it. `make_tab()` wraps page content in a `QScrollArea`
+  precisely to stop that (a scroll area reports a fixed ~68 px minimum whatever it
+  holds); two pages added after March bypassed it:
+
+  - **Notebook** (528 × 107) — its six-button toolbar sits *outside* the tab's own scroll
+    area, and a row of buttons cannot shrink below its labels. The toolbar is now a
+    `toolbar_row()`: still pinned above the cells, but scrolling sideways when narrow, so
+    it costs 68 px instead of 528. Wrapping the whole tab instead would have worked, but
+    would have scrolled the toolbar out of view.
+  - **Templates** (389 × 468) — `build_tab` returned a bare `QWidget` of nested
+    `QSplitter`s with no scroll area anywhere. Now returned through `scrollable()`, with
+    its four action buttons in a `toolbar_row()` so a narrow dock does not hide
+    "Save && Activate" behind a scrollbar.
+
+  New `_helpers.scrollable()` (which `make_tab` now uses, so there is one implementation)
+  and `_helpers.toolbar_row()`. `tests/test_control_panel_size.py` measures both pages and
+  the assembled panel, including the Templates tab with every button shown — the worst
+  case is the state a user is in when they visit the tab to resolve an upgrade.
+
+  Ruled out by measurement, and recorded so nobody re-derives it: napari 0.8's dock widget
+  (`setMinimumWidth(50)`, an 8 px separator, `Movable` set — an empty panel gives a 121 px
+  dock), the central canvas (`minimumSizeHint` 8 × 4), the PyQt6 enum rewrite, and every
+  `make_tab`-wrapped page (a 580 px pixmap inside one still reports 68 px).
+
 ## [Unreleased] — 2026-08-25 (installable on macOS)
 
 ### Fixed

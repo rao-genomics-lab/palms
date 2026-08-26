@@ -29,6 +29,7 @@ from qtpy.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from xenium_viewer.tabs._helpers import scrollable, toolbar_row
 from xenium_viewer.tabs.tab_notebook import PythonSyntaxHighlighter
 from xenium_viewer.utils.step_templates import (
     ERROR, EXECUTOR_BASE_NAMES, builtin_ids, builtin_spec, parse_template,
@@ -449,12 +450,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         holder.setLayout(holder_layout)
         side_by_side.addWidget(holder)
 
-    buttons = QHBoxLayout()
-    for button in (validate_button, save_button, revert_button, take_button):
-        buttons.addWidget(button)
-    buttons.addStretch()
-    button_bar = QWidget()
-    button_bar.setLayout(buttons)
+    button_bar = toolbar_row(validate_button, save_button, revert_button, take_button)
 
     lower = QWidget()
     lower_layout = QVBoxLayout()
@@ -486,4 +482,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     layout.setContentsMargins(4, 4, 4, 4)
     layout.addWidget(split)
     widget.setLayout(layout)
-    return widget, {}
+    # Wrapped like every other page: the splitters and editors here report a
+    # large minimum, and a stacked widget hands its dock the maximum minimum
+    # over all pages — so leaving this bare pinned the whole panel's size.
+    return scrollable(widget), {}

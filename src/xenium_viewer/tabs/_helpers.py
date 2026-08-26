@@ -72,9 +72,54 @@ def combo_value_kwargs(choices, index: int = 0) -> dict:
 
 # ── Tab layout helper ────────────────────────────────────────────────────────
 
+def scrollable(widget: QWidget) -> QWidget:
+    """Wrap a widget so it cannot impose its minimum size on the dock.
+
+    The control panel is a ``QTabWidget`` of ``QTabWidget``s, and a stacked
+    widget's minimum is the maximum over *all* its pages, hidden ones included.
+    So a single page that reports a wide or tall minimum becomes the floor for
+    the whole Xenium Controls dock, and the separator between the dock and the
+    canvas stops moving. A ``QScrollArea`` reports a fixed ~68px minimum
+    whatever it contains, which is what keeps that floor low: every page must
+    go through here (or through `make_tab`, which does).
+    """
+    from qtpy.QtWidgets import QScrollArea
+    scroll = QScrollArea()
+    scroll.setWidget(widget)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    return scroll
+
+
+def toolbar_row(*buttons) -> QWidget:
+    """Pack buttons into a fixed-height row that scrolls sideways when narrow.
+
+    A plain ``QHBoxLayout`` of buttons cannot shrink below the sum of their
+    label widths, so a button bar outside a scroll area sets the dock's minimum
+    width all by itself (the six-button Notebook toolbar cost 528px). Keeping
+    the row pinned but horizontally scrollable costs ~68px instead, and unlike
+    wrapping the whole tab it leaves the bar visible while the content below
+    scrolls.
+    """
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import QHBoxLayout
+
+    row = QWidget()
+    layout = QHBoxLayout()
+    layout.setContentsMargins(0, 0, 0, 0)
+    for button in buttons:
+        layout.addWidget(button)
+    layout.addStretch()
+    row.setLayout(layout)
+
+    scroll = scrollable(row)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setFixedHeight(row.sizeHint().height() + 2)
+    return scroll
+
+
 def make_tab(*widgets_and_natives) -> QWidget:
     """Pack magicgui widgets and raw QWidgets into a scrollable container."""
-    from qtpy.QtWidgets import QScrollArea
     inner = QWidget()
     layout = QVBoxLayout()
     layout.setContentsMargins(4, 4, 4, 4)
@@ -85,11 +130,7 @@ def make_tab(*widgets_and_natives) -> QWidget:
             layout.addWidget(w)
     layout.addStretch()
     inner.setLayout(layout)
-    scroll = QScrollArea()
-    scroll.setWidget(inner)
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-    return scroll
+    return scrollable(inner)
 
 
 # ── Status proxy ─────────────────────────────────────────────────────────────
