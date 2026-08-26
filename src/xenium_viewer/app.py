@@ -35,6 +35,10 @@ from pathlib import Path
 import ctypes
 import ctypes.util
 
+# Safe to import at module scope: it pulls in nothing, and defers its own
+# napari_mcp import until --mcp is actually used.
+from xenium_viewer import dev_mcp
+
 _IS_LINUX = sys.platform.startswith('linux')   # WSL reports 'linux' too
 
 # ─── Prevent ICE/X11 EPIPE crash on Linux ────────────────────────────────
@@ -127,6 +131,13 @@ def _parse_args():
         "--no-user-templates", action="store_true",
         help="Ignore customised analysis templates and run the shipped ones",
     )
+    parser.add_argument(
+        "--mcp", nargs="?", type=int, const=dev_mcp.DEFAULT_PORT, default=None,
+        metavar="PORT",
+        help="Dev only: expose this viewer to an AI assistant over an "
+             "unauthenticated localhost MCP bridge that can execute arbitrary "
+             "Python in this process. Requires the 'mcp' extra.",
+    )
     args = parser.parse_args()
 
     # Applied before anything resolves a template. This is the first thing to
@@ -147,7 +158,7 @@ def _parse_args():
         )
         if not data_path_str:
             print("No directory selected. Starting with empty viewer.")
-            return None, args.no_cache
+            return None, args.no_cache, args.mcp
         data_path = Path(data_path_str)
 
     # Validate only when a path was given
@@ -156,7 +167,7 @@ def _parse_args():
         print(f"Error: {experiment_file} not found. Is this a Xenium output directory?")
         sys.exit(1)
 
-    return data_path, args.no_cache
+    return data_path, args.no_cache, args.mcp
 
 
 def _read_pixel_size(data_path: Path) -> float:
@@ -1334,6 +1345,10 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
 
 def _push_to_console(viewer, ctx):
     """Inject key variables into napari's IPython console."""
+    # The one place a *fresh* ctx is published to an interactive surface — this
+    # runs on first load and again on every dataset switch — so it is also
+    # where the --mcp bridge's namespace gets its handle. See dev_mcp.
+    dev_mcp.publish_context(viewer, ctx)
     try:
         console = viewer.window._qt_viewer.console
         console.push({
@@ -1357,7 +1372,7 @@ def _push_to_console(viewer, ctx):
         print(f"  Warning: could not push variables to console: {exc}")
 
 
-def run_viewer(data_path=None, no_cache: bool = False):
+def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = None):
     print("=" * 60)
     print("Xenium Linux Viewer")
     if data_path:
@@ -1744,6 +1759,11 @@ def run_viewer(data_path=None, no_cache: bool = False):
     else:
         print("Viewer ready (no dataset loaded). Use File menu to open or preprocess.")
 
+    # After the load, not before: every bridge call marshals onto the Qt main
+    # thread, so a bridge started ahead of _do_full_init would accept requests
+    # it could not service until the dataset had finished loading anyway.
+    _mcp_server = dev_mcp.start_bridge(viewer, mcp_port) if mcp_port else None
+
     napari.run()
 
     # ── Save session state on exit ────────────────────────────────────────
@@ -1769,10 +1789,10 @@ def run_viewer(data_path=None, no_cache: bool = False):
 
 def main():
     """Console-script entry point — parses argv and launches the viewer."""
-    data_path, no_cache = _parse_args()
+    data_path, no_cache, mcp_port = _parse_args()
     from xenium_viewer.loader import CacheLoadAborted, NoRawSourceError
     try:
-        run_viewer(data_path, no_cache=no_cache)
+        run_viewer(data_path, no_cache=no_cache, mcp_port=mcp_port)
     except CacheLoadAborted as e:
         # The user declined to rebuild, or we had no way to ask. Exiting
         # quietly is the point: the cache is left exactly as it was.

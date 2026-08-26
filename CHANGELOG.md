@@ -3,6 +3,28 @@
 ## [Unreleased] — 2026-08-26 (plots)
 
 ### Added
+- **`--mcp`: a dev-only MCP bridge onto the running viewer** (`src/xenium_viewer/dev_mcp.py`,
+  `mcp` extra). Starts `napari-mcp`'s `NapariBridgeServer` over the viewer that already has
+  the dataset loaded, so an assistant can take **full-window** screenshots — docks included,
+  which is where this app's UI defects actually live — and run `execute_code` on the Qt main
+  thread. `_push_to_console` now also publishes `ctx` as `viewer._xv_ctx`; that is the one
+  place a *fresh* ctx reaches an interactive surface, so it survives a dataset switch, where
+  hanging it anywhere else would leave a stale object behind.
+
+  Off by default, out of `environment.yml` and out of `full`: the bridge is an
+  unauthenticated localhost server that executes arbitrary Python in the viewer process.
+  `napari_mcp`'s own `init_viewer` is the wrong entry point here — it would create a second,
+  empty viewer.
+
+  `fastmcp` is pinned `<3` in the extra. napari-mcp declares only `>=2.10.3` but reaches
+  into `FastMCP._tool_manager._tools`, which fastmcp 3 renamed, so a fresh install resolves
+  3.x and the bridge dies at start with `'FastMCP' object has no attribute '_tool_manager'`.
+  Measured, not guessed.
+
+  Known limits, both inherent: every bridge call marshals onto the Qt main thread, so one of
+  this app's modal dialogs blocks the bridge until a human clicks it, and long main-thread
+  work (cache build, pyramid load) hits `NapariBridgeServer`'s 300 s timeout.
+
 - **A Plots dock** (issue #35). Every figure the viewer produces — dotplots, UMAPs,
   neighbourhood-enrichment heatmaps, co-occurrence curves, L-R dotplots, CNV heatmaps,
   the provenance DAG — now appears in one gallery at the bottom of the window, newest

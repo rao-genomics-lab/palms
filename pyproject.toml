@@ -73,6 +73,19 @@ cnv = [
     "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git",
 ]
 full = ["xenium-viewer[celltypist,r,gpu,references,cnv]"]
+# Dev only, and deliberately out of `full` and environment.yml: `--mcp` starts an
+# unauthenticated localhost server that executes arbitrary Python in the viewer
+# process. Alpha software with loose pins; see src/xenium_viewer/dev_mcp.py.
+#
+# fastmcp is pinned below 3.0 because napari-mcp declares only `fastmcp>=2.10.3`
+# while reaching into `FastMCP._tool_manager._tools` (bridge_server.py drops
+# init_viewer/close_viewer that way). fastmcp 3 renamed that private attribute,
+# so a fresh install resolves 3.x and the bridge dies at start with
+# "'FastMCP' object has no attribute '_tool_manager'". Measured here, not
+# guessed. Note fastmcp 3 also pulls `fastmcp-slim`, which installs into the
+# same `fastmcp` namespace — downgrading on top of it leaves a half-shadowed
+# package that fails on import, so uninstall both before pinning.
+mcp = ["napari-mcp>=0.1.0", "fastmcp>=2.10.3,<3"]
 # The replay tests execute an exported notebook in a real kernel, so the test
 # extra carries nbclient/ipykernel as well as pytest.
 test = ["pytest", "nbformat", "nbclient", "ipykernel"]
