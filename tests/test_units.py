@@ -15,6 +15,7 @@ wrong place.
 from __future__ import annotations
 
 import os
+import sys
 
 import numpy as np
 import pytest
@@ -379,6 +380,8 @@ def _has_real_display() -> bool:
     """
     if os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"):
         return False
+    if sys.platform == "darwin":
+        return True   # cocoa; DISPLAY is an X11 variable and is absent on a Mac
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 

@@ -26,6 +26,13 @@ jobs:
           cache-environment: true    # cache the solved env across runs
           cache-downloads: true
 
+      # scripts/install.sh applies this on a real Linux install, and it is not
+      # cosmetic: without libglx-devel PyOpenGL loads the host's libGLX beside
+      # conda's and Qt6 aborts. Testing environment.yml alone would mean CI green
+      # on a stack no Linux user actually runs.
+      - name: Apply the Linux GL overlay (as scripts/install.sh does)
+        run: micromamba install -y -n xenium_viewer -f environment-linux.yml
+
       # The solver reaching for PyQt5, or walking napari back a minor version to
       # ease an unrelated pin, is silent otherwise — and both have happened. A
       # green suite on the wrong backend is exactly the regression this migration
@@ -50,6 +57,51 @@ jobs:
                                      # no test name. tests/conftest.py sets this
                                      # too; stated here so the runner is honest
                                      # about what it needs.
+        run: pytest
+
+  # environment.yml became unsolvable on macOS the moment a linux-only package
+  # (libglx-devel) was added to it, and nothing caught that — the first report was
+  # a user whose MacBook could not create the env at all. A Linux-only matrix
+  # cannot see this class of breakage, so macOS gets its own leg.
+  #
+  # arm64 (macos-14) rather than Intel: it is what Apple ships, and it is the
+  # narrower package set, so it is the one that fails first.
+  macos:
+    name: macOS solve + Qt backend (arm64)
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v7
+
+      # No environment-linux.yml here, deliberately: this asserts that
+      # environment.yml *alone* is installable, which is the thing that broke.
+      - name: Build xenium_viewer env from environment.yml
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+          cache-downloads: true
+
+      - name: Assert the resolved Qt backend
+        run: |
+          python - <<'EOF'
+          import napari, qtpy
+          from packaging.version import Version
+          print("napari", napari.__version__, "| qtpy", qtpy.API_NAME, qtpy.QT_VERSION)
+          assert qtpy.API_NAME == "PyQt6", f"expected PyQt6, got {qtpy.API_NAME}"
+          assert Version(napari.__version__) >= Version("0.8"), \
+              f"napari downgraded to {napari.__version__}"
+          EOF
+
+      # Runs with the cocoa platform plugin, not offscreen: tests/conftest.py
+      # only forces offscreen where there is no display, and DISPLAY is an X11
+      # variable that says nothing on a Mac. macos-14 runners have a window
+      # server, so this exercises the path a real user gets.
+      - name: Run test suite
+        env:
+          MPLBACKEND: Agg
         run: pytest
 
   lint:

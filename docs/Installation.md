@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Operating system**: Linux
+- **Operating system**: Linux, macOS (Apple Silicon or Intel), or WSL2. Linux is the primary development and CI platform; macOS is supported but less exercised. Native Windows (outside WSL) is not supported.
 - **Memory**: 8 GB RAM minimum; 32 GB or more is recommended for large datasets (500k+ cells)
 - **Package manager**: [mamba](https://mamba.readthedocs.io/) or [conda](https://docs.conda.io/)
 
@@ -11,11 +11,26 @@
 ```bash
 git clone https://github.com/sraorao/xenium_viewer.git
 cd xenium_viewer
-conda env create -f environment.yml
+./scripts/install.sh
 conda activate xenium_viewer
 ```
 
 This installs the `xenium-viewer` package in editable mode along with all required dependencies. It also installs the CNV inference stack (`infercnvpy` and `insitucnv`), so the CNV tab's **inferCNV** backend works immediately — no extra step required.
+
+### What `install.sh` does, and the manual equivalent
+
+It is `conda env create` plus one OS-dependent step. On **Linux and WSL** it additionally applies `environment-linux.yml`, which adds `libglx-devel` — the package that fixes the `Could not initialize GLX` abort described below. That package has no macOS build, so keeping it in `environment.yml` made the environment impossible to solve on a Mac; it lives in a separate overlay file instead. conda environment files have no platform selectors (`# [linux]` is a conda-*build* feature that `conda env create` ignores), which is why this needs a script rather than a conditional line.
+
+To run conda yourself:
+
+```bash
+conda env create -f environment.yml                          # all platforms
+conda env update -n xenium_viewer -f environment-linux.yml   # Linux and WSL only
+```
+
+Forgetting the second command on Linux is not silent — the viewer detects it at startup and prints the command to run, instead of aborting with no traceback.
+
+`install.sh` passes any extra arguments through to `env create`, so `./scripts/install.sh --name xv-test` works and the overlay follows the name you chose. Set `CONDA_EXE_OVERRIDE` to force a particular solver binary; otherwise it prefers `mamba` and falls back to `conda`.
 
 ## Optional Extras
 
@@ -48,6 +63,8 @@ The CNV tab's inferCNV backend runs in the main environment. Its **CopyKAT** bac
 conda env create -f environment-copykat.yml   # creates 'xenium_viewer_copykat'
 ```
 
+**Linux only.** This environment does not solve on Apple Silicon: `r-dlm`, a CopyKAT dependency, is published only on the Anaconda `r` channel, which has no `osx-arm64` builds. The inferCNV backend runs in the main environment and works on every supported platform.
+
 The viewer locates that environment by name and launches CopyKAT there as a detached background job, so the analysis (typically a couple of hours) survives closing the GUI. The `copykat` R package is GitHub-only and installs automatically on first run.
 
 To use a differently-named environment, set one of:
@@ -67,7 +84,7 @@ If the conda environment becomes broken or corrupted, remove it and start fresh:
 conda env remove -n xenium_viewer
 git clone https://github.com/sraorao/xenium_viewer.git
 cd xenium_viewer
-conda env create -f environment.yml
+./scripts/install.sh
 conda activate xenium_viewer
 ```
 
@@ -152,9 +169,11 @@ If your Xenium output directory is on a read-only filesystem, copy the dataset t
 **Memory**
 Building the cache for a full slide peaks at around 9 GB, and reports its usage per element as it goes, to both the terminal and the session log. Once a cache exists, launching against it is a fraction of that.
 
+On **macOS** those per-element figures read as unknown. The probe uses `/proc/self/statm` and `/proc/self/status`, which macOS does not have; it fails soft, so this costs you the numbers and nothing else. The peak memory itself is unchanged, so the guidance in this section still applies.
+
 `--no-cache` is the exception, and the reason is worth understanding. The image pyramid the viewer displays exists on disk in a cache; without one it has to be *computed*, and napari draws the smallest, most zoomed-out level first — which stands on every chunk of the full-resolution image below it. On a 57887×51217 slide that is tens of GB, and it is not something a smaller machine can page its way through: the computation is not streamable, so a whole pyramid level must be resident at once. The viewer warns at startup when it is about to do this. Use `--no-cache` for a quick look at a small dataset, not as a way to avoid writing to disk on a large one.
 
-**The viewer vanished with no error, and took the terminal with it**
+**The viewer vanished with no error, and took the terminal with it** (Linux)
 That is almost certainly not a crash — a crashing process leaves a traceback, and closing every tab in a terminal window is beyond what one process can do to itself. On systemd-based Linux desktops it is `systemd-oomd`, which kills an entire cgroup scope when a slice is under sustained memory *pressure*, not when memory is exhausted. It is why you can see this at 60% of RAM and never catch the process anywhere near the limit.
 
 ```bash
@@ -187,6 +206,8 @@ Besides the zarr cache, a dataset directory accumulates `viewer_cache/` (normali
 
 ## Troubleshooting: `Could not initialize GLX` / `Aborted (core dumped)`
 
+**Linux and WSL only** — macOS has no GLX at all; Qt uses the `cocoa` platform plugin there.
+
 If the viewer dies immediately with
 
 ```
@@ -194,13 +215,16 @@ WARNING: Could not initialize GLX
 Aborted (core dumped)
 ```
 
-your environment is missing **`libglx-devel`**. Current `environment.yml` includes it, so
-this only affects environments created before it was added:
+your environment is missing **`libglx-devel`**. That happens if the environment was created
+with a bare `conda env create -f environment.yml` instead of `./scripts/install.sh`, or
+predates the package being added at all. Apply the Linux overlay:
 
 ```bash
-conda activate xenium_viewer
-mamba install -c conda-forge libglx-devel
+conda env update -n xenium_viewer -f environment-linux.yml
 ```
+
+The viewer checks for this at startup and prints the same command, so you should not have to
+diagnose the abort from the message above.
 
 Why: conda ships `libGLX.so.0` but not the unversioned `libGLX.so`. PyOpenGL's loader looks
 for the unversioned name first, misses the environment, and loads your *system's* copy

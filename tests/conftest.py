@@ -21,7 +21,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # `pytest` over ssh did the same. Choosing offscreen up front turns that into a
 # working run; an explicit QT_QPA_PLATFORM or a real display still wins, so this
 # does not change what happens on a desktop.
-if not os.environ.get("QT_QPA_PLATFORM") and not os.environ.get("DISPLAY"):
+#
+# DISPLAY is an X11 variable, so it says nothing on macOS: a Mac with a perfectly
+# good screen has no DISPLAY, and without the darwin check the whole suite was
+# silently forced offscreen there. macOS uses the cocoa plugin, which does not
+# have the abort-without-a-display failure mode this guard exists for.
+if (
+    not os.environ.get("QT_QPA_PLATFORM")
+    and not os.environ.get("DISPLAY")
+    and sys.platform != "darwin"
+):
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
 # Same shape of problem: matplotlib's default backend needs a display.
 os.environ.setdefault("MPLBACKEND", "Agg")
