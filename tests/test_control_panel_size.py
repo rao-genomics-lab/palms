@@ -129,6 +129,64 @@ def test_the_assembled_panel_can_shrink(qapp, notebook_tab, templates_tab, umap_
     assert height <= MAX_MINIMUM, f"Control panel minimum height {height}px"
 
 
+def test_make_tab_renders_a_widgets_label(qapp):
+    """The caption must survive the trip through ``make_tab``.
+
+    ``.native`` is the bare control; magicgui keeps the caption in a wrapper only
+    a ``Container`` builds, so ``layout.addWidget(w.native)`` dropped every one.
+    The whole control panel rendered as anonymous sliders — Clustering showed
+    ``15``, ``40``, ``1.00``, ``2``, ``2000`` with nothing to say which was
+    which — and no test noticed, because none of them rendered a tab. Found by
+    screenshotting the running viewer over the ``--mcp`` bridge.
+    """
+    from qtpy.QtWidgets import QLabel
+    from magicgui.widgets import Slider
+
+    from xenium_viewer.tabs._helpers import make_tab
+
+    page = make_tab(Slider(label="probe_label", min=0, max=10, value=5))
+    texts = [w.text() for w in page.findChildren(QLabel)]
+    assert "probe_label" in texts, f"label dropped by make_tab; found {texts}"
+
+
+def test_make_tab_does_not_label_a_widget_that_paints_its_own_text(qapp):
+    """A ``CheckBox``/``PushButton`` carries its text *on* the control.
+
+    magicgui's own ``Container`` skips ``ButtonWidget`` for this reason, and
+    ``labelled()`` mirrors it. Pinned because the failure is silent and ugly
+    rather than loud: every checkbox in the panel would read its text twice.
+    """
+    from qtpy.QtWidgets import QCheckBox, QLabel
+
+    from magicgui.widgets import CheckBox
+
+    from xenium_viewer.tabs._helpers import make_tab
+
+    page = make_tab(CheckBox(label="Use HVGs only", value=False))
+    on_control = [w.text() for w in page.findChildren(QCheckBox)]
+    captions = [w.text() for w in page.findChildren(QLabel) if w.text()]
+    assert on_control == ["Use HVGs only"]
+    assert captions == [], f"checkbox text duplicated as a caption: {captions}"
+
+
+def test_make_tab_invents_no_label_for_an_unlabelled_widget(qapp):
+    """An unlabelled widget must stay unlabelled.
+
+    magicgui reports ``label == ''`` when ``label=`` was never passed — it does
+    not derive one from a variable name — so wrapping unconditionally is safe.
+    Asserted rather than assumed: if that ever changed, every bare control in
+    the panel would sprout a caption nobody wrote.
+    """
+    from qtpy.QtWidgets import QLabel
+    from magicgui.widgets import Slider
+
+    from xenium_viewer.tabs._helpers import make_tab
+
+    page = make_tab(Slider(min=0, max=10, value=5))
+    captions = [w.text() for w in page.findChildren(QLabel) if w.text()]
+    assert captions == [], f"invented a caption: {captions}"
+
+
 def test_a_page_with_wide_content_reports_a_small_minimum(qapp):
     """The mechanism itself: this is why every page must be wrapped."""
     from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget

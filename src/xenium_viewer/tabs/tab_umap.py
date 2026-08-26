@@ -62,7 +62,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # ── The linked napari scatter window (unchanged) ──────────────────────
     show_umap_button = PushButton(label="Show UMAP Window", enabled=True)
-    umap_size_slider = Slider(label="UMAP pt size", min=1, max=50, value=15)
+    umap_size_slider = Slider(label="Point size", min=1, max=50, value=15)
 
     # ── Gene picker ───────────────────────────────────────────────────────
     gene_widget = ComboBox(

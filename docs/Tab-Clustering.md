@@ -6,15 +6,17 @@ The Clustering tab lets you run Leiden clustering on the cell expression matrix 
 
 ## Controls
 
+Each control's tooltip names the template parameter its value lands in, so a caption here can be traced to the corresponding argument in the exported notebook (for example **Neighbours** sets `n_neighbors`).
+
 | Control | Description |
 |---|---|
-| n_neighbors | Slider (5–50, default 15). Number of nearest neighbours used to build the kNN graph. Higher values produce coarser, more stable clusters. |
-| n_pcs | Slider (10–50, default 40). Number of principal components used when constructing the kNN graph. |
-| resolution | Float spinbox (0.1–5.0, step 0.1, default 1.0). Leiden resolution parameter. Higher values produce more, smaller clusters. |
-| flavor | Dropdown (`igraph` / `leidenalg`, default `igraph`). Which implementation of the Leiden algorithm to use. `igraph` is orders of magnitude faster. `leidenalg` is scanpy's historical backend and optimises a different objective, so it produces a different partition — choose it to reproduce an existing scanpy pipeline. |
-| n_iterations | Spinbox (-1–100). How many Leiden iterations to run; `-1` iterates until the partition stops improving. Resets to the selected backend's default when you change **flavor** (`2` for igraph, `-1` for leidenalg). |
-| Use HVGs only | Checkbox (default unchecked). When checked, restricts the analysis to highly variable genes and enables the n_top_genes slider. |
-| n_top_genes | Slider (500–4000, default 2000). Number of highly variable genes selected when "Use HVGs only" is active. |
+| Neighbours | Slider (5–50, default 15). Number of nearest neighbours used to build the kNN graph. Higher values produce coarser, more stable clusters. |
+| Principal components | Slider (10–50, default 40). Number of principal components used when constructing the kNN graph. |
+| Resolution | Float spinbox (0.1–5.0, step 0.1, default 1.0). Leiden resolution parameter. Higher values produce more, smaller clusters. |
+| Clustering backend | Dropdown (`igraph` / `leidenalg`, default `igraph`). Which implementation of the Leiden algorithm to use. `igraph` is orders of magnitude faster. `leidenalg` is scanpy's historical backend and optimises a different objective, so it produces a different partition — choose it to reproduce an existing scanpy pipeline. |
+| Iterations | Spinbox (-1–100). How many Leiden iterations to run; `-1` iterates until the partition stops improving. Resets to the selected backend's default when you change **Clustering backend** (`2` for igraph, `-1` for leidenalg). |
+| Use HVGs only | Checkbox (default unchecked). When checked, restricts the analysis to highly variable genes and enables the **Highly variable genes** slider. |
+| Highly variable genes | Slider (500–4000, default 2000). Number of highly variable genes selected when "Use HVGs only" is active. |
 | Scale (max_value=10) | Checkbox (default unchecked). Scales the expression matrix to unit variance, capping values at 10. |
 | Run Leiden Clustering | Button. Executes Leiden clustering. The result is stored under the key `leiden_{flavor}_r{resolution}` (e.g. `leiden_igraph_r1.0`). |
 | Import Clustering... | Button. Opens a file dialog to load cluster assignments from a CSV or TSV file with columns `cell_id` and `group`. If those column names are absent, the first two columns are used in that order. |
@@ -23,9 +25,9 @@ The Clustering tab lets you run Leiden clustering on the cell expression matrix 
 
 ## Workflow
 
-1. Adjust **n_neighbors**, **n_pcs**, and **resolution** to suit your dataset size and the granularity you need.
-2. Leave **flavor** at `igraph` unless you are reproducing a pipeline that used `leidenalg`. Because the flavour is part of the result key, you can run both at one resolution and compare them side by side.
-3. Optionally enable **Use HVGs only** and set **n_top_genes** to speed up computation on large datasets.
+1. Adjust **Neighbours**, **Principal components**, and **Resolution** to suit your dataset size and the granularity you need.
+2. Leave **Clustering backend** at `igraph` unless you are reproducing a pipeline that used `leidenalg`. Because the flavour is part of the result key, you can run both at one resolution and compare them side by side.
+3. Optionally enable **Use HVGs only** and set **Highly variable genes** to speed up computation on large datasets.
 4. Optionally enable **Scale (max_value=10)** if you want variance-scaled input.
 5. Click **Run Leiden Clustering**. Check the status area for the result key and cluster count.
 6. Switch to [Coloring](Tab-Cell-Coloring) or [Rank Genes](Tab-Rank-Genes) to use the new clustering.

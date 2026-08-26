@@ -2,6 +2,48 @@
 
 ## [Unreleased] — 2026-08-26 (plots)
 
+### Fixed
+- **Every control label in the Xenium Controls panel was invisible.** `make_tab`
+  added `w.native` — the *bare* Qt control. magicgui keeps a widget's caption in a
+  wrapper only a `Container` builds, so all 72 captions were discarded at layout
+  time. The Clustering tab rendered as six anonymous controls reading `15`, `40`,
+  `1.00`, `igraph`, `2`, `2000`, with nothing to say which was which; `CheckBox`
+  and `PushButton` looked fine only because Qt paints their text on the control.
+
+  `_helpers.labelled()` restores the caption with a one-widget `Container` —
+  public API, and measured identical to the private `_LabeledWidget` (same 142px
+  minimum, same 22px height). It returns the bare control for a `ButtonWidget`
+  (mirroring what magicgui's own `Container` does, so a checkbox does not show its
+  text twice) and for a widget with no label, which magicgui reports as `''` — it
+  never derives one, so nothing sprouts a caption nobody wrote.
+
+  `tab_annot_nhood` and `tab_annot_distance` hand-rolled the `QVBoxLayout` +
+  `QScrollArea` that `make_tab` already is, which is exactly why their 10 labels
+  would have stayed invisible after a `make_tab`-only fix; both now call the
+  helper. No other call site changed.
+
+  Found by screenshotting the running viewer over the new `--mcp` bridge. The
+  1315-test suite passed throughout, because none of it renders a tab — so
+  `tests/test_control_panel_size.py` gained three guards: the label survives
+  `make_tab`, a `CheckBox` is not captioned twice, and an unlabelled widget stays
+  unlabelled.
+
+### Changed
+- **Control captions read as English rather than scanpy parameter names**, now
+  that they render at all: `n_neighbors` → **Neighbours**, `n_pcs` → **Principal
+  components**, `flavor` → **Clustering backend**, `n_top_genes` → **Highly
+  variable genes**. Each carries a tooltip naming the template parameter its value
+  lands in, so the correspondence with the exported notebook — which the captions
+  used to *be* — is kept rather than lost.
+
+  Captions that repeated a section heading or the tab title are trimmed
+  (`CellTypist Model` → **Model** under the "CellTypist Annotation" heading;
+  `UMAP pt size` → **Point size** on the UMAP tab), the three CNV controls whose
+  captions all contained "resolution"/"backend" are now distinct (**Cluster
+  resolution**, **Inference backend**, **Heatmap backend**), and `N neighbors` /
+  `N neighbours` are spelled the one way. Docs updated to match; the two generated
+  reference pages still name the parameters, since they describe code.
+
 ### Added
 - **`--mcp`: a dev-only MCP bridge onto the running viewer** (`src/xenium_viewer/dev_mcp.py`,
   `mcp` extra). Starts `napari-mcp`'s `NapariBridgeServer` over the viewer that already has

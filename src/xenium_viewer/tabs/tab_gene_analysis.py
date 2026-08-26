@@ -139,7 +139,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     from qtpy.QtWidgets import QLabel
     ga_ct_separator = QLabel("── CellTypist Annotation ──")
     ga_ct_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
-    ga_ct_model_widget = ComboBox(label="CellTypist Model", choices=[])
+    ga_ct_model_widget = ComboBox(label="Model", choices=[])
     from magicgui.widgets import FloatSlider
     ga_ct_conf_slider = FloatSlider(label="Min confidence", min=0.0, max=1.0, value=0.5, step=0.05)
     ga_ct_download_button = PushButton(label="Download Models")
@@ -589,7 +589,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     llm_separator = QLabel("── LLM Annotation ──")
     llm_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
     llm_provider_widget = ComboBox(
-        label="LLM Provider",
+        label="Provider",
         choices=["Claude (claude)", "Gemini (gemini)", "Codex (codex)"],
         value="Claude (claude)",
     )
@@ -661,8 +661,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     # -- Label Transfer (sc.tl.ingest) widgets --
     lt_separator = QLabel("── Label Transfer (sc.tl.ingest) ──")
     lt_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
-    lt_ref_widget = ComboBox(label="Reference Dataset", choices=list(_REFERENCE_DATASETS.keys()))
-    lt_col_widget = ComboBox(label="Annotation Column", choices=[])
+    lt_ref_widget = ComboBox(label="Reference dataset", choices=list(_REFERENCE_DATASETS.keys()))
+    lt_col_widget = ComboBox(label="Annotation column", choices=[])
     lt_load_ref_button = PushButton(label="Load Reference")
     lt_transfer_button = PushButton(label="Run Label Transfer", enabled=False)
 

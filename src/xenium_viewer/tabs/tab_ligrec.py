@@ -58,7 +58,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ctx.lr_clustering_widget = lr_clustering_widget
 
     lr_perms_slider = Slider(label="Permutations", min=100, max=1000, value=1000)
-    lr_neighs_slider = Slider(label="N neighbors", min=3, max=20, value=6)
+    lr_neighs_slider = Slider(label="Neighbours", min=3, max=20, value=6)
     lr_run_button = PushButton(label="Run L-R Analysis", enabled=True)
 
     # Interaction database filter checkboxes

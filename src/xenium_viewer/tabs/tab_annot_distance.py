@@ -14,10 +14,10 @@ import numpy as np
 from magicgui.widgets import ComboBox, PushButton, SpinBox
 from xenium_viewer.utils.coloring import AVAILABLE_COLORMAPS
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QTextEdit, QFileDialog, QScrollArea,
+    QTextEdit, QFileDialog,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import StatusProxy, combo_value_kwargs
+from xenium_viewer.tabs._helpers import StatusProxy, combo_value_kwargs, make_tab
 from xenium_viewer.utils.plot_output import safe_stem
 from xenium_viewer.utils.prov_graph import NOTE
 
@@ -339,27 +339,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
         pass
 
     # ── Build tab layout ──────────────────────────────────────────────────────
-    container = QWidget()
-    layout = QVBoxLayout()
-    layout.setContentsMargins(4, 4, 4, 4)
-    layout.addWidget(clustering_widget.native)
-    layout.addWidget(annot_widget.native)
-    layout.addWidget(refresh_btn.native)
-    layout.addWidget(plot_type_widget.native)
-    layout.addWidget(max_dist_spin.native)
-    layout.addWidget(run_btn.native)
-    layout.addWidget(results_text)
-    layout.addWidget(plot_btn.native)
-    layout.addWidget(export_btn.native)
-    layout.addWidget(dist_colormap_widget.native)
-    layout.addWidget(color_btn.native)
-    layout.addWidget(clear_color_btn.native)
-    layout.addStretch()
-    container.setLayout(layout)
-
-    scroll = QScrollArea()
-    scroll.setWidget(container)
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    # Was a hand-rolled QVBoxLayout + QScrollArea doing exactly what make_tab
+    # does. That duplication is what kept this tab's labels invisible after the
+    # fix landed in make_tab, so it goes through the helper like every other tab.
+    scroll = make_tab(
+        clustering_widget,
+        annot_widget,
+        refresh_btn,
+        plot_type_widget,
+        max_dist_spin,
+        run_btn,
+        results_text,
+        plot_btn,
+        export_btn,
+        dist_colormap_widget,
+        color_btn,
+        clear_color_btn,
+    )
 
     return scroll, {"restore_session": _restore_session}

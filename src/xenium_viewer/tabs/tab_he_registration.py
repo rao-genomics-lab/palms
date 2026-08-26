@@ -31,7 +31,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     he_load_button = PushButton(label="Load H&E Image...", enabled=True)
     he_flip_v = CheckBox(label="Flip vertically", value=False)
     he_flip_h = CheckBox(label="Flip horizontally", value=False)
-    he_opacity_slider = Slider(label="H&E opacity", min=0, max=100, value=70)
+    he_opacity_slider = Slider(label="Opacity", min=0, max=100, value=70)
     he_opacity_slider.enabled = False
 
     coarse_align_button = PushButton(label="Coarse Align", enabled=False)

@@ -9,7 +9,7 @@ The UMAP tab does two things: it opens a linked scatter window showing cells pro
 | Control | Description |
 |---|---|
 | Show UMAP Window | Button. Opens a separate floating napari window displaying the UMAP scatter plot, coloured by the currently active colouring. |
-| UMAP pt size | Slider (1–50, default 15). Controls point size in the UMAP window. The slider value is divided by 100 to produce a fractional size argument. |
+| Point size | Slider (1–50, default 15). Controls point size in the UMAP window. The slider value is divided by 100 to produce a fractional size argument. |
 | Gene | Dropdown over every gene in the panel. Pick one, then **Add Gene**. |
 | Add Gene / Remove Selected / Clear All | Buttons. Build the list of genes to plot; up to 15. |
 | Colormap | Dropdown: viridis, magma, plasma, RdBu_r, YlOrRd. |
@@ -20,7 +20,7 @@ The UMAP tab does two things: it opens a linked scatter window showing cells pro
 ## Workflow
 
 1. Click **Show UMAP Window** to open the interactive scatter plot. If the window is already open, clicking again brings it to the foreground.
-2. Adjust **UMAP pt size** to find a point size that is legible at your screen resolution.
+2. Adjust **Point size** to find a point size that is legible at your screen resolution.
 3. For a gene figure: choose a gene, click **Add Gene**, and repeat. One gene gives a single panel with a colour bar; several give a grid **Columns** wide. Click **Plot UMAP by gene**.
 4. For a cluster figure: select the clustering in the [Coloring](Tab-Cell-Coloring) tab, then click **Plot UMAP by cluster**.
 5. Both figures appear in the **Plots** dock and are written to `<dataset>/plots/` in every format set under **Preferences → Plot format** (PNG and PDF by default).

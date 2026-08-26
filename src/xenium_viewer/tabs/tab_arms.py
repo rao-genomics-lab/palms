@@ -77,7 +77,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     arms_edge_width_slider.enabled = False
 
     # ARMS Tile DEG widgets
-    arms_deg_method = ComboBox(label="DEG Method", choices=["wilcoxon", "t-test"], value="wilcoxon")
+    arms_deg_method = ComboBox(label="DEG method", choices=["wilcoxon", "t-test"], value="wilcoxon")
     arms_deg_filter_check = CheckBox(label="Filter by cluster", value=False)
     arms_deg_button = PushButton(label="Run ARMS Tile DEG", enabled=False)
     arms_deg_text = QTextEdit()

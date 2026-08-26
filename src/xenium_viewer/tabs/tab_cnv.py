@@ -315,11 +315,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # ── Parameters ──────────────────────────────────────────────────────
     # Defaults match InSituCNV's own reference notebook (run_insitucnv.ipynb).
-    cnv_n_neighbors = SpinBox(label="Neighbors (expression graph)", min=5, max=100, value=15)
-    cnv_smoothing_neighbors = SpinBox(label="Smoothing neighbors", min=5, max=200, value=20)
+    cnv_n_neighbors = SpinBox(label="Neighbours (expression graph)", min=5, max=100, value=15)
+    cnv_smoothing_neighbors = SpinBox(label="Smoothing neighbours", min=5, max=200, value=20)
     cnv_window_size = SpinBox(label="Window size (genes)", min=2, max=200, value=60)
     cnv_step = SpinBox(label="Window step", min=1, max=50, value=10)
-    cnv_resolution = FloatSpinBox(label="CNV cluster resolution", min=0.05, max=2.0, step=0.05, value=0.2)
+    cnv_resolution = FloatSpinBox(label="Cluster resolution", min=0.05, max=2.0, step=0.05, value=0.2)
     cnv_resolution.tooltip = (
         "InSituCNV's own notebook evaluates several resolutions (e.g. 0.1, 0.2, 0.3) "
         "and picks one per dataset after reviewing the results — this default may not "
@@ -332,7 +332,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     )
 
     cnv_backend_widget = ComboBox(
-        label="CNV backend",
+        label="Inference backend",
         choices=[("Both (inferCNV + CopyKAT)", "both"), ("inferCNV only", "infercnv"),
                  ("CopyKAT only", "copykat")],
         value="both",

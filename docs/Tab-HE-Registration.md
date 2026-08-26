@@ -13,7 +13,7 @@ Load an H&E (or other brightfield) TIFF image, align it to the Xenium coordinate
 | Load H&E Image... | Opens a file dialog accepting `.ome.tif`, `.tif`, `.tiff`, `.svs` files. Loads the image as a multi-scale pyramid and adds it to the napari canvas. |
 | Flip vertically | Flips the H&E image vertically by applying a flip affine. |
 | Flip horizontally | Flips the H&E image horizontally. |
-| H&E opacity | Slider (0–100, default 70). Controls H&E layer transparency. Disabled until an image is loaded. |
+| Opacity | Slider (0–100, default 70). Controls H&E layer transparency. Disabled until an image is loaded. |
 
 ### Coarse alignment
 

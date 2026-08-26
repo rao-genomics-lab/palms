@@ -41,7 +41,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ctx.ne_clustering_widget = ne_clustering_widget
 
     ne_perms_slider = Slider(label="Permutations", min=100, max=1000, value=1000)
-    ne_neighs_slider = Slider(label="N neighbors", min=3, max=20, value=6)
+    ne_neighs_slider = Slider(label="Neighbours", min=3, max=20, value=6)
     ne_run_button = PushButton(label="Run Nhood Enrichment", enabled=True)
     ne_mode_widget = ComboBox(
         label="Display mode", choices=["zscore", "count"], value="zscore",

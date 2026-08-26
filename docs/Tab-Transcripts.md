@@ -24,7 +24,7 @@ The Transcripts tab lets you overlay raw transcript locations as colour-coded po
 
 | Control | Description |
 |---|---|
-| Density gene | Dropdown. Gene to use for the density heatmap. |
+| Gene (density section) | Dropdown. Gene to use for the density heatmap. |
 | Bin size (µm) | Slider (10–500, default 50). Spatial bin size in micrometres. |
 | Filter by selected clusters | Checkbox. Restricts the density calculation to transcripts located within cells belonging to the currently visible clusters (requires an active cluster filter in the [Coloring](Tab-Cell-Coloring) tab). |
 | Normalise by cells per bin | Checkbox. Divides each bin's transcript count by the number of cells in that bin, producing a per-cell density estimate. |
@@ -35,7 +35,7 @@ The Transcripts tab lets you overlay raw transcript locations as colour-coded po
 1. Select a gene from the **Transcript gene** dropdown and click **Add Gene**. Repeat for each additional gene (up to 10).
 2. Make sure **Show transcripts** is ticked, then click **Apply Transcripts** to load and display the point overlay.
 3. To hide the overlay again, either untick the layer in the napari layer list, or untick **Show transcripts** and press **Apply Transcripts** a second time.
-4. For a density heatmap, choose a gene in **Density gene**, set **Bin size (µm)**, and enable optional filters.
+4. For a density heatmap, choose a gene in the density section's **Gene** dropdown, set **Bin size (µm)**, and enable optional filters.
 5. Click **Compute Density**. The heatmap is a separate layer and can be adjusted independently in the napari layer list.
 
 ## Notes

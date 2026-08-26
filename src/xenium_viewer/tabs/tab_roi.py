@@ -282,7 +282,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # ── ROI DEG widgets ──────────────────────────────────────────────────
     roi_deg_method_widget = ComboBox(
-        label="DEG Method", choices=["wilcoxon", "t-test"], value="wilcoxon",
+        label="Method", choices=["wilcoxon", "t-test"], value="wilcoxon",
     )
     roi_deg_filter_check = CheckBox(label="Filter by cluster", value=False)
     roi_deg_button = PushButton(label="Run ROI DEG", enabled=True)

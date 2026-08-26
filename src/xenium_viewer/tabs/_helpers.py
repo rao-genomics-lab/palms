@@ -122,6 +122,40 @@ def toolbar_row(*buttons) -> QWidget:
     return scroll
 
 
+def labelled(w) -> QWidget:
+    """Return the Qt widget for a magicgui widget, *with* its label attached.
+
+    ``w.native`` is the bare control. magicgui keeps a widget's caption in a
+    separate ``_LabeledWidget`` wrapper that only a ``Container`` ever creates,
+    so dropping ``.native`` into a plain layout silently discards it — which is
+    how every ``Slider(label="n_neighbors", ...)`` in this package rendered as
+    an anonymous slider reading ``15``. Found by screenshotting the running
+    viewer over ``--mcp``; no test caught it, because none of them render a tab.
+
+    A one-widget ``Container`` restores the label through public API only. The
+    private ``_LabeledWidget`` renders identically (measured: same 142px
+    minimum, same 22px height) but would break on a magicgui rename.
+
+    Two widgets are returned bare, and both cases are load-bearing:
+
+    - **No label.** A widget built without ``label=`` reports ``''``, never a
+      name derived from anything, so this cannot invent a caption for a control
+      that never had one.
+    - **A ``ButtonWidget``** (``CheckBox``, ``PushButton``, ``RadioButton``).
+      Qt paints their text *on* the control, so a caption would show it twice.
+      magicgui's own ``Container`` skips them for the same reason — this mirrors
+      upstream rather than inventing a rule.
+    """
+    from magicgui.widgets import Container
+    from magicgui.widgets.bases import ButtonWidget
+
+    if isinstance(w, (Container, ButtonWidget)) or not w.label:
+        return w.native
+    box = Container(widgets=[w], labels=True)
+    box.margins = (0, 0, 0, 0)   # the row must sit flush like a bare .native did
+    return box.native
+
+
 def make_tab(*widgets_and_natives) -> QWidget:
     """Pack magicgui widgets and raw QWidgets into a scrollable container."""
     inner = QWidget()
@@ -129,7 +163,7 @@ def make_tab(*widgets_and_natives) -> QWidget:
     layout.setContentsMargins(4, 4, 4, 4)
     for w in widgets_and_natives:
         if hasattr(w, "native"):
-            layout.addWidget(w.native)
+            layout.addWidget(labelled(w))
         else:
             layout.addWidget(w)
     layout.addStretch()

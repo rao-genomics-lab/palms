@@ -81,7 +81,7 @@ If a specific landmark has a high residual, it may be misplaced. Delete it using
 
 ### 7. Inspect the overlay
 
-Use the **H&E opacity** slider in the tab to blend the H&E image against the morphology image. Pan around the tissue at high zoom to check that structures align. Toggle the H&E layer visibility using its eye icon in the layer list to compare with and without the overlay.
+Use the **Opacity** slider in the tab to blend the H&E image against the morphology image. Pan around the tissue at high zoom to check that structures align. Toggle the H&E layer visibility using its eye icon in the layer list to compare with and without the overlay.
 
 ### 8. Save the landmarks
 

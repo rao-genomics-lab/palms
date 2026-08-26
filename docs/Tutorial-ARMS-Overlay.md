@@ -85,7 +85,7 @@ Each ARMS cluster appears as a row with a checkbox. Check at least 2 clusters yo
 
 ### Step 10. Choose a DEG method
 
-Select a method from the **DEG Method** dropdown. `wilcoxon` is recommended for most datasets. `t-test` is faster for very large cell counts.
+Select a method from the **DEG method** dropdown. `wilcoxon` is recommended for most datasets. `t-test` is faster for very large cell counts.
 
 ### Step 11. Run the DEG analysis
 
