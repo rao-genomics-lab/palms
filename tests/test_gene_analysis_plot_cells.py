@@ -56,13 +56,17 @@ def ranked():
 @pytest.mark.parametrize("dendrogram", [True, False])
 def test_the_recorded_dotplot_cell_runs_and_writes_its_figure(
         ranked, tmp_path, monkeypatch, dendrogram):
-    monkeypatch.chdir(tmp_path)          # the cell saves to a relative path
-    code = dotplot_code(GROUPBY, n_genes=5, dendrogram=dendrogram, fmt="png")
+    monkeypatch.chdir(tmp_path)          # the cell saves to relative paths
+    # Both formats, as the viewer now writes them: the cell names the files
+    # that were actually produced rather than a bare "dotplot.svg".
+    code = dotplot_code(GROUPBY, n_genes=5, dendrogram=dendrogram,
+                        paths=["plots/dotplot.png", "plots/dotplot.pdf"])
 
     exec(compile(code, "<plot:dotplot>", "exec"),  # noqa: S102
-         {"sc": sc, "np": np, "pd": pd, "adata_norm": ranked})
+         {"sc": sc, "np": np, "pd": pd, "Path": Path, "adata_norm": ranked})
 
-    assert (tmp_path / "dotplot.png").exists()
+    assert (tmp_path / "plots" / "dotplot.png").exists()
+    assert (tmp_path / "plots" / "dotplot.pdf").exists()
 
 
 def test_the_cell_never_names_raw_adata(ranked):
@@ -71,13 +75,14 @@ def test_the_cell_never_names_raw_adata(ranked):
     Executing against a namespace that has *only* the raw object is how the
     notebook failed — the name resolved, the `uns` key did not.
     """
-    code = dotplot_code(GROUPBY, n_genes=5, dendrogram=False, fmt="png")
+    code = dotplot_code(GROUPBY, n_genes=5, dendrogram=False,
+                        paths=["plots/dotplot.png"])
     assert "adata_norm" in code
     assert "(adata," not in code and "(adata " not in code
 
     with pytest.raises(NameError):
         exec(compile(code, "<plot:dotplot>", "exec"),  # noqa: S102
-             {"sc": sc, "adata": ranked})
+             {"sc": sc, "Path": Path, "adata": ranked})
 
 
 def test_the_cell_reaches_the_keyed_ranking(ranked):
@@ -89,14 +94,15 @@ def test_the_cell_reaches_the_keyed_ranking(ranked):
     unkeyed slot — which is what the notebook would have if the cell and the
     step disagreed about the key.
     """
-    code = dotplot_code(GROUPBY, n_genes=5, dendrogram=False, fmt="png")
+    code = dotplot_code(GROUPBY, n_genes=5, dendrogram=False,
+                        paths=["plots/dotplot.png"])
     assert f'key="{rank_genes_key(GROUPBY)}"' in code
 
     legacy = ranked.copy()
     legacy.uns["rank_genes_groups"] = legacy.uns.pop(rank_genes_key(GROUPBY))
     with pytest.raises(KeyError):
         exec(compile(code, "<plot:dotplot>", "exec"),  # noqa: S102
-             {"sc": sc, "np": np, "pd": pd, "adata_norm": legacy})
+             {"sc": sc, "np": np, "pd": pd, "Path": Path, "adata_norm": legacy})
 
 
 if __name__ == "__main__":

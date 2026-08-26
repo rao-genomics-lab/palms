@@ -10,7 +10,7 @@ The Lig-Rec tab tests for significant ligand-receptor interactions between spati
 |---|---|
 | Clustering | Clustering that defines sender and receiver cell types |
 | Permutations | Slider (100–1000, default 1000) — number of permutations for significance testing |
-| N neighbors | Slider (3–20, default 6) — neighbourhood size used to define spatial proximity |
+| Neighbours | Slider (3–20, default 6) — neighbourhood size used to define spatial proximity |
 | Interaction datasets | Group box holding the four database checkboxes below |
 | OmniPath | Include OmniPath interactions (default checked) |
 | LigRecExtra | Include LigRecExtra interactions (default checked) |
@@ -27,7 +27,7 @@ The Lig-Rec tab tests for significant ligand-receptor interactions between spati
 ## Workflow
 
 1. Select a **Clustering** from the dropdown.
-2. Adjust **Permutations** and **N neighbors** as needed.
+2. Adjust **Permutations** and **Neighbours** as needed.
 3. Check or uncheck the interaction database checkboxes to define which resources to query.
 4. Click **Run L-R Analysis** and wait for completion.
 5. Review the interaction counts and top 20 interactions in the results area.

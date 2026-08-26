@@ -14,6 +14,7 @@ from qtpy.QtWidgets import (
 from napari.qt.threading import thread_worker
 from xenium_viewer.utils.units import layer_affine_px, px_affine_to_world
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy
+from xenium_viewer.utils.plot_output import batch_dir, plot_formats, save_figure
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.zarr_safe import safe_write_element
 
@@ -76,7 +77,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     arms_edge_width_slider.enabled = False
 
     # ARMS Tile DEG widgets
-    arms_deg_method = ComboBox(label="DEG Method", choices=["wilcoxon", "t-test"], value="wilcoxon")
+    arms_deg_method = ComboBox(label="DEG method", choices=["wilcoxon", "t-test"], value="wilcoxon")
     arms_deg_filter_check = CheckBox(label="Filter by cluster", value=False)
     arms_deg_button = PushButton(label="Run ARMS Tile DEG", enabled=False)
     arms_deg_text = QTextEdit()
@@ -812,27 +813,34 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if adata_norm is None:
             arms_status_label.value = "Run ARMS Tile DEG first"
             return
-        output_dir = QFileDialog.getExistingDirectory(None, "Select output directory for ARMS volcano plots")
+        default_dir = batch_dir(ctx.data_path, "arms_volcano")
+        default_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = QFileDialog.getExistingDirectory(
+            None, "Select output directory for ARMS volcano plots",
+            str(default_dir))
         if not output_dir:
             return
         arms_volcano_button.enabled = False
         arms_status_label.value = "Generating ARMS volcano plots..."
         method = arms_deg_method.value
         gen = ctx.dataset_generation
+        formats = plot_formats(state)
+        _recorded_dir = ctx.recorded_plot_paths([output_dir])[0]
         ctx.record_node(
             "plot:arms_volcano",
             f"\n# ARMS pairwise volcano plots (method={method})\n"
             f"import itertools\n"
             f"from pathlib import Path\n"
             f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
-            f"arms_volcano_dir = Path(\"{Path(output_dir).name}\"); "
+            f"arms_volcano_dir = Path(r\"{_recorded_dir}\"); "
             f"arms_volcano_dir.mkdir(parents=True, exist_ok=True)\n"
             f"_groups = sorted(arms_adata_norm.obs['arms_cluster'].cat.categories.tolist())\n"
             f"for _a, _b in itertools.combinations(_groups, 2):\n"
             f"    _df = run_pairwise_deg(arms_adata_norm, 'arms_cluster', str(_a), str(_b), method=\"{method}\")\n"
             f"    _vfig = make_volcano_plot(_df, str(_a), str(_b))\n"
-            f"    _name = 'arms_volcano_' + str(_a) + '_vs_' + str(_b) + '.png'\n"
-            f"    _vfig.savefig(arms_volcano_dir / _name, dpi=300)\n"
+            f"    _stem = 'arms_volcano_' + str(_a) + '_vs_' + str(_b)\n"
+            f"    for _ext in {formats!r}:\n"
+            f"        _vfig.savefig(arms_volcano_dir / f'{{_stem}}.{{_ext}}', dpi=300)\n"
             f"    plt.close(_vfig)",
             deps=["arms:tile_deg"], kind=TERMINAL, label="ARMS pairwise volcano plots",
         )
@@ -856,7 +864,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 yield f"Volcano plot {i + 1}/{total}: ARMS C{a} vs C{b}"
                 df = run_pairwise_deg(adata_norm, 'arms_cluster', str(a), str(b), method=method)
                 fig = make_volcano_plot(df, f"ARMS C{a}", f"ARMS C{b}")
-                fig.savefig(out / f'volcano_ARMS_C{a}_vs_ARMS_C{b}.png', dpi=300)
+                save_figure(fig, [out / f'volcano_ARMS_C{a}_vs_ARMS_C{b}.{ext}'
+                                  for ext in formats])
                 _plt.close(fig)
             return total, output_dir
 

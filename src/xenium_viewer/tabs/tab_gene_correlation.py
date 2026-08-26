@@ -1,9 +1,9 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
-import os
 
 from magicgui.widgets import ComboBox, PushButton, CheckBox
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, combo_value_kwargs
+from xenium_viewer.utils.plot_output import safe_stem
 from xenium_viewer.utils.prov_graph import TERMINAL
 from xenium_viewer.utils.steps import Step
 from xenium_viewer.utils.step_templates import (
@@ -79,6 +79,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
     plot_button   = PushButton(label="Plot Correlation")
     status        = StatusProxy(ctx.viewer)
 
+    def _stem(gene_a: str, gene_b: str) -> str:
+        """Keyed by the gene pair — a second correlation used to overwrite the
+        first, because every run wrote ``plots/gene_correlation.<fmt>``."""
+        return f"gene_correlation_{safe_stem(gene_a)}_{safe_stem(gene_b)}"
+
     def _gene_corr_preview() -> Preview:
         """What "Plot Correlation" would run with the widgets as they stand.
 
@@ -108,14 +113,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 selected = sorted({str(i) for i in ids}) if ids else None
         filtered = clustering_key is not None and selected is not None
 
-        fmt = state.get("plot_format", "svg")
         params = {
             "gene_a": gene_a, "gene_b": gene_b,
             "norm_label": norm_label,
             "xlabel": f"{gene_a} [{norm_label}]",
             "ylabel": f"{gene_b} [{norm_label}]",
             "title_prefix": f"{gene_a} vs {gene_b}",
-            "path": os.path.join(ctx.data_path, "plots", f"gene_correlation.{fmt}"),
+            "paths": ctx.plot_paths(_stem(gene_a, gene_b)),
         }
         if filtered:
             params["clustering"] = clustering_key
@@ -133,9 +137,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         clustering_key = params.get("clustering")
         status.value = f"Computing correlation: {gene_a} vs {gene_b}…"
         gen = ctx.dataset_generation
-
-        path = params["path"]
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ctx.apply_plot_font_size()
 
         deps = ["preamble"]
         if norm == "Log1p(CPM)":
@@ -168,18 +170,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
         def _on_result(out):
             if ctx.dataset_generation != gen:
                 return
-            import matplotlib.pyplot as plt
             state["corr_fig"] = out["fig"]
             state["corr_genes"] = (gene_a, gene_b)
-            plt.show(block=False)
-            out["fig"].show()
+            # The template wrote the files; show_plot only publishes them.
+            paths = ctx.show_plot(out["fig"], _stem(gene_a, gene_b),
+                                  title=f"{gene_a} vs {gene_b} [{norm_label}]",
+                                  save=False, paths=params["paths"])
 
             def _fmt_p(p):
                 return f"{p:.2e}" if p < 0.001 else f"{p:.4f}"
             status.value = (
                 f"{gene_a}/{gene_b} [{norm_label}] — "
                 f"Pearson r={out['pr']:.3f} (p={_fmt_p(out['pp'])}), "
-                f"Spearman ρ={out['sr']:.3f} (p={_fmt_p(out['sp'])}) — saved to {path}"
+                f"Spearman ρ={out['sr']:.3f} (p={_fmt_p(out['sp'])}) — "
+                f"saved to {', '.join(paths)}"
             )
 
         def _on_error(e):

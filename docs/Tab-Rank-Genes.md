@@ -35,7 +35,7 @@ Requires the `celltypist` package.
 
 | Control | Description |
 |---|---|
-| CellTypist Model | Select from downloaded models |
+| Model | Select from downloaded models |
 | Min confidence | Float slider (0.0–1.0, default 0.5) — minimum per-cell prediction confidence to accept |
 | Download Models | Downloads available CellTypist models from the internet |
 | Annotate with CellTypist | Runs annotation; predictions are majority-voted per cluster and stored as cluster labels |
@@ -44,15 +44,15 @@ Requires the `celltypist` package.
 
 | Control | Description |
 |---|---|
-| LLM Provider | Language model to use: `Claude (claude)`, `Gemini (gemini)`, or `Codex (codex)` |
+| Provider | Language model to use: `Claude (claude)`, `Gemini (gemini)`, or `Codex (codex)` |
 | Annotate with LLM | Sends top-N genes per cluster to the LLM and stores returned cell-type names as cluster labels. Runs the provider's **command-line tool**, so that tool must be installed, on `PATH` and already authenticated — see the notes. |
 
 ### Label Transfer
 
 | Control | Description |
 |---|---|
-| Reference Dataset / Browse... | Built-in reference dropdown or a custom `.h5ad` file via file dialog |
-| Annotation Column | Column in the reference `obs` table to transfer |
+| Reference dataset / Browse... | Built-in reference dropdown or a custom `.h5ad` file via file dialog |
+| Annotation column | Column in the reference `obs` table to transfer |
 | Load Reference | Loads the selected reference h5ad into memory |
 | Run Label Transfer | Runs `sc.tl.ingest()` against the reference; predictions are majority-voted per cluster |
 

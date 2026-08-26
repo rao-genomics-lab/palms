@@ -143,8 +143,14 @@ def make_rank_genes_dotplot(
     cluster_labels: Optional[dict] = None,
     dendrogram: bool = True,
     key: Optional[str] = None,
-) -> plt.Figure:
-    """Create a dotplot of top marker genes per cluster. Returns matplotlib Figure.
+):
+    """Create a dotplot of top marker genes per cluster.
+
+    Returns scanpy's ``DotPlot``, **not** a matplotlib ``Figure`` — this used to
+    be annotated as one, which is how a caller came to hand it straight to Qt.
+    ``DotPlot`` has ``savefig``, so anything that only saves works; anything that
+    draws it does not. Pass it through
+    :func:`xenium_viewer.utils.fig_render.to_figure` first.
 
     *key* is the ``uns`` slot the ranking was written to; it defaults through
     :func:`resolve_rank_key`, so an ``adata_norm`` restored from a cache written
@@ -657,11 +663,16 @@ def generate_all_volcano_plots(
     pval_thresh: float = 0.05,
     n_label: int = 10,
     progress_callback: Optional[Callable] = None,
+    formats=None,
 ) -> int:
-    """Generate volcano PNGs for all pairwise cluster comparisons.
+    """Generate volcano plots for all pairwise cluster comparisons.
 
-    Returns the number of plots generated.
+    Returns the number of comparisons plotted (not the number of files: each
+    one is written in every format in *formats*, which defaults to the same
+    PNG + PDF pair every other figure in the viewer gets).
     """
+    from xenium_viewer.utils.plot_output import DEFAULT_FORMATS, save_figure
+    formats = list(formats or DEFAULT_FORMATS)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -681,7 +692,8 @@ def generate_all_volcano_plots(
 
         df = run_pairwise_deg(adata_norm, groupby, str(a), str(b), method=method)
         fig = make_volcano_plot(df, str(a), str(b), lfc_thresh, pval_thresh, n_label)
-        fig.savefig(output_dir / f'volcano_{a}_vs_{b}.png', dpi=300)
+        save_figure(fig, [output_dir / f'volcano_{a}_vs_{b}.{ext}'
+                          for ext in formats])
         plt.close(fig)
 
     return total

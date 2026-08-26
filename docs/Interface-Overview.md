@@ -4,6 +4,8 @@
 
 The viewer consists of a **napari canvas** occupying the left portion of the window and a **control panel** docked on the right. The canvas provides interactive pan, zoom, and layer toggle controls using napari's standard mouse and keyboard bindings. The control panel is organised into five top-level tab groups, each with further sub-tabs along the bottom edge.
 
+A third dock, **[Plots](Plots-Window)**, appears along the bottom the first time an analysis produces a figure. Every plot the viewer draws is collected there and written to `<dataset>/plots/`.
+
 ## Control Panel Tab Groups
 
 Each top-level tab contains sub-tabs positioned along the bottom of the panel. The **Sub-tab** column below is the label on the tab itself, abbreviated where the tab bar is too narrow for the full name; the **Reference page** column links to the page documenting it. This table is the authority for which name refers to which tab.
@@ -76,6 +78,7 @@ The viewer adds three menus to napari's own menu bar.
 |------|-------------|
 | Show Xenium Controls (Ctrl+Shift+X) | Show or hide the control panel dock. On by default. |
 | Show Minimap | Show or hide the overview minimap. Off, and disabled until a minimap exists. |
+| Show Plots (Ctrl+Shift+P) | Show or hide the [Plots](Plots-Window) dock, where every figure the viewer produces is collected. Off until the first plot, which reveals it. |
 
 ### Scale bar
 

@@ -10,6 +10,9 @@ from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
 from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.plot_output import (
+    batch_dir, plot_formats, recorded_save_code, safe_stem, save_figure,
+)
 from xenium_viewer.utils.prov_graph import TERMINAL
 
 if TYPE_CHECKING:
@@ -36,7 +39,7 @@ RANK_GENES_TEMPLATE_ID = "genes.rank_genes"
 _RANK_GENES_TEMPLATE = builtin_text("genes.rank_genes")
 
 
-def dotplot_code(groupby: str, n_genes: int, dendrogram: bool, fmt: str) -> str:
+def dotplot_code(groupby: str, n_genes: int, dendrogram: bool, paths) -> str:
     """The recorded dotplot cell.
 
     ``adata_norm``, not ``adata``: the ranked genes live on the normalised copy
@@ -46,8 +49,13 @@ def dotplot_code(groupby: str, n_genes: int, dendrogram: bool, fmt: str) -> str:
     reason, now that the ranking step writes a keyed slot: without it this cell
     reaches for a ``uns['rank_genes_groups']`` the notebook never binds.
     Module-level so a test can execute the exact string the viewer records.
+
+    ``paths`` are the files the viewer actually wrote, relative to the dataset —
+    this cell used to record a bare ``"dotplot.svg"`` no matter where the figure
+    went.
     """
     key = rank_genes_key(groupby)
+    saves = recorded_save_code(paths, fig_expr="dotplot")
     return (
         f"\n# Dotplot (n_genes={n_genes}, dendrogram={dendrogram})\n"
         + (f"sc.tl.dendrogram(adata_norm, groupby=\"{groupby}\")\n"
@@ -56,7 +64,7 @@ def dotplot_code(groupby: str, n_genes: int, dendrogram: bool, fmt: str) -> str:
         f"    adata_norm, groupby=\"{groupby}\", n_genes={n_genes}, key=\"{key}\",\n"
         f"    dendrogram={dendrogram}, show=False, return_fig=True,\n"
         f")\n"
-        f"dotplot.savefig(\"dotplot.{fmt}\", dpi=300, bbox_inches='tight')"
+        + saves
     )
 
 
@@ -131,7 +139,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     from qtpy.QtWidgets import QLabel
     ga_ct_separator = QLabel("── CellTypist Annotation ──")
     ga_ct_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
-    ga_ct_model_widget = ComboBox(label="CellTypist Model", choices=[])
+    ga_ct_model_widget = ComboBox(label="Model", choices=[])
     from magicgui.widgets import FloatSlider
     ga_ct_conf_slider = FloatSlider(label="Min confidence", min=0.0, max=1.0, value=0.5, step=0.05)
     ga_ct_download_button = PushButton(label="Download Models")
@@ -282,18 +290,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _on_dotplot_ready(fig):
         state["dotplot_fig"] = fig
         ga_dotplot_button.enabled = True
-        import matplotlib.pyplot as _plt
-        _plt.show(block=False)
-        path = ctx.auto_save_plot(fig, "dotplot")
-        ga_status.value = f"Dotplot displayed — saved to {path}"
+        _dp_groupby = state.get("rank_genes_groupby", "")
+        paths = ctx.show_plot(fig, f"dotplot_{safe_stem(_dp_groupby)}",
+                              title=f"Rank-genes dotplot: {_dp_groupby}")
+        ga_status.value = f"Dotplot displayed — saved to {', '.join(paths)}"
 
         _dp_n = ga_dotplot_n_slider.value
         _dp_dendro = ga_dendro_check.value
-        _dp_groupby = state.get("rank_genes_groupby", "")
-        _dp_fmt = ctx.state.get("plot_format", "svg")
         ctx.record_node(
             f"plot:dotplot:{_dp_groupby}",
-            dotplot_code(_dp_groupby, _dp_n, _dp_dendro, _dp_fmt),
+            dotplot_code(_dp_groupby, _dp_n, _dp_dendro,
+                         ctx.recorded_plot_paths(paths)),
             deps=[f"rank_genes:{_dp_groupby}"],
             kind=TERMINAL,
             label="Rank-genes dotplot",
@@ -323,22 +330,27 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if adata_norm is None:
             ga_status.value = "Run rank genes first"
             return
-        import matplotlib.pyplot as _plt
         ctx.apply_plot_font_size()
         _rp_n = ga_n_genes_slider.value
         groupby = state.get("rank_genes_groupby", "")
         labels = ctx.get_labels_for(groupby)
         fig = make_rank_genes_plot(adata_norm, n_genes=_rp_n, cluster_labels=labels,
                                    key=resolve_rank_key(adata_norm, groupby))
-        _plt.show(block=False)
-        ga_status.value = "Rank genes plot displayed"
+        # This plot was displayed and never written — the one figure in the app
+        # a user could not keep.
+        paths = ctx.show_plot(fig, f"rank_panel_{safe_stem(groupby)}",
+                              title=f"Rank-genes panel: {groupby}")
+        ga_status.value = f"Rank genes plot displayed — saved to {', '.join(paths)}"
+        _saves = recorded_save_code(ctx.recorded_plot_paths(paths),
+                                    fig_expr="plt.gcf()")
         # key=, or the exported notebook reaches for a uns['rank_genes_groups']
         # the ranking step never binds — it writes a keyed slot.
         ctx.record_node(
             f"plot:rank_panel:{groupby}",
             f"\n# Rank genes panel plot (n_genes={_rp_n})\n"
             f"sc.pl.rank_genes_groups(adata_norm, n_genes={_rp_n}, "
-            f"key=\"{rank_genes_key(groupby)}\")",
+            f"key=\"{rank_genes_key(groupby)}\", show=False)\n"
+            f"{_saves}",
             deps=[f"rank_genes:{groupby}"],
             kind=TERMINAL,
             label="Rank-genes panel plot",
@@ -371,25 +383,34 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if adata_norm is None or groupby is None:
             ga_status.value = "Run rank genes first"
             return
-        output_dir = QFileDialog.getExistingDirectory(None, "Select output directory for volcano plots")
+        # Defaults into <dataset>/plots/, like every other figure, but still
+        # asks — a batch of N×N figures is the one output people routinely want
+        # somewhere of their own.
+        default_dir = batch_dir(ctx.data_path, f"volcano_{groupby}")
+        default_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = QFileDialog.getExistingDirectory(
+            None, "Select output directory for volcano plots", str(default_dir))
         if not output_dir:
             return
         ga_volcano_button.enabled = False
         ga_status.value = "Generating volcano plots..."
         method = state.get("_rg_method", "wilcoxon")
+        formats = plot_formats(state)
+        _recorded_dir = ctx.recorded_plot_paths([output_dir])[0]
         ctx.record_node(
             f"plot:volcano:{groupby}",
             f"\n# Pairwise volcano plots (groupby={groupby}, method={method})\n"
             f"import itertools\n"
             f"from pathlib import Path\n"
             f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
-            f"volcano_dir = Path(\"{os.path.basename(output_dir)}\"); "
+            f"volcano_dir = Path(r\"{_recorded_dir}\"); "
             f"volcano_dir.mkdir(parents=True, exist_ok=True)\n"
             f"_groups = [g for g in adata_norm.obs[\"{groupby}\"].cat.categories if str(g) != '-1']\n"
             f"for _a, _b in itertools.combinations(_groups, 2):\n"
             f"    _df = run_pairwise_deg(adata_norm, \"{groupby}\", str(_a), str(_b), method=\"{method}\")\n"
             f"    _vfig = make_volcano_plot(_df, str(_a), str(_b))\n"
-            f"    _vfig.savefig(volcano_dir / f'volcano_{{_a}}_vs_{{_b}}.png', dpi=300)\n"
+            f"    for _ext in {formats!r}:\n"
+            f"        _vfig.savefig(volcano_dir / f'volcano_{{_a}}_vs_{{_b}}.{{_ext}}', dpi=300)\n"
             f"    plt.close(_vfig)",
             deps=[f"rank_genes:{groupby}"],
             kind=TERMINAL,
@@ -416,7 +437,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 yield f"Volcano plot {i + 1}/{total}: {a} vs {b}"
                 df = run_pairwise_deg(adata_norm, groupby, str(a), str(b), method=method)
                 fig = make_volcano_plot(df, str(a), str(b))
-                fig.savefig(out / f'volcano_{a}_vs_{b}.png', dpi=300)
+                save_figure(fig, [out / f'volcano_{a}_vs_{b}.{ext}'
+                                  for ext in formats])
                 _plt.close(fig)
             return total, output_dir
         _run()
@@ -567,7 +589,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     llm_separator = QLabel("── LLM Annotation ──")
     llm_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
     llm_provider_widget = ComboBox(
-        label="LLM Provider",
+        label="Provider",
         choices=["Claude (claude)", "Gemini (gemini)", "Codex (codex)"],
         value="Claude (claude)",
     )
@@ -639,8 +661,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
     # -- Label Transfer (sc.tl.ingest) widgets --
     lt_separator = QLabel("── Label Transfer (sc.tl.ingest) ──")
     lt_separator.setStyleSheet("font-weight: bold; margin-top: 8px;")
-    lt_ref_widget = ComboBox(label="Reference Dataset", choices=list(_REFERENCE_DATASETS.keys()))
-    lt_col_widget = ComboBox(label="Annotation Column", choices=[])
+    lt_ref_widget = ComboBox(label="Reference dataset", choices=list(_REFERENCE_DATASETS.keys()))
+    lt_col_widget = ComboBox(label="Annotation column", choices=[])
     lt_load_ref_button = PushButton(label="Load Reference")
     lt_transfer_button = PushButton(label="Run Label Transfer", enabled=False)
 

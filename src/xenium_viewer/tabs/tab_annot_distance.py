@@ -14,10 +14,12 @@ import numpy as np
 from magicgui.widgets import ComboBox, PushButton, SpinBox
 from xenium_viewer.utils.coloring import AVAILABLE_COLORMAPS
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QTextEdit, QFileDialog, QScrollArea,
+    QTextEdit, QFileDialog,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import StatusProxy, combo_value_kwargs
+from xenium_viewer.tabs._helpers import StatusProxy, combo_value_kwargs, make_tab
+from xenium_viewer.utils.plot_output import safe_stem
+from xenium_viewer.utils.prov_graph import NOTE
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -221,10 +223,31 @@ def build_tab(ctx: ViewerContext) -> tuple:
         ax.set_xlabel(clustering_key)
         ax.set_ylabel("Distance to annotation boundary (µm)")
         ax.set_title(f"Distance to '{annot_type}' boundary by {clustering_key}")
-        plt.xticks(rotation=45, ha="right")
-        plt.tight_layout()
-        ctx.auto_save_plot(fig, "annot_distance")
-        plt.show()
+        ax.tick_params(axis="x", labelrotation=45)
+        for tick in ax.get_xticklabels():
+            tick.set_horizontalalignment("right")
+        fig.tight_layout()
+        # ``plt.show()`` here was *blocking*, and this figure was never recorded.
+        stem = f"annot_distance_{safe_stem(annot_type)}_{safe_stem(clustering_key)}"
+        paths = ctx.show_plot(
+            fig, stem,
+            title=f"Distance to '{annot_type}' by {clustering_key}")
+        status.value = f"Distance plot displayed — saved to {', '.join(paths)}"
+        # NOTE for the same reason as the annotation-nhood plot: the distances
+        # are measured against shapes drawn in the viewer, which the notebook
+        # cannot reach, so there is no code to record — only the fact that this
+        # figure exists and where it went.
+        ctx.record_node(
+            "viewer:annot_distance_plot",
+            f"\n# Distance to '{annot_type}' boundary by {clustering_key} "
+            f"({plot_type} plot)\n"
+            f"# Measured against annotation shapes drawn in the viewer, which\n"
+            f"# this notebook cannot reach. Figure written to:\n"
+            + "".join(f"#   {p}\n" for p in ctx.recorded_plot_paths(paths)),
+            deps=["preamble"],
+            kind=NOTE,
+            label="Annotation distance plot",
+        )
 
     def _on_export():
         distances = state.get("annot_dist_distances")
@@ -316,27 +339,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
         pass
 
     # ── Build tab layout ──────────────────────────────────────────────────────
-    container = QWidget()
-    layout = QVBoxLayout()
-    layout.setContentsMargins(4, 4, 4, 4)
-    layout.addWidget(clustering_widget.native)
-    layout.addWidget(annot_widget.native)
-    layout.addWidget(refresh_btn.native)
-    layout.addWidget(plot_type_widget.native)
-    layout.addWidget(max_dist_spin.native)
-    layout.addWidget(run_btn.native)
-    layout.addWidget(results_text)
-    layout.addWidget(plot_btn.native)
-    layout.addWidget(export_btn.native)
-    layout.addWidget(dist_colormap_widget.native)
-    layout.addWidget(color_btn.native)
-    layout.addWidget(clear_color_btn.native)
-    layout.addStretch()
-    container.setLayout(layout)
-
-    scroll = QScrollArea()
-    scroll.setWidget(container)
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    # Was a hand-rolled QVBoxLayout + QScrollArea doing exactly what make_tab
+    # does. That duplication is what kept this tab's labels invisible after the
+    # fix landed in make_tab, so it goes through the helper like every other tab.
+    scroll = make_tab(
+        clustering_widget,
+        annot_widget,
+        refresh_btn,
+        plot_type_widget,
+        max_dist_spin,
+        run_btn,
+        results_text,
+        plot_btn,
+        export_btn,
+        dist_colormap_widget,
+        color_btn,
+        clear_color_btn,
+    )
 
     return scroll, {"restore_session": _restore_session}

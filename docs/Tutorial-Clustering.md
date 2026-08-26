@@ -12,7 +12,7 @@
 
 1. In the control panel, open the **Cells** group and click the **Clustering** tab.
 2. Set **Resolution** to `1.0` (higher values produce more clusters; lower values produce fewer).
-3. Leave **n_neighbors** and **n_pcs** at their defaults unless you have a reason to change them.
+3. Leave **Neighbours** and **Principal components** at their defaults unless you have a reason to change them.
 4. Leave **flavor** at `igraph` — it is much faster. Switch it to `leidenalg` only if you are reproducing an existing scanpy pipeline that used that backend; the two optimise different objectives and give different partitions, so both can be run at one resolution and compared.
 5. Leave **Use HVGs only** and **Scale (max_value=10)** unticked for a first pass. Both are off by default because a Xenium panel is a few hundred targeted genes rather than a transcriptome — selecting highly variable genes from it discards a large fraction of a panel that was already curated. Tick them if you are matching a scRNA-seq pipeline that did the same.
 6. Click **Run Leiden Clustering**.

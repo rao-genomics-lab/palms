@@ -18,7 +18,7 @@ The ROI DEG tab analyses gene expression within hand-drawn ROI polygons on the n
 
 | Control | Description |
 |---|---|
-| DEG Method | Statistical test for differential expression: `wilcoxon` or `t-test` |
+| Method | Statistical test for differential expression: `wilcoxon` or `t-test` |
 | Filter by cluster | When checked, restricts DEG to cells in the currently active cluster filter |
 | Run ROI DEG | Runs differential expression between all pairs of ROI regions |
 | DEG results area | Read-only display of the top 50 differentially expressed genes |

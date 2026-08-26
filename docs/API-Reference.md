@@ -213,12 +213,12 @@ Attach a clustering to `adata.obs` under the viewer's naming conventions, so the
 
 ```python
 from xenium_viewer.utils.gene_analysis import make_rank_genes_dotplot
-make_rank_genes_dotplot(adata_norm: 'sc.AnnData', groupby: 'str', n_genes: 'int' = 5, cluster_labels: 'Optional[dict]' = None, dendrogram: 'bool' = True, key: 'Optional[str]' = None) -> 'plt.Figure'
+make_rank_genes_dotplot(adata_norm: 'sc.AnnData', groupby: 'str', n_genes: 'int' = 5, cluster_labels: 'Optional[dict]' = None, dendrogram: 'bool' = True, key: 'Optional[str]' = None)
 ```
 
 The dotplot the Markers tab draws, as a matplotlib figure.
 
-> Create a dotplot of top marker genes per cluster. Returns matplotlib Figure.
+> Create a dotplot of top marker genes per cluster.
 
 ### `run_celltypist_annotation`
 

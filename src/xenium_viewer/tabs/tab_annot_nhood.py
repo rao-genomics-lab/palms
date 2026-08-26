@@ -13,11 +13,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 from magicgui.widgets import ComboBox, PushButton, Slider, SpinBox
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QTextEdit, QFileDialog,
-    QCheckBox, QGroupBox, QScrollArea,
+    QVBoxLayout, QLabel, QTextEdit, QFileDialog,
+    QCheckBox, QGroupBox,
 )
 from napari.qt.threading import thread_worker
-from xenium_viewer.tabs._helpers import StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
+from xenium_viewer.tabs._helpers import StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs, make_tab
+from xenium_viewer.utils.plot_output import safe_stem
+from xenium_viewer.utils.prov_graph import NOTE
 
 if TYPE_CHECKING:
     from xenium_viewer.utils.viewer_context import ViewerContext
@@ -68,7 +70,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     # ── Parameters ────────────────────────────────────────────────────────────
     density_spin = SpinBox(label="Grid density (µm²/virtual cell)", min=10, max=10000, value=100)
     perms_slider = Slider(label="Permutations", min=100, max=1000, value=1000)
-    neighs_slider = Slider(label="N neighbours", min=3, max=20, value=6)
+    neighs_slider = Slider(label="Neighbours", min=3, max=20, value=6)
 
     # ── Controls ──────────────────────────────────────────────────────────────
     run_btn = PushButton(label="Run Annotation Nhood Enrichment", enabled=True)
@@ -242,14 +244,37 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if result is None:
             return
         ctx.apply_plot_font_size()
-        import matplotlib.pyplot as plt
         fig = make_nhood_enrichment_plot(result, mode=mode_widget.value)
         annot_types = result.get('_annot_types', [])
         fig.suptitle(f"Annotation Nhood Enrichment\n(annotation types: {', '.join(annot_types)})",
                      fontsize=10)
-        plt.tight_layout()
-        ctx.auto_save_plot(fig, "annot_nhood_enrichment")
-        plt.show()
+        fig.tight_layout()
+        # ``plt.show()`` here was *blocking* — the only plot in the app that
+        # froze the viewer until its window was closed.
+        cluster_key = result.get('_cluster_key', '')
+        paths = ctx.show_plot(
+            fig, f"annot_nhood_enrichment_{safe_stem(cluster_key)}",
+            title=f"Annotation nhood enrichment: {cluster_key}")
+        status.value = f"Heatmap displayed — saved to {', '.join(paths)}"
+        # This tab recorded nothing at all before, so the figure existed with no
+        # trace in the notebook. It is a NOTE rather than a TERMINAL because the
+        # enrichment is computed over virtual cells sampled from a napari shapes
+        # layer the notebook has no access to: there is no code to record yet,
+        # and a cell that ran `plt.gcf().savefig(...)` with no preceding plot
+        # would replay as a silent no-op writing an empty figure. NOTE says
+        # "not code, and not meant to be", renders as markdown, and is counted
+        # apart from the comment-only punch list.
+        ctx.record_node(
+            "viewer:annot_nhood_plot",
+            f"\n# Annotation neighbourhood enrichment heatmap "
+            f"(mode={mode_widget.value}, annotation types: {', '.join(annot_types)})\n"
+            f"# Computed over virtual cells sampled from annotation shapes drawn\n"
+            f"# in the viewer, which this notebook cannot reach. Figure written to:\n"
+            + "".join(f"#   {p}\n" for p in ctx.recorded_plot_paths(paths)),
+            deps=["preamble"],
+            kind=NOTE,
+            label="Annotation nhood heatmap",
+        )
 
     def _on_export():
         result = state.get("annot_nhood_result")
@@ -280,28 +305,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
         pass  # No persistent state for this tab
 
     # ── Build tab layout ──────────────────────────────────────────────────────
-    container = QWidget()
-    layout = QVBoxLayout()
-    layout.setContentsMargins(4, 4, 4, 4)
-    layout.addWidget(clustering_widget.native)
-    layout.addWidget(annot_group_label)
-    layout.addWidget(annot_group)
-    layout.addWidget(refresh_annot_btn.native)
-    layout.addWidget(density_spin.native)
-    layout.addWidget(perms_slider.native)
-    layout.addWidget(neighs_slider.native)
-    layout.addWidget(run_btn.native)
-    layout.addWidget(annot_nhood_progress)
-    layout.addWidget(mode_widget.native)
-    layout.addWidget(results_text)
-    layout.addWidget(plot_btn.native)
-    layout.addWidget(export_btn.native)
-    layout.addStretch()
-    container.setLayout(layout)
-
-    scroll = QScrollArea()
-    scroll.setWidget(container)
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    # Was a hand-rolled QVBoxLayout + QScrollArea doing exactly what make_tab
+    # does. That duplication is what kept this tab's labels invisible after the
+    # fix landed in make_tab, so it goes through the helper like every other tab.
+    scroll = make_tab(
+        clustering_widget,
+        annot_group_label,
+        annot_group,
+        refresh_annot_btn,
+        density_spin,
+        perms_slider,
+        neighs_slider,
+        run_btn,
+        annot_nhood_progress,
+        mode_widget,
+        results_text,
+        plot_btn,
+        export_btn,
+    )
 
     return scroll, {"restore_session": _restore_session}

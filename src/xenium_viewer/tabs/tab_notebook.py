@@ -17,6 +17,7 @@ from qtpy.QtWidgets import (
 from qtpy.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 from qtpy.QtCore import Qt
 
+from xenium_viewer.tabs._helpers import toolbar_row
 from xenium_viewer.utils.prov_graph import NOTE, TEMPLATE_HAND_EDITED
 
 if TYPE_CHECKING:
@@ -275,17 +276,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
     outer_layout = QVBoxLayout()
     outer_layout.setContentsMargins(4, 4, 4, 4)
 
-    # Toolbar
-    toolbar = QHBoxLayout()
+    # Toolbar. Pinned above the cells but horizontally scrollable — six buttons
+    # in a plain row cannot shrink below their labels, which made this tab the
+    # floor for the whole control dock's width.
     sync_btn = QPushButton("Sync Graph")
     add_btn = QPushButton("+ Cell")
     run_all_btn = QPushButton("Run All")
     clear_btn = QPushButton("Clear Outputs")
     dag_btn = QPushButton("Show DAG")
     export_btn = QPushButton("Export .ipynb")
-    for btn in [sync_btn, add_btn, run_all_btn, clear_btn, dag_btn, export_btn]:
-        toolbar.addWidget(btn)
-    outer_layout.addLayout(toolbar)
+    outer_layout.addWidget(toolbar_row(
+        sync_btn, add_btn, run_all_btn, clear_btn, dag_btn, export_btn
+    ))
 
     # Scrollable cell area
     cell_container = QWidget()
@@ -409,20 +411,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
         return out
 
     def _on_show_dag():
-        import os
-        import matplotlib.pyplot as plt
         from xenium_viewer.utils.dag_view import render_dag
         graph = state.get("prov_graph")
         if graph is None or len(graph) == 0:
             ctx.set_status("Provenance graph is empty — record some steps first")
             return
-        plots_dir = os.path.join(str(ctx.data_path), "plots")
-        os.makedirs(plots_dir, exist_ok=True)
-        out = os.path.join(plots_dir, "provenance_dag.png")
         try:
-            render_dag(graph, out)
-            plt.show(block=False)
-            ctx.set_status(f"Provenance DAG ({len(graph)} nodes) — saved to {out}")
+            fig = render_dag(graph)
+            paths = ctx.show_plot(fig, "provenance_dag",
+                                  title=f"Provenance DAG ({len(graph)} nodes)")
+            ctx.set_status(f"Provenance DAG ({len(graph)} nodes) — "
+                           f"saved to {', '.join(paths)}")
         except Exception as e:
             ctx.set_status(f"DAG render failed: {e}")
 

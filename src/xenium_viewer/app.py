@@ -35,6 +35,10 @@ from pathlib import Path
 import ctypes
 import ctypes.util
 
+# Safe to import at module scope: it pulls in nothing, and defers its own
+# napari_mcp import until --mcp is actually used.
+from xenium_viewer import dev_mcp
+
 _IS_LINUX = sys.platform.startswith('linux')   # WSL reports 'linux' too
 
 # ─── Prevent ICE/X11 EPIPE crash on Linux ────────────────────────────────
@@ -83,7 +87,12 @@ from xenium_viewer.utils.transcript_index import TranscriptLoader
 from xenium_viewer.utils.umap_widget import UMAPViewer
 from xenium_viewer.utils.viewer_context import ViewerContext
 from xenium_viewer.utils.units import layer_affine_px
-from xenium_viewer.tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu, create_view_menu
+from xenium_viewer.tabs._helpers import (
+    create_shared_helpers, create_preferences_menu, create_file_menu,
+    create_view_menu, ensure_plots_dock as _ensure_plots_dock,
+    reveal_plots_dock as _reveal_plots_dock,
+)
+from xenium_viewer.utils.plot_output import DEFAULT_FORMATS
 from xenium_viewer.utils.prov_graph import ProvGraph
 from xenium_viewer import loader as _loader_mod
 from xenium_viewer import preprocess as _preprocess_mod
@@ -122,6 +131,13 @@ def _parse_args():
         "--no-user-templates", action="store_true",
         help="Ignore customised analysis templates and run the shipped ones",
     )
+    parser.add_argument(
+        "--mcp", nargs="?", type=int, const=dev_mcp.DEFAULT_PORT, default=None,
+        metavar="PORT",
+        help="Dev only: expose this viewer to an AI assistant over an "
+             "unauthenticated localhost MCP bridge that can execute arbitrary "
+             "Python in this process. Requires the 'mcp' extra.",
+    )
     args = parser.parse_args()
 
     # Applied before anything resolves a template. This is the first thing to
@@ -142,7 +158,7 @@ def _parse_args():
         )
         if not data_path_str:
             print("No directory selected. Starting with empty viewer.")
-            return None, args.no_cache
+            return None, args.no_cache, args.mcp
         data_path = Path(data_path_str)
 
     # Validate only when a path was given
@@ -151,7 +167,7 @@ def _parse_args():
         print(f"Error: {experiment_file} not found. Is this a Xenium output directory?")
         sys.exit(1)
 
-    return data_path, args.no_cache
+    return data_path, args.no_cache, args.mcp
 
 
 def _read_pixel_size(data_path: Path) -> float:
@@ -1001,8 +1017,10 @@ def _make_initial_state(gene_names: list, clustering_names: list) -> dict:
         "nhood_fig": None,
         "co_result": None,
         "co_fig": None,
-        "plot_format": "svg",
+        # Every plot is written in each of these; see utils/plot_output.py.
+        "plot_formats": list(DEFAULT_FORMATS),
         "plot_font_size": 10,
+        "umap_genes": [],
         # Global CPU-core budget for parallel analyses (currently CopyKAT's
         # parallelDist). Default to half the machine's cores, leaving headroom.
         "n_cores": max(1, (os.cpu_count() or 2) // 2),
@@ -1120,11 +1138,35 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
             pass
         _app["dock_widget"] = None
 
+    # Remove the old Plots dock too — its cards hold figures from the dataset
+    # being replaced, and its gallery would otherwise mix two datasets' plots.
+    if _app.get("plots_dock") is not None:
+        try:
+            viewer.window.remove_dock_widget(_app["plots_dock"])
+        except Exception:
+            pass
+        _app["plots_dock"] = None
+        _app["plots_panel"] = None
+
     panel, _state, _he_state, restore_fn = _build_control_panel(ctx)
     _app["dock_widget"] = viewer.window.add_dock_widget(
         panel, name="Xenium Controls", area="right"
     )
     _app["restore_fn"] = restore_fn
+
+    # The Plots dock: every figure any tab produces lands here. Built after the
+    # control panel so it docks below it, and hidden until the first plot —
+    # ``ctx.show_plot`` reveals it.
+    from xenium_viewer.utils.plots_panel import PlotsPanel
+    plots_panel = PlotsPanel()
+    _app["plots_panel"] = plots_panel
+    ctx.plots_panel = plots_panel
+    # ensure_plots_dock owns the dock's lifecycle — it also re-creates the dock
+    # if napari destroyed it, which its title-bar close button does.
+    plots_dock = _ensure_plots_dock(viewer, _app)
+    if plots_dock is not None:
+        plots_dock.setVisible(False)
+    ctx.reveal_plots_dock = lambda: _reveal_plots_dock(viewer, _app)
 
     # Sync the View menu checkbox when the dock is closed via its own close button
     _dw = _app["dock_widget"]
@@ -1303,6 +1345,10 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
 
 def _push_to_console(viewer, ctx):
     """Inject key variables into napari's IPython console."""
+    # The one place a *fresh* ctx is published to an interactive surface — this
+    # runs on first load and again on every dataset switch — so it is also
+    # where the --mcp bridge's namespace gets its handle. See dev_mcp.
+    dev_mcp.publish_context(viewer, ctx)
     try:
         console = viewer.window._qt_viewer.console
         console.push({
@@ -1326,7 +1372,7 @@ def _push_to_console(viewer, ctx):
         print(f"  Warning: could not push variables to console: {exc}")
 
 
-def run_viewer(data_path=None, no_cache: bool = False):
+def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = None):
     print("=" * 60)
     print("Xenium Linux Viewer")
     if data_path:
@@ -1362,6 +1408,8 @@ def run_viewer(data_path=None, no_cache: bool = False):
     # ── App-level mutable container ──────────────────────────────────────────
     _app = {
         "dock_widget": None,
+        "plots_dock": None,
+        "plots_panel": None,
         "restore_fn": None,
         "snapshot": {},
         "reload_in_progress": False,
@@ -1711,6 +1759,11 @@ def run_viewer(data_path=None, no_cache: bool = False):
     else:
         print("Viewer ready (no dataset loaded). Use File menu to open or preprocess.")
 
+    # After the load, not before: every bridge call marshals onto the Qt main
+    # thread, so a bridge started ahead of _do_full_init would accept requests
+    # it could not service until the dataset had finished loading anyway.
+    _mcp_server = dev_mcp.start_bridge(viewer, mcp_port) if mcp_port else None
+
     napari.run()
 
     # ── Save session state on exit ────────────────────────────────────────
@@ -1736,10 +1789,10 @@ def run_viewer(data_path=None, no_cache: bool = False):
 
 def main():
     """Console-script entry point — parses argv and launches the viewer."""
-    data_path, no_cache = _parse_args()
+    data_path, no_cache, mcp_port = _parse_args()
     from xenium_viewer.loader import CacheLoadAborted, NoRawSourceError
     try:
-        run_viewer(data_path, no_cache=no_cache)
+        run_viewer(data_path, no_cache=no_cache, mcp_port=mcp_port)
     except CacheLoadAborted as e:
         # The user declined to rebuild, or we had no way to ask. Exiting
         # quietly is the point: the cache is left exactly as it was.

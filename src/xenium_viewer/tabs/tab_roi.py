@@ -10,6 +10,7 @@ from magicgui.widgets import ComboBox, CheckBox, PushButton
 from qtpy.QtWidgets import QTextEdit, QFileDialog, QLabel as QtLabel
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, make_progress_bar
+from xenium_viewer.utils.plot_output import batch_dir, plot_formats, save_figure
 from xenium_viewer.utils.prov_graph import ARTIFACT, SETUP, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
 from xenium_viewer.utils.step_templates import (
@@ -281,7 +282,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     # ── ROI DEG widgets ──────────────────────────────────────────────────
     roi_deg_method_widget = ComboBox(
-        label="DEG Method", choices=["wilcoxon", "t-test"], value="wilcoxon",
+        label="Method", choices=["wilcoxon", "t-test"], value="wilcoxon",
     )
     roi_deg_filter_check = CheckBox(label="Filter by cluster", value=False)
     roi_deg_button = PushButton(label="Run ROI DEG", enabled=True)
@@ -411,27 +412,34 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if adata_norm is None:
             roi_deg_status.value = "Run ROI DEG first"
             return
-        output_dir = QFileDialog.getExistingDirectory(None, "Select output directory for ROI volcano plots")
+        default_dir = batch_dir(ctx.data_path, "roi_volcano")
+        default_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = QFileDialog.getExistingDirectory(
+            None, "Select output directory for ROI volcano plots",
+            str(default_dir))
         if not output_dir:
             return
         roi_volcano_button.enabled = False
         roi_deg_status.value = "Generating ROI volcano plots..."
         method = roi_deg_method_widget.value
         gen = ctx.dataset_generation
+        formats = plot_formats(state)
+        _recorded_dir = ctx.recorded_plot_paths([output_dir])[0]
         ctx.record_node(
             "plot:roi_volcano",
             f"\n# ROI pairwise volcano plots (method={method})\n"
             f"import itertools\n"
             f"from pathlib import Path\n"
             f"from xenium_viewer.utils.gene_analysis import run_pairwise_deg, make_volcano_plot\n"
-            f"roi_volcano_dir = Path(\"{os.path.basename(output_dir)}\"); "
+            f"roi_volcano_dir = Path(r\"{_recorded_dir}\"); "
             f"roi_volcano_dir.mkdir(parents=True, exist_ok=True)\n"
             f"_groups = sorted(roi_adata_norm.obs['roi_region'].cat.categories.tolist())\n"
             f"for _a, _b in itertools.combinations(_groups, 2):\n"
             f"    _df = run_pairwise_deg(roi_adata_norm, 'roi_region', str(_a), str(_b), method=\"{method}\")\n"
             f"    _vfig = make_volcano_plot(_df, str(_a), str(_b), lfc_thresh=1.0, pval_thresh=0.01)\n"
-            f"    _name = 'roi_volcano_' + str(_a).replace(' ', '_') + '_vs_' + str(_b).replace(' ', '_') + '.png'\n"
-            f"    _vfig.savefig(roi_volcano_dir / _name, dpi=300)\n"
+            f"    _stem = 'roi_volcano_' + str(_a).replace(' ', '_') + '_vs_' + str(_b).replace(' ', '_')\n"
+            f"    for _ext in {formats!r}:\n"
+            f"        _vfig.savefig(roi_volcano_dir / f'{{_stem}}.{{_ext}}', dpi=300)\n"
             f"    plt.close(_vfig)",
             deps=["roi_deg"],
             kind=TERMINAL,
@@ -456,7 +464,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 fig = make_volcano_plot(df, str(a), str(b), lfc_thresh=1.0, pval_thresh=0.01)
                 safe_a = str(a).replace(' ', '_')
                 safe_b = str(b).replace(' ', '_')
-                fig.savefig(out / f'roi_volcano_{safe_a}_vs_{safe_b}.png', dpi=300)
+                save_figure(fig, [out / f'roi_volcano_{safe_a}_vs_{safe_b}.{ext}'
+                                  for ext in formats])
                 _plt.close(fig)
             return total, output_dir
 

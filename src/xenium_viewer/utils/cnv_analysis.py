@@ -332,7 +332,7 @@ def make_cnv_heatmap(adata_cnv, groupby: str):
     """Build an infercnvpy chromosome heatmap figure for ``groupby``.
 
     Returns a matplotlib Figure (caller is responsible for
-    ``ctx.auto_save_plot(fig, ...)``), matching the
+    ``ctx.show_plot(fig, stem)``), matching the
     make_rank_genes_dotplot-style "return a Figure" convention.
     """
     import infercnvpy as cnv

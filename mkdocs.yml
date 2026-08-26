@@ -39,6 +39,7 @@ nav:
   - Home: Home.md
   - Installation: Installation.md
   - Interface Overview: Interface-Overview.md
+  - Plots Window: Plots-Window.md
   - Reference:
     - Analysis Templates: Analysis-Templates.md
     - Cells:

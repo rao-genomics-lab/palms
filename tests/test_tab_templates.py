@@ -342,7 +342,7 @@ def _enclosing_function(module, target) -> str:
 _PROVIDER_TABS = (
     "tab_clustering", "tab_gene_analysis", "tab_nhood", "tab_co_occurrence",
     "tab_ligrec", "tab_gene_correlation", "tab_marker_genes", "tab_roi",
-    "tab_cnv",
+    "tab_cnv", "tab_umap",
 )
 
 
@@ -387,6 +387,15 @@ def stub_ctx():
         set_status=lambda *a, **k: None, run_step=lambda step: {},
         ensure_normalized=lambda: adata, ensure_spatial_neighbors=lambda k: None,
         reload_dataset=None, external_images_state=[], patch_overlays_state=[],
+        umap_viewer=None, plots_panel=None,
+        # Plot providers name the files their step will write. Read-only in the
+        # real helper too (``save_paths`` creates nothing), which is what lets a
+        # provider call it — drawing a preview pane must not touch the disk.
+        plot_paths=lambda stem: [f"/tmp/xv-not-written/plots/{stem}.png",
+                                 f"/tmp/xv-not-written/plots/{stem}.pdf"],
+        recorded_plot_paths=lambda paths: [str(p) for p in paths],
+        show_plot=lambda *a, **k: [],
+        apply_plot_font_size=lambda: None,
     )
 
 

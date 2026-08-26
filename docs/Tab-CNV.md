@@ -33,7 +33,7 @@ Requires the `cnv` optional extra, and CopyKAT additionally requires the `xenium
 | Smoothing neighbors | Spin box (5–200, default 20) — neighbors used by the graph-smoothing step |
 | Window size (genes) | Spin box (2–200, default 60) — infercnvpy sliding-window size, in genes, computed independently per chromosome |
 | Window step | Spin box (1–50, default 10) — infercnvpy sliding-window step |
-| CNV cluster resolution | Float spin box (0.05–2.0, default 0.2) — Leiden clustering resolution for CNV subclones. Hover for a tooltip, or see the hint text below the field: this default may need tuning per dataset — check the chromosome heatmap and cluster count after running |
+| Cluster resolution | Float spin box (0.05–2.0, default 0.2) — Leiden clustering resolution for CNV subclones. Hover for a tooltip, or see the hint text below the field: this default may need tuning per dataset — check the chromosome heatmap and cluster count after running |
 
 Neighbors/Smoothing neighbors/Window size/Window step defaults match InSituCNV's own reference notebook ([`run_insitucnv.ipynb`](https://github.com/Moldia/InSituCNV/blob/main/notebooks/run_insitucnv.ipynb)).
 
@@ -41,7 +41,7 @@ Neighbors/Smoothing neighbors/Window size/Window step defaults match InSituCNV's
 
 | Control | Description |
 |---|---|
-| CNV backend | Dropdown — **Both (inferCNV + CopyKAT)** (default), **inferCNV only**, or **CopyKAT only**. With the default, a run starts inferCNV in-process and also launches a detached CopyKAT job that takes far longer. |
+| Inference backend | Dropdown — **Both (inferCNV + CopyKAT)** (default), **inferCNV only**, or **CopyKAT only**. With the default, a run starts inferCNV in-process and also launches a detached CopyKAT job that takes far longer. |
 | CopyKAT max cells | Spin box (500–500 000, default 10 000) — CopyKAT runs on a random subsample of this many cells, since it does not scale to a whole Xenium section |
 | Extrapolate CopyKAT calls to all cells | Checkbox (default unchecked) — propagates the subsampled CopyKAT calls to every cell, adding a `<col>_propagated` clustering for each result column |
 
@@ -62,7 +62,7 @@ Neighbors/Smoothing neighbors/Window size/Window step defaults match InSituCNV's
 2. Check the categories that represent the **reference (normal)** population in the first checkbox grid.
 3. Optionally narrow the second grid, **Cell types to analyze**, to the populations you care about. Everything unchecked there is excluded from inference along with everything that is not the reference.
 4. Adjust **Window size**/**Window step** if needed — these are gene counts, computed independently per chromosome (a chromosome with fewer genes than **Window size** doesn't get dropped; it falls back to a single window averaging all of that chromosome's genes). A larger window trades sub-chromosomal resolution for a less noisy per-window estimate. The results panel reports how many genes mapped to the genome and how many windows were produced so you can judge result quality and tune accordingly.
-5. Choose a **CNV backend**. Leave it at **Both** to get inferCNV's answer immediately and CopyKAT's later; choose **inferCNV only** if you do not have the second environment installed.
+5. Choose an **Inference backend**. Leave it at **Both** to get inferCNV's answer immediately and CopyKAT's later; choose **inferCNV only** if you do not have the second environment installed.
 6. Click **Run CNV Inference**. On the first run, infercnvpy's human (GRCh38) gene-position reference is downloaded and cached automatically (requires internet access).
 7. Once inferCNV completes, the result is registered as a new clustering (`cnv_leiden_res<resolution>`, e.g. `cnv_leiden_res0.2`) and automatically applied as the active colouring — it's also usable everywhere clusterings are, e.g. as the groupby in Rank Genes or the cluster source in ROI DEG.
 8. Pick a **Heatmap backend** and **Heatmap resolution**, then click **Save Chromosome Heatmap (PDF/PNG)** to export gain/loss patterns across chromosomes per CNV cluster. The heatmap is not displayed in a window — building it can be slow, so it is saved directly instead.
@@ -79,5 +79,5 @@ Neighbors/Smoothing neighbors/Window size/Window step defaults match InSituCNV's
 - Only CopyKAT uses the **Preferences → CPU cores** setting; inferCNV ignores it.
 - The full CNV profile (per-window values, gene positions) is cached in `<dataset>/viewer_cache/` as `adata_cnv_cache_<backend>.h5ad` with a `cnv_<backend>_result.json` summary, so the chromosome heatmap can be regenerated after reopening the dataset without recomputing the pipeline. CopyKAT additionally leaves its input and parameters there, and run markers in `plots/`.
 - Results persist across sessions like any other clustering; reopening the dataset restores the results summary and re-enables the heatmap/score-colouring buttons.
-- The **CNV cluster resolution** default (0.2) is a starting point, not a universal recommendation — InSituCNV's own notebook evaluates several resolutions per dataset before picking one. If clusters look too coarse (few, large clusters mixing distinct CNV profiles) or too fragmented (many tiny clusters), re-run with a different resolution and compare the chromosome heatmaps; both resolutions stay available in the **Heatmap resolution** dropdown.
+- The **Cluster resolution** default (0.2) is a starting point, not a universal recommendation — InSituCNV's own notebook evaluates several resolutions per dataset before picking one. If clusters look too coarse (few, large clusters mixing distinct CNV profiles) or too fragmented (many tiny clusters), re-run with a different resolution and compare the chromosome heatmaps; both resolutions stay available in the **Heatmap resolution** dropdown.
 - The inferCNV run is a templated step, so the exact code it executes can be read — and changed — in the [Templates](Tab-Templates) tab. CopyKAT is not: it runs in another interpreter, so its recorded cell states in line that it is a reconstruction rather than the code that ran.

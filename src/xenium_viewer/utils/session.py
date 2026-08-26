@@ -150,6 +150,7 @@ def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
     attrs["has_arms_tile_deg"] = False
 
     attrs["marker_genes_json"] = state.get("marker_genes_json")
+    attrs["umap_genes"] = list(state.get("umap_genes") or [])
     attrs["segmentation_source"] = state.get("segmentation_source", "xenium")
 
     # ── Reproducible-code provenance graph ───────────────────────────────
@@ -348,6 +349,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "arms_geojson_path": attrs.get("arms_geojson_path"),
         "arms_csv_path": attrs.get("arms_csv_path"),
         "marker_genes_json": attrs.get("marker_genes_json"),
+        "umap_genes": list(attrs.get("umap_genes") or []),
         "segmentation_source": attrs.get("segmentation_source", "xenium"),
         "external_images_ui": attrs.get("external_images_ui") or [],
         "patch_overlays_ui": attrs.get("patch_overlays_ui") or [],

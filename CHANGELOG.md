@@ -1,5 +1,239 @@
 # Changelog
 
+## [Unreleased] — 2026-08-26 (plots)
+
+### Fixed
+- **Every control label in the Xenium Controls panel was invisible.** `make_tab`
+  added `w.native` — the *bare* Qt control. magicgui keeps a widget's caption in a
+  wrapper only a `Container` builds, so all 72 captions were discarded at layout
+  time. The Clustering tab rendered as six anonymous controls reading `15`, `40`,
+  `1.00`, `igraph`, `2`, `2000`, with nothing to say which was which; `CheckBox`
+  and `PushButton` looked fine only because Qt paints their text on the control.
+
+  `_helpers.labelled()` restores the caption with a one-widget `Container` —
+  public API, and measured identical to the private `_LabeledWidget` (same 142px
+  minimum, same 22px height). It returns the bare control for a `ButtonWidget`
+  (mirroring what magicgui's own `Container` does, so a checkbox does not show its
+  text twice) and for a widget with no label, which magicgui reports as `''` — it
+  never derives one, so nothing sprouts a caption nobody wrote.
+
+  `tab_annot_nhood` and `tab_annot_distance` hand-rolled the `QVBoxLayout` +
+  `QScrollArea` that `make_tab` already is, which is exactly why their 10 labels
+  would have stayed invisible after a `make_tab`-only fix; both now call the
+  helper. No other call site changed.
+
+  Found by screenshotting the running viewer over the new `--mcp` bridge. The
+  1315-test suite passed throughout, because none of it renders a tab — so
+  `tests/test_control_panel_size.py` gained three guards: the label survives
+  `make_tab`, a `CheckBox` is not captioned twice, and an unlabelled widget stays
+  unlabelled.
+
+### Changed
+- **Control captions read as English rather than scanpy parameter names**, now
+  that they render at all: `n_neighbors` → **Neighbours**, `n_pcs` → **Principal
+  components**, `flavor` → **Clustering backend**, `n_top_genes` → **Highly
+  variable genes**. Each carries a tooltip naming the template parameter its value
+  lands in, so the correspondence with the exported notebook — which the captions
+  used to *be* — is kept rather than lost.
+
+  Captions that repeated a section heading or the tab title are trimmed
+  (`CellTypist Model` → **Model** under the "CellTypist Annotation" heading;
+  `UMAP pt size` → **Point size** on the UMAP tab), the three CNV controls whose
+  captions all contained "resolution"/"backend" are now distinct (**Cluster
+  resolution**, **Inference backend**, **Heatmap backend**), and `N neighbors` /
+  `N neighbours` are spelled the one way. Docs updated to match; the two generated
+  reference pages still name the parameters, since they describe code.
+
+### Added
+- **`--mcp`: a dev-only MCP bridge onto the running viewer** (`src/xenium_viewer/dev_mcp.py`,
+  `mcp` extra). Starts `napari-mcp`'s `NapariBridgeServer` over the viewer that already has
+  the dataset loaded, so an assistant can take **full-window** screenshots — docks included,
+  which is where this app's UI defects actually live — and run `execute_code` on the Qt main
+  thread. `_push_to_console` now also publishes `ctx` as `viewer._xv_ctx`; that is the one
+  place a *fresh* ctx reaches an interactive surface, so it survives a dataset switch, where
+  hanging it anywhere else would leave a stale object behind.
+
+  Off by default, out of `environment.yml` and out of `full`: the bridge is an
+  unauthenticated localhost server that executes arbitrary Python in the viewer process.
+  `napari_mcp`'s own `init_viewer` is the wrong entry point here — it would create a second,
+  empty viewer.
+
+  `fastmcp` is pinned `<3` in the extra. napari-mcp declares only `>=2.10.3` but reaches
+  into `FastMCP._tool_manager._tools`, which fastmcp 3 renamed, so a fresh install resolves
+  3.x and the bridge dies at start with `'FastMCP' object has no attribute '_tool_manager'`.
+  Measured, not guessed.
+
+  Known limits, both inherent: every bridge call marshals onto the Qt main thread, so one of
+  this app's modal dialogs blocks the bridge until a human clicks it, and long main-thread
+  work (cache build, pyramid load) hits `NapariBridgeServer`'s 300 s timeout.
+
+- **A Plots dock** (issue #35). Every figure the viewer produces — dotplots, UMAPs,
+  neighbourhood-enrichment heatmaps, co-occurrence curves, L-R dotplots, CNV heatmaps,
+  the provenance DAG — now appears in one gallery at the bottom of the window, newest
+  first, each card carrying a thumbnail, the paths it was written to, and Open / Save
+  as… / Remove. Hidden until the first plot; **View → Show Plots** (`Ctrl+Shift+P`)
+  toggles it. Capped at 20 figures, because the viewer produces one per action and a
+  rank-genes heatmap is not small.
+
+  **Open** draws into the dock's own `FigureCanvasQTAgg` rather than calling
+  `plt.show`, which is what makes display independent of the process-wide matplotlib
+  backend — see the `matplotlib.use` fix below.
+
+- **UMAP coloured by gene expression** (issue #34). The UMAP tab gained a multi-gene
+  picker (up to 15) with a colormap and a column count: one gene renders as a single
+  panel with its colour bar, several as a grid. "Save UMAP Plot…" became **Plot UMAP by
+  cluster** — same template, no file dialog, and it no longer builds a throwaway AnnData
+  by hand. The gene list is session-persisted.
+
+  New `umap.plot` template. Its `embed.xenium` block reads
+  `analysis/umap/gene_expression_2_components/projection.csv` — **the same file the
+  viewer's UMAP window reads** — so a replayed notebook reproduces the figure that was on
+  screen. The old `plot:umap` node recorded `sc.pp.neighbors` + `sc.tl.umap` instead,
+  which produces an equally valid but *different* layout; `docs/Tab-UMAP.md` had to warn
+  about the discrepancy. `embed.recompute` remains for a Crop Dataset export, which has
+  no `analysis/` folder, and says so in a comment. Verified against a real dataset:
+  `reindex(obs_names)` matches 318,617 of 318,708 cells — the 91 Xenium's UMAP omits,
+  which become NaN rows that `sc.pl.umap` skips.
+
+### Changed
+- **One save policy: `<dataset>/plots/`, PNG and PDF.** Preferences → Plot format now
+  offers **PNG + PDF** (default), PNG, PDF and SVG, and every plot is written in each
+  chosen format. Previously six sites used `ctx.auto_save_plot` (one format), CNV
+  hard-coded PNG+PDF, UMAP and marker genes asked via `QFileDialog`, the three volcano
+  batches hard-coded PNG into a directory of the user's choosing, and the rank-genes
+  panel plot was **never saved at all** — the one figure in the app a user could not keep.
+
+  Names are now keyed by what the figure is about (`dotplot_leiden_r1.0`,
+  `nhood_enrichment_graphclust`, `umap_EPCAM_KRT5`). They were not, so a second
+  neighbourhood plot silently overwrote the first.
+
+  Volcano batches still ask for a directory — an N×N run is the one output people
+  routinely want elsewhere — but default to `<dataset>/plots/volcano_<key>/` and honour
+  the format setting. They stay out of the gallery on purpose: fifty figures would bury
+  everything else.
+
+- **Recorded `savefig` paths name the file that was actually written.** Every
+  hand-written `plot:*` node recorded a bare relative guess (`"dotplot.svg"`,
+  `"umap.png"`, `"nhood_enrichment.svg"`) that matched nothing on disk; the volcano nodes
+  recorded `Path("<basename of the chosen directory>")`. They now emit the real path
+  relative to the dataset, preceded by the `mkdir` that a replayed notebook needs —
+  `savefig` does not create its parent, so those cells would have failed on a clean
+  checkout anyway.
+
+- `genes.marker_plot` and `genes.correlation` take `paths: list` in place of
+  `path: str`, and marker_plot's `save.plain`/`save.dpi` pair collapsed into one `save`
+  block (20 assemblies → 10). A user override of those blocks is flagged **stale** by the
+  existing upgrade machinery rather than silently doing the wrong thing.
+
+- The two annotation plots (nhood, distance) recorded nothing at all and now record a
+  `NOTE`. Not a `TERMINAL`: both are computed over virtual cells sampled from shapes
+  drawn in the viewer, which a notebook cannot reach, so a cell calling
+  `plt.gcf().savefig(...)` with no preceding plot would replay as a silent no-op writing
+  an empty figure. `NOTE` says "not code, and not meant to be" and is counted apart from
+  the comment-only punch list.
+
+- `render_dag` no longer takes a `path=` — it returns the Figure and lets the caller
+  write it, the convention `make_cnv_heatmap` already documented.
+
+### Fixed
+- **`matplotlib.use('Agg')` leaked out of two workers and disabled plotting for the rest
+  of the session.** `tab_umap` and `tab_marker_genes` set it globally, from a background
+  thread, and never restored it — so once a user saved a UMAP or ran any marker plot,
+  every later `plt.show(block=False)` in the process became a silent no-op and figures
+  from *unrelated tabs* simply stopped appearing, with no error anywhere. This is a large
+  part of what issue #35 described as plots "showing up in completely different
+  interfaces". Both calls are gone, and nothing displays through pyplot any more.
+
+- **Two plots blocked the viewer.** `tab_annot_nhood` and `tab_annot_distance` called
+  bare `plt.show()`, which spins its own event loop: the window had to be closed before
+  the viewer responded again.
+
+- The CNV tab's "Show Heatmap" button now shows the heatmap. It built the figure, wrote
+  two files and closed it without ever putting it on screen.
+
+- **The rank-genes dotplot crashed the moment it reached the Plots dock.**
+  `sc.pl.rank_genes_groups_dotplot(return_fig=True)` returns a scanpy `DotPlot`, not a
+  `Figure` — and `make_rank_genes_dotplot` was *annotated* as returning a `Figure`, which
+  is how it came to be handed straight to Qt. `DotPlot` has `savefig`, so the old
+  save-only path never noticed; drawing one raises `AttributeError: 'DotPlot' object has
+  no attribute 'set_canvas'`. New `fig_render.to_figure()` resolves it, once, in
+  `ctx.show_plot`. Two wrinkles it has to handle: a `BasePlot`'s `.fig` is `None` until
+  the plot is built (so `get_axes()`, which builds it and is idempotent), and
+  `BasePlot.savefig` writes `plt.gcf()` rather than `self.fig` — resolving to the concrete
+  Figure removes the chance of saving whichever figure happened to be current. Anything
+  else raises a named `TypeError` instead of failing inside Qt. The misleading annotation
+  is gone.
+
+- **Closing the Plots dock destroyed it, and the View-menu toggle then did nothing.**
+  napari's dock title bar has an "×", and it does not hide the dock: it calls
+  `destroyOnClose` → `Window.remove_dock_widget`, which reparents the gallery to `None`
+  and `deleteLater()`s the dock. So one click left a dangling C++ pointer, and
+  **View → Show Plots** called `setVisible` on it, raised `RuntimeError` into a bare
+  `except: pass`, and looked broken. That is both halves of the report — the dock
+  "disappearing" and the toggle not working.
+
+  The dock is now disposable and the gallery is what persists: `ensure_plots_dock`
+  re-creates a dock around the surviving panel whenever the old one is gone, so the
+  figures are never lost. The "×" is shimmed to *hide* rather than destroy (closing a
+  gallery should not throw away what is in it). And `reveal_plots_dock` raises the window
+  and, if a floating dock has been dragged somewhere no connected screen reaches, docks it
+  back into the main window rather than re-showing it out of sight.
+
+- **Two clusters could not share a display name.** `.cat.rename_categories()` raises
+  *ValueError: Categorical categories must be unique*, so naming clusters 0 and 2 both
+  "Tumour" — an ordinary thing to want, meaning "these are the same cell type" — failed
+  the whole step. Both templates that relabel (`umap.plot`, `genes.marker_plot`) now use
+  `.map()` with a mapping and `dict.fromkeys` to dedupe, which **merges** the clusters,
+  which is what was meant; cluster order is preserved in the legend. `categories` is a
+  `dict` (original id → display name) rather than a positional list, so it also cannot
+  silently mis-align if the category order shifts. `genes.marker_plot` carried the same
+  defect before this branch and is fixed with it.
+
+`tests/test_plot_consistency.py` is the source guard that keeps this from unravelling one
+tab at a time: it parses every `tabs/tab_*.py` and fails on any `plt.show`, any
+`matplotlib.use`, and any `savefig` outside `plot_output.save_figure` — plus a check that
+`<data_path>/plots` has exactly one definition, where five modules used to build it by
+hand. New `tests/test_plot_output.py` (pure logic) and `tests/test_plots_panel.py`
+(offscreen Qt, including the dock-minimum bound from the August resize fix, which a
+second dock inherits).
+
+## [Unreleased] — 2026-08-26
+
+### Fixed
+- **The Xenium Controls dock could not be resized.** Dragging the separator between the
+  panel and the canvas did nothing: the control panel reported a minimum size of
+  **536 × 534 px** (up to ~617 wide once the Templates tab's "Take new default for
+  changed blocks" button appeared), so there was nothing left to give. Now **131 × 175**,
+  and the dock itself reports 127 × 190 instead of ~540 × 534.
+
+  This is the March fix at `CHANGELOG.md:2889` (*Console not resizable when opened*)
+  recurring on the width axis, and for the same reason. The panel is a `QTabWidget` of
+  `QTabWidget`s, and **a stacked widget's minimum is the maximum over all its pages,
+  hidden ones included** — so one unwrapped page sets the floor for the whole dock, even
+  when the user never opens it. `make_tab()` wraps page content in a `QScrollArea`
+  precisely to stop that (a scroll area reports a fixed ~68 px minimum whatever it
+  holds); two pages added after March bypassed it:
+
+  - **Notebook** (528 × 107) — its six-button toolbar sits *outside* the tab's own scroll
+    area, and a row of buttons cannot shrink below its labels. The toolbar is now a
+    `toolbar_row()`: still pinned above the cells, but scrolling sideways when narrow, so
+    it costs 68 px instead of 528. Wrapping the whole tab instead would have worked, but
+    would have scrolled the toolbar out of view.
+  - **Templates** (389 × 468) — `build_tab` returned a bare `QWidget` of nested
+    `QSplitter`s with no scroll area anywhere. Now returned through `scrollable()`, with
+    its four action buttons in a `toolbar_row()` so a narrow dock does not hide
+    "Save && Activate" behind a scrollbar.
+
+  New `_helpers.scrollable()` (which `make_tab` now uses, so there is one implementation)
+  and `_helpers.toolbar_row()`. `tests/test_control_panel_size.py` measures both pages and
+  the assembled panel, including the Templates tab with every button shown — the worst
+  case is the state a user is in when they visit the tab to resolve an upgrade.
+
+  Ruled out by measurement, and recorded so nobody re-derives it: napari 0.8's dock widget
+  (`setMinimumWidth(50)`, an 8 px separator, `Movable` set — an empty panel gives a 121 px
+  dock), the central canvas (`minimumSizeHint` 8 × 4), the PyQt6 enum rewrite, and every
+  `make_tab`-wrapped page (a 580 px pixmap inside one still reports 68 px).
+
 ## [Unreleased] — 2026-08-25 (installable on macOS)
 
 ### Fixed

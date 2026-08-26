@@ -43,7 +43,7 @@ The registration workflow is identical to the H&E Registration tab.
 
 | Control | Description |
 |---|---|
-| DEG Method | Dropdown: "wilcoxon" or "t-test". Selects the statistical test for differential expression. |
+| DEG method | Dropdown: "wilcoxon" or "t-test". Selects the statistical test for differential expression. |
 | Filter by cluster | When checked, restricts DEG to cells that fall within the active Xenium cluster filter. |
 | Run ARMS Tile DEG | Runs differential gene expression between the selected tile cluster groups. |
 | Results (read-only) | Text area showing cells per tile cluster and top DEG genes after a run. |

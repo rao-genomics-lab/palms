@@ -5,6 +5,8 @@ import io
 import sys
 from dataclasses import dataclass, field
 
+from xenium_viewer.utils.fig_render import THUMBNAIL_WIDTH, fig_to_pixmap
+
 
 @dataclass
 class CellResult:
@@ -26,7 +28,6 @@ class NotebookEngine:
 
     def run_cell(self, code: str) -> CellResult:
         import matplotlib.pyplot as plt
-        from qtpy.QtCore import Qt
 
         # 1. Snapshot existing figures
         pre_figs = set(plt.get_fignums())
@@ -88,17 +89,5 @@ class NotebookEngine:
             success=result.success,
         )
 
-    def _fig_to_pixmap(self, fig, max_width=580):
-        from matplotlib.backends.backend_agg import FigureCanvasAgg
-        from qtpy.QtGui import QImage, QPixmap
-        from qtpy.QtCore import Qt
-
-        canvas = FigureCanvasAgg(fig)
-        canvas.draw()
-        buf = canvas.buffer_rgba()
-        w, h = canvas.get_width_height()
-        qimg = QImage(bytes(buf), w, h, 4 * w, QImage.Format.Format_RGBA8888)
-        pixmap = QPixmap.fromImage(qimg)
-        if pixmap.width() > max_width:
-            pixmap = pixmap.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
-        return pixmap
+    def _fig_to_pixmap(self, fig, max_width=THUMBNAIL_WIDTH):
+        return fig_to_pixmap(fig, max_width)

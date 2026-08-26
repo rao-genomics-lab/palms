@@ -13,6 +13,7 @@ from qtpy.QtWidgets import (
 )
 from napari.qt.threading import thread_worker
 from xenium_viewer.tabs._helpers import make_tab, StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs
+from xenium_viewer.utils.plot_output import recorded_save_code, safe_stem
 from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL
 from xenium_viewer.utils.steps import Step, StepError, coerce
 from xenium_viewer.utils.step_templates import (
@@ -242,7 +243,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
         cc = state.get("cluster_to_color")
         co_ck = result.get('_cluster_key', co_clustering_widget.value)
         labels = ctx.get_labels_for(co_ck)
-        import matplotlib.pyplot as _plt
         ctx.apply_plot_font_size()
         try:
             fig = make_co_occurrence_plot(
@@ -253,15 +253,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 cluster_labels=labels,
             )
             state["co_fig"] = fig
-            _plt.show(block=False)
-            path = ctx.auto_save_plot(fig, "co_occurrence")
-            if subplot_clusters:
-                co_status.value = f"Co-occurrence plot (subplots: {', '.join(subplot_clusters)}) — saved to {path}"
-            else:
-                co_status.value = f"Co-occurrence plot displayed — saved to {path}"
-
             _co_ck = result.get('_cluster_key', '')
-            _co_fmt = ctx.state.get("plot_format", "svg")
+            paths = ctx.show_plot(fig, f"co_occurrence_{safe_stem(_co_ck)}",
+                                  title=f"Co-occurrence: {_co_ck}")
+            if subplot_clusters:
+                co_status.value = (f"Co-occurrence plot (subplots: "
+                                   f"{', '.join(subplot_clusters)}) — "
+                                   f"saved to {', '.join(paths)}")
+            else:
+                co_status.value = (f"Co-occurrence plot displayed — "
+                                   f"saved to {', '.join(paths)}")
+
+            _saves = recorded_save_code(ctx.recorded_plot_paths(paths))
             ctx.record_node(
                 f"plot:cooccur:{_co_ck}",
                 f"\n# Co-occurrence plot\n"
@@ -270,7 +273,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 + ")\n"
                 + (f"# filter_targets={target_filter}\n" if target_filter else "")
                 + f"fig = plt.gcf()\n"
-                + f"fig.savefig(\"co_occurrence.{_co_fmt}\", dpi=300, bbox_inches='tight')",
+                + _saves,
                 deps=[f"cooccur:{_co_ck}"],
                 kind=TERMINAL,
                 label="Co-occurrence plot",

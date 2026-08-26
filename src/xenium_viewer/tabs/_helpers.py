@@ -14,6 +14,10 @@ from xenium_viewer.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
 from xenium_viewer.utils.environment import environment_code, same_environment
+from xenium_viewer.utils.fig_render import to_figure
+from xenium_viewer.utils.plot_output import (
+    plot_formats, recorded_paths, save_figure, save_paths,
+)
 from xenium_viewer.utils.reporting import get_logger, report_recording_failure
 from xenium_viewer.utils.step_templates import builtin_spec, builtin_text, check_base_namespace, step_template as _resolved
 from xenium_viewer.utils.steps import Step, StepExecutor, coerce
@@ -72,24 +76,99 @@ def combo_value_kwargs(choices, index: int = 0) -> dict:
 
 # ── Tab layout helper ────────────────────────────────────────────────────────
 
+def scrollable(widget: QWidget) -> QWidget:
+    """Wrap a widget so it cannot impose its minimum size on the dock.
+
+    The control panel is a ``QTabWidget`` of ``QTabWidget``s, and a stacked
+    widget's minimum is the maximum over *all* its pages, hidden ones included.
+    So a single page that reports a wide or tall minimum becomes the floor for
+    the whole Xenium Controls dock, and the separator between the dock and the
+    canvas stops moving. A ``QScrollArea`` reports a fixed ~68px minimum
+    whatever it contains, which is what keeps that floor low: every page must
+    go through here (or through `make_tab`, which does).
+    """
+    from qtpy.QtWidgets import QScrollArea
+    scroll = QScrollArea()
+    scroll.setWidget(widget)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    return scroll
+
+
+def toolbar_row(*buttons) -> QWidget:
+    """Pack buttons into a fixed-height row that scrolls sideways when narrow.
+
+    A plain ``QHBoxLayout`` of buttons cannot shrink below the sum of their
+    label widths, so a button bar outside a scroll area sets the dock's minimum
+    width all by itself (the six-button Notebook toolbar cost 528px). Keeping
+    the row pinned but horizontally scrollable costs ~68px instead, and unlike
+    wrapping the whole tab it leaves the bar visible while the content below
+    scrolls.
+    """
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import QHBoxLayout
+
+    row = QWidget()
+    layout = QHBoxLayout()
+    layout.setContentsMargins(0, 0, 0, 0)
+    for button in buttons:
+        layout.addWidget(button)
+    layout.addStretch()
+    row.setLayout(layout)
+
+    scroll = scrollable(row)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setFixedHeight(row.sizeHint().height() + 2)
+    return scroll
+
+
+def labelled(w) -> QWidget:
+    """Return the Qt widget for a magicgui widget, *with* its label attached.
+
+    ``w.native`` is the bare control. magicgui keeps a widget's caption in a
+    separate ``_LabeledWidget`` wrapper that only a ``Container`` ever creates,
+    so dropping ``.native`` into a plain layout silently discards it — which is
+    how every ``Slider(label="n_neighbors", ...)`` in this package rendered as
+    an anonymous slider reading ``15``. Found by screenshotting the running
+    viewer over ``--mcp``; no test caught it, because none of them render a tab.
+
+    A one-widget ``Container`` restores the label through public API only. The
+    private ``_LabeledWidget`` renders identically (measured: same 142px
+    minimum, same 22px height) but would break on a magicgui rename.
+
+    Two widgets are returned bare, and both cases are load-bearing:
+
+    - **No label.** A widget built without ``label=`` reports ``''``, never a
+      name derived from anything, so this cannot invent a caption for a control
+      that never had one.
+    - **A ``ButtonWidget``** (``CheckBox``, ``PushButton``, ``RadioButton``).
+      Qt paints their text *on* the control, so a caption would show it twice.
+      magicgui's own ``Container`` skips them for the same reason — this mirrors
+      upstream rather than inventing a rule.
+    """
+    from magicgui.widgets import Container
+    from magicgui.widgets.bases import ButtonWidget
+
+    if isinstance(w, (Container, ButtonWidget)) or not w.label:
+        return w.native
+    box = Container(widgets=[w], labels=True)
+    box.margins = (0, 0, 0, 0)   # the row must sit flush like a bare .native did
+    return box.native
+
+
 def make_tab(*widgets_and_natives) -> QWidget:
     """Pack magicgui widgets and raw QWidgets into a scrollable container."""
-    from qtpy.QtWidgets import QScrollArea
     inner = QWidget()
     layout = QVBoxLayout()
     layout.setContentsMargins(4, 4, 4, 4)
     for w in widgets_and_natives:
         if hasattr(w, "native"):
-            layout.addWidget(w.native)
+            layout.addWidget(labelled(w))
         else:
             layout.addWidget(w)
     layout.addStretch()
     inner.setLayout(layout)
-    scroll = QScrollArea()
-    scroll.setWidget(inner)
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-    return scroll
+    return scrollable(inner)
 
 
 # ── Status proxy ─────────────────────────────────────────────────────────────
@@ -630,17 +709,66 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.ensure_spatial_neighbors = _ensure_spatial_neighbors
 
-    # ── auto_save_plot ───────────────────────────────────────────────────
-    def _auto_save_plot(fig, stem: str) -> str:
-        """Save fig to data_dir/plots/<stem>.<format>. Returns the save path."""
-        fmt = state.get("plot_format", "svg")
-        plots_dir = os.path.join(ctx.data_path, "plots")
-        os.makedirs(plots_dir, exist_ok=True)
-        path = os.path.join(plots_dir, f"{stem}.{fmt}")
-        fig.savefig(path, dpi=300, bbox_inches="tight")
-        return path
+    # ── show_plot ────────────────────────────────────────────────────────
+    @ensure_main_thread
+    def _add_to_plots_panel(fig, title: str, paths: list):
+        """Append to the Plots dock and reveal it. GUI thread only.
 
-    ctx.auto_save_plot = _auto_save_plot
+        Bounced through ``ensure_main_thread`` because building the thumbnail
+        touches ``QPixmap``: figures are routinely *built* in a napari worker,
+        and a caller that forgets to hop back would crash Qt rather than show a
+        plot.
+        """
+        panel = ctx.plots_panel
+        if panel is None:
+            return
+        panel.add_figure(fig, title, paths)
+        # Through the same route as the View menu: the dock may have been closed
+        # (and therefore destroyed) since the last plot, in which case this
+        # re-creates it around the panel rather than writing to a dead pointer.
+        if ctx.reveal_plots_dock is not None:
+            ctx.reveal_plots_dock()
+
+    def _show_plot(fig, stem: str, title: str = None, save: bool = True,
+                   paths=None) -> list[str]:
+        """Save *fig* under ``<data_path>/plots/`` and show it in the Plots dock.
+
+        The single route every figure takes. Replaces the old
+        ``auto_save_plot`` + ``plt.show(block=False)`` pair, which six tabs used,
+        four tabs did differently, and four tabs skipped entirely.
+
+        ``save=False`` is for a figure its own Step template already wrote — the
+        template must remain the thing that writes the file, or the recorded
+        code would stop being the code that ran. Pass the ``paths`` it wrote so
+        the card can still say where the figure went.
+
+        Returns the paths written, for the status line and for the recorded
+        ``savefig`` argument.
+
+        *fig* may be a scanpy plot object rather than a Figure — the rank-genes
+        dotplot is one — so it is resolved here, once, instead of at each of the
+        three things that go on to use it.
+        """
+        figure = to_figure(fig)
+        written = [str(p) for p in (paths or [])]
+        if save:
+            written = save_figure(
+                figure, save_paths(ctx.data_path, stem, state=state))
+        _add_to_plots_panel(figure, title or stem, written)
+        return written
+
+    ctx.show_plot = _show_plot
+
+    def _plot_paths(stem: str) -> list:
+        """Where ``stem`` will be written — for a template's ``paths`` param."""
+        return [str(p) for p in save_paths(ctx.data_path, stem, state=state)]
+
+    ctx.plot_paths = _plot_paths
+
+    def _recorded_plot_paths(paths) -> list[str]:
+        return recorded_paths(ctx.data_path, paths)
+
+    ctx.recorded_plot_paths = _recorded_plot_paths
 
     # ── refresh_clustering_choices ───────────────────────────────────────
     def _refresh_clustering_choices():
@@ -886,6 +1014,92 @@ def create_file_menu(viewer, on_open_dataset, on_preprocess_dataset=None):
         file_menu.addAction(pre_act)
 
 
+# ── Plots dock lifecycle ─────────────────────────────────────────────────────
+#
+# napari's dock title bar has a close button, and it does not hide the dock: it
+# calls ``destroyOnClose`` -> ``Window.remove_dock_widget``, which reparents the
+# inner widget to ``None`` and ``deleteLater()``s the dock. So one click on the
+# "x" left the Plots gallery in a state where the dock object was a dangling C++
+# pointer and the panel was an orphan — and the View-menu toggle, which called
+# ``setVisible`` on that pointer, raised ``RuntimeError`` into a bare
+# ``except: pass`` and appeared to do nothing at all.
+#
+# The panel itself always survives (Python holds it in ``_app["plots_panel"]``),
+# so the fix is to treat the *dock* as disposable and re-create it around the
+# surviving panel whenever it is needed.
+
+def dock_is_alive(dock) -> bool:
+    """Whether *dock* is still a live Qt object rather than a dangling pointer."""
+    if dock is None:
+        return False
+    try:
+        dock.isVisible()
+        return True
+    except RuntimeError:      # wrapped C/C++ object has been deleted
+        return False
+
+
+def _is_on_a_screen(widget) -> bool:
+    """Whether any part of *widget* is on a connected display.
+
+    A floating dock can be dragged somewhere unreachable — off the desktop, or
+    onto a screen that has since been disconnected. Re-showing it there looks
+    exactly like the toggle doing nothing.
+    """
+    from qtpy.QtGui import QGuiApplication
+
+    frame = widget.frameGeometry()
+    return any(screen.availableGeometry().intersects(frame)
+               for screen in QGuiApplication.screens())
+
+
+def ensure_plots_dock(viewer, _app):
+    """The live Plots dock, re-created around the surviving panel if needed.
+
+    Returns ``None`` only when there is no panel yet (before the first dataset
+    finishes loading).
+    """
+    dock = _app.get("plots_dock")
+    if dock_is_alive(dock):
+        return dock
+
+    panel = _app.get("plots_panel")
+    if panel is None:
+        return None
+
+    dock = viewer.window.add_dock_widget(panel, name="Plots", area="bottom")
+    _app["plots_dock"] = dock
+
+    # Make the title bar's "x" *hide* the dock instead of destroying it. Closing
+    # a gallery should not throw away the figures in it, and an instance
+    # attribute shadows the class method napari's close button calls.
+    dock.destroyOnClose = dock.hide
+
+    if hasattr(dock, "visibilityChanged"):
+        def _sync(visible, _dock=dock):
+            action = _app.get("plots_action")
+            if action is not None and action.isChecked() != visible:
+                action.setChecked(visible)
+        dock.visibilityChanged.connect(_sync)
+    return dock
+
+
+def reveal_plots_dock(viewer, _app):
+    """Show the Plots dock and make sure it is somewhere the user can see it."""
+    dock = ensure_plots_dock(viewer, _app)
+    if dock is None:
+        return None
+    # A floating dock that was dragged off the desktop cannot be shown where it
+    # is; bring it back into the main window rather than leaving the user with a
+    # menu item that appears dead.
+    if dock.isFloating() and not _is_on_a_screen(dock):
+        dock.setFloating(False)
+    dock.setVisible(True)
+    dock.raise_()
+    dock.activateWindow()
+    return dock
+
+
 # ── View menu ─────────────────────────────────────────────────────────────────
 
 def create_view_menu(viewer, _app):
@@ -934,6 +1148,28 @@ def create_view_menu(viewer, _app):
     view_menu.addAction(minimap_action)
     _app["minimap_action"] = minimap_action
 
+    # Show/hide the Plots dock. Starts unchecked — the dock reveals itself when
+    # the first figure arrives, so an empty gallery never takes up the canvas.
+    plots_action = QAction("Show Plots", view_menu, checkable=True)
+    plots_action.setObjectName("xenium_plots_toggle")
+    plots_action.setChecked(False)
+    plots_action.setShortcut("Ctrl+Shift+P")
+
+    def _on_plots_toggled(checked):
+        if checked:
+            # Not ``dw.setVisible(True)``: napari may have destroyed the dock
+            # (its close button does), and calling into the dangling pointer is
+            # what made this menu item look broken.
+            reveal_plots_dock(viewer, _app)
+        else:
+            dw = _app.get("plots_dock")
+            if dock_is_alive(dw):
+                dw.hide()
+
+    plots_action.toggled.connect(_on_plots_toggled)
+    view_menu.addAction(plots_action)
+    _app["plots_action"] = plots_action
+
 
 # ── Preferences menu ─────────────────────────────────────────────────────────
 
@@ -961,17 +1197,25 @@ def create_preferences_menu(ctx: ViewerContext):
     else:
         prefs_menu.clear()
 
-    # Plot format
+    # Plot format. Every plot is written in each of the chosen formats, so the
+    # choices are combinations rather than a single extension — PNG to look at,
+    # PDF to publish, and the default writes both because asking a user to pick
+    # in advance is what left half the figures in a format they had to redo.
     format_menu = prefs_menu.addMenu("Plot format")
     format_group = QActionGroup(format_menu)
     format_group.setExclusive(True)
-    png_action = QAction("PNG", format_group, checkable=True)
-    svg_action = QAction("SVG", format_group, checkable=True, checked=True)
-    format_menu.addAction(png_action)
-    format_menu.addAction(svg_action)
+    current = plot_formats(state)
+    for label, formats in (("PNG + PDF", ["png", "pdf"]),
+                           ("PNG", ["png"]),
+                           ("PDF", ["pdf"]),
+                           ("SVG", ["svg"])):
+        act = QAction(label, format_group, checkable=True,
+                      checked=(formats == current))
+        act.setData(formats)
+        format_menu.addAction(act)
 
     def _on_format_changed(action):
-        state["plot_format"] = action.text().lower()
+        state["plot_formats"] = list(action.data())
     format_group.triggered.connect(_on_format_changed)
 
     # Font size

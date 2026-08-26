@@ -79,24 +79,51 @@ def _leiden_template(use_hvg: bool, do_scale: bool) -> str:
 def build_tab(ctx: ViewerContext) -> tuple:
     state = ctx.state
 
-    leiden_n_neighbors = Slider(label="n_neighbors", min=5, max=50, value=15)
-    leiden_n_pcs = Slider(label="n_pcs", min=10, max=50, value=40)
-    leiden_resolution = FloatSpinBox(label="resolution", min=0.1, max=5.0, step=0.1, value=1.0)
+    # Labels read as English; the tooltip names the template parameter the value
+    # lands in. The captions used to *be* the parameter names, which kept the GUI
+    # and the exported notebook in step — until it turned out none of them
+    # rendered at all (see ``_helpers.labelled``), so nobody was reading them.
+    # The tooltip keeps that correspondence without making the panel a wall of
+    # snake_case.
+    leiden_n_neighbors = Slider(
+        label="Neighbours", min=5, max=50, value=15,
+        tooltip="Number of nearest neighbours used to build the kNN graph.\n"
+                "Higher values give coarser, more stable clusters.\n\n"
+                "Template parameter: n_neighbors",
+    )
+    leiden_n_pcs = Slider(
+        label="Principal components", min=10, max=50, value=40,
+        tooltip="How many PCs the neighbour graph is built on.\n\n"
+                "Template parameter: n_pcs",
+    )
+    leiden_resolution = FloatSpinBox(
+        label="Resolution", min=0.1, max=5.0, step=0.1, value=1.0,
+        tooltip="Higher values give more, smaller clusters.\n\n"
+                "Template parameter: resolution",
+    )
     leiden_flavor = ComboBox(
-        label="flavor", choices=LEIDEN_FLAVORS, value="igraph",
+        label="Clustering backend", choices=LEIDEN_FLAVORS, value="igraph",
         tooltip="Which implementation of the Leiden algorithm to use.\n"
                 "igraph is orders of magnitude faster and is the default.\n"
                 "leidenalg is scanpy's historical backend and gives a different\n"
-                "partition — pick it to reproduce an existing scanpy pipeline.",
+                "partition — pick it to reproduce an existing scanpy pipeline.\n\n"
+                "Template parameter: flavor",
     )
     leiden_n_iterations = SpinBox(
-        label="n_iterations", min=-1, max=100, value=FLAVOR_DEFAULTS["igraph"][0],
+        label="Iterations", min=-1, max=100, value=FLAVOR_DEFAULTS["igraph"][0],
         tooltip="How many Leiden iterations to run.\n"
                 "-1 iterates until the partition stops improving (slower).\n"
-                "Resets to the chosen backend's default when you change flavor.",
+                "Resets to the chosen backend's default when you change the\n"
+                "clustering backend.\n\n"
+                "Template parameter: n_iterations",
     )
     leiden_hvg_check = CheckBox(label="Use HVGs only", value=False)
-    leiden_n_hvgs = Slider(label="n_top_genes", min=500, max=4000, value=2000, enabled=False)
+    leiden_n_hvgs = Slider(
+        label="Highly variable genes", min=500, max=4000, value=2000, enabled=False,
+        tooltip="How many highly variable genes to keep when 'Use HVGs only'\n"
+                "is ticked.\n\n"
+                "Template parameter: n_top_genes",
+    )
     leiden_scale_check = CheckBox(label="Scale (max_value=10)", value=False)
 
     def _on_hvg_toggle(val):

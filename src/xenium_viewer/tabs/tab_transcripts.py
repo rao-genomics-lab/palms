@@ -134,7 +134,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     density_separator = QLabel("── Transcript Density ──")
 
     density_gene_widget = ComboBox(
-        label="Density gene",
+        label="Gene",
         choices=ctx.gene_names,
         value=ctx.gene_names[0] if ctx.gene_names else None,
     )
