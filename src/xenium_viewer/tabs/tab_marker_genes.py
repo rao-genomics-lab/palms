@@ -147,8 +147,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         """Keyed by clustering, so a second run does not overwrite the first."""
         return f"{plot_name}_{safe_stem(clustering_key or 'none')}"
 
-    def _display_categories(clustering_key: str) -> list | None:
-        """Cluster display names as a literal list, or None if unnamed.
+    def _display_categories(clustering_key: str) -> dict | None:
+        """Original cluster id -> display name, or None if unnamed.
 
         Reads ``adata.obs`` when the clustering has been mirrored there and the
         stored series otherwise, so the preview can answer before a run has put
@@ -167,14 +167,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
             if series is None:
                 return None
             source = sorted(series.unique())
-        categories = []
+        # A mapping, not a list: the template merges clusters that share a
+        # display name, and it needs the original key to map from. A list also
+        # silently mis-aligns if the category order ever shifts.
+        display = {}
         for c in source:
             try:
                 label = labels.get(int(c), labels.get(c, c))
             except (ValueError, TypeError):
                 label = labels.get(c, c)
-            categories.append(str(label))
-        return categories
+            display[str(c)] = str(label)
+        return display
 
     def _marker_preview(plot_name: str = None, marker_dict: dict = None) -> Preview:
         """What one of the five plot buttons would run, as the widgets stand.

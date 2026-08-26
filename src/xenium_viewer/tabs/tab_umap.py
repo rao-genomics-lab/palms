@@ -130,8 +130,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         gene_list_qt.clear()
 
     # ── Preview provider ──────────────────────────────────────────────────
-    def _display_categories(clustering_key: str) -> list | None:
-        """Cluster display names as a literal list, or None if unnamed."""
+    def _display_categories(clustering_key: str) -> dict | None:
+        """Original cluster id -> display name, or None if unnamed."""
         labels = ctx.get_labels_for(clustering_key)
         if not labels:
             return None
@@ -145,14 +145,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
             if series is None:
                 return None
             source = sorted(series.unique())
-        categories = []
+        # A mapping, not a list: the template merges clusters that share a
+        # display name, and it needs the original key to map from. A list also
+        # silently mis-aligns if the category order ever shifts.
+        display = {}
         for c in source:
             try:
                 label = labels.get(int(c), labels.get(c, c))
             except (ValueError, TypeError):
                 label = labels.get(c, c)
-            categories.append(str(label))
-        return categories
+            display[str(c)] = str(label)
+        return display
 
     def _umap_preview(mode: str = None) -> Preview:
         """What the two buttons would run, as the widgets stand.

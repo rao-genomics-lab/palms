@@ -11,7 +11,7 @@
 # requires: sc, pd, plt, Path, adata, adata_norm, data_path
 # outputs: fig
 # params: color:list, cmap:str?, ncols:int?, paths:list, groupby:str?,
-#         categories:list?
+#         categories:dict?
 
 #--- block embed.xenium
 # UMAP: $color
@@ -38,8 +38,16 @@ sc.pp.neighbors(adata_norm)
 sc.tl.umap(adata_norm, random_state=0)
 
 #--- block relabel
-adata_norm.obs[$groupby] = adata.obs[$groupby].values
-adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)
+# .map() rather than .cat.rename_categories(): two clusters may deliberately
+# carry the same display name, which is simply a request to merge them, but
+# rename_categories refuses it outright ("Categorical categories must be
+# unique"). dict.fromkeys dedupes the names while keeping cluster order, so the
+# legend still reads in the order the clusters are numbered.
+_display = $categories
+adata_norm.obs[$groupby] = pd.Categorical(
+    adata.obs[$groupby].astype(str).map(_display),
+    categories=list(dict.fromkeys(_display.values())),
+)
 
 #--- block color.genes
 # One panel per gene, each with its own colour bar; scanpy lays out the grid.

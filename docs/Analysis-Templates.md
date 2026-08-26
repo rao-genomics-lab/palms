@@ -406,7 +406,7 @@ Draws one scanpy marker-gene figure — dotplot, heatmap, matrixplot, tracksplot
 | `paths` | `list` | yes |
 | `categories` | `dict` | no |
 
-- **Requires:** `Path`, `adata`, `adata_norm`, `plt`, `sc`
+- **Requires:** `Path`, `adata`, `adata_norm`, `pd`, `plt`, `sc`
 - **Outputs:** `fig`
 - **Blocks:** `head`, `relabel`, `call.dotplot`, `call.heatmap`, `call.matrixplot`, `call.tracksplot`, `call.correlation_matrix`, `save`
 
@@ -433,7 +433,15 @@ Ten assemblies: which of the five `call.*` plot types you picked, times whether 
 adata_norm.obs[$groupby] = adata.obs[$groupby].values
 
 #--- block relabel
-adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)
+# .map() rather than .cat.rename_categories(): naming two clusters the same
+# thing is a request to merge them, and rename_categories refuses it outright
+# ("Categorical categories must be unique"). dict.fromkeys dedupes the names
+# while keeping cluster order.
+_display = $categories
+adata_norm.obs[$groupby] = pd.Categorical(
+    adata_norm.obs[$groupby].astype(str).map(_display),
+    categories=list(dict.fromkeys(_display.values())),
+)
 
 #--- block call.dotplot
 sc.pl.dotplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)
@@ -515,7 +523,7 @@ Draws the UMAP embedding as a publication figure — one panel per selected gene
 | `ncols` | `int` | no |
 | `paths` | `list` | yes |
 | `groupby` | `str` | no |
-| `categories` | `list` | no |
+| `categories` | `dict` | no |
 
 - **Requires:** `Path`, `adata`, `adata_norm`, `data_path`, `pd`, `plt`, `sc`
 - **Outputs:** `fig`
@@ -560,8 +568,16 @@ sc.pp.neighbors(adata_norm)
 sc.tl.umap(adata_norm, random_state=0)
 
 #--- block relabel
-adata_norm.obs[$groupby] = adata.obs[$groupby].values
-adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)
+# .map() rather than .cat.rename_categories(): two clusters may deliberately
+# carry the same display name, which is simply a request to merge them, but
+# rename_categories refuses it outright ("Categorical categories must be
+# unique"). dict.fromkeys dedupes the names while keeping cluster order, so the
+# legend still reads in the order the clusters are numbered.
+_display = $categories
+adata_norm.obs[$groupby] = pd.Categorical(
+    adata.obs[$groupby].astype(str).map(_display),
+    categories=list(dict.fromkeys(_display.values())),
+)
 
 #--- block color.genes
 # One panel per gene, each with its own colour bar; scanpy lays out the grid.

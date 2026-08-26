@@ -8,7 +8,7 @@
 #          head+call.correlation_matrix+save |
 #          head+relabel+call.correlation_matrix+save
 # doc: Scanpy marker-gene figure; one call.* block per plot type.
-# requires: sc, plt, Path, adata, adata_norm
+# requires: sc, pd, plt, Path, adata, adata_norm
 # outputs: fig
 # params: plot_name:str, groupby:str, markers:dict?, paths:list,
 #         categories:dict?
@@ -18,7 +18,15 @@
 adata_norm.obs[$groupby] = adata.obs[$groupby].values
 
 #--- block relabel
-adata_norm.obs[$groupby] = adata_norm.obs[$groupby].cat.rename_categories($categories)
+# .map() rather than .cat.rename_categories(): naming two clusters the same
+# thing is a request to merge them, and rename_categories refuses it outright
+# ("Categorical categories must be unique"). dict.fromkeys dedupes the names
+# while keeping cluster order.
+_display = $categories
+adata_norm.obs[$groupby] = pd.Categorical(
+    adata_norm.obs[$groupby].astype(str).map(_display),
+    categories=list(dict.fromkeys(_display.values())),
+)
 
 #--- block call.dotplot
 sc.pl.dotplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)

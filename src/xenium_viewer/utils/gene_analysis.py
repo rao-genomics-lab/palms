@@ -143,8 +143,14 @@ def make_rank_genes_dotplot(
     cluster_labels: Optional[dict] = None,
     dendrogram: bool = True,
     key: Optional[str] = None,
-) -> plt.Figure:
-    """Create a dotplot of top marker genes per cluster. Returns matplotlib Figure.
+):
+    """Create a dotplot of top marker genes per cluster.
+
+    Returns scanpy's ``DotPlot``, **not** a matplotlib ``Figure`` — this used to
+    be annotated as one, which is how a caller came to hand it straight to Qt.
+    ``DotPlot`` has ``savefig``, so anything that only saves works; anything that
+    draws it does not. Pass it through
+    :func:`xenium_viewer.utils.fig_render.to_figure` first.
 
     *key* is the ``uns`` slot the ranking was written to; it defaults through
     :func:`resolve_rank_key`, so an ``adata_norm`` restored from a cache written

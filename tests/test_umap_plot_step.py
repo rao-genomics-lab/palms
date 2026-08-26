@@ -159,13 +159,50 @@ def test_the_cluster_assembly_relabels_from_the_display_names(dataset, tmp_path)
     step, out = _run(
         executor, ["embed.xenium", "relabel", "color.clusters", "save"],
         {"color": ["leiden"], "groupby": "leiden",
-         "categories": ["Tumour", "Stroma", "Immune"],
+         "categories": {"0": "Tumour", "1": "Stroma", "2": "Immune"},
          "paths": [str(tmp_path / "plots" / "c.png")]})
 
-    assert "rename_categories(['Tumour', 'Stroma', 'Immune'])" in step.render()
+    assert "{'0': 'Tumour', '1': 'Stroma', '2': 'Immune'}" in step.render()
     assert list(executor.ns["adata_norm"].obs["leiden"].cat.categories) == [
-        "Tumour", "Stroma", "Immune"]
+        "Tumour", "Stroma", "Immune"], "cluster order should survive relabelling"
     plt.close("all")
+
+
+def test_two_clusters_may_share_a_display_name(dataset, tmp_path):
+    """Reported from a real session: *ValueError: Categorical categories must
+    be unique*, raised by ``.cat.rename_categories`` at statement 4 of 6.
+
+    Giving two clusters one label is an ordinary thing to want — it means "these
+    are the same cell type". ``.map()`` merges them; ``rename_categories``
+    refuses, because it can only rename one-for-one.
+    """
+    adata, data_path = dataset
+    executor = _executor(adata, data_path)
+    step, _ = _run(
+        executor, ["embed.xenium", "relabel", "color.clusters", "save"],
+        {"color": ["leiden"], "groupby": "leiden",
+         "categories": {"0": "Tumour", "1": "Stroma", "2": "Tumour"},
+         "paths": [str(tmp_path / "plots" / "merged.png")]})
+
+    column = executor.ns["adata_norm"].obs["leiden"]
+    assert list(column.cat.categories) == ["Tumour", "Stroma"]
+    # Cells from both source clusters really are in the merged category.
+    assert (column == "Tumour").sum() == (adata.obs["leiden"].isin(["0", "2"])).sum()
+    assert Path(step.params["paths"][0]).stat().st_size > 0
+    plt.close("all")
+
+
+def test_the_relabel_block_does_not_use_rename_categories():
+    """Asserted on the text, so the reason survives a refactor of the test.
+
+    Comment lines are stripped first — the block explains *why* it avoids
+    ``rename_categories``, and that explanation must not trip the check.
+    """
+    source = builtin_assemble("umap.plot", ["relabel"])
+    code = "\n".join(line for line in source.splitlines()
+                     if not line.lstrip().startswith("#"))
+    assert "rename_categories" not in code
+    assert ".map(" in code
 
 
 def test_the_fallback_computes_its_own_embedding_and_says_so(dataset, tmp_path):

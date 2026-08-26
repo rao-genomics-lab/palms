@@ -87,6 +87,29 @@
 - The CNV tab's "Show Heatmap" button now shows the heatmap. It built the figure, wrote
   two files and closed it without ever putting it on screen.
 
+- **The rank-genes dotplot crashed the moment it reached the Plots dock.**
+  `sc.pl.rank_genes_groups_dotplot(return_fig=True)` returns a scanpy `DotPlot`, not a
+  `Figure` — and `make_rank_genes_dotplot` was *annotated* as returning a `Figure`, which
+  is how it came to be handed straight to Qt. `DotPlot` has `savefig`, so the old
+  save-only path never noticed; drawing one raises `AttributeError: 'DotPlot' object has
+  no attribute 'set_canvas'`. New `fig_render.to_figure()` resolves it, once, in
+  `ctx.show_plot`. Two wrinkles it has to handle: a `BasePlot`'s `.fig` is `None` until
+  the plot is built (so `get_axes()`, which builds it and is idempotent), and
+  `BasePlot.savefig` writes `plt.gcf()` rather than `self.fig` — resolving to the concrete
+  Figure removes the chance of saving whichever figure happened to be current. Anything
+  else raises a named `TypeError` instead of failing inside Qt. The misleading annotation
+  is gone.
+
+- **Two clusters could not share a display name.** `.cat.rename_categories()` raises
+  *ValueError: Categorical categories must be unique*, so naming clusters 0 and 2 both
+  "Tumour" — an ordinary thing to want, meaning "these are the same cell type" — failed
+  the whole step. Both templates that relabel (`umap.plot`, `genes.marker_plot`) now use
+  `.map()` with a mapping and `dict.fromkeys` to dedupe, which **merges** the clusters,
+  which is what was meant; cluster order is preserved in the legend. `categories` is a
+  `dict` (original id → display name) rather than a positional list, so it also cannot
+  silently mis-align if the category order shifts. `genes.marker_plot` carried the same
+  defect before this branch and is fixed with it.
+
 `tests/test_plot_consistency.py` is the source guard that keeps this from unravelling one
 tab at a time: it parses every `tabs/tab_*.py` and fails on any `plt.show`, any
 `matplotlib.use`, and any `savefig` outside `plot_output.save_figure` — plus a check that

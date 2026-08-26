@@ -278,7 +278,9 @@ def _marker_step(plot_name="dotplot", relabel=False, tmp_path=None):
               "paths": [str(tmp_path / "plots" / f"{plot_name}.{ext}")
                         for ext in ("png", "pdf")]}
     if relabel:
-        params["categories"] = ["Tumour", "Stroma"]
+        # A mapping, and one that deliberately gives two clusters the same name
+        # — see test_marker_plot_merges_clusters_that_share_a_display_name.
+        params["categories"] = {"0": "Tumour", "1": "Stroma"}
     return Step(
         id=f"plot:markers:{plot_name}:{CLUSTER_KEY}",
         template=_marker_plot_template(plot_name, relabel),
@@ -302,7 +304,23 @@ def test_marker_plot_templates_execute_and_write_a_file(plot_name, tmp_path):
 
 def test_marker_plot_carries_display_labels_into_the_recorded_source(tmp_path):
     source = _marker_step(relabel=True, tmp_path=tmp_path).render()
-    assert "rename_categories(['Tumour', 'Stroma'])" in source
+    assert "{'0': 'Tumour', '1': 'Stroma'}" in source
+
+
+def test_marker_plot_merges_clusters_that_share_a_display_name(tmp_path):
+    """Naming two clusters the same thing is a request to merge them.
+
+    ``.cat.rename_categories`` refuses it outright — *ValueError: Categorical
+    categories must be unique* — which is what a real session hit as soon as a
+    user gave two clusters one label. ``.map()`` merges, which is what was meant.
+    """
+    step = _marker_step(relabel=True, tmp_path=tmp_path)
+    step.params["categories"] = {"0": "Tumour", "1": "Tumour"}
+    ex = _run([_normalize_step(), _clustering_step(), step])
+    categories = list(ex.ns["adata_norm"].obs[CLUSTER_KEY].cat.categories)
+    assert categories == ["Tumour"], categories
+    assert all(Path(p).exists() for p in step.params["paths"])
+    plt.close("all")
 
 
 def test_marker_dict_survives_as_a_dict_literal(tmp_path):

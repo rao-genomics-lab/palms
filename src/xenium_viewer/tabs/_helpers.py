@@ -14,6 +14,7 @@ from xenium_viewer.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
 from xenium_viewer.utils.environment import environment_code, same_environment
+from xenium_viewer.utils.fig_render import to_figure
 from xenium_viewer.utils.plot_output import (
     plot_formats, recorded_paths, save_figure, save_paths,
 )
@@ -707,12 +708,17 @@ def create_shared_helpers(ctx: ViewerContext):
 
         Returns the paths written, for the status line and for the recorded
         ``savefig`` argument.
+
+        *fig* may be a scanpy plot object rather than a Figure — the rank-genes
+        dotplot is one — so it is resolved here, once, instead of at each of the
+        three things that go on to use it.
         """
+        figure = to_figure(fig)
         written = [str(p) for p in (paths or [])]
         if save:
             written = save_figure(
-                fig, save_paths(ctx.data_path, stem, state=state))
-        _add_to_plots_panel(fig, title or stem, written)
+                figure, save_paths(ctx.data_path, stem, state=state))
+        _add_to_plots_panel(figure, title or stem, written)
         return written
 
     ctx.show_plot = _show_plot

@@ -19,6 +19,48 @@ from __future__ import annotations
 THUMBNAIL_WIDTH = 580
 
 
+def to_figure(obj):
+    """Return the matplotlib ``Figure`` behind *obj*.
+
+    Not every "figure" in this codebase is one. ``sc.pl.rank_genes_groups_dotplot
+    (return_fig=True)`` hands back a scanpy ``DotPlot``, which quacks *almost*
+    like a Figure — it has ``savefig``, which is why the old one-format
+    ``auto_save_plot`` never noticed — but has no canvas, so anything that draws
+    it fails with ``AttributeError: 'DotPlot' object has no attribute
+    'set_canvas'``.
+
+    Two details make this less obvious than it looks:
+
+    * a ``BasePlot``'s ``.fig`` is ``None`` until the plot is actually built, so
+      reading the attribute is not enough. ``get_axes()`` builds it if needed and
+      is idempotent (it guards on ``ax_dict is None``);
+    * ``BasePlot.savefig`` writes ``plt.gcf()``, not ``self.fig``. Resolving to
+      the concrete Figure and saving *that* also removes the chance of writing
+      whichever figure happens to be current instead.
+
+    Raises ``TypeError`` naming the type, rather than failing later inside Qt.
+    """
+    from matplotlib.figure import Figure
+
+    if isinstance(obj, Figure):
+        return obj
+    if hasattr(obj, "get_axes") and not isinstance(obj, Figure):
+        # scanpy BasePlot: build the figure if it has not been built yet.
+        axes = obj.get_axes()
+        figure = getattr(obj, "fig", None)
+        if isinstance(figure, Figure):
+            return figure
+        if isinstance(axes, dict) and axes:
+            return next(iter(axes.values())).figure
+    figure = getattr(obj, "figure", None)      # an Axes
+    if isinstance(figure, Figure):
+        return figure
+    raise TypeError(
+        f"expected a matplotlib Figure or a scanpy plot object, got "
+        f"{type(obj).__module__}.{type(obj).__name__}"
+    )
+
+
 def fig_to_pixmap(fig, max_width: int = THUMBNAIL_WIDTH):
     """Render *fig* to a ``QPixmap``, scaled down to *max_width*.
 
