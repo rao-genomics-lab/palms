@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased] — 2026-08-26 (doc counts)
+
+### Fixed
+- **Four counts in the docs were wrong, three of them badly.** The test suite is
+  **1318 tests across 56 files**, not the "~320" `CLAUDE.md` had carried for
+  months — off by a factor of four. There are **26 tabs** in 5 groups, not the
+  11 in `CLAUDE.md` or the 21 in `README.md`; `app.py`'s `addTab` calls are the
+  authoritative count and `src/xenium_viewer/tabs/*.py` agrees with them.
+  `README.md`'s per-group listing was also short: the Tools group showed 3 of its
+  7 tabs, omitting Crop Dataset, Dataset, Cache and Templates. `app.py` is ~1800
+  lines, not ~1300.
+
+  Counted rather than recalled: `pytest --collect-only -q` (1314 passed + 4
+  skipped confirms it), `grep '\.addTab(' src/xenium_viewer/app.py`, `wc -l`.
+  `CLAUDE.md` now says how to re-measure the test count instead of stating a
+  number that will drift again.
+
+### Removed
+- **`tabs/__init__.py` no longer re-exports `build_*_tab`.** It aliased
+  `build_tab` from 11 of the 26 tab modules — the 11 that existed when it was
+  written — and nothing has ever imported them: `app.py` imports each module
+  directly, *inside* the function that builds the panel, precisely so the
+  napari-heavy tab modules load only when a viewer is being constructed. The
+  eager re-exports quietly undid that for anything touching the package, which
+  includes three test modules doing `from xenium_viewer.tabs import tab_cache`.
+  Completing the list to 26 would have made that worse, so the dead surface is
+  gone and the docstring says what to import instead.
+
 ## [Unreleased] — 2026-08-26 (plots)
 
 ### Fixed

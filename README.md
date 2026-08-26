@@ -153,16 +153,17 @@ You can also invoke the package directly: `python -m xenium_viewer ...`.
 
 ```
 src/xenium_viewer/          # the installable package
-├── app.py                  # main GUI entry point (~1300 lines)
+├── app.py                  # main GUI entry point (~1800 lines)
 ├── loader.py               # SpatialData loader with zarr cache
 ├── preprocess.py           # transcript feather cache builder
-├── tabs/                   # 21 control-panel tab modules in 5 groups
+├── tabs/                   # 26 control-panel tab modules in 5 groups
 │   │                       #   Cells: Clustering, Coloring, Transcripts, UMAP
 │   │                       #   Genes: Rank Genes, Markers, Correlation, CNV
 │   │                       #   Spatial: ROI DEG, Lig-Rec, Nhood Enrich,
 │   │                       #            Co-occur, Domains, Annot Nhood, Annot Dist
 │   │                       #   Images: H&E, ARMS, Ext Images, Patches
-│   │                       #   Tools: Annotations, Segmentation, Notebook
+│   │                       #   Tools: Annotations, Segmentation, Crop Dataset,
+│   │                       #          Notebook, Dataset, Cache, Templates
 │   └── _helpers.py         # shared tab utilities (StatusProxy, make_tab, …)
 └── utils/
     ├── viewer_context.py   # ViewerContext dataclass — shared state for all tabs

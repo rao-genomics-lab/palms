@@ -38,7 +38,9 @@ xenium-viewer /path/to/xenium/output/ --no-cache
 
 The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-build-cache`, `xenium-rename-dataset`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
 
-There is a `pytest` suite in `tests/` (~320 tests) covering pure logic (provenance graph,
+There is a `pytest` suite in `tests/` (**1318 tests** across 56 files, measured 2026-08-26 —
+count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
+number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
 the **zarr/SpatialData persistence paths** — crash-safe writes with simulated interrupted
 writes, cache verify/repair, session save, loader cache policy and sidecar locations.
@@ -75,7 +77,7 @@ manual/exploratory.
 
 ### Entry Points & Load Sequence
 
-1. **`src/xenium_viewer/app.py`** — Main entry point (~1300 lines). Validates data dir, orchestrates loading, builds napari viewer with layers, instantiates all managers, creates `ViewerContext`, builds all tab widgets, then restores session. The `main()` function is the `xenium-viewer` console-script entry point.
+1. **`src/xenium_viewer/app.py`** — Main entry point (~1800 lines). Validates data dir, orchestrates loading, builds napari viewer with layers, instantiates all managers, creates `ViewerContext`, builds all tab widgets, then restores session. The `main()` function is the `xenium-viewer` console-script entry point.
 2. **`src/xenium_viewer/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness comes from a content hash in `.xv_manifest.json` (see "Cache safety"). Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`. Its `main()` is the `xenium-build-cache` console script — the same load, headless, so the cold read can happen over ssh. `load_sdata(on_stale=)` is how a caller with no GUI authorises a rebuild: `_stale_preference` checks it *before* any branch that would prompt, because two of those branches never reach a dialog. Default `None` keeps the GUI behaviour exactly as it was, and `'keep'` deliberately does not satisfy `_ask_corrupt_cache` — a cache that will not open cannot be kept.
 3. **`src/xenium_viewer/preprocess.py`** — One-time step that splits the transcript parquet into ~480 per-gene feather files for fast per-gene loading (~100ms vs 4–5s). The `main()` function is the `xenium-preprocess` console-script entry point.
 
@@ -615,4 +617,7 @@ reproducibility defect rather than a kernel-discovery one.
 
 ## Version History
 
-See `CHANGELOG.md`. The codebase was refactored from a 4295-line monolith into 11 modular tabs in March 2026.
+See `CHANGELOG.md`. The codebase was refactored from a 4295-line monolith into modular tabs in
+March 2026; that refactor produced 11, and there are **26** now, in 5 groups. `app.py`'s
+`addTab` calls are the authoritative count — `src/xenium_viewer/tabs/*.py` agrees, but neither
+the docs nor `tabs/__init__.py` did until 2026-08-26.
