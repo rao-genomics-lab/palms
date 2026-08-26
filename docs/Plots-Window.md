@@ -6,6 +6,8 @@ Every figure the viewer produces — dotplots, UMAPs, neighbourhood-enrichment h
 
 The dock is hidden until the first figure arrives, then reveals itself at the bottom of the window. **View → Show Plots** (`Ctrl+Shift+P`) toggles it, and closing it with its own close button unticks the menu item.
 
+Closing the dock only hides it — the figures in it are kept, and the menu item brings them back. If you float the dock and lose track of it behind another window, the menu item raises it; if it has ended up somewhere no screen reaches, it is docked back into the main window instead.
+
 ## The gallery
 
 Figures are listed newest first. Each card shows a thumbnail, the figure's title, and the files it was written to.

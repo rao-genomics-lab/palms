@@ -95,6 +95,9 @@ class ViewerContext:
     # which only ever wrote a file, in one format, from six of eighteen sites.
     show_plot: Any = None
     plot_paths: Any = None            # where a stem will be written
+    # Shows the Plots dock, re-creating it if napari destroyed it (its
+    # title-bar close button does). Bound by app.py.
+    reveal_plots_dock: Any = None
     recorded_plot_paths: Any = None   # the same, relative to data_path
     repopulate_cluster_checkboxes: Any = None
     get_selected_cluster_ids: Any = None

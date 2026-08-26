@@ -689,9 +689,11 @@ def create_shared_helpers(ctx: ViewerContext):
         if panel is None:
             return
         panel.add_figure(fig, title, paths)
-        dock = state.get("_plots_dock")
-        if dock is not None and not dock.isVisible():
-            dock.setVisible(True)
+        # Through the same route as the View menu: the dock may have been closed
+        # (and therefore destroyed) since the last plot, in which case this
+        # re-creates it around the panel rather than writing to a dead pointer.
+        if ctx.reveal_plots_dock is not None:
+            ctx.reveal_plots_dock()
 
     def _show_plot(fig, stem: str, title: str = None, save: bool = True,
                    paths=None) -> list[str]:
@@ -978,6 +980,92 @@ def create_file_menu(viewer, on_open_dataset, on_preprocess_dataset=None):
         file_menu.addAction(pre_act)
 
 
+# ── Plots dock lifecycle ─────────────────────────────────────────────────────
+#
+# napari's dock title bar has a close button, and it does not hide the dock: it
+# calls ``destroyOnClose`` -> ``Window.remove_dock_widget``, which reparents the
+# inner widget to ``None`` and ``deleteLater()``s the dock. So one click on the
+# "x" left the Plots gallery in a state where the dock object was a dangling C++
+# pointer and the panel was an orphan — and the View-menu toggle, which called
+# ``setVisible`` on that pointer, raised ``RuntimeError`` into a bare
+# ``except: pass`` and appeared to do nothing at all.
+#
+# The panel itself always survives (Python holds it in ``_app["plots_panel"]``),
+# so the fix is to treat the *dock* as disposable and re-create it around the
+# surviving panel whenever it is needed.
+
+def dock_is_alive(dock) -> bool:
+    """Whether *dock* is still a live Qt object rather than a dangling pointer."""
+    if dock is None:
+        return False
+    try:
+        dock.isVisible()
+        return True
+    except RuntimeError:      # wrapped C/C++ object has been deleted
+        return False
+
+
+def _is_on_a_screen(widget) -> bool:
+    """Whether any part of *widget* is on a connected display.
+
+    A floating dock can be dragged somewhere unreachable — off the desktop, or
+    onto a screen that has since been disconnected. Re-showing it there looks
+    exactly like the toggle doing nothing.
+    """
+    from qtpy.QtGui import QGuiApplication
+
+    frame = widget.frameGeometry()
+    return any(screen.availableGeometry().intersects(frame)
+               for screen in QGuiApplication.screens())
+
+
+def ensure_plots_dock(viewer, _app):
+    """The live Plots dock, re-created around the surviving panel if needed.
+
+    Returns ``None`` only when there is no panel yet (before the first dataset
+    finishes loading).
+    """
+    dock = _app.get("plots_dock")
+    if dock_is_alive(dock):
+        return dock
+
+    panel = _app.get("plots_panel")
+    if panel is None:
+        return None
+
+    dock = viewer.window.add_dock_widget(panel, name="Plots", area="bottom")
+    _app["plots_dock"] = dock
+
+    # Make the title bar's "x" *hide* the dock instead of destroying it. Closing
+    # a gallery should not throw away the figures in it, and an instance
+    # attribute shadows the class method napari's close button calls.
+    dock.destroyOnClose = dock.hide
+
+    if hasattr(dock, "visibilityChanged"):
+        def _sync(visible, _dock=dock):
+            action = _app.get("plots_action")
+            if action is not None and action.isChecked() != visible:
+                action.setChecked(visible)
+        dock.visibilityChanged.connect(_sync)
+    return dock
+
+
+def reveal_plots_dock(viewer, _app):
+    """Show the Plots dock and make sure it is somewhere the user can see it."""
+    dock = ensure_plots_dock(viewer, _app)
+    if dock is None:
+        return None
+    # A floating dock that was dragged off the desktop cannot be shown where it
+    # is; bring it back into the main window rather than leaving the user with a
+    # menu item that appears dead.
+    if dock.isFloating() and not _is_on_a_screen(dock):
+        dock.setFloating(False)
+    dock.setVisible(True)
+    dock.raise_()
+    dock.activateWindow()
+    return dock
+
+
 # ── View menu ─────────────────────────────────────────────────────────────────
 
 def create_view_menu(viewer, _app):
@@ -1034,13 +1122,15 @@ def create_view_menu(viewer, _app):
     plots_action.setShortcut("Ctrl+Shift+P")
 
     def _on_plots_toggled(checked):
-        dw = _app.get("plots_dock")
-        if dw is None:
-            return
-        try:
-            dw.setVisible(checked)
-        except RuntimeError:
-            pass          # C++ object deleted during a dataset reload
+        if checked:
+            # Not ``dw.setVisible(True)``: napari may have destroyed the dock
+            # (its close button does), and calling into the dangling pointer is
+            # what made this menu item look broken.
+            reveal_plots_dock(viewer, _app)
+        else:
+            dw = _app.get("plots_dock")
+            if dock_is_alive(dw):
+                dw.hide()
 
     plots_action.toggled.connect(_on_plots_toggled)
     view_menu.addAction(plots_action)

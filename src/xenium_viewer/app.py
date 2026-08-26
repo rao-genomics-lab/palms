@@ -83,7 +83,11 @@ from xenium_viewer.utils.transcript_index import TranscriptLoader
 from xenium_viewer.utils.umap_widget import UMAPViewer
 from xenium_viewer.utils.viewer_context import ViewerContext
 from xenium_viewer.utils.units import layer_affine_px
-from xenium_viewer.tabs._helpers import create_shared_helpers, create_preferences_menu, create_file_menu, create_view_menu
+from xenium_viewer.tabs._helpers import (
+    create_shared_helpers, create_preferences_menu, create_file_menu,
+    create_view_menu, ensure_plots_dock as _ensure_plots_dock,
+    reveal_plots_dock as _reveal_plots_dock,
+)
 from xenium_viewer.utils.plot_output import DEFAULT_FORMATS
 from xenium_viewer.utils.prov_graph import ProvGraph
 from xenium_viewer import loader as _loader_mod
@@ -1144,20 +1148,14 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     # ``ctx.show_plot`` reveals it.
     from xenium_viewer.utils.plots_panel import PlotsPanel
     plots_panel = PlotsPanel()
-    plots_dock = viewer.window.add_dock_widget(
-        plots_panel, name="Plots", area="bottom"
-    )
-    plots_dock.setVisible(False)
     _app["plots_panel"] = plots_panel
-    _app["plots_dock"] = plots_dock
     ctx.plots_panel = plots_panel
-    ctx.state["_plots_dock"] = plots_dock
-    if hasattr(plots_dock, "visibilityChanged"):
-        def _on_plots_visibility(visible):
-            action = _app.get("plots_action")
-            if action is not None and action.isChecked() != visible:
-                action.setChecked(visible)
-        plots_dock.visibilityChanged.connect(_on_plots_visibility)
+    # ensure_plots_dock owns the dock's lifecycle — it also re-creates the dock
+    # if napari destroyed it, which its title-bar close button does.
+    plots_dock = _ensure_plots_dock(viewer, _app)
+    if plots_dock is not None:
+        plots_dock.setVisible(False)
+    ctx.reveal_plots_dock = lambda: _reveal_plots_dock(viewer, _app)
 
     # Sync the View menu checkbox when the dock is closed via its own close button
     _dw = _app["dock_widget"]

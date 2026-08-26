@@ -100,6 +100,21 @@
   else raises a named `TypeError` instead of failing inside Qt. The misleading annotation
   is gone.
 
+- **Closing the Plots dock destroyed it, and the View-menu toggle then did nothing.**
+  napari's dock title bar has an "×", and it does not hide the dock: it calls
+  `destroyOnClose` → `Window.remove_dock_widget`, which reparents the gallery to `None`
+  and `deleteLater()`s the dock. So one click left a dangling C++ pointer, and
+  **View → Show Plots** called `setVisible` on it, raised `RuntimeError` into a bare
+  `except: pass`, and looked broken. That is both halves of the report — the dock
+  "disappearing" and the toggle not working.
+
+  The dock is now disposable and the gallery is what persists: `ensure_plots_dock`
+  re-creates a dock around the surviving panel whenever the old one is gone, so the
+  figures are never lost. The "×" is shimmed to *hide* rather than destroy (closing a
+  gallery should not throw away what is in it). And `reveal_plots_dock` raises the window
+  and, if a floating dock has been dragged somewhere no connected screen reaches, docks it
+  back into the main window rather than re-showing it out of sight.
+
 - **Two clusters could not share a display name.** `.cat.rename_categories()` raises
   *ValueError: Categorical categories must be unique*, so naming clusters 0 and 2 both
   "Tumour" — an ordinary thing to want, meaning "these are the same cell type" — failed
