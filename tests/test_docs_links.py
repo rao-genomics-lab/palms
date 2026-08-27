@@ -34,7 +34,7 @@ SCREENSHOTS = DOCS / "screenshots"
 PUBLISH_SCRIPT = REPO / "scripts" / "push_to_wiki.sh"
 MKDOCS = REPO / "mkdocs.yml"
 SIDEBAR = DOCS / "_Sidebar.md"
-APP = REPO / "src" / "xenium_viewer" / "app.py"
+APP = REPO / "src" / "palms" / "app.py"
 
 # ``![alt](target)`` and ``[label](target)``. The negative lookbehind keeps the
 # link pattern from also matching the image one.

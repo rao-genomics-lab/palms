@@ -28,9 +28,9 @@ pytest.importorskip("qtpy")
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from xenium_viewer.tabs import tab_cache  # noqa: E402
-from xenium_viewer.utils import cache_repair  # noqa: E402
-from xenium_viewer.utils.zarr_safe import consolidate, safe_write_element  # noqa: E402
+from palms.tabs import tab_cache  # noqa: E402
+from palms.utils import cache_repair  # noqa: E402
+from palms.utils.zarr_safe import consolidate, safe_write_element  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -233,7 +233,7 @@ def test_clusterings_survive_a_table_anndata_cannot_read(tiny_sdata, tmp_path):
 
 
 def test_read_obs_columns_ignores_non_user_columns(tiny_sdata):
-    from xenium_viewer.utils.cache_repair import read_obs_columns
+    from palms.utils.cache_repair import read_obs_columns
 
     cache = Path(tiny_sdata.path)
     found = read_obs_columns(cache, ("clustering_", "cnv_score"))
@@ -247,13 +247,13 @@ def test_salvageable_elements_works_without_opening_the_store(tiny_sdata):
     root = cache / "zarr.json"
     root.write_text("{")                      # unopenable
 
-    from xenium_viewer.utils.cache_repair import salvageable_elements
+    from palms.utils.cache_repair import salvageable_elements
     assert sorted(salvageable_elements(cache)) == ["labels/lab", "tables/table"]
 
 
 def test_recovering_a_cache_pulls_back_sidecars(tiny_sdata, tmp_path):
     """CopyKAT results are the most expensive thing a rebuild can lose."""
-    from xenium_viewer.utils.adata_persistence import sidecar_dir
+    from palms.utils.adata_persistence import sidecar_dir
 
     cache = Path(tiny_sdata.path)
     backup = cache.parent / "sdata_cached_corrupt_20260101_000000.zarr"
@@ -317,7 +317,7 @@ def test_recovered_registration_survives_the_reload_that_follows(tiny_sdata):
     live state too, not only the disk.
     """
     import zarr
-    from xenium_viewer.utils.session import save_session
+    from palms.utils.session import save_session
 
     cache = Path(tiny_sdata.path)
     backup = cache.parent / "sdata_cached_corrupt_20260728_222253.zarr"
@@ -351,7 +351,7 @@ def test_recovered_registration_survives_the_reload_that_follows(tiny_sdata):
 
 def test_recovered_arms_affine_survives_too(tiny_sdata):
     import zarr
-    from xenium_viewer.utils.session import save_session
+    from palms.utils.session import save_session
 
     cache = Path(tiny_sdata.path)
     backup = cache.parent / "sdata_cached_prev_20260101_000000.zarr"
@@ -419,7 +419,7 @@ def test_recovery_with_no_session_in_the_backup_is_a_no_op(tiny_sdata):
 
 def test_viewer_context_carries_a_reload_hook():
     """The Cache tab needs it: recovered elements are invisible until reload."""
-    from xenium_viewer.utils.viewer_context import ViewerContext
+    from palms.utils.viewer_context import ViewerContext
 
     assert hasattr(ViewerContext(), "reload_dataset")
 
@@ -427,7 +427,7 @@ def test_viewer_context_carries_a_reload_hook():
 def test_app_binds_the_reload_hook_on_every_dataset_load():
     """It must be rebound in _do_full_init — each reload makes a new context."""
     source = (Path(__file__).resolve().parent.parent
-              / "src" / "xenium_viewer" / "app.py").read_text()
+              / "src" / "palms" / "app.py").read_text()
     assert 'ctx.reload_dataset = _app.get("reload_current_dataset")' in source
     assert "def _load_dataset_into_viewer" in source
 

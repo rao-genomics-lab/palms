@@ -22,8 +22,8 @@ pytest.importorskip("spatialdata")
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from xenium_viewer.utils import store_inventory as si  # noqa: E402
-from xenium_viewer.utils import zarr_safe  # noqa: E402
+from palms.utils import store_inventory as si  # noqa: E402
+from palms.utils import zarr_safe  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -239,7 +239,7 @@ def test_the_bare_twin_a_leiden_run_leaves_is_deletable_with_its_clustering(data
     The recorded step writes adata.obs[$key]; save_clustering_to_adata writes
     clustering_<key>. Offering only the prefixed one left an identical copy.
     """
-    from xenium_viewer.utils import zarr_safe as zs
+    from palms.utils import zarr_safe as zs
     adata = dataset.sdata["table"]
     adata.obs["leiden_igraph_r1.0"] = adata.obs["clustering_leiden_r1.0"]
     adata.obs["clustering_leiden_igraph_r1.0"] = adata.obs["clustering_leiden_r1.0"]
@@ -263,7 +263,7 @@ def test_a_bare_column_with_no_clustering_twin_stays_blocked(dataset):
 
 
 def test_a_structural_column_is_never_paired_even_if_named_like_one(dataset):
-    from xenium_viewer.utils import zarr_safe as zs
+    from palms.utils import zarr_safe as zs
     adata = dataset.sdata["table"]
     # A user who names a clustering "region" must not lose the real column.
     adata.obs["clustering_region"] = adata.obs["clustering_leiden_r1.0"]
@@ -325,7 +325,7 @@ def test_the_transcript_cache_is_deletable_and_says_what_it_costs(dataset):
     node = _by_key(si.build_inventory(dataset.data_path, dataset.cache))[
         "derived:transcript_cache"]
     assert node.deletable is True
-    assert "xenium-preprocess" in node.detail
+    assert "palms-preprocess" in node.detail
     assert node.size_bytes and node.size_bytes > 0
 
 
@@ -346,7 +346,9 @@ def test_a_dated_provenance_backup_is_blocked_too(dataset):
 
 
 @pytest.mark.parametrize("name", [
-    "analysis.py", "analysis_notebook.ipynb", "plots", "xenium_viewer.log"])
+    "analysis.py", "analysis_notebook.ipynb", "plots", "palms.log",
+    # A dataset last opened before the rename still has the old log filename.
+    "xenium_viewer.log"])
 def test_viewer_output_in_the_dataset_folder_is_not_called_raw(dataset, name):
     """It is outside every deletable root, but it is not 10x's either — saying
     "the viewer never modifies it" about the viewer's own log is just false."""

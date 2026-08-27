@@ -28,8 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 pytest.importorskip("spatialdata")
 np = pytest.importorskip("numpy")
 
-from xenium_viewer import loader  # noqa: E402
-from xenium_viewer.loader import (  # noqa: E402
+from palms import loader  # noqa: E402
+from palms.loader import (  # noqa: E402
     _detect_user_data, _format_user_data_message, _has_any_user_data,
     _is_cache_stale, _restore_user_elements, write_manifest,
 )
@@ -193,7 +193,7 @@ def test_a_missing_source_is_never_stale(fake_cache):
 
 
 def test_manifest_records_the_versions_it_was_built_with(fake_cache):
-    from xenium_viewer.utils.cache_repair import read_manifest
+    from palms.utils.cache_repair import read_manifest
 
     cache, experiment = fake_cache
     write_manifest(cache, experiment)
@@ -303,7 +303,7 @@ def test_stale_with_user_data_and_no_dialog_keeps_the_cache(monkeypatch, fake_ca
 def test_an_unopenable_cache_with_no_dialog_raises_rather_than_rebuilding(
     monkeypatch, fake_cache,
 ):
-    from xenium_viewer.utils import cache_repair
+    from palms.utils import cache_repair
 
     cache, _ = fake_cache
     (cache / "adata_cnv_cache_copykat.h5ad").write_bytes(b"x")
@@ -315,7 +315,7 @@ def test_an_unopenable_cache_with_no_dialog_raises_rather_than_rebuilding(
         )
 
 
-# ── the headless opt-in: xenium-build-cache --on-stale ───────────────────────
+# ── the headless opt-in: palms-build-cache --on-stale ───────────────────────
 #
 # The rule above ("never discard without asking") left a terminal with no way to
 # say yes. --on-stale is that yes, and these check it stays an opt-in.
@@ -357,7 +357,7 @@ def test_on_stale_also_covers_the_branches_that_never_prompt(fake_cache):
 def test_on_stale_keep_still_refuses_an_unopenable_cache(monkeypatch, fake_cache):
     """'keep' is not an answer here — the cache does not open, so keeping it is
     not a way to carry on."""
-    from xenium_viewer.utils import cache_repair
+    from palms.utils import cache_repair
 
     cache, _ = fake_cache
     (cache / "adata_cnv_cache_copykat.h5ad").write_bytes(b"x")
@@ -404,8 +404,8 @@ def test_build_cache_parser_rejects_an_unknown_on_stale():
 
 
 def test_the_console_script_target_exists():
-    """pyproject points xenium-build-cache at this name."""
-    entry = "xenium-build-cache = \"xenium_viewer.loader:main\""
+    """pyproject points palms-build-cache at this name."""
+    entry = "palms-build-cache = \"palms.loader:main\""
     pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
     assert entry in pyproject
     assert callable(loader.main)
@@ -486,7 +486,7 @@ def test_a_cache_only_dataset_loads_from_cache_and_moves_nothing(
 def test_a_cache_only_dataset_is_stamped_so_the_next_run_need_not_re_derive(
     monkeypatch, crop_export_dir,
 ):
-    from xenium_viewer.utils.cache_repair import read_manifest
+    from palms.utils.cache_repair import read_manifest
 
     monkeypatch.setattr(loader, "_open_cache", lambda p: "SDATA")
     loader.load_sdata(crop_export_dir)
@@ -570,7 +570,7 @@ def test_the_loader_never_deletes_a_cache_directory():
     import re
 
     source = (Path(__file__).resolve().parent.parent
-              / "src" / "xenium_viewer" / "loader.py").read_text()
+              / "src" / "palms" / "loader.py").read_text()
     offenders = [
         line.strip() for line in source.splitlines()
         if re.search(r"rmtree\(\s*(str\()?cache_path", line)

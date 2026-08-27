@@ -23,8 +23,8 @@ from shapely.geometry import Point, Polygon
 from spatialdata.models import Image2DModel, Labels2DModel, ShapesModel
 from spatialdata.transformations import Affine, Identity, set_transformation
 
-from xenium_viewer.utils import crop_overlays
-from xenium_viewer.utils.crop_export import _safe_scale_factors
+from palms.utils import crop_overlays
+from palms.utils.crop_export import _safe_scale_factors
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
@@ -277,7 +277,7 @@ def test_xenium_and_image_landmark_sets_are_told_apart():
 
 def test_the_carry_list_comes_from_the_loader_predicate():
     """Not a second hand-written list — the loader's is the single source."""
-    from xenium_viewer import loader
+    from palms import loader
 
     class _FakeSData:
         images = {"morphology_focus": 1, "he_image": 1, "arms_he_image": 1, "ext_phenocycler": 1}

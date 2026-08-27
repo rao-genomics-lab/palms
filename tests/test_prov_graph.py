@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from xenium_viewer.utils.prov_graph import (  # noqa: E402
+from palms.utils.prov_graph import (  # noqa: E402
     ProvGraph, CycleError, graph_to_cells, graph_to_script,
     graph_to_mermaid, graph_to_dot,
     SETUP, ARTIFACT, TERMINAL, NOTE,
@@ -243,7 +243,7 @@ def test_a_note_exports_as_markdown_not_as_an_empty_code_cell():
 
 def test_a_note_is_marked_as_viewer_state():
     """A reader must be able to tell it apart from analysis narrative."""
-    from xenium_viewer.utils.prov_graph import NOTES_MARKER
+    from palms.utils.prov_graph import NOTES_MARKER
 
     cells = graph_to_cells(_with_note())
     body = [c for c in cells if c.node_id == "viewer:background"][-1].source

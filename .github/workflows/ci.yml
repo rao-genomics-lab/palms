@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build xenium_viewer env from environment.yml
+      - name: Build palms env from environment.yml
         uses: mamba-org/setup-micromamba@v3
         with:
           environment-file: environment.yml
@@ -31,7 +31,7 @@ jobs:
       # conda's and Qt6 aborts. Testing environment.yml alone would mean CI green
       # on a stack no Linux user actually runs.
       - name: Apply the Linux GL overlay (as scripts/install.sh does)
-        run: micromamba install -y -n xenium_viewer -f environment-linux.yml
+        run: micromamba install -y -n palms -f environment-linux.yml
 
       # The solver reaching for PyQt5, or walking napari back a minor version to
       # ease an unrelated pin, is silent otherwise — and both have happened. A
@@ -77,7 +77,7 @@ jobs:
 
       # No environment-linux.yml here, deliberately: this asserts that
       # environment.yml *alone* is installable, which is the thing that broke.
-      - name: Build xenium_viewer env from environment.yml
+      - name: Build palms env from environment.yml
         uses: mamba-org/setup-micromamba@v3
         with:
           environment-file: environment.yml

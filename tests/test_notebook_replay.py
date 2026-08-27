@@ -45,22 +45,22 @@ pytest.importorskip("nbclient")
 pytest.importorskip("ipykernel")
 adjusted_rand_score = pytest.importorskip("sklearn.metrics").adjusted_rand_score
 
-from xenium_viewer.utils import notebook_export  # noqa: E402
-from xenium_viewer.utils.environment import environment_code  # noqa: E402
-from xenium_viewer.utils.prov_graph import SETUP  # noqa: E402
-from xenium_viewer.utils.steps import Step, StepExecutor  # noqa: E402
+from palms.utils import notebook_export  # noqa: E402
+from palms.utils.environment import environment_code  # noqa: E402
+from palms.utils.prov_graph import SETUP  # noqa: E402
+from palms.utils.steps import Step, StepExecutor  # noqa: E402
 
 # The real templates, imported as constants so the tab modules' Qt/napari
 # imports are never triggered.
-from xenium_viewer.tabs.tab_clustering import (  # noqa: E402
+from palms.tabs.tab_clustering import (  # noqa: E402
     FLAVOR_DEFAULTS, _leiden_template,
 )
-from xenium_viewer.tabs._helpers import (  # noqa: E402
+from palms.tabs._helpers import (  # noqa: E402
     _NORMALIZE_TEMPLATE, _SPATIAL_NEIGHBORS_TEMPLATE,
 )
-from xenium_viewer.tabs.tab_gene_analysis import _RANK_GENES_TEMPLATE  # noqa: E402
-from xenium_viewer.utils.gene_analysis import rank_genes_key  # noqa: E402
-from xenium_viewer.tabs.tab_nhood import _NHOOD_TEMPLATE  # noqa: E402
+from palms.tabs.tab_gene_analysis import _RANK_GENES_TEMPLATE  # noqa: E402
+from palms.utils.gene_analysis import rank_genes_key  # noqa: E402
+from palms.tabs.tab_nhood import _NHOOD_TEMPLATE  # noqa: E402
 
 CLUSTER_KEYS = ("leiden_igraph_r0.5", "leiden_igraph_r1.0")
 PRIMARY_KEY = CLUSTER_KEYS[1]
@@ -310,7 +310,7 @@ verify_notebook = pytest.importorskip("verify_notebook")
 
 
 def _graph_with(nodes):
-    from xenium_viewer.utils.prov_graph import ProvGraph
+    from palms.utils.prov_graph import ProvGraph
     graph = ProvGraph()
     for node_id, code in nodes:
         graph.upsert(node_id, code, kind=SETUP)
@@ -339,7 +339,7 @@ def test_declared_viewer_state_is_counted_apart_from_the_punch_list():
     recorded prose does. Both used to land in the same list, so the list was
     mostly display state and the defects in it were invisible.
     """
-    from xenium_viewer.utils.prov_graph import NOTE
+    from palms.utils.prov_graph import NOTE
 
     graph = _graph_with([
         ("real", "adata_norm = adata.copy()"),

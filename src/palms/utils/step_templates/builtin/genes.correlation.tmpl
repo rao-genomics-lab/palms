@@ -1,0 +1,72 @@
+# palms template
+# id: genes.correlation
+# schema-version: 1
+# assemblies: head+expr.raw+stats+title.plain+tail |
+#          head+expr.raw+filter+stats+title.filtered+tail |
+#          head+expr.fraction+stats+title.plain+tail |
+#          head+expr.fraction+filter+stats+title.filtered+tail |
+#          head+expr.log1p_cpm+stats+title.plain+tail |
+#          head+expr.log1p_cpm+filter+stats+title.filtered+tail
+# doc: Two-gene scatter with Pearson/Spearman, one expr.* block per normalisation.
+# requires: sc, plt, Path, adata, adata_norm
+# outputs: fig, x, pr, pp, sr, sp
+# params: gene_a:str, gene_b:str, norm_label:str, xlabel:str, ylabel:str,
+#         title_prefix:str, paths:list, clustering:str?, selected:list?
+
+#--- block head
+# Gene correlation ($norm_label): $gene_a vs $gene_b
+from scipy.stats import pearsonr, spearmanr
+
+#--- block expr.raw
+_expr = sc.get.obs_df(adata, keys=[$gene_a, $gene_b])
+x = _expr[$gene_a].to_numpy(dtype='float32')
+y = _expr[$gene_b].to_numpy(dtype='float32')
+
+#--- block expr.fraction
+_expr = sc.get.obs_df(adata, keys=[$gene_a, $gene_b])
+# Totals from scanpy's QC helper rather than a hand-rolled row sum.
+# inplace=False deliberately: inplace=True writes obs['total_counts'], which is
+# one of Xenium's own columns, so it would overwrite the raw value on adata.
+_qc_obs, _ = sc.pp.calculate_qc_metrics(adata, percent_top=None, log1p=False,
+                                        inplace=False)
+_totals = _qc_obs['total_counts'].to_numpy(dtype='float64')
+_totals[_totals == 0] = 1
+x = (_expr[$gene_a].to_numpy() / _totals).astype('float32')
+y = (_expr[$gene_b].to_numpy() / _totals).astype('float32')
+
+#--- block expr.log1p_cpm
+_expr = sc.get.obs_df(adata_norm, keys=[$gene_a, $gene_b])
+x = _expr[$gene_a].to_numpy(dtype='float32')
+y = _expr[$gene_b].to_numpy(dtype='float32')
+
+#--- block filter
+_sel = adata.obs[$clustering].astype(str).isin($selected).to_numpy()
+x, y = x[_sel], y[_sel]
+
+#--- block stats
+pr, pp = pearsonr(x, y)
+sr, sp = spearmanr(x, y)
+_p = lambda p: f'{p:.2e}' if p < 0.001 else f'{p:.4f}'
+
+fig, ax = plt.subplots(figsize=(5, 5))
+ax.scatter(x, y, s=1, alpha=0.3, rasterized=True, color='#1f77b4')
+ax.set_xlabel($xlabel)
+ax.set_ylabel($ylabel)
+
+#--- block title.plain
+ax.set_title($title_prefix + f'  [n={len(x):,}]')
+
+#--- block title.filtered
+ax.set_title($title_prefix + f'  [n={len(x):,} (filtered)]')
+
+#--- block tail
+ax.text(
+    0.03, 0.97,
+    f'Pearson  r = {pr:.3f}, p = {_p(pp)}\nSpearman \u03c1 = {sr:.3f}, p = {_p(sp)}',
+    transform=ax.transAxes, va='top', ha='left', fontsize=9,
+    bbox={'boxstyle': 'round,pad=0.3', 'fc': 'white', 'alpha': 0.7},
+)
+fig.tight_layout()
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, dpi=300, bbox_inches='tight')

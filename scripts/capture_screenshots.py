@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Automated screenshot capture for xenium_viewer wiki documentation.
+Automated screenshot capture for palms wiki documentation.
 
 Run with:
-    conda run -n xenium_viewer python scripts/capture_screenshots.py
+    conda run -n palms python scripts/capture_screenshots.py
 
 Saves PNGs to docs/screenshots/ and exits when done.
 """
@@ -170,7 +170,7 @@ def main():
     import napari
     from qtpy.QtCore import QTimer
     # Import internal helpers — these are private but stable across the codebase
-    from xenium_viewer.app import _do_full_init  # noqa: PLC2701
+    from palms.app import _do_full_init  # noqa: PLC2701
 
     _app = {
         "dock_widget": None,
@@ -179,7 +179,7 @@ def main():
         "reload_in_progress": False,
     }
 
-    viewer = napari.Viewer(title="Xenium Viewer — Screenshot Capture")
+    viewer = napari.Viewer(title="PALMS — Screenshot Capture")
     viewer.window.resize(1400, 900)
 
     print(f"Loading dataset: {DATASET}")

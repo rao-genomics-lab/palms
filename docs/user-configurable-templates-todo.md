@@ -46,7 +46,7 @@ tab.
 Run 2026-07-31 against a 4104-cell / 477-gene Xenium output, by driving
 `app.run_viewer` with `napari.run` replaced by an inspector that exits before
 the `save_session` block. Nothing was written back: the zarr was untouched, and
-the `viewer_cache/prov_graph.json` and `xenium_viewer.log` the launch creates
+the `viewer_cache/prov_graph.json` and `palms.log` the launch creates
 were removed afterwards. **`analysis.py` in the dataset root was overwritten**
 and could not be restored — it is derived and rewritten on every recorded step,
 so any run of this kind destroys it. **Copy a dataset before probing it, or use
@@ -109,7 +109,7 @@ every timing in the report.
 Only relevant if the per-user-only scope decision changes:
 
 - **Per-dataset override scope**, so a customised analysis travels with the data.
-  Site it at `<data_path>/xenium_viewer_templates/` — *outside* `viewer_cache/`,
+  Site it at `<data_path>/palms_templates/` — *outside* `viewer_cache/`,
   whose documented invariant (`store_inventory.py:672-674`) is that everything
   in it is deletable viewer output. Otherwise `_BLOCKED_SIDECAR_PREFIX`
   (`store_inventory.py:158-166`) has to be generalised to `(prefix, reason)`
@@ -128,7 +128,7 @@ Only relevant if the per-user-only scope decision changes:
   becomes relevant again only for Phase 4b's sharing work — Galaxy has long
   experience with tool definitions travelling between installations.
 - **Testing blind spot to keep in mind.** `tests/conftest.py` sets
-  `XENIUM_VIEWER_TEMPLATE_PATH` for the whole suite, so the branch taken when it
+  `PALMS_TEMPLATE_PATH` for the whole suite, so the branch taken when it
   is *unset* — every real user — runs nowhere by default. That gap shipped a
   viewer that could not start. `tests/test_template_overrides.py::no_env` now
   covers it; anything new that is reachable at launch belongs there too.

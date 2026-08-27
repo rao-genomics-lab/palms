@@ -20,7 +20,7 @@ import sys
 import numpy as np
 import pytest
 
-from xenium_viewer.utils import units
+from palms.utils import units
 
 PX = 0.2125          # the Xenium default, and the fallback in transcript_index
 
@@ -247,7 +247,7 @@ def test_minimap_maps_a_click_to_world_not_to_pixels():
     pixel size the click would land ~4.7x off — inside the tissue, plausibly,
     which is what makes it easy to miss.
     """
-    from xenium_viewer.utils.minimap_widget import MinimapWidget
+    from palms.utils.minimap_widget import MinimapWidget
 
     full_shape = (4000, 5000)
     scaled = MinimapWidget.__new__(MinimapWidget)
@@ -326,7 +326,7 @@ def test_inserting_opens_the_window_and_inserted_closes_it():
     """
     from napari.layers import Image
 
-    from xenium_viewer.app import _install_unit_scaling
+    from palms.app import _install_unit_scaling
 
     class _Emitter:
         def __init__(self): self.callbacks = []
@@ -406,7 +406,7 @@ def viewer():
 def test_adding_layers_does_not_warn_about_inconsistent_units(viewer, monkeypatch):
     """The whole point: a normal dataset load must not produce that message."""
     import napari._vispy.canvas as canvas_mod
-    from xenium_viewer.app import _install_unit_scaling
+    from palms.app import _install_unit_scaling
 
     _install_unit_scaling(viewer, PX)
 
@@ -433,7 +433,7 @@ def test_a_real_mismatch_outside_an_insertion_still_warns(viewer, monkeypatch):
     become invisible — which is a worse outcome than the noise.
     """
     import napari._vispy.canvas as canvas_mod
-    from xenium_viewer.app import _install_unit_scaling
+    from palms.app import _install_unit_scaling
 
     _install_unit_scaling(viewer, PX)
     viewer.add_image(np.zeros((16, 16), dtype=np.uint8), name="a")
@@ -487,7 +487,7 @@ def test_a_layer_that_refuses_the_scale_is_reported_not_swallowed(monkeypatch):
     A layer left in pixels really is misplaced relative to every other layer, so
     this must be surfaced — naming the layer, which napari's message does not.
     """
-    from xenium_viewer.utils import reporting
+    from palms.utils import reporting
 
     class _Stubborn:
         name = "wont_scale"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Create the xenium_viewer conda env, applying the Linux-only GL overlay when the
+# Create the palms conda env, applying the Linux-only GL overlay when the
 # host needs it. One command on Linux, macOS and WSL:
 #
 #     ./scripts/install.sh
-#     conda activate xenium_viewer
+#     conda activate palms
 #
 # Extra arguments are passed through to `env create`, e.g.:
 #

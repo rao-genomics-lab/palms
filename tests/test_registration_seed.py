@@ -1,6 +1,6 @@
 """Where an overlay's placement comes from, and the mixture that must never happen.
 
-The defect these pin: a cropped export (and any store built by `xenium-build-cache`,
+The defect these pin: a cropped export (and any store built by `palms-build-cache`,
 or whose session node was deleted) has no `viewer_session`, so the H&E and ARMS
 restorers found no affine and added the image at the origin. The element carries the
 registration; nothing read it back.
@@ -14,7 +14,7 @@ error anywhere.
 import numpy as np
 import pytest
 
-from xenium_viewer.utils.registration_seed import seed_registration
+from palms.utils.registration_seed import seed_registration
 
 
 class _FakeSdata:

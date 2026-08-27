@@ -139,7 +139,7 @@ are drafted in `/media/srao/InternalBac2/software_development/napari_issue/`.
 
 ```bash
 ./scripts/install.sh                    # now resolves the Qt6 stack, on Linux and macOS
-conda activate xenium_viewer
+conda activate palms
 python -c "import qtpy; print(qtpy.API_NAME, qtpy.QT_VERSION)"   # PyQt6 6.8.1
 pytest
 ```

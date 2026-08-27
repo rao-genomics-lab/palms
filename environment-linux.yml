@@ -1,7 +1,7 @@
 # Linux-only overlay for the main viewer env. Applies ON TOP of environment.yml:
 #
 #     conda env create -f environment.yml
-#     conda env update -n xenium_viewer -f environment-linux.yml   # Linux/WSL only
+#     conda env update -n palms -f environment-linux.yml   # Linux/WSL only
 #
 # `scripts/install.sh` does both, branching on `uname -s`, so normally you never
 # run this by hand.
@@ -35,7 +35,7 @@
 #
 # macOS needs none of this: there is no GLX on macOS at all — Qt uses the cocoa
 # platform plugin and PyOpenGL loads the system OpenGL framework.
-name: xenium_viewer
+name: palms
 channels:          # `env update` does not inherit environment.yml's channels
   - conda-forge
   - nodefaults

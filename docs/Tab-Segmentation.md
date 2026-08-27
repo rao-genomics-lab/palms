@@ -15,7 +15,7 @@ Replace the native Xenium cell segmentation with a custom segmentation produced 
 
 ## Workflow
 
-1. Produce a `custom_segmentation.h5ad` file using the `xenium-build-custom-segmentation` pipeline. This step requires R and Seurat for cell boundary extraction; see the project README for details.
+1. Produce a `custom_segmentation.h5ad` file using the `palms-build-custom-segmentation` pipeline. This step requires R and Seurat for cell boundary extraction; see the project README for details.
 2. In the viewer, open the Segmentation tab and click "Load Custom Segmentation...".
 3. Select the `custom_segmentation.h5ad` file. If a cached copy exists, choose whether to load from cache or re-import.
 4. The viewer swaps to the custom segmentation; previously computed cluster-dependent analyses are cleared.
@@ -25,5 +25,5 @@ Replace the native Xenium cell segmentation with a custom segmentation produced 
 ## Notes
 
 - A custom segmentation is cached in `sdata_cached.zarr` on first load; subsequent loads use the cached version automatically.
-- Building a custom segmentation is a two-stage pipeline. The boundaries are extracted first (typically in R/Seurat), then `xenium-build-custom-segmentation` turns them into the label raster the viewer loads. Its output is a `custom_labels.zarr` that must stay **beside** the `.h5ad` you select here — selecting an `.h5ad` on its own fails with "not found alongside h5ad".
+- Building a custom segmentation is a two-stage pipeline. The boundaries are extracted first (typically in R/Seurat), then `palms-build-custom-segmentation` turns them into the label raster the viewer loads. Its output is a `custom_labels.zarr` that must stay **beside** the `.h5ad` you select here — selecting an `.h5ad` on its own fails with "not found alongside h5ad".
 - Swapping segmentation resets active clusterings. You will need to re-run Leiden clustering on the new segmentation before cluster-dependent visualisations and analyses are available.

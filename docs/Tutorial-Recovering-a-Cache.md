@@ -1,6 +1,6 @@
 # Recovering a Cache
 
-**Prerequisites:** Xenium Viewer installed; a dataset whose zarr cache the viewer is complaining about, or that you simply want to check
+**Prerequisites:** PALMS installed; a dataset whose zarr cache the viewer is complaining about, or that you simply want to check
 
 **Time required:** ~10 minutes for a check and repair; considerably longer if a full rebuild turns out to be necessary
 
@@ -19,7 +19,7 @@ It usually is not. The viewer never deletes a cache: every recovery path is a re
 Open the dataset as usual:
 
 ```bash
-xenium-viewer /path/to/xenium/output/
+palms /path/to/xenium/output/
 ```
 
 If the cache is fine — or was repairable on its own — the viewer opens normally and you can skip to step 3 to confirm.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-**Xenium Viewer** is a napari-based spatial transcriptomics viewer for Xenium 3.x output data — an open alternative to the commercial Xenium Explorer, which has no Linux build. It visualizes high-resolution spatial gene expression data with cell-level resolution. Supported on **Linux, macOS and WSL2**; Linux is the primary development platform and native Windows is not supported.
+**PALMS** is a napari-based spatial transcriptomics viewer for Xenium 3.x output data — an open alternative to the commercial Xenium Explorer, which has no Linux build. It visualizes high-resolution spatial gene expression data with cell-level resolution. Supported on **Linux, macOS and WSL2**; Linux is the primary development platform and native Windows is not supported.
 
 ## Running the Viewer
 
@@ -14,29 +14,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # libglx-devel, which is linux-only and made environment.yml unsolvable on macOS
 # while it lived there — conda env files have no platform selectors, hence a script.
 ./scripts/install.sh
-conda activate xenium_viewer
+conda activate palms
 
 # Optional one-time transcript preprocessing per dataset (~30-60 min)
 # Without this, transcript loading falls back to scanning transcripts.parquet (~5s/gene instead of <100ms)
-xenium-preprocess /path/to/xenium/output/
+palms-preprocess /path/to/xenium/output/
 
 # Optional: build the SpatialData zarr cache without the GUI (the viewer builds
 # it on first launch anyway). --check reports on an existing one and writes nothing.
-xenium-build-cache /path/to/xenium/output/
+palms-build-cache /path/to/xenium/output/
 
 # Rename or move a dataset. Nothing stores a dataset *name*, but the provenance
 # graph records absolute paths; this rewrites them. --dry-run writes nothing.
-xenium-rename-dataset /path/to/xenium/output/ new_name
-xenium-rename-dataset /path/that/was/moved/ --repair
+palms-rename-dataset /path/to/xenium/output/ new_name
+palms-rename-dataset /path/that/was/moved/ --repair
 
 # Launch viewer (file dialog opens if no path given)
-xenium-viewer [/path/to/xenium/output/]
+palms [/path/to/xenium/output/]
 
 # Launch without SpatialData zarr cache
-xenium-viewer /path/to/xenium/output/ --no-cache
+palms /path/to/xenium/output/ --no-cache
 ```
 
-The package is installed as `xenium-viewer` (PyPI name) / `xenium_viewer` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `xenium-viewer`, `xenium-preprocess`, `xenium-build-cache`, `xenium-rename-dataset`, `xenium-fetch-references`, `xenium-build-custom-segmentation`. You can also run `python -m xenium_viewer ...`.
+The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
 There is a `pytest` suite in `tests/` (**1318 tests** across 56 files, measured 2026-08-26 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
@@ -77,20 +77,20 @@ manual/exploratory.
 
 ### Entry Points & Load Sequence
 
-1. **`src/xenium_viewer/app.py`** — Main entry point (~1800 lines). Validates data dir, orchestrates loading, builds napari viewer with layers, instantiates all managers, creates `ViewerContext`, builds all tab widgets, then restores session. The `main()` function is the `xenium-viewer` console-script entry point.
-2. **`src/xenium_viewer/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness comes from a content hash in `.xv_manifest.json` (see "Cache safety"). Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`. Its `main()` is the `xenium-build-cache` console script — the same load, headless, so the cold read can happen over ssh. `load_sdata(on_stale=)` is how a caller with no GUI authorises a rebuild: `_stale_preference` checks it *before* any branch that would prompt, because two of those branches never reach a dialog. Default `None` keeps the GUI behaviour exactly as it was, and `'keep'` deliberately does not satisfy `_ask_corrupt_cache` — a cache that will not open cannot be kept.
-3. **`src/xenium_viewer/preprocess.py`** — One-time step that splits the transcript parquet into ~480 per-gene feather files for fast per-gene loading (~100ms vs 4–5s). The `main()` function is the `xenium-preprocess` console-script entry point.
+1. **`src/palms/app.py`** — Main entry point (~1800 lines). Validates data dir, orchestrates loading, builds napari viewer with layers, instantiates all managers, creates `ViewerContext`, builds all tab widgets, then restores session. The `main()` function is the `palms` console-script entry point.
+2. **`src/palms/loader.py`** — Loads SpatialData from Xenium output. Uses a zarr cache (`sdata_cached.zarr/`) for 60–70% faster subsequent launches; staleness comes from a content hash in `.xv_manifest.json` (see "Cache safety"). Public API: `load_sdata`, `load_umap`, `load_clusterings`, `get_label_to_obs_mapping`. Its `main()` is the `palms-build-cache` console script — the same load, headless, so the cold read can happen over ssh. `load_sdata(on_stale=)` is how a caller with no GUI authorises a rebuild: `_stale_preference` checks it *before* any branch that would prompt, because two of those branches never reach a dialog. Default `None` keeps the GUI behaviour exactly as it was, and `'keep'` deliberately does not satisfy `_ask_corrupt_cache` — a cache that will not open cannot be kept.
+3. **`src/palms/preprocess.py`** — One-time step that splits the transcript parquet into ~480 per-gene feather files for fast per-gene loading (~100ms vs 4–5s). The `main()` function is the `palms-preprocess` console-script entry point.
 
 ### Central State: ViewerContext
 
-**`src/xenium_viewer/utils/viewer_context.py`** — `ViewerContext` dataclass is the single shared state object passed to all tab modules. It holds:
+**`src/palms/utils/viewer_context.py`** — `ViewerContext` dataclass is the single shared state object passed to all tab modules. It holds:
 - Core data: `viewer`, `adata`, `sdata`, `clusterings`, pixel size
 - Layer references: `cell_labels_layer`, `transcript_layer`, `roi_layer`
 - Manager objects: `CellColorManager`, `TranscriptLoader`, `UMAPViewer`
 - Mutable state dicts: `state` (general), `he_state` (H&E registration), `arms_state` (ARMS overlay)
 - Shared callables: `record_node()` / `record_code()`, `set_status()`, `refresh_clustering_choices()`
 
-### Tab Modules (`src/xenium_viewer/tabs/`)
+### Tab Modules (`src/palms/tabs/`)
 
 Each tab follows a consistent pattern:
 
@@ -130,7 +130,7 @@ Templates, pinning the dock at 536×534). **The same rule applies to the Plots d
 which is a second dock with the same failure mode — `utils/plots_panel.py` wraps its
 gallery in `scrollable()` and its buttons in `toolbar_row()` for exactly that reason.
 
-`src/xenium_viewer/tabs/_helpers.py` contains shared utilities (e.g., `StatusProxy`, `make_tab()`).
+`src/palms/tabs/_helpers.py` contains shared utilities (e.g., `StatusProxy`, `make_tab()`).
 
 ### Figures (`utils/plot_output.py`, `utils/plots_panel.py`, `utils/fig_render.py`)
 
@@ -170,7 +170,7 @@ Batch outputs (the three pairwise-volcano generators) stay out of the gallery �
 run is fifty figures — but default their directory to `batch_dir(data_path, ...)` and
 honour the format setting.
 
-### Key Utilities (`src/xenium_viewer/utils/`)
+### Key Utilities (`src/palms/utils/`)
 
 | Module | Purpose |
 |---|---|
@@ -231,7 +231,7 @@ the `preamble` node's `data_path = Path(r"…")` and each `clustering:<key>` nod
 CopyKAT result JSONs. It does not stay quiet: `app.py` re-emits the preamble for the
 current `data_path` on every launch, so `upsert` flags **every descendant stale** and
 the first launch after a manual rename marks the whole notebook ⚠ for nothing.
-`xenium-rename-dataset` repairs all of it before that launch; `--repair` infers the
+`palms-rename-dataset` repairs all of it before that launch; `--repair` infers the
 old path from the recorded preamble.
 
 Two rules carry the safety, both under test:
@@ -339,7 +339,7 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   template × every declared assembly (40 renderings), which is where the five hand-written
   `check_step` calls became a registry-wide gate.
 
-  **Users can override a template**, per user, in `~/.config/xenium-viewer/templates/*.tmpl`
+  **Users can override a template**, per user, in `~/.config/palms/templates/*.tmpl`
   — **resolved per block**, so blocks the user did not touch keep tracking the shipped
   template and still receive upstream fixes. `loader.resolve()` never raises and never
   returns nothing: an invalid override is skipped, the builtin is used, and the problems ride
@@ -350,7 +350,7 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   `validate.py` is the gate; the check that matters most is that a **required param the
   template no longer mentions is a hard stop**, because that template runs, succeeds, and
   silently ignores the user's setting. Two off switches: `--no-user-templates` and
-  `XENIUM_VIEWER_TEMPLATE_PATH` (emptied by `tests/conftest.py`, so a dev's own overrides
+  `PALMS_TEMPLATE_PATH` (emptied by `tests/conftest.py`, so a dev's own overrides
   never change what the suite asserts). Saving derives its destination from the same search
   path reading uses, so a write cannot land where the reader does not look.
 
@@ -453,7 +453,7 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   One documented exception: the `preamble` node records
   `xenium(data_path)` while the viewer reaches the same objects via the zarr cache.
   A second documented exception: **CopyKAT** (`cnv:copykat`) stays on `record_node`
-  because it runs detached in the `xenium_viewer_copykat` env — no in-process step can be
+  because it runs detached in the `palms_copykat` env — no in-process step can be
   the code that ran, so its cell says in-line that it is a reconstruction. `run_cnv_pipeline`
   is now the CopyKAT path only; the inferCNV template must stay in sync with it
   (`tests/test_cnv_step.py` pins both).
@@ -552,12 +552,12 @@ reproducibility defect rather than a kernel-discovery one.
   loose: upper pins there make the main env's pip section unsolvable against `-e .`.
   **inferCNV** runs in the main env. **CopyKAT** needs **rpy2 + R 4.3 + the `copykat` R package**,
   whose stack requires **python 3.11** — incompatible with the main env's python 3.12. So CopyKAT
-  runs in a **second conda env** (`environment-copykat.yml` → `xenium_viewer_copykat`): the viewer
+  runs in a **second conda env** (`environment-copykat.yml` → `palms_copykat`): the viewer
   resolves that env's python (`_resolve_copykat_python` in `tabs/tab_cnv.py`; override via
-  `XENIUM_COPYKAT_ENV`/`XENIUM_COPYKAT_PYTHON`) and launches the detached worker
-  (`src/xenium_viewer/cnv_copykat_worker.py`) there, passing the viewer source on `PYTHONPATH`.
+  `PALMS_COPYKAT_ENV`/`PALMS_COPYKAT_PYTHON`) and launches the detached worker
+  (`src/palms/cnv_copykat_worker.py`) there, passing the viewer source on `PYTHONPATH`.
   The detached process survives the GUI closing; the GitHub-only copykat R package auto-installs
-  on first run (`src/xenium_viewer/install_copykat.py::ensure_copykat_installed`).
+  on first run (`src/palms/install_copykat.py::ensure_copykat_installed`).
 
 ## Pending upstream deprecations (act before upgrading)
 
@@ -595,7 +595,7 @@ reproducibility defect rather than a kernel-discovery one.
 
 ## Known Compatibility Patches
 
-- **ICE/X11 disconnect** — handled at startup of `src/xenium_viewer/app.py`, gated on
+- **ICE/X11 disconnect** — handled at startup of `src/palms/app.py`, gated on
   `sys.platform.startswith('linux')` (macOS has no session manager, so clearing
   `SESSION_MANAGER` there would be an unexplained edit to the user's environment).
 - **Missing `libglx-devel`** — `utils/gl_check.py`, called from `app.py` *before*
@@ -608,10 +608,10 @@ reproducibility defect rather than a kernel-discovery one.
   correctly-working box with no `libglx-dev` installed. **Both checks are for the unversioned
   name**: `ctypes.util.find_library('GLX')` returns `libGLX.so.0`, which every working box
   has, so it cannot answer this question — hence the globbed path list.
-- **pandas 3.0 PyArrow strings** — `_convert_arrow_strings()` in `src/xenium_viewer/loader.py`
+- **pandas 3.0 PyArrow strings** — `_convert_arrow_strings()` in `src/palms/loader.py`
 - **NumPy 2.0** — `np.NAN` fallback for omnipath compatibility
 - **matplotlib 3.9 `cm.get_cmap` removal** — `_patch_matplotlib_cm_compat()` in
-  `src/xenium_viewer/utils/cnv_analysis.py`. Now a no-op against the pinned
+  `src/palms/utils/cnv_analysis.py`. Now a no-op against the pinned
   `insituCNV-copykat` fork (fixed there); retained for pre-existing environments
   and upstream InSituCNV.
 
@@ -619,5 +619,5 @@ reproducibility defect rather than a kernel-discovery one.
 
 See `CHANGELOG.md`. The codebase was refactored from a 4295-line monolith into modular tabs in
 March 2026; that refactor produced 11, and there are **26** now, in 5 groups. `app.py`'s
-`addTab` calls are the authoritative count — `src/xenium_viewer/tabs/*.py` agrees, but neither
+`addTab` calls are the authoritative count — `src/palms/tabs/*.py` agrees, but neither
 the docs nor `tabs/__init__.py` did until 2026-08-26.

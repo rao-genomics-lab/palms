@@ -26,7 +26,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from xenium_viewer.tabs._helpers import (                        # noqa: E402
+from palms.tabs._helpers import (                        # noqa: E402
     dock_is_alive, ensure_plots_dock, reveal_plots_dock,
 )
 
@@ -73,7 +73,7 @@ def stub_viewer(qapp):
 
 @pytest.fixture
 def app_state(qapp):
-    from xenium_viewer.utils.plots_panel import PlotsPanel
+    from palms.utils.plots_panel import PlotsPanel
     panel = PlotsPanel()
     return {"plots_panel": panel, "plots_dock": None, "plots_action": None}
 
@@ -161,7 +161,7 @@ def test_off_screen_geometry_is_recognised(qapp):
     from qtpy.QtGui import QGuiApplication
     from qtpy.QtWidgets import QWidget
 
-    from xenium_viewer.tabs._helpers import _is_on_a_screen
+    from palms.tabs._helpers import _is_on_a_screen
 
     stray = QWidget()
     stray.setGeometry(-100000, -100000, 100, 100)
@@ -182,7 +182,7 @@ def test_reveal_rescues_a_dock_dragged_off_the_desktop(
     here — see the test above for the predicate itself — because a window
     manager will not let a test put a real window out of reach.
     """
-    import xenium_viewer.tabs._helpers as helpers
+    import palms.tabs._helpers as helpers
 
     stub_viewer._window.show()
     dock = ensure_plots_dock(stub_viewer, app_state)
@@ -198,7 +198,7 @@ def test_reveal_rescues_a_dock_dragged_off_the_desktop(
 def test_reveal_leaves_a_reachable_floating_dock_floating(
         stub_viewer, app_state, monkeypatch):
     """Floating on purpose is a legitimate choice; do not undo it."""
-    import xenium_viewer.tabs._helpers as helpers
+    import palms.tabs._helpers as helpers
 
     stub_viewer._window.show()
     dock = ensure_plots_dock(stub_viewer, app_state)
@@ -220,7 +220,7 @@ def test_the_close_button_hides_rather_than_destroys(qapp):
     napari's.
     """
     napari = pytest.importorskip("napari")
-    from xenium_viewer.utils.plots_panel import PlotsPanel
+    from palms.utils.plots_panel import PlotsPanel
 
     viewer = napari.Viewer(show=False)
     try:

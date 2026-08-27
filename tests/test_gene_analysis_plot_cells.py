@@ -26,8 +26,8 @@ sc = pytest.importorskip("scanpy")
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 
-from xenium_viewer.tabs.tab_gene_analysis import dotplot_code  # noqa: E402
-from xenium_viewer.utils.gene_analysis import rank_genes_key  # noqa: E402
+from palms.tabs.tab_gene_analysis import dotplot_code  # noqa: E402
+from palms.utils.gene_analysis import rank_genes_key  # noqa: E402
 
 GROUPBY = "leiden_igraph_r1.0"
 

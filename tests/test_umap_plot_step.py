@@ -37,10 +37,10 @@ import matplotlib                                                # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                                  # noqa: E402
 
-from xenium_viewer.utils.step_templates import (                 # noqa: E402
+from palms.utils.step_templates import (                 # noqa: E402
     builtin_assemble, builtin_text,
 )
-from xenium_viewer.utils.steps import Step, StepExecutor         # noqa: E402
+from palms.utils.steps import Step, StepExecutor         # noqa: E402
 
 N = 60
 GENES = ["Gene0", "Gene1", "Gene2"]
@@ -222,7 +222,7 @@ def test_the_fallback_computes_its_own_embedding_and_says_so(dataset, tmp_path):
 def test_the_tab_picks_the_embedding_block_from_the_dataset(dataset, tmp_path):
     """``has_xenium_umap`` is what chooses between the two embed blocks."""
     pytest.importorskip("qtpy")
-    from xenium_viewer.tabs.tab_umap import has_xenium_umap
+    from palms.tabs.tab_umap import has_xenium_umap
 
     _adata, data_path = dataset
     assert has_xenium_umap(data_path)

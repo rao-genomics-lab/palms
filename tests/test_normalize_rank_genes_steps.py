@@ -23,10 +23,10 @@ np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 sc = pytest.importorskip("scanpy")
 
-from xenium_viewer.utils.steps import Step, StepExecutor, check_step  # noqa: E402
-from xenium_viewer.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
-from xenium_viewer.tabs.tab_gene_analysis import _RANK_GENES_TEMPLATE  # noqa: E402
-from xenium_viewer.utils.gene_analysis import rank_genes_key  # noqa: E402
+from palms.utils.steps import Step, StepExecutor, check_step  # noqa: E402
+from palms.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
+from palms.tabs.tab_gene_analysis import _RANK_GENES_TEMPLATE  # noqa: E402
+from palms.utils.gene_analysis import rank_genes_key  # noqa: E402
 
 
 def _adata(n_obs: int = 120, n_vars: int = 40):
@@ -89,7 +89,7 @@ def test_normalize_does_not_mutate_adata():
 
 def test_normalize_matches_get_normalized_adata():
     """The step must reproduce what the viewer has always actually computed."""
-    from xenium_viewer.utils.gene_analysis import get_normalized_adata
+    from palms.utils.gene_analysis import get_normalized_adata
 
     adata = _adata()
     with warnings.catch_warnings():

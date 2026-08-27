@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from xenium_viewer.utils import raster_io
+from palms.utils import raster_io
 
 
 @pytest.fixture
@@ -262,7 +262,7 @@ def test_ignores_apple_double_files(write_pyramid_tiff):
 
 def test_loader_swap_never_raises(monkeypatch, tmp_path):
     """A broken read must degrade to the old path, not take the load down."""
-    import xenium_viewer.loader as loader
+    import palms.loader as loader
 
     class FakeSdata:
         images = {"morphology_focus": object()}
@@ -275,7 +275,7 @@ def test_loader_swap_never_raises(monkeypatch, tmp_path):
 
 
 def test_loader_swap_skips_datasets_without_the_image(tmp_path):
-    import xenium_viewer.loader as loader
+    import palms.loader as loader
 
     class FakeSdata:
         images: dict = {}
@@ -285,7 +285,7 @@ def test_loader_swap_skips_datasets_without_the_image(tmp_path):
 
 def test_loader_swap_replaces_the_element(write_pyramid_tiff):
     np = pytest.importorskip("numpy")
-    import xenium_viewer.loader as loader
+    import palms.loader as loader
 
     path, base = write_pyramid_tiff(shape=(2, 256, 192), levels=6)
 

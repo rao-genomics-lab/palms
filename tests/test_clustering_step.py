@@ -25,13 +25,13 @@ anndata = pytest.importorskip("anndata")
 np = pytest.importorskip("numpy")
 sc = pytest.importorskip("scanpy")
 
-from xenium_viewer.utils.steps import Step, StepExecutor, check_step  # noqa: E402
+from palms.utils.steps import Step, StepExecutor, check_step  # noqa: E402
 
 # Imported from the tab module's constants without triggering its Qt imports.
-from xenium_viewer.tabs.tab_clustering import (  # noqa: E402
+from palms.tabs.tab_clustering import (  # noqa: E402
     FLAVOR_DEFAULTS, LEIDEN_FLAVORS, _leiden_template,
 )
-from xenium_viewer.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
+from palms.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
 
 
 def _adata(n_obs: int = 200, n_vars: int = 60):
@@ -103,7 +103,7 @@ def test_the_step_hands_back_the_labels_it_declared():
 
 def test_a_template_that_stops_binding_the_labels_fails_loudly():
     """The point of the declared output: silent breakage becomes a StepError."""
-    from xenium_viewer.utils.steps import StepError
+    from palms.utils.steps import StepError
 
     adata = _adata()
     step = _step()

@@ -31,7 +31,7 @@ pytest.importorskip("infercnvpy")
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 
-from xenium_viewer.utils.cnv_analysis import make_cnv_heatmap  # noqa: E402
+from palms.utils.cnv_analysis import make_cnv_heatmap  # noqa: E402
 
 GROUPBY = "cnv_leiden_res0.2"
 
@@ -112,7 +112,7 @@ def test_a_panel_that_barely_maps_is_rejected_before_it_produces_a_result():
     reads copy number from runs of neighbouring genes, so 8 scattered genes is
     not a weak signal — it is noise that looks like a result.
     """
-    from xenium_viewer.utils.cnv_analysis import GeneMappingError, check_gene_mapping
+    from palms.utils.cnv_analysis import GeneMappingError, check_gene_mapping
 
     with pytest.raises(GeneMappingError) as excinfo:
         check_gene_mapping(8, 5006, ["A1cf", "A2m", "Aatf", "Abca1"])
@@ -125,7 +125,7 @@ def test_a_panel_that_barely_maps_is_rejected_before_it_produces_a_result():
 
 def test_a_human_panel_with_the_same_mapping_rate_gets_no_species_hint():
     """The species guess is a heuristic; the rejection is not."""
-    from xenium_viewer.utils.cnv_analysis import GeneMappingError, check_gene_mapping
+    from palms.utils.cnv_analysis import GeneMappingError, check_gene_mapping
 
     with pytest.raises(GeneMappingError) as excinfo:
         check_gene_mapping(8, 5006, ["A1CF", "A2M", "AATF", "ABCA1"])
@@ -139,7 +139,7 @@ def test_a_human_panel_with_the_same_mapping_rate_gets_no_species_hint():
     (0, 0),            # degenerate input must not raise here
 ])
 def test_a_usable_mapping_is_left_alone(n_mapped, n_total):
-    from xenium_viewer.utils.cnv_analysis import check_gene_mapping
+    from palms.utils.cnv_analysis import check_gene_mapping
     check_gene_mapping(n_mapped, n_total, ["A1CF"])      # must not raise
 
 

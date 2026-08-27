@@ -25,11 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 pytest.importorskip("spatialdata")
 
-from xenium_viewer.utils import cache_repair  # noqa: E402
-from xenium_viewer.utils.cache_repair import (  # noqa: E402
+from palms.utils import cache_repair  # noqa: E402
+from palms.utils.cache_repair import (  # noqa: E402
     AUTO, FULL, human_bytes, repair, verify,
 )
-from xenium_viewer.utils.zarr_safe import (  # noqa: E402
+from palms.utils.zarr_safe import (  # noqa: E402
     JOURNAL_DIR, STAGING_DIR, consolidate, safe_write_element,
 )
 
@@ -217,7 +217,7 @@ def test_debris_is_reported_and_cleared(tiny_sdata):
 
 
 def test_pending_writes_are_reported(tiny_sdata, make_table, monkeypatch):
-    from xenium_viewer.utils import zarr_safe
+    from palms.utils import zarr_safe
 
     cache = Path(tiny_sdata.path)
     real = os.rename

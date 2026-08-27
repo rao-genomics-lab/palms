@@ -6,7 +6,7 @@ recorded inside the provenance graph and the session attrs — and it does not
 break quietly: ``app.py`` re-emits the preamble for the current ``data_path`` on
 every launch, and ``ProvGraph.upsert`` then flags every transitive descendant
 stale. So the first launch after a hand-rolled ``mv`` marks the whole notebook
-⚠. ``xenium-rename-dataset`` exists to repair the graph before that happens.
+⚠. ``palms-rename-dataset`` exists to repair the graph before that happens.
 
 The properties that matter, and that each test below pins:
 
@@ -34,8 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 pytest.importorskip("spatialdata")
 
-from xenium_viewer.scripts import rename_dataset as rd  # noqa: E402
-from xenium_viewer.scripts.rename_dataset import (  # noqa: E402
+from palms.scripts import rename_dataset as rd  # noqa: E402
+from palms.scripts.rename_dataset import (  # noqa: E402
     PreflightError, infer_old_path, main, sub_text, sub_value,
 )
 
@@ -97,7 +97,7 @@ def dataset(tmp_path, make_table):
     session.attrs["arms_geojson_path"] = f"{outside}/tiles.geojson"
     session.attrs["arms_he_path"] = None
     session.attrs["roi_count"] = 2
-    from xenium_viewer.utils.zarr_safe import consolidate
+    from palms.utils.zarr_safe import consolidate
     consolidate(cache)
 
     sidecars = data_path / "viewer_cache"
@@ -111,7 +111,7 @@ def dataset(tmp_path, make_table):
     }))
 
     (data_path / "analysis.py").write_text("# stale\n")
-    from xenium_viewer.utils.notebook_export import write_notebook
+    from palms.utils.notebook_export import write_notebook
     write_notebook([("code", "# stale")], data_path / "analysis_notebook.ipynb")
 
     return {"data_path": data_path, "outside": outside, "cache": cache,
@@ -119,7 +119,7 @@ def dataset(tmp_path, make_table):
 
 
 def _read_session_attrs(cache: Path) -> dict:
-    from xenium_viewer.utils.session import _read_prev_attrs
+    from palms.utils.session import _read_prev_attrs
     return _read_prev_attrs(cache)
 
 
@@ -202,7 +202,7 @@ def test_derived_outputs_are_regenerated_from_the_repaired_graph(dataset):
     assert f'data_path = Path(r"{new_path}")' in code
     assert "# stale" not in code
 
-    from xenium_viewer.utils.notebook_export import read_notebook
+    from palms.utils.notebook_export import read_notebook
     sources = "\n".join(src for _kind, src in read_notebook(new_path / NB))
     assert str(new_path) in sources
     assert str(dataset["data_path"]) not in sources
@@ -292,7 +292,7 @@ def test_repair_without_a_preamble_refuses_rather_than_guessing(dataset, capsys)
     new_path = dataset["tmp"] / "moved"
     os.rename(dataset["data_path"], new_path)
     # The session attr still has a preamble, so blank that too.
-    from xenium_viewer.utils.zarr_safe import safe_group_update
+    from palms.utils.zarr_safe import safe_group_update
     with safe_group_update(new_path / "sdata_cached.zarr", "viewer_session") as (g, _):
         g.attrs["prov_graph"] = []
     assert main([str(new_path), "--repair"]) == 1

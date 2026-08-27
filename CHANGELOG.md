@@ -1,5 +1,48 @@
 # Changelog
 
+## [Unreleased] — 2026-08-27 (rename to PALMS)
+
+### Changed
+- **The project is now PALMS — Provenance-Aware Linking of Multimodal
+  Spatial-omics.** The old name borrowed 10x Genomics' instrument trademark for
+  the identity of an independent tool, and undersold the scope: this is not a
+  transcriptomics viewer, it is where transcriptomics, histology and genomic
+  overlays are brought into one coordinate space with every step recorded as
+  replayable code. It sits beside ARMS (Adaptive Resolution Multiscale Spatial
+  DNAseq) in the same ecosystem. Renamed now because the citable release would
+  otherwise have minted the old name into a DOI permanently.
+
+  Import package `xenium_viewer` → `palms`; distribution `xenium-viewer` →
+  `palms`; the six console scripts to `palms`, `palms-preprocess`,
+  `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`,
+  `palms-build-custom-segmentation`; conda envs to `palms` and `palms_copykat`;
+  the six `XENIUM_*` environment variables to `PALMS_*`.
+
+  **No shim.** Nothing was on PyPI and the version is 0.1.0, so no external
+  consumer can break — and a compatibility package would have kept the
+  proprietary name in the tree, which is the thing being removed.
+
+- **References to the Xenium *data format* are untouched, deliberately.**
+  `experiment.xenium`, `spatialdata_io.xenium()`, "Xenium 3.x output" and the
+  comparison to Xenium Explorer all describe what the tool reads, not what it
+  is called. A blind substitution would have broken the loader; every
+  replacement was anchored on an identity token instead, and the format
+  references were diffed before and after to prove they did not move.
+
+### Fixed
+- **Three names that reach onto users' disks keep working.** A rename that
+  silently orphans existing work is a data-loss bug, not a cosmetic change:
+  - Template overrides written to `~/.config/xenium-viewer/templates/` still
+    resolve. `search_path()` reads the pre-rename directory below the current
+    one, and only while it exists, so it retires itself.
+  - `.tmpl` files whose banner reads `# xenium-viewer template` still parse —
+    the banner is prose, not a header field. Now pinned by a test, because a
+    stricter parser would deactivate every old override at once.
+  - `xenium_viewer.log` in an existing dataset directory is still listed and
+    deletable in Tools → Dataset. Dropping the key would not have hidden the
+    file, it would have relabelled it "original 10x output, never modified by
+    the viewer" — false, and un-deletable.
+
 ## [Unreleased] — 2026-08-26 (doc counts)
 
 ### Fixed

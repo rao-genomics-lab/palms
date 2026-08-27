@@ -35,14 +35,14 @@ pd = pytest.importorskip("pandas")
 anndata = pytest.importorskip("anndata")
 pytest.importorskip("qtpy")
 
-SRC = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+SRC = Path(__file__).resolve().parent.parent / "src" / "palms"
 
 
 @pytest.fixture
 def ctx(tmp_path, qapp):
     """A ViewerContext with the shared helpers bound, and nothing else."""
-    from xenium_viewer.tabs._helpers import create_shared_helpers
-    from xenium_viewer.utils.viewer_context import ViewerContext
+    from palms.tabs._helpers import create_shared_helpers
+    from palms.utils.viewer_context import ViewerContext
 
     context = ViewerContext(
         data_path=tmp_path,
@@ -180,7 +180,7 @@ def test_a_step_with_a_missing_dependency_is_reported_not_warned(ctx):
     process goes nowhere. What is left behind is exactly the failure this phase
     exists to prevent: a result on screen with no cell that produces it.
     """
-    from xenium_viewer.utils import reporting
+    from palms.utils import reporting
 
     reporting.reset_failures()
     ctx.record_node("nhood:k", "sq.gr.nhood_enrichment(adata_norm)",
@@ -197,8 +197,8 @@ def test_a_step_with_a_missing_dependency_is_reported_not_warned(ctx):
 # ── persisting the graph when it changes ─────────────────────────────────────
 
 def _sidecar(ctx) -> Path:
-    from xenium_viewer.tabs._helpers import PROV_GRAPH_SIDECAR
-    from xenium_viewer.utils.adata_persistence import sidecar_dir
+    from palms.tabs._helpers import PROV_GRAPH_SIDECAR
+    from palms.utils.adata_persistence import sidecar_dir
     return sidecar_dir(ctx.data_path) / PROV_GRAPH_SIDECAR
 
 
@@ -239,7 +239,7 @@ def test_the_graph_reaches_disk_as_soon_as_a_step_is_recorded(ctx):
 
 def test_the_persisted_graph_reloads_into_an_equivalent_graph(ctx):
     import json
-    from xenium_viewer.utils.prov_graph import ProvGraph
+    from palms.utils.prov_graph import ProvGraph
 
     ctx.record_preamble()
     ctx.record_node("clustering:k", "sc.tl.leiden(adata_leiden)", deps=["preamble"],
@@ -268,9 +268,9 @@ def test_a_revised_node_is_persisted_too(ctx):
 def test_the_sidecar_wins_over_a_stale_session_attr():
     """Load precedence: the eagerly-written file beats the exit-written attr."""
     import json
-    from xenium_viewer.app import _load_prov_graph_items
-    from xenium_viewer.utils.adata_persistence import sidecar_dir
-    from xenium_viewer.tabs._helpers import PROV_GRAPH_SIDECAR
+    from palms.app import _load_prov_graph_items
+    from palms.utils.adata_persistence import sidecar_dir
+    from palms.tabs._helpers import PROV_GRAPH_SIDECAR
     import tempfile
 
     data_path = Path(tempfile.mkdtemp())
@@ -292,9 +292,9 @@ def test_a_smaller_sidecar_never_beats_a_bigger_session_attr():
     when it is, the attr is the better record.
     """
     import json
-    from xenium_viewer.app import _load_prov_graph_items
-    from xenium_viewer.utils.adata_persistence import sidecar_dir
-    from xenium_viewer.tabs._helpers import PROV_GRAPH_SIDECAR
+    from palms.app import _load_prov_graph_items
+    from palms.utils.adata_persistence import sidecar_dir
+    from palms.tabs._helpers import PROV_GRAPH_SIDECAR
     import tempfile
 
     data_path = Path(tempfile.mkdtemp())
@@ -312,7 +312,7 @@ def test_a_smaller_sidecar_never_beats_a_bigger_session_attr():
 
 def test_a_dataset_without_the_sidecar_still_restores_from_the_attr():
     """Every cache written before this existed has only the attr."""
-    from xenium_viewer.app import _load_prov_graph_items
+    from palms.app import _load_prov_graph_items
     import tempfile
 
     stale = [{"id": "preamble", "code": "import scanpy as sc", "kind": "setup"}]
@@ -321,9 +321,9 @@ def test_a_dataset_without_the_sidecar_still_restores_from_the_attr():
 
 
 def test_an_unreadable_sidecar_falls_back_rather_than_losing_the_graph():
-    from xenium_viewer.app import _load_prov_graph_items
-    from xenium_viewer.utils.adata_persistence import sidecar_dir
-    from xenium_viewer.tabs._helpers import PROV_GRAPH_SIDECAR
+    from palms.app import _load_prov_graph_items
+    from palms.utils.adata_persistence import sidecar_dir
+    from palms.tabs._helpers import PROV_GRAPH_SIDECAR
     import tempfile
 
     data_path = Path(tempfile.mkdtemp())

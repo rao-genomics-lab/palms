@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from xenium_viewer.utils.crop_state import capture_overlay_frames
+from palms.utils.crop_state import capture_overlay_frames
 
 
 class _Affine:
@@ -184,7 +184,7 @@ def test_a_layer_affine_is_converted_out_of_world_units():
     Every other affine-persisting call site already goes through
     `units.layer_affine_px`; this is the one that has to as well.
     """
-    from xenium_viewer.utils.units import px_affine_to_world
+    from palms.utils.units import px_affine_to_world
 
     px = 0.2125
     reg_px = np.array([[-2.3535, 0.0, 34396.65],
