@@ -172,17 +172,19 @@ def is_dataset_dir(path: Path) -> bool:
     Both are worth renaming, and the second is exactly why this does not simply
     test for raw files: a Crop Dataset export's zarr *is* the data.
 
-    ``loader.has_raw_xenium_source`` is the single definition of "raw output is
-    present" (issue #17) — deliberately conservative, ``True`` unless *none* of
-    its markers exists, because partial raw output is broken raw output. Reusing
-    it here rather than re-testing ``cells.zarr.zip`` is the point of that fix:
-    a predicate applied in one place is not a guarantee.
+    ``loader.is_cache_only`` is the single definition of "the zarr store is the
+    data" — the export's own manifest stamp where it exists, falling back to
+    ``has_raw_xenium_source``, which is deliberately conservative (raw output is
+    "present" unless *none* of its markers exists, because partial raw output is
+    broken raw output). Reusing them here rather than re-testing
+    ``cells.zarr.zip`` is the point of that fix: a predicate applied in one
+    place is not a guarantee.
     """
-    from palms.loader import has_raw_xenium_source
+    from palms.loader import is_cache_only
 
     if (path / "experiment.xenium").exists():
         return True
-    return (path / "sdata_cached.zarr").exists() and not has_raw_xenium_source(path)
+    return (path / "sdata_cached.zarr").exists() and is_cache_only(path)
 
 
 def copykat_is_running(data_path: Path) -> bool:

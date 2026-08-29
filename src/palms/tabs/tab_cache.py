@@ -56,19 +56,18 @@ def _rebuild_blocked_reason(ctx) -> "str | None":
     stages for the next launch cannot happen — and the staging step renames the
     only copy of the data aside first.
     """
-    from palms.loader import has_raw_xenium_source
+    from palms.loader import cache_only_reason, is_cache_only
 
     data_path = getattr(ctx, "data_path", None)
     if data_path is None:
         return None
-    if has_raw_xenium_source(Path(data_path)):
+    if not is_cache_only(Path(data_path)):
         return None
     return (
-        "This dataset has no raw Xenium output (no cells.zarr.zip, no "
-        "cell_feature_matrix, no morphology_focus) — most likely a Crop Dataset "
-        "export. Its zarr cache is the only copy of the data, so there is "
-        "nothing to rebuild from. Use Verify, Re-consolidate or Recover from "
-        "Backup instead."
+        f"This dataset cannot be rebuilt: {cache_only_reason(Path(data_path))}. "
+        "Its zarr cache is the only copy of the data, so there is nothing to "
+        "rebuild from. Use Verify, Re-consolidate or Recover from Backup "
+        "instead."
     )
 
 

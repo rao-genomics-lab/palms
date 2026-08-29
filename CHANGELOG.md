@@ -4,7 +4,39 @@ Dates are ISO. Versions follow [Semantic Versioning](https://semver.org). New wo
 under an `## [Unreleased]` heading above the newest release; the dated per-session
 entries under **Development log** are the closed pre-1.0.0 record.
 
-## [1.0.0] — 2026-08-29
+## [Unreleased]
+
+### Fixed
+- **A Crop Dataset export declares itself cache-only, and nothing read the
+  declaration.** `crop_export` stamps `cache_only: True` into the export's cache
+  manifest, and `write_manifest`'s own docstring says it is there "for readers that
+  would otherwise have to infer it from absent files". Five readers inferred it
+  anyway — both `loader` call sites, the dataset inventory's description of the raw
+  section, the Force Rebuild guard and the recorded preamble all recomputed
+  `not has_raw_xenium_source(path)`, which is the inference the stamp exists to
+  replace.
+
+  It agreed by luck: an export writes none of the raw markers, so absence and
+  declaration said the same thing. The moment an export also writes a raw-shaped
+  file — the raw-format export this is a prerequisite for — the inference flips, the
+  loader reopens rebuild paths on a dataset whose cache is the *only* copy of the
+  data, and the recorded preamble silently reverts to `xenium(data_path)`, which
+  reads the raw half and drops every derived layer the crop carried. That notebook
+  runs and produces less, which is worse than the first-cell crash fixed in the
+  previous release.
+
+  `loader.is_cache_only()` is now the single question every reader asks, with
+  `has_raw_xenium_source` left as the definition of the *inference* it falls back to.
+  **Only a `True` stamp overrides**: a `false` one is read but not trusted to unset
+  cache-only, because being wrong in that direction sends the loader down a rebuild
+  path on data that cannot be rebuilt — the stamp may add certainty, never remove
+  protection. A manifest that is missing, unparseable or silent makes no claim and
+  never raises on the load path.
+
+  `loader.cache_only_reason()` exists so the two *messages* stay true: Force
+  Rebuild's refusal enumerates the absent raw files, which is a sentence contradicted
+  by a declared export that has them.
+
 
 The first release. Work started on 2026-02-28 as a handful of scripts for looking at
 Xenium output on Linux, where 10x's own Explorer has no build; `0.1.0` was a number in

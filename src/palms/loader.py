@@ -124,6 +124,62 @@ def has_raw_xenium_source(path: Path) -> bool:
     return any((path / marker).exists() for marker in _RAW_PALMS_MARKERS)
 
 
+def cache_only_declared(path: Path) -> Optional[bool]:
+    """What the cache's own manifest says about being cache-only, if anything.
+
+    ``None`` means the manifest is absent, unreadable, or silent — every cache
+    built before the Crop Dataset tool started stamping it, and every raw
+    dataset. Never raises: a manifest that cannot be parsed is a manifest that
+    says nothing, and the caller falls back to ``has_raw_xenium_source``.
+    """
+    import json
+
+    from palms.utils.zarr_safe import MANIFEST_FILE
+
+    try:
+        manifest = json.loads((Path(path) / "sdata_cached.zarr" / MANIFEST_FILE).read_text())
+    except (OSError, ValueError):
+        return None
+    value = manifest.get("cache_only")
+    return bool(value) if isinstance(value, bool) else None
+
+
+def is_cache_only(path: Path) -> bool:
+    """Is this dataset's zarr store the source of record rather than a cache?
+
+    The **declaration wins over the inference.** ``has_raw_xenium_source`` asks
+    a different question — "are raw files present?" — and only answers this one
+    by accident, because a Crop Dataset export happens to write none of them.
+    An export that writes raw-shaped files (the raw-format export) would flip
+    that inference, reopen the rebuild paths on a dataset whose cache is the
+    only copy of the data, and silently revert the recorded preamble to
+    ``xenium(data_path)``, which reads the raw half and drops every derived
+    layer the crop carried. The export already stamps ``cache_only`` for
+    exactly this reason; until now nothing read it.
+
+    Only a ``True`` stamp overrides. A ``False`` one is read but not trusted to
+    *unset* cache-only, because being wrong in that direction sends the loader
+    down a rebuild path on a dataset whose only copy is the cache — the stamp
+    may add certainty, never remove protection.
+    """
+    if cache_only_declared(path):
+        return True
+    return not has_raw_xenium_source(path)
+
+
+def cache_only_reason(path: Path) -> str:
+    """Why ``is_cache_only`` said yes — for messages that must not misdescribe it.
+
+    Enumerating absent files at a dataset that *declares* itself cache-only
+    while holding raw-shaped files would be a message contradicted by the
+    directory it describes.
+    """
+    if cache_only_declared(path):
+        return "its cache manifest declares it one (a Crop Dataset export)"
+    return ("it holds no raw Xenium output — no cells.zarr.zip, no "
+            "cell_feature_matrix, no morphology_focus")
+
+
 def _no_raw_source_message(path: Path, reason: str) -> str:
     return (
         f"{reason}\n\n"
@@ -783,7 +839,7 @@ def load_sdata(
     # can only ever be loaded from its zarr cache; there's nothing to rebuild
     # from. Use the cache even if the caller asked for use_cache=False (e.g.
     # launched with --no-cache), rather than failing on a missing cells.zarr.zip.
-    cache_only = not has_raw_xenium_source(path)
+    cache_only = is_cache_only(path)
     if not use_cache and cache_path.exists() and cache_only:
         print(
             "No raw Xenium files found in this directory (likely a Crop Dataset "
@@ -1186,7 +1242,7 @@ def _check_cache(data_path: Path) -> int:
     cache_path = data_path / "sdata_cached.zarr"
     experiment_path = data_path / "experiment.xenium"
 
-    cache_only = not has_raw_xenium_source(data_path)
+    cache_only = is_cache_only(data_path)
 
     print(f"Dataset: {data_path}")
     if not cache_path.exists():

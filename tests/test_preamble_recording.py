@@ -72,6 +72,32 @@ def test_a_crop_export_is_read_from_its_own_zarr(tmp_path, qapp):
     assert "import spatialdata as sd" in code
 
 
+def test_a_declared_cache_only_export_is_read_from_zarr_even_beside_raw_files(
+    tmp_path, qapp,
+):
+    """The acceptance case for xv-iy9.
+
+    A raw-format crop export would write raw-shaped files *and* stamp
+    ``cache_only`` in its manifest. Branching on file presence would then record
+    ``xenium(data_path)``, which reads the raw half and silently drops every
+    derived layer the crop carried — a worse failure than the loud one this
+    branch was added to fix, because the notebook runs and produces less.
+    """
+    import json
+
+    from palms.utils.zarr_safe import MANIFEST_FILE
+
+    (tmp_path / "cell_feature_matrix.h5").write_bytes(b"")
+    cache = tmp_path / "sdata_cached.zarr"
+    cache.mkdir()
+    (cache / MANIFEST_FILE).write_text(json.dumps({"cache_only": True}))
+
+    code = _preamble_code(_ctx(tmp_path))
+
+    assert 'sdata = sd.read_zarr(data_path / "sdata_cached.zarr")' in code
+    assert "xenium(data_path)" not in code
+
+
 def test_the_crop_export_preamble_still_derives_the_store_from_data_path(tmp_path, qapp):
     """``palms-rename-dataset`` rewrites exactly one line; keep it sufficient.
 
