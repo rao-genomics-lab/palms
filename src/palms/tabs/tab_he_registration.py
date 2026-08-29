@@ -555,8 +555,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
               + (f" with registration ({reg.source})" if has_affine else ""))
 
     def _restore_session(session):
-        from palms.tabs._helpers import StatusProxy as _SP  # noqa: avoid circular
-
         if sdata is not None and "he_image" in sdata.images:
             # The flips are set in _on_he_restored_from_sdata, from the same
             # record the affine comes from — setting them here too would pair a

@@ -7,6 +7,12 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Fixed
+- **A dead import wearing an invalid `# noqa`.** `tab_he_registration._restore_session`
+  opened with `from palms.tabs._helpers import StatusProxy as _SP  # noqa: avoid
+  circular`. `_SP` is never used, `StatusProxy` is already imported at module level and
+  used there, and "avoid circular" is prose where ruff expects rule codes — so the
+  directive was invalid, suppressed nothing, and printed a warning on every lint run
+  including CI. Removed rather than corrected: there is nothing left to suppress.
 - **A crop export rewrote recorded paths into files it does not copy.**
   `rewrite_graph_paths` repoints *every* absolute path in the carried provenance
   graph at the export. That is right for the preamble's `data_path` and wrong for
