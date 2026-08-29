@@ -1,6 +1,6 @@
 # PALMS
 
-PALMS is an open-source, napari-based viewer for 10x Genomics Xenium spatial transcriptomics data, designed as an open alternative to the commercial Xenium Explorer, which ships no Linux build. It runs on Linux, macOS and WSL2. It provides interactive, high-resolution visualisation of cell-level gene expression data directly from Xenium 3.x output directories, with no data export or conversion required. The project is released under the MIT licence and is currently at version 0.1.0 (alpha).
+PALMS is an open-source, napari-based viewer for 10x Genomics Xenium spatial transcriptomics data, designed as an open alternative to the commercial Xenium Explorer, which ships no Linux build. It runs on Linux, macOS and WSL2. It provides interactive, high-resolution visualisation of cell-level gene expression data directly from Xenium 3.x output directories, with no data export or conversion required. The project is released under the MIT licence and is currently at version 1.0.0.
 
 ## Key Features
 

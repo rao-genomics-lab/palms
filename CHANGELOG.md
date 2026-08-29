@@ -1,8 +1,84 @@
 # Changelog
 
-## [Unreleased] — 2026-08-29 (reproducibility measurement)
+Dates are ISO. Versions follow [Semantic Versioning](https://semver.org). New work goes
+under an `## [Unreleased]` heading above the newest release; the dated per-session
+entries under **Development log** are the closed pre-1.0.0 record.
 
-### Fixed
+## [1.0.0] — 2026-08-29
+
+The first release. Work started on 2026-02-28 as a handful of scripts for looking at
+Xenium output on Linux, where 10x's own Explorer has no build; `0.1.0` was a number in
+`pyproject.toml` and was never published anywhere. Everything under **Development log**
+below is part of this release — which is why, until now, no entry in this file carried a
+version.
+
+PALMS (Provenance-Aware Linking of Multimodal Spatial-omics) is a napari viewer for
+Xenium 3.x output that brings transcripts, cells, histology and genomic overlays into one
+coordinate space, and records every action the user takes as code that replays.
+
+### Added
+
+- **Reproducible-by-construction recording.** Every analysis is a node in a provenance
+  DAG with a stable id, its code, and its dependencies; the notebook is *derived* from
+  that graph by topological sort, so it respects dependencies regardless of the order
+  actions were taken, across sessions. `ctx.run_step()` renders a template **once** and
+  hands the same string both to `exec` and to the graph, so the code that ran and the
+  code that is recorded are equal by construction rather than by discipline. Outputs are
+  a flat `analysis.py` written live and an `analysis_notebook.ipynb` that replays from
+  the raw Xenium output.
+- **The claim is measured, not asserted.** `tests/test_notebook_replay.py` exports the
+  graph as a real `.ipynb`, executes it in a clean kernel with `allow_errors=False`, and
+  requires ARI exactly 1.0 on every clustering and identical top-N ranked genes;
+  `scripts/verify_notebook.py` does the same against a real dataset and emits a JSON
+  report with per-cell timing, per-clustering ARI and package versions.
+- **Analysis tabs**, 26 of them in five groups: cell colouring and clustering (Leiden,
+  Novae, imported labels), gene analysis and ranked genes, marker-gene and correlation
+  plots, ROI differential expression, squidpy spatial statistics (neighbourhood
+  enrichment, co-occurrence, ligand–receptor), CNV inference via **inferCNV** in-process
+  and **CopyKAT** in a detached second conda env, UMAP in a linked napari window, and a
+  Plots dock every figure passes through.
+- **Multimodal overlays.** Landmark-based similarity-affine registration of H&E and ARMS
+  images onto the transcriptomic frame, persisted with the session.
+- **User-configurable analysis templates.** Every template ships as a `.tmpl` of plain
+  scverse source with a declared contract, and is overridable per user **per block**, so
+  untouched blocks keep tracking the shipped version and still receive upstream fixes.
+  Tools → Templates shows the shipped text beside yours with a live preview of the exact
+  string that would be executed; a notebook built from customised templates says so.
+- **Data management that does not lose data.** A zarr cache with content-hash staleness
+  (60–70% faster launches), crash-safe element writes that stage-journal-rename and keep
+  the previous copy, a read-only cache verifier that works on a store too broken to open,
+  a per-item dataset inventory with guarded deletion, `palms-rename-dataset` for moving a
+  dataset without invalidating its provenance, and crop export.
+- **Cross-platform install and docs.** Linux, macOS and WSL2; PyQt6 + napari ≥ 0.8;
+  console scripts `palms`, `palms-preprocess`, `palms-build-cache`,
+  `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`;
+  documentation on Read the Docs; CI running the full suite plus a lint gate on every
+  push.
+- **1,388 tests** across 59 files, including source guards that fail if a fixed defect is
+  reintroduced.
+
+### Known limitations
+
+- **Native Windows is not supported** (WSL2 is).
+- The napari GUI proper and the spatial-analysis tabs have no automated coverage; that
+  testing is manual.
+- The annotation-neighbourhood and annotation-distance tabs are not yet recorded as
+  steps — their synthetic virtual cells are sampled from a napari shapes layer the
+  notebook cannot reach. Their figures are recorded as declared viewer-state notes.
+- CopyKAT needs a second conda environment (`palms_copykat`, python 3.11 + R 4.3),
+  because its R stack cannot coexist with the main environment's python 3.12.
+
+---
+
+## Development log
+
+Every entry below predates the 1.0.0 tag and is part of it. They were written one per
+working session, newest first, and are kept in full rather than summarised: several are
+the only record of *why* a fix took the shape it did.
+
+### 2026-08-29 — reproducibility measurement
+
+#### Fixed
 - **inferCNV ran without the gene-mapping guard, and reproduced the exact defect that
   guard was written to prevent.** `418cf07` added `cnv_analysis.check_gene_mapping`,
   which refuses a panel where under 5% of genes map to genomic coordinates. Migrating
@@ -33,7 +109,7 @@
   `run_infercnv` — the previous tests called `check_gene_mapping` directly and stayed
   green throughout the regression, which is how it went unnoticed.
 
-### Changed
+#### Changed
 - **`verify_notebook.py` treats 10x's own clusterings as inputs, not results.**
   `compare_clusterings` marked any persisted clustering the replay did not produce
   as `not_in_replay`, and `passed = not failures` counted those — so a session
@@ -60,9 +136,9 @@
   refusing to answer there would make every crop export look as though it had lost
   ten analyses.
 
-## [Unreleased] — 2026-08-29 (stale cleanup)
+### 2026-08-29 — stale cleanup
 
-### Fixed
+#### Fixed
 - **A step whose recorded code does not vary with its settings could never be
   un-flagged as stale.** `ProvGraph.upsert` returns early when the code, deps and
   kind are unchanged, and that early return sat *above* `existing.stale = False` —
@@ -90,7 +166,7 @@
   This mattered more once staleness became actionable: **"Select Stale Results"
   would have offered to delete a result that was in fact current.**
 
-### Added
+#### Added
 - **Two ways to act on staleness, which until now was display-only.** A node is
   flagged `stale` when an ancestor was re-recorded with different code after that
   node last ran, so the artifact on disk was produced by an input that no longer
@@ -160,9 +236,9 @@
 
   `ProvGraph.remove` also gains its first test coverage.
 
-## [Unreleased] — 2026-08-29 (crop-export notebooks)
+### 2026-08-29 — crop-export notebooks
 
-### Fixed
+#### Fixed
 - **A Crop Dataset export's recorded notebook could never replay.** The preamble
   recorder always emitted `from spatialdata_io import xenium` /
   `sdata = xenium(data_path)`. A crop export has no raw 10x output — the zarr store
@@ -191,9 +267,9 @@
   16 of them. That is the graph telling the truth: those results were produced by a
   preamble that no longer exists.
 
-## [Unreleased] — 2026-08-29 (pre-publication audit)
+### 2026-08-29 — pre-publication audit
 
-### Fixed
+#### Fixed
 - **`scripts/capture_screenshots.py` hardcoded a collaborator's dataset.** The
   module constant was `/media/srao/InternalBac2/jinsen/output-XETG00160__…` —
   a local absolute path, a collaborator's name and a real slide ID, in a tracked
@@ -233,22 +309,22 @@
   preprint plan's Phase A" — the only manuscript-positioning reference in the code
   repo — and reads the same without it.
 
-### Removed
+#### Removed
 - **`more_datasets.tsv`.** Ten candidate prostate/atlas datasets at the repo root,
   tracked since `64fc950` and read by no code, with ChatGPT citation artifacts
   (`:contentReference[oaicite:N]{index=N}`) inside the URLs. Moved to the private
   planning repo rather than deleted.
 
-### Verified
+#### Verified
 - The rest of the pre-publication audit came back clean: no secrets or credentials in
   tracked files; `.gitignore` does cover `manuscript/`, `data/` and `report.json`;
   `.claude/` is untracked; `LICENSE` is the MIT one `pyproject.toml` declares; both
   open GitHub issues read acceptably in public; and the only absolute-path hits in the
   whole tree were the two fixed above.
 
-## [Unreleased] — 2026-08-27 (rename to PALMS)
+### 2026-08-27 — rename to PALMS
 
-### Changed
+#### Changed
 - **The project is now PALMS — Provenance-Aware Linking of Multimodal
   Spatial-omics.** The old name borrowed 10x Genomics' instrument trademark for
   the identity of an independent tool, and undersold the scope: this is not a
@@ -275,7 +351,7 @@
   replacement was anchored on an identity token instead, and the format
   references were diffed before and after to prove they did not move.
 
-### Fixed
+#### Fixed
 - **Three names that reach onto users' disks keep working.** A rename that
   silently orphans existing work is a data-loss bug, not a cosmetic change:
   - Template overrides written to `~/.config/xenium-viewer/templates/` still
@@ -289,9 +365,9 @@
     file, it would have relabelled it "original 10x output, never modified by
     the viewer" — false, and un-deletable.
 
-## [Unreleased] — 2026-08-26 (doc counts)
+### 2026-08-26 — doc counts
 
-### Fixed
+#### Fixed
 - **Four counts in the docs were wrong, three of them badly.** The test suite is
   **1318 tests across 56 files**, not the "~320" `CLAUDE.md` had carried for
   months — off by a factor of four. There are **26 tabs** in 5 groups, not the
@@ -306,7 +382,7 @@
   `CLAUDE.md` now says how to re-measure the test count instead of stating a
   number that will drift again.
 
-### Removed
+#### Removed
 - **`tabs/__init__.py` no longer re-exports `build_*_tab`.** It aliased
   `build_tab` from 11 of the 26 tab modules — the 11 that existed when it was
   written — and nothing has ever imported them: `app.py` imports each module
@@ -317,9 +393,9 @@
   Completing the list to 26 would have made that worse, so the dead surface is
   gone and the docstring says what to import instead.
 
-## [Unreleased] — 2026-08-26 (plots)
+### 2026-08-26 — plots
 
-### Fixed
+#### Fixed
 - **Every control label in the Xenium Controls panel was invisible.** `make_tab`
   added `w.native` — the *bare* Qt control. magicgui keeps a widget's caption in a
   wrapper only a `Container` builds, so all 72 captions were discarded at layout
@@ -345,7 +421,7 @@
   `make_tab`, a `CheckBox` is not captioned twice, and an unlabelled widget stays
   unlabelled.
 
-### Changed
+#### Changed
 - **Control captions read as English rather than scanpy parameter names**, now
   that they render at all: `n_neighbors` → **Neighbours**, `n_pcs` → **Principal
   components**, `flavor` → **Clustering backend**, `n_top_genes` → **Highly
@@ -361,7 +437,7 @@
   `N neighbours` are spelled the one way. Docs updated to match; the two generated
   reference pages still name the parameters, since they describe code.
 
-### Added
+#### Added
 - **`--mcp`: a dev-only MCP bridge onto the running viewer** (`src/xenium_viewer/dev_mcp.py`,
   `mcp` extra). Starts `napari-mcp`'s `NapariBridgeServer` over the viewer that already has
   the dataset loaded, so an assistant can take **full-window** screenshots — docks included,
@@ -412,7 +488,7 @@
   `reindex(obs_names)` matches 318,617 of 318,708 cells — the 91 Xenium's UMAP omits,
   which become NaN rows that `sc.pl.umap` skips.
 
-### Changed
+#### Changed
 - **One save policy: `<dataset>/plots/`, PNG and PDF.** Preferences → Plot format now
   offers **PNG + PDF** (default), PNG, PDF and SVG, and every plot is written in each
   chosen format. Previously six sites used `ctx.auto_save_plot` (one format), CNV
@@ -452,7 +528,7 @@
 - `render_dag` no longer takes a `path=` — it returns the Figure and lets the caller
   write it, the convention `make_cnv_heatmap` already documented.
 
-### Fixed
+#### Fixed
 - **`matplotlib.use('Agg')` leaked out of two workers and disabled plotting for the rest
   of the session.** `tab_umap` and `tab_marker_genes` set it globally, from a background
   thread, and never restored it — so once a user saved a UMAP or ran any marker plot,
@@ -514,9 +590,9 @@ hand. New `tests/test_plot_output.py` (pure logic) and `tests/test_plots_panel.p
 (offscreen Qt, including the dock-minimum bound from the August resize fix, which a
 second dock inherits).
 
-## [Unreleased] — 2026-08-26
+### 2026-08-26
 
-### Fixed
+#### Fixed
 - **The Xenium Controls dock could not be resized.** Dragging the separator between the
   panel and the canvas did nothing: the control panel reported a minimum size of
   **536 × 534 px** (up to ~617 wide once the Templates tab's "Take new default for
@@ -551,9 +627,9 @@ second dock inherits).
   dock), the central canvas (`minimumSizeHint` 8 × 4), the PyQt6 enum rewrite, and every
   `make_tab`-wrapped page (a 580 px pixmap inside one still reports 68 px).
 
-## [Unreleased] — 2026-08-25 (installable on macOS)
+### 2026-08-25 — installable on macOS
 
-### Fixed
+#### Fixed
 - **`conda env create -f environment.yml` failed to solve on macOS.** The PyQt6
   migration added `libglx-devel` to fix a Qt6 startup abort on remote X displays, but
   that package is part of conda-forge's linux-only glvnd stack — there is no
@@ -597,7 +673,7 @@ second dock inherits).
   `test_units.py::_has_real_display()`, where it silently skipped every
   `requires_display` test. Both now special-case `darwin`.
 
-### Changed
+#### Changed
 - The ICE/X11 startup patch in `app.py` is gated on Linux. It was setting
   `SESSION_MANAGER=''` unconditionally, including on macOS, which has no session
   manager.
@@ -613,14 +689,14 @@ second dock inherits).
   channel, which has no `osx-arm64` builds. inferCNV runs in the main env and is
   unaffected everywhere.
 
-### Known limitations on macOS
+#### Known limitations on macOS
 - Per-element memory reporting degrades to "unknown": `utils/mem_probe.py` reads
   `/proc/self/statm` and `/proc/self/status`, and resolves `malloc_trim` from libc.
   All three already fail soft, so this is a missing number rather than an error.
 
-## [Unreleased] — 2026-08-25 (quiet the units warning)
+### 2026-08-25 — quiet the units warning
 
-### Fixed
+#### Fixed
 - **Loading a dataset no longer prints `Inconsistent units across layers` once per
   layer.** Roughly twenty lines on a real load, and spurious every time: a new layer
   arrives carrying napari's default pixel units while every existing layer is already
@@ -660,9 +736,9 @@ second dock inherits).
   wiring directly — and that one was verified to fail with the fix neutered, under
   `QT_QPA_PLATFORM=offscreen`, which is exactly how CI runs.
 
-## [Unreleased] — 2026-08-25 (a cropped dataset opens like a dataset)
+### 2026-08-25 — a cropped dataset opens like a dataset
 
-### Fixed
+#### Fixed
 - **A store with no `viewer_session` restored nothing at all.** `restore_fn` — the call
   that fans out to every tab's `restore_session`, and the only thing that adds the H&E,
   ARMS, external-image and patch layers at startup — sat inside `if session is not None`,
@@ -723,9 +799,9 @@ second dock inherits).
 - `_carry_over_clusterings` no longer writes a `cluster_labels_*` column consisting
   entirely of empty strings when a clustering's names have all been cleared.
 
-## [Unreleased] — 2026-08-24 (crop carries the overlays)
+### 2026-08-24 — crop carries the overlays
 
-### Added
+#### Added
 - **Crop & Export now carries every registered overlay and drawn region** (issue #27).
   A crop used to keep five core elements and silently drop the rest, so exporting a
   core threw away the registered H&E, the ARMS tiles and the ROIs — the work that
@@ -774,7 +850,7 @@ second dock inherits).
   carried is skipped and named in the summary dialog and in the recorded provenance
   note, rather than failing an export the user did get most of.
 
-### Notes
+#### Notes
 Tested against synthetic elements (`tests/test_crop_overlays.py`, 21 tests) rather
 than a dataset: a rotated, scaled, registered overlay is exactly what no local
 dataset has, and the failure mode is geometric — a misplaced overlay still exports
@@ -783,9 +859,9 @@ a known pixel lands, and the two subtlest guards (the image-space landmark rule 
 the (y, x) → (x, y) transposition when mapping the region into a rotated frame) were
 each confirmed to fail when mutated.
 
-## [Unreleased] — 2026-08-24 (PyQt6)
+### 2026-08-24 — PyQt6
 
-### Fixed (post-review)
+#### Fixed (post-review)
 - **napari aborted at startup under Qt6 on a remote X display** — `Could not initialize
   GLX`, `SIGABRT`, no Python traceback. This nearly got the migration shelved as a
   Qt6-versus-remote-X incompatibility. It is neither: it is a library-loading conflict, and
@@ -842,7 +918,7 @@ each confirmed to fail when mutated.
   PyQt5 1047 passed / 25 skipped, PyQt6 1048 passed / 24 skipped (the differing
   skip is the backend-specific test in each).
 
-### Changed
+#### Changed
 - **Migrated the Qt backend from PyQt5 to PyQt6** (issue #15). napari deprecated the
   PyQt5 backend for removal in autumn 2026 and warns about it at every startup, along
   with a second warning that system theme detection needs Qt6.
@@ -865,7 +941,7 @@ each confirmed to fail when mutated.
   once during this migration, and a green suite on the wrong backend is exactly what
   the migration was for.
 
-### Notes
+#### Notes
 `docs/pyqt6-migration.md` was rewritten from a plan into a record, because the plan was
 wrong in both directions. It listed 8 unscoped enums (there were 98) and treated those
 edits as the work — but qtpy's `enums_compat.promote_enums()` and its `exec_` aliases
@@ -881,9 +957,9 @@ accepts every unscoped form.
 Verified: full suite green on PyQt5 (1045 passed, 24 skipped) before the pin flip, and
 again on a real PyQt6 6.8.1 / Qt 6.8.1 / napari 0.8.0 environment after it.
 
-## [Unreleased] — 2026-08-24 (scale bar in micrometres)
+### 2026-08-24 — scale bar in micrometres
 
-### Added
+#### Added
 - **The canvas scale bar now reads in micrometres**, switching to millimetres as you
   zoom out (issue #25). It is on from the moment a dataset loads, and the conversion
   comes from `pixel_size` in `experiment.xenium` — nothing is assumed.
@@ -901,7 +977,7 @@ again on a real PyQt6 6.8.1 / Qt 6.8.1 / napari 0.8.0 environment after it.
   eight modules, and one missed would leave that layer in pixels — *misplaced*
   relative to everything else, not merely mislabelled.
 
-### Fixed
+#### Fixed
 - **Registered overlays would have silently moved.** napari composes
   `world = affine(scale(data))` — the affine is applied *after* the scale, so its
   translation is in world units, while every affine this codebase stores is in Xenium
@@ -926,7 +1002,7 @@ again on a real PyQt6 6.8.1 / Qt 6.8.1 / napari 0.8.0 environment after it.
   units throughout, and defaults to `pixel_size=1.0` so an unscaled viewer is
   unchanged.
 
-### Notes
+#### Notes
 Layer **data** is still in Xenium pixels everywhere, so nothing that reads
 `layer.data` — the crop export, the ROI tab, the ARMS tile ingest — is affected.
 
@@ -937,9 +1013,9 @@ conversion rests on a behaviour we do not control. The tests build bare
 `napari.layers.Image` objects rather than a `Viewer`, so they need no OpenGL context
 and run in CI.
 
-## [Unreleased] — 2026-08-24 (readthedocs)
+### 2026-08-24 — readthedocs
 
-### Added
+#### Added
 - **The docs site builds** (issue #16). `mkdocs.yml` had shipped a complete 44-page
   nav for months and `site_url` already pointed at `xenium-viewer.readthedocs.io` —
   but the site had **never been built**, and would not have worked if it had.
@@ -968,7 +1044,7 @@ and run in CI.
   the published site, using the same lower-case/Title-Case convention
   `scripts/push_to_wiki.sh` already uses.
 
-### Notes
+#### Notes
 **Connecting the Read the Docs project needs the repository to be public** — RTD
 Community does not build private repos. Everything above is done and verified; the
 connection is the one step that cannot be. `docs/readthedocs-setup.md` records the
@@ -979,9 +1055,9 @@ anything bought.
 every bare link in `docs/` rewrites onto a page that actually exists — derived from
 the files present, not from a list.
 
-## [Unreleased] — 2026-08-19 (H&E image memory)
+### 2026-08-19 — H&E image memory
 
-### Fixed
+#### Fixed
 - **Loading a second H&E over one restored from the cache displayed the new image but
   never persisted it** — the next launch brought back the old one, and any landmarks
   placed in between were saved against an image the cache did not hold. The same defect
@@ -1018,7 +1094,7 @@ the files present, not from a list.
   correct to refuse there. Pinned by a test that parses both call sites and requires
   exactly one to opt in.
 
-### Fixed (memory)
+#### Fixed (memory)
 - **Loading an H&E built RAM fast enough to kill the session.** Measured on a
   16384x12288 RGB TIFF: load + write to the cache peaked at **2.61 GB**, and the
   session restore of the same image at **1.71 GB** — for a 604 MB image. On a real
@@ -1065,7 +1141,7 @@ the files present, not from a list.
   predicts the memory — whether the base is **tiled**. "The viewer died loading an
   H&E" carried no information about the file that killed it.
 
-### Investigated, no change
+#### Investigated, no change
 - **The `da.coarsen` chain `load_he_pyramid` synthesises for a TIFF with no internal
   pyramid is *not* the problem, and materialising each level as it is built makes
   things worse.** This looked like the morphology bug wearing a different hat — napari
@@ -1088,9 +1164,9 @@ the files present, not from a list.
   conclusion `--no-cache` morphology reached, so it warns rather than pretending
   otherwise.
 
-## [Unreleased] — 2026-08-18 (dataset rename)
+### 2026-08-18 — dataset rename
 
-### Added
+#### Added
 - **`xenium-rename-dataset`** — a console script that renames or moves a dataset
   directory and rewrites the absolute paths recorded inside it
   (`src/xenium_viewer/scripts/rename_dataset.py`).
@@ -1138,7 +1214,7 @@ the files present, not from a list.
   message), or a directory that is not a dataset. Interrupted safe writes are
   recovered before the move.
 
-### Fixed
+#### Fixed
 - **The rename tool's derived-file writes now swap an inode instead of truncating
   one.** Found by probing the real tool against a `cp -al` snapshot of a live dataset:
   `analysis.py` and the notebook were the only writes not going through
@@ -1147,9 +1223,9 @@ the files present, not from a list.
   `test_derived_outputs_are_replaced_not_written_in_place` states the property —
   a hardlink taken before the rename still holds the old bytes after it — and fails
   against the previous version.
-## [Unreleased] — 2026-08-17 (squidpy 1.9 readiness)
+### 2026-08-17 — squidpy 1.9 readiness
 
-### Changed
+#### Changed
 - **`sq.gr.spatial_neighbors` → `sq.gr.spatial_neighbors_knn`** (issue #19), before
   squidpy 1.9 removes the old name. Two call sites that had to change together —
   `utils/spatial_analysis.py::compute_spatial_neighbors` (what the GUI runs) and
@@ -1172,7 +1248,7 @@ the files present, not from a list.
   re-runs `ensure_spatial_neighbors`, `upsert` revises the node, and its descendants are
   flagged stale — which is what a changed upstream step is supposed to do.
 
-### Corrected
+#### Corrected
 - **Raised the squidpy floor to `>=1.8.2`** in `environment.yml` and `pyproject.toml`.
   The first cut of this change left it at `>=1.8` on the strength of
   `spatial_neighbors`'s own `.. deprecated:: 1.7.0` directive, read as "the replacements
@@ -1192,9 +1268,9 @@ the files present, not from a list.
   `tests/test_notebook_replay.py` *does* cover this path — it replays a
   `spatial_neighbors` node in a clean kernel, which is the gate the doc said did not
   exist.
-## [Unreleased] — 2026-08-17 (cache-only datasets)
+### 2026-08-17 — cache-only datasets
 
-### Fixed
+#### Fixed
 - **A dataset with no raw Xenium output is never told to rebuild its cache**
   (issue #17). A Crop Dataset export ships `experiment.xenium`,
   `sdata_cached.zarr/`, `transcripts.parquet` and `transcript_cache/` — and
@@ -1247,9 +1323,9 @@ the files present, not from a list.
   in `test_loader_policy.py` carried the mirror-image error — "a Crop Dataset
   export has no `experiment.xenium`" — and is corrected too.
 
-## [Unreleased] — 2026-08-17 (headless cache build)
+### 2026-08-17 — headless cache build
 
-### Added
+#### Added
 - **`xenium-build-cache` console script** — builds `sdata_cached.zarr/` for a dataset
   without starting the GUI, so the cold read (tens of minutes, tens of GB) can happen
   over ssh or overnight. The capability already existed as `loader.main()` but was never
@@ -1264,7 +1340,7 @@ the files present, not from a list.
   It reuses `cache_repair.verify` and `_detect_user_data`, both filesystem-level, so it
   works on a store too broken for zarr to open — which is when it gets run.
 
-### Changed
+#### Changed
 - **`load_sdata(on_stale=)`** answers the stale-cache question in advance instead of
   prompting. This closes a real gap rather than relaxing a safety rule: with no dialog
   available `_ask_rebuild_preference` returns `'keep'` and `_ask_corrupt_cache` raises,
@@ -1278,9 +1354,9 @@ the files present, not from a list.
   consulting a dialog — a preset threaded only through the ask-helper would have been
   silently ignored there. Extracting it also made every branch testable without data.
 
-## [Unreleased] — 2026-08-17 (documentation)
+### 2026-08-17 — documentation
 
-### Tracked, not fixed
+#### Tracked, not fixed
 - **`sq.gr.spatial_neighbors` is deprecated in squidpy 1.8.2 and removed in 1.9.0** —
   `docs/squidpy-spatial-neighbors-migration.md`, flagged at the top of `CLAUDE.md` so it is
   seen before the next dependency bump. Found while executing the API-Reference snippets.
@@ -1300,7 +1376,7 @@ the files present, not from a list.
   results — no saved analysis is invalidated. The doc carries the equivalence check to
   re-run against whatever squidpy version is current at the time.
 
-### Added
+#### Added
 - **[Analysis Templates](docs/Analysis-Templates.md)** — a catalogue of all fourteen analysis
   templates: what each computes, which tab runs it, its full contract, and its **complete
   default source, block by block**. The templates *are* the analysis, and until now none of
@@ -1316,7 +1392,7 @@ the files present, not from a list.
   from what the generator produces**, if a shipped template has no prose, or if a documented
   function no longer exists. Code in the docs cannot go stale without CI noticing.
 
-### Fixed
+#### Fixed
 - **The four missing screenshots** (CNV, Dataset, Cache, Templates) are captured; those pages
   had carried unfilled placeholders since the tabs were added.
 - **Three documented calls were wrong, and executing the snippets is what found them** —
@@ -1346,9 +1422,9 @@ the files present, not from a list.
   memory reporting during a rebuild, per-clustering ranked genes, and the two clustering
   preprocessing checkboxes the tutorial never mentioned.
 
-## [Unreleased] — 2026-08-17
+### 2026-08-17
 
-### Performance
+#### Performance
 - **Building `sdata_cached.zarr` needed ~24 GB before it could write a single byte**, and
   the cause was the *chunking of the read*, not anything in the write. `spatialdata_io`
   reads `morphology_focus` through `dask_image.imread`, which yields **one dask chunk per
@@ -1428,7 +1504,7 @@ the files present, not from a list.
   meant "single scale". For the same reason the replacement's `scale_factors` are derived
   from the element being replaced rather than from a constant.
 
-### Added
+#### Added
 - `utils/sdata_write.write_sdata()` — writes a store **one element at a time** instead of
   through `SpatialData.write()`'s internal loop, so there is a point at which progress can
   be reported, dask concurrency chosen per element type, and memory released. Uses only
@@ -1440,7 +1516,7 @@ the files present, not from a list.
   terminal and the dataset log, because "how much is this using" is a question people ask
   *while* a tens-of-minutes build is happening.
 
-### Fixed
+#### Fixed
 - **Loading a dataset for the first time killed the terminal while the GUI was adding
   `morphology_focus`** — build the cache and display it in one session and it died;
   restart, load the same dataset, and it was fine. Both halves have the same cause:
@@ -1495,7 +1571,7 @@ the files present, not from a list.
   what made the write loop look like it leaked when nothing was actually retained.
   `write_sdata` calls `gc.collect()` + `malloc_trim(0)` after each element.
 
-### Investigated, no change
+#### Investigated, no change
 - **napari's global opportunistic dask cache is not implicated.** `Layer.__init__` calls
   `configure_dask(data, cache=True)` for any dask-backed layer, which sizes
   `dask.cache.Cache` at 25% of RAM — **33.77 GB** here — and `dask.callbacks` registration
@@ -1509,9 +1585,9 @@ the files present, not from a list.
   run at full width, but that path was verified at real scale only days ago and is bounded
   as it stands; changing it is a separate, separately-verified piece of work.
 
-## [Unreleased] — 2026-08-16
+### 2026-08-16
 
-### Performance
+#### Performance
 - **The transcript feather cache rebuilt ~13× more data than it needed to** — measured, not
   estimated: of the ~69 minutes a verified real-scale crop took, ~53 minutes (77%) was
   `preprocess.py`. Feather (Arrow IPC) has no append, so `_flush_buffers` **read back and
@@ -1567,7 +1643,7 @@ the files present, not from a list.
   controls batch granularity and peak buffer memory, and raising it would trade back the
   memory headroom the crash fix above exists to protect.
 
-### Fixed
+#### Fixed
 - **Crop Dataset could exhaust memory and crash the machine on a large crop** — the real
   cause, found after an initial (real but insufficient) transcript-filter fix still
   crashed on a retry: `crop_and_export()` (`utils/crop_export.py`) pulled the cropped
@@ -1612,9 +1688,9 @@ the files present, not from a list.
   above found, this alone doesn't help (and isn't relied on for correctness/memory
   safety) once the crop spans most of the source table's width.
 
-## [Unreleased] — 2026-08-05
+### 2026-08-05
 
-### Changed — templates now use the library API instead of hand-rolled equivalents
+#### Changed — templates now use the library API instead of hand-rolled equivalents
 
 The `.tmpl` files are unusual code: they are `exec`'d by the GUI *and* recorded verbatim
 into the reproducible notebook, so a reader learns the analysis from them. Hand-rolled
@@ -1672,7 +1748,7 @@ principle as rule **(e)**, beside the four that already exist because each was o
 `spatialdata` is now bound as **`sd`** in the template namespace and imported by the
 recorded notebook preamble.
 
-### Documentation
+#### Documentation
 - **Comprehensive wiki review.** `docs/` doubles as the GitHub Wiki and the mkdocs
   source; 20 of 23 `Tab-*.md` pages had not been touched since 2026-06-26, and
   `mkdocs.yml` had not moved either. Audited every page against the code it documents.
@@ -1708,7 +1784,7 @@ recorded notebook preamble.
   the Cache tab and the Dataset tab, so no reference page owns it. New `## Menu Bar`
   section in `Interface-Overview.md`, which had never documented the three menus.
 
-### Fixed
+#### Fixed
 - **Three widgets were built, filled, and never laid out.** `ga_results_text` (the Rank
   Genes top-50 preview), `lr_results_text` (the Lig-Rec interaction counts and top-20
   table) and `reg_residuals_qt` (the H&E per-landmark residuals) were each constructed,
@@ -1734,7 +1810,7 @@ recorded notebook preamble.
   remembering. `tests/test_docs_links.py` parses the pattern out of the script, keeping
   it the single source of truth.
 
-### Added
+#### Added
 - **`tests/test_docs_links.py`** — the first automated check on `docs/`. Asserts that
   internal wiki links resolve, that referenced screenshots exist, that the set of
   published pages, the mkdocs nav and the sidebar agree, and that every `addTab` label
@@ -1742,9 +1818,9 @@ recorded notebook preamble.
   assertion alone would have caught every navigation gap found in this review. Pure
   stdlib, no dataset, runs in the existing CI job in milliseconds.
 
-## [Unreleased] — 2026-07-31
+### 2026-07-31
 
-### Fixed
+#### Fixed
 - **The verifier's own notebook never said a session was customised.**
   `scripts/verify_notebook.py` builds its notebook from
   `prov_graph.graph_to_cells` rather than the `notebook_export` one, because
@@ -1770,7 +1846,7 @@ recorded notebook preamble.
   `builtin_assemble` remains correct where it is still used — in the `_*_template`
   helpers the pinning tests read, which must not see a developer's own overrides.
 
-### Changed
+#### Changed
 - **The Templates preview now shows what the button would actually run — for every
   template, in shape as well as in value.** Two gaps, one visible and one not. Only the
   Clustering tab supplied live parameters, so twelve of fourteen panes read
@@ -1800,9 +1876,9 @@ recorded notebook preamble.
   half-built one, since `_preview` catches it and shows sample values); and every
   provider selects a block sequence the template declares.
 
-## [Unreleased] — 2026-07-30
+### 2026-07-30
 
-### Added
+#### Added
 - **A customised template survives an upgrade, and says when it needs a second look.**
   This is the `dpkg` conffile problem, and most of it turned out to be already solved by the
   shape of the storage rather than by logic: an override records *only* the blocks the user
@@ -1912,7 +1988,7 @@ recorded notebook preamble.
   contract error: `markers` was declared required, but `sc.pl.correlation_matrix` ignores
   `var_names`, so that assembly never referenced it.
 
-### Changed
+#### Changed
 - **Groundwork for user-configurable analysis templates (Phase 0).** No user-visible
   feature yet; four preparatory changes that each stand on their own, ahead of moving the
   14 private template constants into a registry.
@@ -1948,7 +2024,7 @@ recorded notebook preamble.
     deliberately excluded from the staleness comparison — it describes where the same code
     came from, so changing it must not flag downstream results.
 
-### Fixed
+#### Fixed
 - **`pytest` hung forever on any machine with a display.** The suite stalled in
   `test_persistence_safety.py::test_a_failed_persist_leaves_the_table_readable` and never
   returned. `reporting._headless()` decided "nobody can answer a dialog" from
@@ -1991,7 +2067,7 @@ recorded notebook preamble.
   `env -u DISPLAY QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg` incantation is no longer
   required — a requirement that has to be remembered by hand is one CI will forget.
 
-### Added
+#### Added
 - **Tools → Dataset: see what the dataset holds on disk, and delete the parts the
   viewer created.** A dataset accumulates viewer data in four places nobody can see —
   `sdata_cached.zarr/`, `viewer_cache/`, `transcript_cache/` and sibling backup stores.
@@ -2032,9 +2108,9 @@ recorded notebook preamble.
   bare twin is only ever paired when its `clustering_<name>` exists and the name is not
   one of the Xenium table's own columns, so no raw column becomes selectable.
 
-## [Unreleased] — 2026-07-29
+### 2026-07-29
 
-### Fixed (found by replaying a real session)
+#### Fixed (found by replaying a real session)
 - **The exported notebook could not get past the dotplot.** `plot:dotplot:<key>`
   recorded `sc.pl.rank_genes_groups_dotplot(adata, …)`, but the rank-genes step writes
   its result to `adata_norm`; the replay died at cell 29 of 39 with
@@ -2076,7 +2152,7 @@ recorded notebook preamble.
   `leiden_leidenalg_r1.0` (28), `cnv_leiden_res0.2` (27 over 12,157 labelled cells) —
   and top-10 ranked genes identical in all 31 groups.
 
-### Added
+#### Added
 - **The notebook now records what it was run with.** A replay only reproduces a result
   against the same software, and the recorded code named the functions but never the
   versions that answered the call — so a disagreement gave no way to separate a real
@@ -2186,7 +2262,7 @@ recorded notebook preamble.
   `leiden_r{resolution}` keys and still load and appear in every dropdown, but a new run
   at that resolution writes the new key *alongside* the old one rather than replacing it.
 
-### Fixed
+#### Fixed
 - **inferCNV failed under pandas 3 with `ArrowInvalid: only handle 1-dimensional
   arrays`.** infercnvpy's `_running_mean` slices the gene list with a **2-D** index
   array. Under pandas 3 `var.index.values` is an `ArrowStringArray`, which routes that
@@ -2342,7 +2418,7 @@ recorded notebook preamble.
 - **The Marker Genes correlation-matrix button never worked** — it called
   `sc.tl.correlation_matrix`, which does not exist in scanpy. See the 2026-07-28 entry.
 
-### Added
+#### Added
 - **Recovery from a corrupt cache no longer needs the corrupt cache to open.** The first
   version of "Recover from Backup" called `spatialdata.read_zarr` on the backup — which is
   by definition a store that failed to read — and died in `_read_table` on an unreadable
@@ -2428,7 +2504,7 @@ recorded notebook preamble.
   nested consolidated-metadata layout — zarr 3.1 writes a flat one, so it could not have
   detected the case it was written for. (`utils/cache_repair.py`, `app.py`)
 
-### Changed
+#### Changed
 - **Sidecar analysis outputs moved out of the zarr store root** into
   `<data_path>/viewer_cache/`. Files in the store root make zarr's hierarchy walk emit a
   `ZarrUserWarning` each — the most likely source of the reported "several warnings",
@@ -2437,7 +2513,7 @@ recorded notebook preamble.
   fall back to the old location, so existing datasets keep working and nothing is migrated
   eagerly. (`utils/adata_persistence.py`, `tabs/tab_cnv.py`, `loader.py`)
 
-### Tests
+#### Tests
 - First coverage the zarr/persistence paths have ever had: `test_zarr_safe.py` (26,
   including interrupted-write simulation with both a recoverable `OSError` and a
   `KeyboardInterrupt` that bypasses cleanup the way a `kill -9` does),
@@ -2448,9 +2524,9 @@ recorded notebook preamble.
   the store root, or if a cache write path prints a warning instead of logging it, or if recovery opens a backup as a whole.
   289 tests pass.
 
-## [Unreleased] — 2026-07-28
+### 2026-07-28
 
-### Added
+#### Added
 - **Step executor: the code the GUI runs is now literally the code the notebook
   records.** New `utils/steps.py` introduces `Step` (a provenance node id, a
   `string.Template` of plain scverse source, and a dict of literal `params`) plus
@@ -2620,7 +2696,7 @@ recorded notebook preamble.
   corrected to read the object the artifact now lives on, but the terminal-node policy
   itself is E4.
 
-### Fixed
+#### Fixed
 - **Re-running a clustering under an existing key kept the previous run's colors.**
   `CellColorManager.get_cluster_colors` caches on the series' `name`, which is the
   clustering key. Re-running Leiden at the same resolution (or re-importing the same
@@ -2647,7 +2723,7 @@ recorded notebook preamble.
   arguments in the wrong order (`adata_orig` and `clustering_series` swapped). Removed.
   (`tabs/tab_marker_genes.py`)
 
-### Removed
+#### Removed
 - **`spatial_analysis.run_ligrec` and `spatial_analysis.run_co_occurrence`.** One squidpy
   call each; the templates in the tabs now *are* that call. (`utils/spatial_analysis.py`)
 - **`utils/leiden_worker.py`.** The spawned-subprocess Leiden existed for GUI
@@ -2656,13 +2732,13 @@ recorded notebook preamble.
   faster" than `leidenalg`, which removes the motivation. (`utils/leiden_worker.py`,
   `cnv_copykat_worker.py` docstring reference)
 
-### Changed
+#### Changed
 - **`.gitignore`**: added `manuscript/` (preprint drafts and planning notes, kept out of
   the public repo) and `data/` (untracked local datasets).
 
-## [Unreleased] — 2026-07-19
+### 2026-07-19
 
-### Fixed
+#### Fixed
 - **`conda env create -f environment.yml` failed to solve because of `insitucnv`.**
   The `insituCNV-copykat` fork's published metadata carried stale upper pins
   (`anndata<0.12`, `pandas<3`). Since the pip section of `environment.yml` resolves
@@ -2701,7 +2777,7 @@ recorded notebook preamble.
   propagation" was this same blanking artifact, not a propagation bug. Added
   `tests/test_cluster_filter.py`. (`tabs/_helpers.py`, `tests/test_cluster_filter.py`)
 
-### Docs
+#### Docs
 - **Tracked TODO to migrate napari off the deprecated PyQt5 backend.** Napari warns
   that PyQt5 support is deprecated and will be removed in fall 2026. No code change
   yet (the viewer runs fine on PyQt5 until then); the codebase already routes all Qt
@@ -2709,7 +2785,7 @@ recorded notebook preamble.
   Qt5-isms (8 unscoped enums, 7 `.exec_()` calls). Captured the migration checklist in
   `docs/pyqt6-migration.md` for a future session. (`docs/pyqt6-migration.md`)
 
-### Added
+#### Added
 - **Unit tests + continuous integration.** Added a `pytest` suite over the codebase's
   pure logic — `tests/test_prov_graph.py` (extended with Mermaid/DOT rendering),
   `test_cnv_subsample.py` (the CopyKAT budget-split invariant), `test_registration.py`
@@ -2744,7 +2820,7 @@ recorded notebook preamble.
   the updated `insituCNV-copykat` fork (force-reinstalled in both envs).
   (`tabs/tab_cnv.py`, `cnv_copykat_worker.py`)
 
-### Fixed
+#### Fixed
 - **`NameError` on a successful Novae run (surfaced by the new CI lint gate).** In the
   Novae tab, `_on_novae_ready()` referenced `level` when recording the reproducible code
   and building the results summary, but `level` was only bound in `on_run_novae()`'s
@@ -2774,7 +2850,7 @@ recorded notebook preamble.
   `.h5ad`/`.json`/plot files, never the zarr store). (`tabs/tab_cnv.py`,
   `cnv_copykat_worker.py`)
 
-### Added
+#### Added
 - **CopyKAT CNV backend (inferCNV / CopyKAT / both).** The CNV tab can now call
   copy-number with **inferCNV**, **CopyKAT**, or **both** (default), via the
   `insituCNV-copykat` fork's `run_copykat` (which writes the same
@@ -2816,9 +2892,9 @@ recorded notebook preamble.
   leading `adata = adata[...].copy()` subset step. (`tabs/tab_cnv.py`,
   `utils/cnv_analysis.py`, `utils/adata_persistence.py`)
 
-## [Unreleased] — 2026-07-17
+### 2026-07-17
 
-### Added
+#### Added
 - **Per-resolution CNV chromosome heatmaps.** The CNV tab now *remembers* every
   leiden resolution run under the same core parameters (reference, neighbors,
   smoothing, window, step) instead of overwriting the previous run. A new
@@ -2833,9 +2909,9 @@ recorded notebook preamble.
   `cluster_cnv_resolutions(adata, [...])` list. (`tabs/tab_cnv.py`,
   `utils/adata_persistence.py`)
 
-## [Unreleased] — 2026-07-16
+### 2026-07-16
 
-### Added
+#### Added
 - **Reproducible analysis as a provenance DAG.** User actions are now recorded
   as a dependency graph of artifacts (`utils/prov_graph.py`) rather than an
   append-only script. Each step is a node keyed by the artifact it produces,
@@ -2859,7 +2935,7 @@ recorded notebook preamble.
   networkx) to `plots/provenance_dag.png`. `graph_to_mermaid` / `graph_to_dot`
   provide diagram text.
 
-### Fixed
+#### Fixed
 - Recorded code now actually replays: undefined `fig` in every plot-save snippet
   (`fig = plt.gcf()`), undefined `data_path` (now defined in the preamble), the
   preamble is always emitted, and durable comment-only actions became real code —
@@ -2872,9 +2948,9 @@ recorded notebook preamble.
   rather than an already-normalized `adata.X`. `random_state` threaded into
   recorded Leiden/UMAP for determinism.
 
-## [Unreleased] — 2026-07-15 (b)
+### 2026-07-15 — b
 
-### Changed
+#### Changed
 - **CNV tab defaults now match InSituCNV's reference notebook** —
   `smoothing_neighbors` 30→20, `window_size` 10→60, `step` 2→10 in
   `utils/cnv_analysis.py::run_cnv_pipeline()` and the corresponding
@@ -2894,9 +2970,9 @@ recorded notebook preamble.
   value (kept at 0.2) may need per-dataset tuning, since InSituCNV's own
   notebook evaluates multiple resolutions rather than recommending one.
 
-## [Unreleased] — 2026-07-15
+### 2026-07-15
 
-### Added
+#### Added
 - **CNV inference tab (Genes → CNV)** — infers copy-number variation from
   expression data using the [InSituCNV](https://github.com/Moldia/InSituCNV)
   method (`insitucnv` + `infercnvpy`, new optional `cnv` extra:
@@ -2933,9 +3009,9 @@ recorded notebook preamble.
   code still calls (removed in matplotlib 3.9+, `insitucnv` not yet
   updated).
 
-## [Unreleased] — 2026-07-14 (e)
+### 2026-07-14 — e
 
-### Added
+#### Added
 - **Crop Dataset now carries over clusterings** — every clustering in
   `ctx.clusterings` (built-in Xenium ones like `graphclust`/`kmeans_*` and
   any custom/Leiden ones), subset to the exported cells, is written into the
@@ -2949,9 +3025,9 @@ recorded notebook preamble.
   clusterings + 1 synthetic custom one + cluster labels, all round-tripped
   with zero mismatches for the kept cells).
 
-## [Unreleased] — 2026-07-14 (d)
+### 2026-07-14 — d
 
-### Fixed
+#### Fixed
 - **Datasets with no clusterings crashed at startup** — a dataset with an empty
   clustering list (e.g. a Crop Dataset export, which has no raw Xenium
   `analysis/clustering/` folder) crashed while building the control panel:
@@ -2966,9 +3042,9 @@ recorded notebook preamble.
   now open normally, with the clustering dropdowns simply empty until a
   clustering is computed.
 
-## [Unreleased] — 2026-07-14 (c)
+### 2026-07-14 — c
 
-### Fixed
+#### Fixed
 - **Crop Dataset: exported datasets failed to open with `FileNotFoundError:
   ... projection.csv`** — `load_umap()`/`load_clusterings()` unconditionally
   read `analysis/umap/.../projection.csv` and `analysis/clustering/`, which a
@@ -2981,9 +3057,9 @@ recorded notebook preamble.
   at crop time. Verified against a real cropped dataset via the full
   `app._load_dataset()` reload path.
 
-## [Unreleased] — 2026-07-14 (b)
+### 2026-07-14 — b
 
-### Fixed
+#### Fixed
 - **Crop Dataset: exported datasets failed to open with `--no-cache`** —
   `load_sdata()` unconditionally rebuilt from raw Xenium files whenever
   `use_cache=False`, but a Crop Dataset export has no raw files (by design —
@@ -2995,9 +3071,9 @@ recorded notebook preamble.
   ones, since the check is based on file presence rather than anything
   written at export time.
 
-## [Unreleased] — 2026-07-14 (a)
+### 2026-07-14 — a
 
-### Fixed
+#### Fixed
 - **Crop Dataset: orphan nuclei in `nucleus_labels`** — nucleus IDs are their own
   independent numbering, unrelated to `cell_id`/`cell_labels`, so an ID-based overlap
   check (added, then removed, in the previous fix) couldn't reliably mask them and
@@ -3005,9 +3081,9 @@ recorded notebook preamble.
   spatial overlap with the already-masked `cell_labels` crop: a nucleus is kept only
   if it occupies at least one pixel within a kept cell's footprint.
 
-## [Unreleased] — 2026-07-13
+### 2026-07-13
 
-### Added
+#### Added
 - **Crop Dataset (Tools tab)** — draw one or more polygons in a new "Crop Regions"
   napari layer and export each as its own standalone, independently-openable
   xenium-viewer data directory (cropped morphology image, cell/nucleus labels,
@@ -3018,34 +3094,34 @@ recorded notebook preamble.
   dialog. New module `src/xenium_viewer/utils/crop_export.py`; new tab
   `src/xenium_viewer/tabs/tab_crop_dataset.py`.
 
-## [Unreleased] — 2026-07-01
+### 2026-07-01
 
-### Fixed
+#### Fixed
 - **Permission-denied dialog gaps** — two write paths were missing coverage from the
   read-only zarr dialog: (1) `delete_element_from_disk` in the Patches tab only printed
   to console on failure; (2) `record_code` in `_helpers.py` had no exception handling at
   all when writing `code.py`. Both now call `_maybe_show_permission_dialog` on
   `PermissionError`/`OSError`.
 
-## [Unreleased] — 2026-06-30
+### 2026-06-30
 
-### Added
+#### Added
 - **tab10 palette in Patches tab** — `tab10` (matplotlib's 10-colour categorical
   palette) is now available in the Patches tab palette dropdown alongside tab20,
   glasbey_dark, Set1, Set3, and ARMS.
 
-## [Unreleased] — 2026-06-26 (d)
+### 2026-06-26 — d
 
-### Fixed
+#### Fixed
 - **Leiden clustering UI freeze** — `sc.tl.leiden` held the Python GIL during graph
   construction and partition, causing the progress bar and status-bar spinner to freeze.
   The Leiden step now runs in a subprocess via `ProcessPoolExecutor` (spawn context),
   giving it its own GIL so the main process's Qt event loop stays responsive throughout.
   New module: `src/xenium_viewer/utils/leiden_worker.py`.
 
-## [Unreleased] — 2026-06-26 (c)
+### 2026-06-26 — c
 
-### Added
+#### Added
 - **Progress bar for long-running analyses** — an indeterminate `QProgressBar` now
   appears inside the control panel directly below the run button while an analysis is
   in progress (Leiden clustering, rank genes, L-R, neighbourhood enrichment,
@@ -3053,9 +3129,9 @@ recorded notebook preamble.
   disappears automatically when the analysis finishes or errors out. The existing
   napari status-bar spinner/tqdm text is retained unchanged.
 
-## [Unreleased] — 2026-06-26 (b)
+### 2026-06-26 — b
 
-### Added
+#### Added
 - **Wiki screenshots** — all 52 documentation screenshot placeholders are now filled with
   actual PNGs captured from a running viewer instance. A new script
   `scripts/capture_screenshots.py` automates future recapture by programmatically
@@ -3063,9 +3139,9 @@ recorded notebook preamble.
   One placeholder (`tutorial-clustering-step5.png`, the matplotlib dotplot window)
   remains a comment for manual capture.
 
-## [Unreleased] — 2026-06-26
+### 2026-06-26
 
-### Fixed
+#### Fixed
 - **Zarr cache rebuild no longer silently destroys user data** — when `experiment.xenium`
   is newer than `sdata_cached.zarr` (e.g. after Xenium Explorer opens the dataset, or a
   backup/rsync resets timestamps), a Qt dialog now appears listing all user-generated data
@@ -3078,9 +3154,9 @@ recorded notebook preamble.
   `sdata_cached_corrupt_<timestamp>.zarr` instead of being silently deleted, so data can
   be recovered manually.
 
-## [Unreleased] — 2026-06-25
+### 2026-06-25
 
-### Fixed
+#### Fixed
 - **ROI DEG region grouping** — `compute_roi_deg` was reading `uns['rank_genes_groups']`
   (the scanpy default key) instead of the key it had just written (`uns['wilcoxon']` /
   `uns['t-test']`). Because the subset AnnData is a copy of `ctx.adata`, it could
@@ -3093,21 +3169,21 @@ recorded notebook preamble.
   `OSError` of a session, telling the user to copy the dataset to a writable location
   or launch with `--no-cache`.
 
-### Added
+#### Added
 - **ARMS Overlay: save/load landmarks** — "Save Landmarks..." and "Load Landmarks..."
   buttons added to the ARMS Overlay tab (below "Compute Registration"), mirroring the
   H&E Registration tab. Landmarks and the computed affine are saved to a portable JSON
   file via the existing `save_landmarks` / `load_landmarks` API. The save button
   enables when ≥1 landmark pair is placed and disables on "Clear All".
 
-### Changed
+#### Changed
 - **H&E Registration: removed Save Affine button** — the "Save Affine..." button has
   been removed. There was no corresponding "Load Affine..." button, making it a dead end.
   The affine is already auto-persisted to the sdata zarr cache on every registration.
 
-## [Unreleased] — 2026-05-05
+### 2026-05-05
 
-### Changed
+#### Changed
 - **Installable Python package** — the repo is now packaged with `pyproject.toml`
   (hatchling build backend) and shipped under `src/xenium_viewer/`. The three
   numbered entry-point scripts have been renamed:
@@ -3128,9 +3204,9 @@ recorded notebook preamble.
   via `importlib.util.spec_from_file_location`; they are normal package
   imports. The `sys.path.insert` at module top is gone.
 
-## [Unreleased] — 2026-04-18
+### 2026-04-18
 
-### Changed
+#### Changed
 - **External Images tab: single composite layer** — multichannel images (e.g. 25-channel PhenoCycler)
   now display as a single RGB composite napari layer instead of one layer per channel. Per-channel
   visibility checkboxes, color buttons, and contrast range sliders are in the tab widget.
@@ -3140,9 +3216,9 @@ recorded notebook preamble.
   Includes flip V/H checkboxes. The "Apply transform from" dropdown remains as an alternative.
   Landmarks are persisted to sdata.shapes; affine to sdata transformations.
 
-## [Unreleased] — 2026-04-17
+### 2026-04-17
 
-### Fixed
+#### Fixed
 - **Overlay affine persistence** — affine transforms for patch overlays and external images are now
   saved to the SpatialData object via `set_transformation()` / `write_transformations()` (same
   pattern as H&E registration). On restore, the affine is read back from sdata directly, so
@@ -3153,15 +3229,15 @@ recorded notebook preamble.
   plain set maintained by the tab) instead of iterating Qt checkbox widgets that may already be
   destroyed during shutdown.
 
-### Changed
+#### Changed
 - **ARMS palette for subclone predictions** — subclone prediction overlays now default to the
   ARMS palette (RColorBrewer Set1+Set2+Dark2, 24 colours) to match the R-based ARMS visualisation
   pipeline. Cluster-to-colour mapping is 0-normalised so 1-based genomic cluster IDs (1,2,3) map
   to Set1 red, blue, green — matching the R package exactly.
 
-## [Unreleased] — 2026-04-16
+### 2026-04-16
 
-### Added
+#### Added
 - **External Images tab** — load arbitrary multichannel OME-TIFF/TIFF/SVS files (e.g. PhenoCycler)
   as lazy-loaded napari layers. Channel axis is detected from `tif.series[0].axes` / OME-XML so
   IF images are never misinterpreted as RGB. Each channel gets its own napari sub-layer with
@@ -3183,18 +3259,18 @@ recorded notebook preamble.
   and wires up `events.affine` subscriptions so external overlays stay aligned when the source
   image is re-registered.
 
-## [Unreleased] — 2026-04-13
+### 2026-04-13
 
-### Added
+#### Added
 - **Cluster labels persisted to SpatialData** — user-assigned cluster names (from the label editor,
   reference atlas annotation, and LLM annotation) are now saved as `adata.obs["cluster_labels_<key>"]`
   columns (e.g. `cluster_labels_leiden_r1.0`) inside `sdata.tables["table"]` immediately on
   assignment. Labels are loaded back on the next launch and merged with the session-attrs fallback
   (sdata wins on conflict). The obs columns are readable in any standalone Python session.
 
-## [Unreleased] — 2026-04-12
+### 2026-04-12
 
-### Changed
+#### Changed
 - **ROI DEG and ARMS tile DEG persistence migrated to SpatialData** — results are now saved as
   sidecar parquets inside the zarr cache (`roi_deg_cache.parquet`, `arms_tile_deg_cache.parquet`)
   immediately on computation rather than at session close. Restores automatically on relaunch.
@@ -3204,9 +3280,9 @@ recorded notebook preamble.
   ARMS registration affine (fine × flip), applies it to the tiles, filters by selected tile
   clusters, and optionally applies a Xenium cell cluster mask before calling `compute_arms_tile_deg`.
 
-## [Unreleased] — 2026-04-10
+### 2026-04-10
 
-### Added
+#### Added
 - **Custom segmentation SpatialData persistence** — custom segmentations are now cached inside the
   SpatialData zarr store (`sdata.labels["custom_cell_labels"]` + `sdata.tables["custom_table"]`)
   after first load, so subsequent opens do not require re-selecting the h5ad file.
@@ -3221,9 +3297,9 @@ recorded notebook preamble.
   - **"Update SpatialData on disk"** button in the Segmentation tab force-syncs current in-memory
     state to sdata (custom table + labels in custom mode; xenium table in xenium mode).
 
-## [Unreleased] — 2026-03-26 (2)
+### 2026-03-26 — 2
 
-### Added
+#### Added
 - **Custom cell segmentation** — two-stage pipeline to replace the native Xenium segmentation
   with a custom one from a Seurat v5 RDS file.
   - `scripts/extract_seurat_segmentation.R` — Stage 1: extracts polygon vertices, count matrix,
@@ -3242,9 +3318,9 @@ recorded notebook preamble.
     spatialdata labels and reloads the original clustering files.
 - `segmentation_source: str` field on `ViewerContext` (values: `"xenium"` | `"custom"`).
 
-## [Unreleased] — 2026-04-01
+### 2026-04-01
 
-### Added
+#### Added
 - **UMAP save** (`tabs/tab_umap.py`) — "Save UMAP Plot..." button saves a scanpy-native `sc.pl.umap`
   figure in PNG or SVG. Uses the current cell-coloring clustering; cluster labels (if set) are
   applied as category names so they appear in the legend and on-data annotation.
@@ -3274,23 +3350,23 @@ recorded notebook preamble.
 - **ARMS tiles: "Tile edge width" slider** — adjusts outline thickness live (range 1–100, default
   20). Enabled once tiles are loaded.
 
-### Changed
+#### Changed
 - **ARMS tiles: ColorBrewer Set1+Set2 color palette** — replaced the hardcoded 8-color custom
   palette with a concatenation of ColorBrewer Set1 (9 colors) + Set2 (8 colors) = 17 distinct
   colors. Cluster filter checkboxes and the legend now show `C{id}` labels without color names.
 
-## [Unreleased] — 2026-03-27 (3)
+### 2026-03-27 — 3
 
-### Fixed
+#### Fixed
 - **Annot. Nhood and Annot. Distance clustering dropdowns not refreshed on segmentation swap** —
   both tabs created their `clustering_widget` ComboBoxes without registering them on `ctx`, so
   `refresh_clustering_choices` skipped them. Fix: register as `ctx.annot_nhood_clustering_widget`
   and `ctx.annot_dist_clustering_widget`, add corresponding fields to `ViewerContext`, and include
   them in the refresh loop in `_helpers.py`.
 
-## [Unreleased] — 2026-03-27 (2)
+### 2026-03-27 — 2
 
-### Fixed
+#### Fixed
 - **Custom segmentation: cluster coloring all-transparent** — obs columns (`cell_type`, etc.)
   added to `ctx.clusterings` from `new_adata.obs` were indexed by obs row numbers (`'0'`, `'1'`,
   …) rather than `cell_id` integer label values. `get_cluster_colors` calls
@@ -3302,9 +3378,9 @@ recorded notebook preamble.
   `(n_original_cells,)` but `cluster_ids_per_obs` from a custom segmentation has a different
   length. Guard added: skip UMAP hover cluster IDs when sizes don't match.
 
-## [Unreleased] — 2026-03-27
+### 2026-03-27
 
-### Added
+#### Added
 - **Annotation layer** — new napari Shapes layer "Annotations" for drawing named tissue regions
   (bone, adipocyte, vessel, etc.) with per-shape type labels displayed as text overlays.
   Annotations persist across sessions via `sdata.shapes['annotations']`.
@@ -3319,16 +3395,16 @@ recorded notebook preamble.
   per cell-type cluster as violin, box, or strip plots. Cells can optionally be coloured on the
   canvas by their distance value using a Points layer.
 
-## [Unreleased] — 2026-03-26
+### 2026-03-26
 
-### Added
+#### Added
 - **View menu: Show Minimap toggle** — checkable "Show Minimap" action appended to napari's native
   View menu. Enabled and checked when the minimap overlay is available; disabled (grayed out) when
   there is no morphology data. State is reset on dataset reload.
 
-## [Unreleased] — 2026-03-25
+### 2026-03-25
 
-### Changed
+#### Changed
 - **Phase 3 SpatialData storage refactoring** — H&E and ARMS landmark pairs, and ARMS tile
   geometries migrated from custom zarr arrays into native SpatialData shapes elements, making
   the sdata object self-sufficient for Python analysis.
@@ -3377,7 +3453,7 @@ recorded notebook preamble.
   - New module: `utils/adata_persistence.py` centralizes all adata read/write/migration logic.
   - `utils/session.py` no longer handles clusterings, nhood, co-occurrence, or L-R data.
 
-### Fixed
+#### Fixed
 - **Index alignment for adata persistence** — `adata.obs.index` uses integer strings (`'0'`, `'1'`, ...)
   while clustering series and UMAP are indexed by cell barcode (`'aaaagflk-1'`, ...). Save/load now
   maps between the two via the `cell_id` column.
@@ -3386,9 +3462,9 @@ recorded notebook preamble.
   so the buttons stayed disabled despite results existing. Fixed by loading `adata.uns` analysis
   results before calling `restore_fn()`.
 
-## [Unreleased] — 2026-03-23
+### 2026-03-23
 
-### Added
+#### Added
 - **Level slider in Novae tab** — exposes the `level` parameter (hierarchical tree level,
   default 7, range 1–15) for `assign_domains()`, giving finer control over domain granularity.
 - **Console variable injection** — key variables (`adata`, `sdata`, `viewer`, `ctx`,
@@ -3397,7 +3473,7 @@ recorded notebook preamble.
   Variables are refreshed on dataset reload. Enables a GUI-to-code handoff workflow alongside
   the existing code recording feature.
 
-### Fixed
+#### Fixed
 - **Console button hidden by layer widgets** — capped layer controls and layer list dock
   widgets to 200px max height so the console toggle button stays visible.
 - **Console not resizable when opened** — the Xenium Controls dock (QTabWidget with 13 tabs)
@@ -3406,9 +3482,9 @@ recorded notebook preamble.
   minimum height to ~117px. Also defers the `resizeDocks` call via `QTimer.singleShot(0)` to
   ensure it runs after Qt finishes the visibility layout pass.
 
-## [Unreleased] — 2026-03-20
+### 2026-03-20
 
-### Added
+#### Added
 - **Spatial Domains tab (Novae)** — new tab that runs [Novae](https://mics-lab.github.io/novae/)
   zero-shot spatial domain inference. Select species (human/mouse), optionally specify N domains
   (0 = auto-detect), and click "Run Novae Domains". On completion the cell labels layer is
@@ -3416,9 +3492,9 @@ recorded notebook preamble.
   dropdowns, and results are persisted to the session cache so they are restored on relaunch.
   Requires `pip install novae`. The full pipeline is recorded to `code.py`.
 
-## [Unreleased] — 2026-03-19
+### 2026-03-19
 
-### Added
+#### Added
 - **Session-scoped code file** — each viewer session now writes to a timestamped file
   (`code_YYYYMMDD_HHMMSS.py`) instead of overwriting `code.py`. Opening a second dataset
   creates a fresh timestamped file; prior session files are preserved.
@@ -3430,7 +3506,7 @@ recorded notebook preamble.
   label editor now emits a `cluster_labels_<key> = {...}` dict to the code journal instead
   of a generic comment, making the output directly usable in downstream plotting calls.
 
-### Changed
+#### Changed
 - **Auto-save plots on Show** — clicking "Show" in the Neighborhood Enrichment,
   Co-occurrence, Ligand-Receptor, Gene Correlation, and Gene Analysis (dotplot) tabs now
   automatically saves the figure to `<data_dir>/plots/<stem>.<format>` and reports the
@@ -3438,7 +3514,7 @@ recorded notebook preamble.
 - **Default plot format is now SVG** — plots are saved as vector graphics out of the box;
   PNG remains available via Preferences → Plot Format.
 
-### Added
+#### Added
 - **Gene Correlation tab** — scatter plot of per-cell expression for any two selected
   genes, annotated with Pearson r and Spearman ρ (both with p-values). Optionally
   restricted to the current cluster filter selection. Plot can be saved in the
@@ -3454,7 +3530,7 @@ recorded notebook preamble.
   propagating to all downstream analyses (cell colouring, ligand-receptor,
   neighborhood enrichment, co-occurrence).
 
-### Fixed
+#### Fixed
 - **Rank genes results lost on crash** — rank genes results are now auto-saved immediately
   after computation via `save_rank_genes_incremental` in `utils/session.py`. This writes
   `rank_genes.parquet`, `rank_genes_adata_norm.h5ad`, and the `rank_genes_groupby` key
@@ -3490,12 +3566,12 @@ recorded notebook preamble.
   Clustering and Gene Analysis tabs now sorts cluster IDs numerically (0, 1, 2, … 19) instead
   of lexicographically (0, 1, 10, 11, … 19, 2, 3); falls back to string sort for non-integer IDs.
 
-### Changed
+#### Changed
 - **"Edit Cluster Labels..." moved to Cell Colouring tab** — the button is now in the Cell
   Colouring tab (below "Apply Cell Coloring"), where it is more naturally discovered alongside
   the clustering selector and cluster filter controls. Removed from the Clustering tab.
 
-### Added
+#### Added
 - **LLM-based cluster annotation** — new "LLM Annotation" section in Gene Analysis tab.
   After running Rank Genes, click "Annotate with LLM" to send top 10 marker genes per
   cluster to a locally installed AI CLI (Claude, Gemini, or Codex). The LLM returns cell
@@ -3563,7 +3639,7 @@ recorded notebook preamble.
   - **Co-occurrence**: cluster subset in run recording; filter_targets in plot recording
   - **Cluster labels**: label editing recorded in `_helpers.py`
 
-### Fixed
+#### Fixed
 - **Progress feedback not showing** — two bugs prevented tqdm progress from appearing in
   the status bar during nhood/L-R/co-occurrence analyses:
   - QTimer objects were garbage-collected immediately after `worker.start()` because no
@@ -3575,7 +3651,7 @@ recorded notebook preamble.
     `tqdm.std.tqdm`
   - `attach_tqdm_progress` now returns `(post_fn, timer)` instead of just `post_fn`
 
-### Added
+#### Added
 - **Progress feedback for long-running analyses** — status bar now updates during analyses
   instead of showing a static "Running…" message:
   - **Leiden clustering**: animated spinner (`| / - \`) with stage messages
@@ -3587,7 +3663,7 @@ recorded notebook preamble.
 - New helpers in `tabs/_helpers.py`: `attach_spinner`, `attach_tqdm_progress`,
   `qt_tqdm_context`, `ProgressMailbox`
 
-### Changed
+#### Changed
 - **Cursor hover debounce** — `_on_cursor_move` in `02_xenium_viewer.py` now fires
   `get_value()` at most every 80 ms via a `QTimer` debounce, eliminating main-thread
   stutter during rapid pan/zoom.
@@ -3602,7 +3678,7 @@ recorded notebook preamble.
   Python `for` loop; result is cached so the vectorization complexity wasn't
   visible to users.
 
-### Fixed
+#### Fixed
 - **"Filter by selected clusters" in Transcript Density** — the checkbox was
   silently ignored when `label_to_cluster` was not yet populated (e.g. before
   clicking "Apply Cell Coloring" or after switching to gene coloring). The fix
@@ -3612,7 +3688,7 @@ recorded notebook preamble.
   skipped" in the status label and returns early instead of silently falling
   through.
 
-### Added
+#### Added
 - **Transcript cache completeness check** (`00_preprocess_transcripts.py`) — writes a
   `.complete` sentinel file to `transcript_cache/` on successful completion, storing the
   parquet mtime and size. Re-running the script detects an up-to-date cache and exits
@@ -3656,7 +3732,7 @@ recorded notebook preamble.
   `main()` is now ~100 lines shorter and `_on_open_dataset()` no longer duplicates the
   load/build sequence.
 
-### Changed
+#### Changed
 - **Zarr skip logic in `PreprocessWorker`** — `PreprocessWorker.run()` now performs a
   staleness pre-check before calling `load_sdata()`: if `sdata_cached.zarr` already
   exists and its mtime ≥ `experiment.xenium` mtime, the zarr step is skipped and the
@@ -3677,7 +3753,7 @@ recorded notebook preamble.
   calling `sys.exit(0)`. `experiment.xenium` validation only runs when a path was
   actually selected.
 
-### Added (continued from 2026-03-16)
+#### Added (continued from 2026-03-16)
 - **File > Preprocess Dataset...** — new menu item that runs both preprocessing
   steps (zarr cache creation via `01_load_sdata.py` and per-gene transcript
   feather splitting via `00_preprocess_transcripts.py`) in a background thread
@@ -3690,7 +3766,7 @@ recorded notebook preamble.
   `_make_progress_dialog()` in `02_xenium_viewer.py`; `create_file_menu()` in
   `tabs/_helpers.py` updated to accept the new `on_preprocess_dataset` callback.
 
-### Changed
+#### Changed
 - **Memory: free old dataset before loading new one** — in `_on_open_dataset()`,
   all heavy `ctx` fields (`sdata`, `adata`, `clusterings`, `color_manager`,
   `transcript_loader`, layer references, etc.) are now explicitly set to `None`
@@ -3698,9 +3774,9 @@ recorded notebook preamble.
   `_load_dataset()` is called (step 9). This prevents peak RSS from reaching
   old-dataset + new-dataset simultaneously during a dataset switch.
 
-## [Unreleased] — 2026-03-14
+### 2026-03-14
 
-### Added
+#### Added
 - **File > Open Dataset** — new menu entry (and `Ctrl+O` shortcut) lets the user
   switch to a different Xenium output directory without restarting the application.
   The current session is saved automatically before the swap; the new dataset's
@@ -3722,14 +3798,14 @@ recorded notebook preamble.
     `ctx.dataset_generation` at dispatch time and silently drops its result if
     the generation has changed when the worker returns.
 
-## [Unreleased] — 2026-03-10
+### 2026-03-10
 
-### Fixed
+#### Fixed
 - **Co-occurrence plot colors now match labels layer** — replaced seaborn `tab20`
   fallback in `make_co_occurrence_plot()` with `CLUSTER_PALETTE` from
   `utils/coloring.py`, ensuring line colors match the cell labels layer colors.
 
-### Changed
+#### Changed
 - **Custom nhood enrichment heatmap now matches squidpy native style** — rewrote
   `make_nhood_enrichment_plot()` in `spatial_analysis.py` to use `imshow` +
   `make_axes_locatable` instead of `sns.heatmap`. Uses `viridis` colormap with
@@ -3765,14 +3841,14 @@ recorded notebook preamble.
   - `scripts/tabs/tab_co_occurrence.py` — Tab 9: co-occurrence
   - `scripts/tabs/tab_arms.py` — Tab 10: ARMS overlay
 
-### Added
+#### Added
 - **ARMS tab code recording** — All ARMS operations (H&E load, landmark registration,
   GeoJSON/CSV load, tile DEG, DEG export, volcano plots) now emit `_record_code()`
   entries so they appear in the reproducible `code.py` journal.
 
-## [2026-03-09]
+### 2026-03-09
 
-### Fixed
+#### Fixed
 - **ARMS metadata not persisting across sessions** — `save_session()` overwrote
   real-time-saved ARMS attrs (filename, affine, shape, paths) with empty snapshot
   values, causing ARMS registration to be lost on reload. Fixed by: (1) preserving
@@ -3784,7 +3860,7 @@ recorded notebook preamble.
   defined later in `main()`; wrapped in `try/except NameError` so closing the
   viewer before the ARMS tab initializes no longer crashes.
 
-### Added
+#### Added
 - **ARMS Tile DEG analysis** — "Run ARMS Tile DEG" button in ARMS Overlay tab
   performs differential expression between cells grouped by ARMS tile cluster ID.
   Tile polygons are transformed from GeoJSON space to Xenium pixel space via the
@@ -3819,12 +3895,12 @@ recorded notebook preamble.
   landmarks are saved in `viewer_session/arms/`. GeoJSON/CSV tiles are re-parsed
   from the original file paths on restore (with a warning if files have moved).
 
-### Changed
+#### Changed
 - `record_code` default changed from `False` to `True` (always-on recording).
 
-## [Unreleased] — 2026-03-06
+### 2026-03-06
 
-### Added
+#### Added
 - **Import clustering from CSV/TSV** — "Import Clustering..." button in the
   Clustering tab. Reads a file with `cell_id` + `group` columns (auto-detects
   tab vs comma separator). Supports string-valued group names (e.g. imported
@@ -3849,7 +3925,7 @@ recorded notebook preamble.
   - Cluster filter checkboxes (show labels when available)
   - Dotplot (already worked, now uses per-clustering lookup)
 
-### Changed
+#### Changed
 - **Cluster label editor shared between tabs** — Gene Analysis and Clustering
   tabs now share the same `_build_label_editor_dialog()` helper, eliminating
   code duplication. Both editors use the per-clustering label storage.
@@ -3857,14 +3933,14 @@ recorded notebook preamble.
   and `_get_cluster_ids_per_obs()` in the viewer now handle string-valued
   cluster IDs (from imported clusterings) via factorization fallback.
 
-## [Previous] — 2026-03-05
+### 2026-03-05
 
-### Added
+#### Added
 - **Cluster label editor in Clustering tab** — "Edit Cluster Labels..." button
   in the Clustering tab opens a dialog to rename clusters (manual cell type
   annotation) using the Cell Coloring tab's selected clustering.
 
-### Changed
+#### Changed
 - **Co-occurrence plot colors match napari** — line colors in co-occurrence plots
   now use the same palette as napari cell coloring (CLUSTER_PALETTE) instead of
   seaborn tab20. Falls back to tab20 for clusters without a stored color.
@@ -3872,9 +3948,9 @@ recorded notebook preamble.
   tab now auto-sets the same clustering in Gene Analysis, Ligand-Receptor,
   Nhood Enrichment, and Co-occurrence tabs (one-directional sync).
 
-## [Previous] — 2026-03-04
+### 2026-03-04
 
-### Added
+#### Added
 - **Leiden clustering tab** — new "Clustering" tab (Tab 0) with configurable
   `n_neighbors` (5–50), `n_pcs` (10–50), and `resolution` (0.1–5.0) parameters.
   Runs `sc.pp.neighbors` + `sc.tl.leiden` on a worker thread, stores results as
@@ -3882,9 +3958,9 @@ recorded notebook preamble.
   ComboBoxes (Cell Coloring, Gene Analysis, L-R, Nhood, Co-occurrence).
   Reproducible code recording supported.
 
-## [Previous] — 2026-03-03
+### 2026-03-03
 
-### Added
+#### Added
 - **Interaction database filtering for L-R analysis** — 4 checkboxes (OmniPath,
   LigRecExtra, PathwayExtra, KinaseExtra) to select which OmniPath interaction
   datasets are queried, plus a "CellPhoneDB only" toggle to restrict to canonical
@@ -3930,13 +4006,13 @@ recorded notebook preamble.
   plot as PNG. Session persistence via zarr. New functions in `spatial_analysis.py`:
   `run_nhood_enrichment()`, `make_nhood_enrichment_plot()`.
 
-### Changed
+#### Changed
 - Renamed `_get_lr_cluster_filter()` to `_get_cluster_filter()` — shared helper for
   cluster filtering in both L-R plot and nhood enrichment plot.
 
-## [Unreleased] — 2026-03-02
+### 2026-03-02
 
-### Added
+#### Added
 - **Session persistence** — viewer state (ROIs, H&E registration, analysis results,
   cluster labels) is automatically saved to `sdata_cached.zarr/` when the viewer closes.
   The H&E image is stored as a spatialdata multiscale image element (`images/he_image`)
@@ -3947,7 +4023,7 @@ recorded notebook preamble.
   real-time (on each registration/flip change). Skipped when `--no-cache` is used.
   New module `scripts/utils/session.py` with `save_session()` and `load_session()`.
 
-### Previously added
+#### Previously added
 - **Gene Analysis tab** (Tab 6) — rank marker genes per cluster using Wilcoxon, t-test, or
   logreg methods via scanpy's `rank_genes_groups`. Features: configurable top-N genes,
   dotplot visualization with optional dendrogram, editable cluster labels (dialog to rename
@@ -3969,9 +4045,9 @@ recorded notebook preamble.
   `scripts/utils/spatial_analysis.py` with `compute_spatial_neighbors()`, `run_ligrec()`,
   `make_ligrec_plot()`.
 
-## [Unreleased] — 2026-03-01
+### 2026-03-01
 
-### Added
+#### Added
 - **H&E image registration** — new "H&E Registration" tab (5th tab). Load an H&E
   OME-TIFF/SVS image as a multiscale overlay, place paired landmark points on both
   Xenium and H&E images, then compute a similarity transform (rotation + uniform scale +
@@ -3998,7 +4074,7 @@ recorded notebook preamble.
   Includes pairwise Welch's t-tests between regions with Benjamini-Hochberg
   correction when >1 comparison.
 
-### Changed
+#### Changed
 - **Multi-cluster filter** — "Filter by cluster" now supports selecting multiple clusters
   simultaneously via checkboxes (3-column grid with Select All / Deselect All). Works
   in both Gene Expression and Cluster coloring modes. Replaces the single-cluster
@@ -4018,7 +4094,7 @@ recorded notebook preamble.
   viridis range across expressing cells so low-expressors are visually distinguishable.
   Zero-expression cells remain transparent.
 
-### Previously added
+#### Previously added
 - **Multi-gene transcript overlay** — add up to 10 genes simultaneously with distinct
   colors (yellow, cyan, magenta, orange, green, sky blue, red, violet, pink, brown).
   New gene list widget with Add/Remove/Clear All buttons and color legend.
@@ -4037,7 +4113,7 @@ recorded notebook preamble.
   "Apply Cell Coloring" click, avoiding 318K-point scatter at startup.
 - **Timing instrumentation** — wall-clock times printed for each startup phase.
 
-### Changed
+#### Changed
 - `load_sdata()` now skips `cells_boundaries` and `nucleus_boundaries` (were hidden
   anyway; 318K polygon shapes freeze napari). Saves ~30-40% of xenium() load time.
 - `load_umap()` and `load_clusterings()` accept a `path` parameter instead of using
@@ -4045,9 +4121,9 @@ recorded notebook preamble.
 - Transcript cache default location changed from `scripts/transcript_cache/` to
   `data_dir/transcript_cache/`.
 
-## [0.1.0] — 2026-02-28
+### 2026-02-28 — initial prototype (numbered 0.1.0, never published)
 
-### Added
+#### Added
 - `scripts/00_preprocess_transcripts.py` — one-time script to split `transcripts.parquet`
   (1.3 GB, 128M rows) into per-gene feather files in `scripts/transcript_cache/`.
   Enables <100 ms per-gene transcript loading in the viewer (vs 4–5 s from parquet).
