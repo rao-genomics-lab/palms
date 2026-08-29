@@ -133,7 +133,7 @@ Three things worth remembering:
   it — which is why `app.py`'s check reports the missing package rather than repairing it.
 
 Upstream reports (root cause is PyOpenGL's loader ordering; napari's import order exposes it)
-are drafted in `/media/srao/InternalBac2/software_development/napari_issue/`.
+are drafted, but not yet filed.
 
 ## How to reproduce the verification
 

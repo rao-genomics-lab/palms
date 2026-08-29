@@ -38,9 +38,9 @@ mkdocs build --strict     # or: mkdocs serve
 
 **Connecting the Read the Docs project requires the repository to be public.**
 RTD Community only builds public repos; `sraorao/palms` is still private.
-This is the same step the preprint plan's Phase A needs, so the sequence is: make the
-repo public, then connect RTD — not pay for RTD Business to work around a step that
-is happening anyway.
+Going public is planned independently, so the sequence is: make the repo public,
+then connect RTD — not pay for RTD Business to work around a step that is happening
+anyway.
 
 Once public:
 

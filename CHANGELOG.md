@@ -1,5 +1,60 @@
 # Changelog
 
+## [Unreleased] — 2026-08-29 (pre-publication audit)
+
+### Fixed
+- **`scripts/capture_screenshots.py` hardcoded a collaborator's dataset.** The
+  module constant was `/media/srao/InternalBac2/jinsen/output-XETG00160__…` —
+  a local absolute path, a collaborator's name and a real slide ID, in a tracked
+  file in a repo about to go public. It is now `argv[1]` or
+  `$PALMS_SCREENSHOT_DATASET`, resolved and validated *before* the napari import,
+  so a missing argument fails in a second instead of after a ten-second Qt load.
+
+  The docstring records why it must not become a constant again: two of the panels
+  it captures — Tools → Dataset and Tools → Cache — print the dataset path into the
+  widget, so whatever is passed ends up legible in `docs/` and on the wiki. That
+  already happened, and `docs/screenshots/tab-dataset.png` and `tab-cache.png` show
+  the path today. Recapturing them is tracked separately; an edit here cannot fix a
+  PNG.
+
+- **The control dock was still called "Xenium Controls".** The dock title, the View
+  menu's "Show Xenium Controls" and the docs table row. Unlike `experiment.xenium`
+  or "Xenium Explorer", that is the app naming *its own* panel — the exact use the
+  rename existed to remove. It is now **"Controls"**: no product name at all, since
+  the dock is unambiguous inside its own window. The five `setObjectName("xenium_*")`
+  identifiers follow it to `palms_*`; nothing reads them back (there is no
+  `objectName()` call in the tree), so they were pure identity strings.
+  `Ctrl+Shift+X` is deliberately unchanged — a moved keyboard shortcut is a worse
+  surprise than an arbitrary one.
+
+- **`install_copykat` told users to run a command that has never existed.** Both its
+  docstring ("Exposed as the `xenium-install-copykat` console script") and the error
+  raised when the R install fails named an entry point absent from
+  `[project.scripts]` under either name. Not wiring it up is correct, and now stated:
+  the module needs rpy2 and R, which only the `palms_copykat` env has, so a console
+  script installed by the main env would be a command that could never work. The
+  failure message now points at re-running the analysis, which is what actually
+  retries the install.
+
+- **Two smaller leaks in `docs/`.** `pyqt6-migration.md` pointed at a directory
+  outside the repo, which tells a reader nothing they can act on; it now says the
+  upstream reports are drafted but not filed. `readthedocs-setup.md` referenced "the
+  preprint plan's Phase A" — the only manuscript-positioning reference in the code
+  repo — and reads the same without it.
+
+### Removed
+- **`more_datasets.tsv`.** Ten candidate prostate/atlas datasets at the repo root,
+  tracked since `64fc950` and read by no code, with ChatGPT citation artifacts
+  (`:contentReference[oaicite:N]{index=N}`) inside the URLs. Moved to the private
+  planning repo rather than deleted.
+
+### Verified
+- The rest of the pre-publication audit came back clean: no secrets or credentials in
+  tracked files; `.gitignore` does cover `manuscript/`, `data/` and `report.json`;
+  `.claude/` is untracked; `LICENSE` is the MIT one `pyproject.toml` declares; both
+  open GitHub issues read acceptably in public; and the only absolute-path hits in the
+  whole tree were the two fixed above.
+
 ## [Unreleased] — 2026-08-27 (rename to PALMS)
 
 ### Changed
