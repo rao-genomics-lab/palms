@@ -304,8 +304,25 @@ def _write_session(ctx, staging_dir, name, output_dir, include_overlays,
         graph_items = []
         graph = (getattr(ctx, "state", None) or {}).get("prov_graph")
         if graph is not None and len(graph):
+            export_path = str(Path(output_dir) / name)
             graph_items = crop_session.rewrite_graph_paths(
-                graph.to_list(), str(ctx.data_path), str(Path(output_dir) / name))
+                graph.to_list(), str(ctx.data_path), export_path)
+            # The rewrite repoints every recorded path at the export, including
+            # ones under directories the export does not carry (10x's
+            # analysis/clustering CSVs are the case that bites). Existence is
+            # checked against the staging directory — what is actually here —
+            # rather than against a list of what an export is believed to hold.
+            graph_items, dangling = crop_session.repair_missing_reads(
+                graph_items, export_path, staging_dir,
+                # Written after this call, by design: see the comment on the
+                # _write_session call site.
+                also_expected=("transcripts.parquet", "transcript_cache"))
+            for node_id, missing in dangling:
+                rel = Path(missing).name
+                overlay_notes.append(
+                    f"provenance: '{node_id}' reads {rel}, which this export does "
+                    "not contain — that cell will fail on replay"
+                )
             node_id, code, label = crop_export_note(
                 name, output_dir, include_overlays, overlay_notes)
             graph_items = [g for g in graph_items if g.get("id") != node_id]

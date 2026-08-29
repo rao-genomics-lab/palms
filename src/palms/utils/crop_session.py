@@ -32,6 +32,7 @@ in source coordinates, into a crop that covers a fraction of it.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -67,6 +68,95 @@ def rewrite_graph_paths(items, old_path: str, new_path: str) -> list:
 
     rewritten, _ = sub_value(items, old_path, new_path)
     return rewritten
+
+
+# Every path a recorded cell names, as a raw or plain string literal. Recorded
+# code writes them as ``r"…"``; nothing recorded spans a line.
+_QUOTED = re.compile(r'r?["\']([^"\'\n]+)["\']')
+
+
+def recorded_paths_inside(items, export_path: str) -> dict:
+    """``{node id: [path, …]}`` for every recorded path under *export_path*.
+
+    Only paths inside the export are the export's business. One pointing
+    somewhere else was never rewritten and still names the file it always did —
+    an H&E slide beside the source dataset, a downloaded reference — so it is
+    not this function's problem, and reporting it would be noise.
+    """
+    export_path = str(export_path).rstrip("/")
+    found = {}
+    for item in items:
+        code = item.get("code") or ""
+        hits = [m.group(1) for m in _QUOTED.finditer(code)
+                if m.group(1) == export_path or m.group(1).startswith(export_path + "/")]
+        if hits:
+            found[item.get("id")] = hits
+    return found
+
+
+def repair_missing_reads(items, export_path: str, present_root: Path,
+                         also_expected: tuple = ()) -> tuple[list, list]:
+    """Fix carried nodes that now read files the export does not contain.
+
+    ``rewrite_graph_paths`` repoints *every* recorded path at the export, which
+    is right for the preamble's ``data_path`` and wrong for anything under a
+    directory the export does not copy. The concrete case is 10x's own
+    clustering CSVs: a parent's ``clustering:<key>`` backstop node legitimately
+    reads ``<parent>/analysis/clustering/<key>/clusters.csv``, the rewrite turns
+    that into ``<export>/analysis/clustering/<key>/clusters.csv``, and an export
+    carries ``experiment.xenium``, ``transcripts.parquet`` and the zarr — never
+    ``analysis/``. The node then points at a file that has never existed in that
+    dataset, and the notebook dies there.
+
+    Copying ``analysis/`` instead would be wrong: the crop is a cell subset, so
+    the parent's CSV reindexes to NaN for every cell the crop does not contain.
+    The labels the export *does* have are in its own store, so a
+    ``clustering:<key>`` node is rewritten to read them back — the same cell
+    ``_record_clustering`` emits when no CSV backs a key, saying in the notebook
+    that it reloads rather than recomputes.
+
+    *present_root* is the staging directory: existence is checked against what
+    the export actually holds, not against a list of what it is believed to
+    hold. *also_expected* names top-level entries the caller has not written
+    *yet* — the session is written between the zarr and ``transcripts.parquet``
+    on purpose, so a check made there would otherwise call the parquet missing
+    every time. Returns ``(items, unrepaired)``, where each entry of
+    *unrepaired* is ``(node id, path)`` for a dangling path with no such
+    substitution — reported rather than silently left, since the notebook will
+    fail on it.
+    """
+    from palms.utils.clustering_code import reload_clustering_code
+
+    export_path = str(export_path).rstrip("/")
+    cache_path = f"{export_path}/sdata_cached.zarr"
+    out, unrepaired = [], []
+
+    def _present(path: str) -> bool:
+        relative = Path(path).relative_to(export_path)
+        if relative.parts and relative.parts[0] in also_expected:
+            return True
+        return (present_root / relative).exists()
+
+    for item in items:
+        item = dict(item)
+        dangling = [
+            path for path in recorded_paths_inside([item], export_path).get(item.get("id"), [])
+            if not _present(path)
+        ]
+        node_id = item.get("id") or ""
+        if dangling and node_id.startswith("clustering:"):
+            key = node_id.split(":", 1)[1]
+            item["code"] = reload_clustering_code(
+                key, cache_path,
+                reason=(f"Clustering '{key}' came with the source dataset, whose "
+                        "analysis/ folder this crop does not carry."),
+            )
+            item["stale"] = False
+        elif dangling:
+            unrepaired.extend((node_id, path) for path in dangling)
+        out.append(item)
+
+    return out, unrepaired
 
 
 def build_session_attrs(ctx, *, carried_elements, cluster_labels,

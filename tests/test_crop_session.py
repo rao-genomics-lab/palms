@@ -147,6 +147,116 @@ def test_rewriting_is_prefix_only():
     assert "/out/crop_3/y" in out[0]["code"]
 
 
+# ── a rewritten path must point at something the export has (xv-aor) ─────────
+#
+# rewrite_graph_paths repoints every recorded path at the export. That is right
+# for the preamble's data_path and wrong for anything under a directory the
+# export does not copy. Measured on demo_data/crop_6: all three clustering:*
+# nodes read <export>/analysis/clustering/<key>/clusters.csv, a file that has
+# never existed there, and the replay died at the first of them. A relaunch
+# cannot repair it — _record_clustering returns early when the node exists,
+# deliberately, so that a loader never overwrites a producer's code.
+
+def _staged(tmp_path):
+    """A staging directory holding what an export holds at session-write time."""
+    (tmp_path / "sdata_cached.zarr").mkdir()
+    (tmp_path / "experiment.xenium").write_text("{}")
+    return tmp_path
+
+
+def test_a_clustering_reading_an_uncopied_csv_is_rewritten_to_reload_from_the_store(tmp_path):
+    items = [{"id": "clustering:graphclust", "code":
+              'clust_df = pd.read_csv(r"/out/crop_3/analysis/clustering/graphclust/clusters.csv", index_col=0)'}]
+
+    out, unrepaired = crop_session.repair_missing_reads(
+        items, "/out/crop_3", _staged(tmp_path))
+
+    assert unrepaired == []
+    code = out[0]["code"]
+    assert "read_csv" not in code
+    assert "/out/crop_3/sdata_cached.zarr" in code
+    assert 'adata.obs["graphclust"]' in code
+    # The cell has to say it is not recomputing, or an ARI quoted off this
+    # notebook is measuring a round trip.
+    assert "does not recompute" in code
+
+
+def test_a_path_the_export_does_carry_is_left_alone(tmp_path):
+    items = [{"id": "clustering:leiden_r1.0", "code":
+              'zarr.open(r"/out/crop_3/sdata_cached.zarr")'}]
+
+    out, unrepaired = crop_session.repair_missing_reads(
+        items, "/out/crop_3", _staged(tmp_path))
+
+    assert unrepaired == []
+    assert out[0]["code"] == items[0]["code"]
+
+
+def test_a_path_outside_the_export_is_not_the_exports_business(tmp_path):
+    """It was never rewritten, and still names the file it always did."""
+    items = [{"id": "he:register", "code": 'he = imread(r"/slides/patient_7.ome.tif")'}]
+
+    out, unrepaired = crop_session.repair_missing_reads(
+        items, "/out/crop_3", _staged(tmp_path))
+
+    assert unrepaired == []
+    assert out[0]["code"] == items[0]["code"]
+
+
+def test_a_dangling_path_with_no_substitution_is_reported_not_swallowed(tmp_path):
+    items = [{"id": "export:degs", "code":
+              'df.to_csv(r"/out/crop_3/viewer_cache/roi_deg_cache.parquet")'}]
+
+    out, unrepaired = crop_session.repair_missing_reads(
+        items, "/out/crop_3", _staged(tmp_path))
+
+    assert unrepaired == [("export:degs", "/out/crop_3/viewer_cache/roi_deg_cache.parquet")]
+    assert out[0]["code"] == items[0]["code"]
+
+
+def test_files_written_after_the_session_are_not_called_missing(tmp_path):
+    """_write_session runs between the zarr write and transcripts.parquet."""
+    items = [{"id": "n", "code": 'pd.read_parquet(r"/out/crop_3/transcripts.parquet")'}]
+
+    _, unrepaired = crop_session.repair_missing_reads(
+        items, "/out/crop_3", _staged(tmp_path),
+        also_expected=("transcripts.parquet", "transcript_cache"))
+
+    assert unrepaired == []
+
+
+def test_no_recorded_path_survives_pointing_outside_what_the_export_contains(tmp_path):
+    """The property, over a whole graph, rather than the three cases above.
+
+    This is what the acceptance criterion asks for: after the export has
+    rewritten and repaired the graph, every path it names inside itself is a
+    path it has.
+    """
+    export = "/out/crop_3"
+    items = [
+        {"id": "preamble", "code": f'data_path = Path(r"{export}")'},
+        {"id": "clustering:graphclust", "code":
+         f'pd.read_csv(r"{export}/analysis/clustering/graphclust/clusters.csv")'},
+        {"id": "clustering:kmeans_2", "code":
+         f'pd.read_csv(r"{export}/analysis/clustering/gene_expression_kmeans_2/clusters.csv")'},
+        {"id": "he:register", "code": 'imread(r"/slides/patient_7.ome.tif")'},
+    ]
+
+    out, unrepaired = crop_session.repair_missing_reads(
+        items, export, _staged(tmp_path),
+        also_expected=("transcripts.parquet", "transcript_cache"))
+
+    assert unrepaired == []
+    from pathlib import Path as _P
+    for node_id, paths in crop_session.recorded_paths_inside(out, export).items():
+        for path in paths:
+            relative = _P(path).relative_to(export)
+            assert not relative.parts or relative.parts[0] in {
+                "sdata_cached.zarr", "experiment.xenium",
+                "transcripts.parquet", "transcript_cache",
+            }, f"{node_id} still names {path}, which the export does not contain"
+
+
 def test_the_crop_export_note_names_what_was_not_carried():
     from palms.utils.crop_export import crop_export_note
 
