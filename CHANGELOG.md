@@ -7,6 +7,33 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Fixed
+- **A crop export rewrote recorded paths into files it does not copy.**
+  `rewrite_graph_paths` repoints *every* absolute path in the carried provenance
+  graph at the export. That is right for the preamble's `data_path` and wrong for
+  anything under a directory the export does not carry. The case that bites is 10x's
+  own clustering CSVs: a parent's `clustering:<key>` node legitimately reads
+  `<parent>/analysis/clustering/<key>/clusters.csv`, the rewrite turns it into
+  `<export>/analysis/…`, and an export carries `experiment.xenium`,
+  `transcripts.parquet` and the zarr — never `analysis/`. Measured on
+  `demo_data/crop_6`: with the preamble fixed, the replay got three cells in and died
+  with `FileNotFoundError`, and all three `clustering:*` nodes were of that shape.
+  A relaunch could not repair it, because `_record_clustering` returns early when the
+  node exists — deliberately, so a loader never overwrites a producer's code.
+
+  The export now checks each rewritten path against **what the staging directory
+  actually holds**, rather than against a list of what an export is believed to hold,
+  and substitutes the reload-from-the-store cell for a `clustering:<key>` node whose
+  file is not there. Copying `analysis/` instead would be wrong: a crop is a cell
+  subset, so the parent's CSV reindexes to NaN for every cell the crop does not
+  contain. A dangling path with no such substitution is **reported in the export's
+  own notes** rather than silently left, since the notebook will fail on it.
+
+  **A reloaded clustering is not a recomputed one**, and the cell says so where the
+  reader is. A crop export's notebook can reproduce the parent's labels but cannot
+  re-derive them, which matters to anything quoting an ARI off a crop export.
+  `utils/clustering_code.py` now holds that cell's text once, because
+  `_record_clustering` and the export must not drift.
+
 - **A Crop Dataset export declares itself cache-only, and nothing read the
   declaration.** `crop_export` stamps `cache_only: True` into the export's cache
   manifest, and `write_manifest`'s own docstring says it is there "for readers that

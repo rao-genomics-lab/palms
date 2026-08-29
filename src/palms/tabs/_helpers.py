@@ -9,7 +9,6 @@ import numpy as np
 from qtpy.QtWidgets import QWidget, QVBoxLayout
 from superqt.utils import ensure_main_thread
 
-from palms.utils.adata_persistence import CLUSTERING_PREFIX
 from palms.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
@@ -683,16 +682,13 @@ def create_shared_helpers(ctx: ViewerContext):
             # Reload it, and say so in the cell — the previous version emitted a
             # read_csv of this path regardless, so the exported notebook died with
             # FileNotFoundError on every viewer-derived clustering.
-            cache = os.path.join(ctx.data_path, "sdata_cached.zarr")
-            code = (
-                f"\n# Clustering '{key}' was computed in an earlier session, before its\n"
-                f"# producer recorded code. This RELOADS the stored labels from the\n"
-                f"# viewer's cache — it does not recompute them.\n"
-                f"import zarr\n"
-                f"from anndata.io import read_elem\n"
-                f"_cached_obs = read_elem(zarr.open(r\"{cache}\", mode='r')['tables/table/obs'])\n"
-                f"adata.obs[\"{key}\"] = pd.Categorical(\n"
-                f"    _cached_obs[\"{CLUSTERING_PREFIX}{key}\"].reindex(adata.obs_names).astype(str).values)"
+            from palms.utils.clustering_code import reload_clustering_code
+
+            code = reload_clustering_code(
+                key,
+                os.path.join(ctx.data_path, "sdata_cached.zarr"),
+                reason=(f"Clustering '{key}' was computed in an earlier session, "
+                        "before its producer recorded code."),
             )
         _record_node(
             f"clustering:{key}",
