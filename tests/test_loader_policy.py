@@ -459,6 +459,80 @@ def test_any_raw_marker_is_enough_to_count_as_rebuildable(crop_export_dir, marke
     assert loader.has_raw_xenium_source(crop_export_dir)
 
 
+# ── the declaration beats the inference (xv-iy9) ─────────────────────────────
+#
+# crop_export stamps ``cache_only: True`` into the export's cache manifest, and
+# the manifest writer's docstring says it is there "for readers that would
+# otherwise have to infer it from absent files". Nothing read it: both loader
+# sites, the dataset inventory, the rebuild guard and the recorded preamble all
+# recomputed ``not has_raw_xenium_source(path)`` — the very inference the stamp
+# exists to replace. Harmless only while an export writes no raw-shaped file.
+
+def _declare_cache_only(path: Path, value) -> None:
+    import json
+    from palms.utils.zarr_safe import MANIFEST_FILE
+    cache = path / "sdata_cached.zarr"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / MANIFEST_FILE).write_text(json.dumps({"cache_only": value}))
+
+
+def test_a_declared_cache_only_dataset_stays_cache_only_beside_raw_files(crop_export_dir):
+    """The regression the stamp exists to prevent, one release early."""
+    _declare_cache_only(crop_export_dir, True)
+    (crop_export_dir / "cell_feature_matrix.h5").write_bytes(b"x")
+
+    assert loader.has_raw_xenium_source(crop_export_dir)      # the inference flips
+    assert loader.is_cache_only(crop_export_dir)              # the declaration does not
+
+
+def test_without_a_stamp_the_inference_still_decides(crop_export_dir):
+    assert loader.cache_only_declared(crop_export_dir) is None
+    assert loader.is_cache_only(crop_export_dir)
+    (crop_export_dir / "cells.zarr.zip").write_bytes(b"PK")
+    assert not loader.is_cache_only(crop_export_dir)
+
+
+def test_a_false_stamp_cannot_unset_cache_only(crop_export_dir):
+    """The stamp may add certainty, never remove protection.
+
+    Trusting ``false`` here would send the loader down a rebuild path on a
+    dataset whose only copy of the data is the cache.
+    """
+    _declare_cache_only(crop_export_dir, False)
+    assert loader.cache_only_declared(crop_export_dir) is False
+    assert loader.is_cache_only(crop_export_dir)
+
+
+@pytest.mark.parametrize("payload", ["{not json", '{"cache_only": "yes"}', "{}"])
+def test_an_unreadable_or_silent_manifest_says_nothing(crop_export_dir, payload):
+    """A manifest that cannot be parsed is a manifest that makes no claim —
+    never an exception on the load path."""
+    cache = crop_export_dir / "sdata_cached.zarr"
+    cache.mkdir(parents=True, exist_ok=True)
+    from palms.utils.zarr_safe import MANIFEST_FILE
+    (cache / MANIFEST_FILE).write_text(payload)
+
+    assert loader.cache_only_declared(crop_export_dir) is None
+    assert loader.is_cache_only(crop_export_dir)
+
+
+def test_the_rebuild_guard_describes_a_declared_export_without_claiming_files_are_absent(
+    crop_export_dir,
+):
+    """The message enumerates missing files; at a declared export they are there."""
+    from palms.tabs import tab_cache
+
+    _declare_cache_only(crop_export_dir, True)
+    (crop_export_dir / "cell_feature_matrix.h5").write_bytes(b"x")
+
+    reason = tab_cache._rebuild_blocked_reason(
+        type("Ctx", (), {"data_path": crop_export_dir})()
+    )
+    assert reason and "Recover from Backup" in reason
+    assert "cache manifest declares it" in reason
+    assert "no cell_feature_matrix" not in reason
+
+
 def test_a_cache_only_dataset_loads_from_cache_and_moves_nothing(
     monkeypatch, crop_export_dir,
 ):

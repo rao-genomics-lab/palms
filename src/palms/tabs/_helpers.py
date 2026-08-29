@@ -563,13 +563,15 @@ def create_shared_helpers(ctx: ViewerContext):
         # A Crop Dataset export has no raw 10x output — the zarr store *is* the
         # data — so ``spatialdata_io.xenium()`` cannot read it, and a notebook
         # recorded with that call fails on its very first cell. Branch on
-        # ``has_raw_xenium_source``, the single definition of "can this be read
-        # from raw output", rather than guessing from the directory contents
-        # here. Imported lazily: this module is on the tab import path and
-        # ``loader`` pulls in spatialdata.
-        from palms.loader import has_raw_xenium_source
+        # ``is_cache_only``, which prefers what the export *declared* in its
+        # cache manifest over what the directory listing suggests: an export
+        # that also wrote raw-shaped files would otherwise flip this branch back
+        # to ``xenium(data_path)`` and silently drop every derived layer the
+        # crop carried. Imported lazily: this module is on the tab import path
+        # and ``loader`` pulls in spatialdata.
+        from palms.loader import is_cache_only
 
-        if has_raw_xenium_source(ctx.data_path):
+        if not is_cache_only(ctx.data_path):
             load = (
                 "from spatialdata_io import xenium\n"
                 f"data_path = Path(r\"{ctx.data_path}\")\n"
