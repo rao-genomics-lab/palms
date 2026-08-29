@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1391 tests** across 60 files, measured 2026-08-29 —
+There is a `pytest` suite in `tests/` (**1392 tests** across 60 files, measured 2026-08-29 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -599,10 +599,15 @@ reproducibility defect rather than a kernel-discovery one.
 - **tifffile**, **opencv**, **scikit-image** — image processing
 - **insitucnv** (the `insituCNV-copykat` fork, in `environment.yml`) + **infercnvpy** — CNV
   inference. `utils/cnv_analysis.py` drives both backends via `run_cnv_pipeline(..., backend=)`.
-  The fork is installed from an *unpinned* git URL (tracks master) in `environment.yml`,
-  `environment-copykat.yml`, and the `cnv` extra — the same distribution in all three,
-  because the two conda envs share no site-packages. Keep the fork's dependency bounds
-  loose: upper pins there make the main env's pip section unsolvable against `-e .`.
+  The fork is installed from a git URL pinned to the tag **`@v0.2.0`** (commit `172e753`)
+  in `environment.yml`, `environment-copykat.yml`, and the `cnv` extra — the same
+  distribution in all three, because the two conda envs share no site-packages, so all
+  three must move together. It tracked `master` unpinned until 2026-08-29; a floating
+  dependency is not something a reproducibility claim can carry. Note the tag is ahead of
+  the fork's own `version = "0.1.0"` (upstream's number, never bumped in the fork), so
+  `pip list` still reports 0.1.0 — the git ref, not the version string, is what pins it.
+  Keep the fork's dependency bounds loose: upper pins there make the main env's pip
+  section unsolvable against `-e .`.
   **inferCNV** runs in the main env. **CopyKAT** needs **rpy2 + R 4.3 + the `copykat` R package**,
   whose stack requires **python 3.11** — incompatible with the main env's python 3.12. So CopyKAT
   runs in a **second conda env** (`environment-copykat.yml` → `palms_copykat`): the viewer

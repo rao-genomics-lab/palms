@@ -51,7 +51,7 @@ These are the extras declared in `pyproject.toml`. Install them after activating
 
 Each extra is independent — install only what you need. A tab whose optional dependency is missing still appears in the UI; it reports a clear "not installed" error naming the command to run, rather than failing at startup.
 
-The `cnv` extra is the exception to "optional": `environment.yml` already installs it, so you only need it for a plain `pip` install. It pulls `insitucnv` from the [`insituCNV-copykat`](https://github.com/sraorao/insituCNV-copykat) fork, which is public and resolves cleanly against this app's `anndata`/`pandas` versions.
+The `cnv` extra is the exception to "optional": `environment.yml` already installs it, so you only need it for a plain `pip` install. It pulls `insitucnv` from the [`insituCNV-copykat`](https://github.com/sraorao/insituCNV-copykat) fork, which is public and resolves cleanly against this app's `anndata`/`pandas` versions. It is pinned to the tag `v0.2.0`, so an install today and an install next year get the same code.
 
 To download pre-built reference panels, use the `palms-fetch-references` command (see [Console Scripts](#console-scripts) below) — it ships with the package and needs no extra install.
 
