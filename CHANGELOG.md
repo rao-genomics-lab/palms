@@ -4,50 +4,6 @@ Dates are ISO. Versions follow [Semantic Versioning](https://semver.org). New wo
 under an `## [Unreleased]` heading above the newest release; the dated per-session
 entries under **Development log** are the closed pre-1.0.0 record.
 
-## [Unreleased]
-
-### Changed
-- **`insitucnv` is pinned to a tag instead of tracking `master`.** All three install
-  sites — `environment.yml`, `environment-copykat.yml` and the `cnv` extra — carried a
-  bare `git+https://…/insituCNV-copykat.git`, which resolves to whatever the fork's
-  default branch happens to be that day. Two installs a week apart could run different
-  CNV code while reporting the same everything else, which is not a dependency a
-  reproducibility claim can rest on. The fork had no tags at all; `v0.2.0` now marks
-  `172e753` and all three sites pin `@v0.2.0`. (The tag is ahead of the fork's own
-  `version = "0.1.0"`, inherited from upstream and never bumped — the git ref is what
-  pins the code, so `pip list` still says 0.1.0.)
-
-  The three must move together: the viewer's env and `palms_copykat` share no
-  site-packages, so a pin that lands in one and not the other has the CopyKAT worker
-  running different code from the viewer that launched it.
-  `tests/test_declared_dependencies.py` now fails if the three disagree, or if any of
-  them loses its `@<ref>`.
-
-### Fixed
-- **Seven modules the app imports were declared nowhere.** `novae` (Spatial → Domains)
-  appeared in no dependency list at all; `platformdirs`, `pygments`, `geopandas`,
-  `seaborn`, `tqdm` and `numcodecs` were reached only as transitive dependencies of
-  napari, spatialdata, scanpy and zarr. Nothing was broken here, because every box that
-  has ever run PALMS also had them — but the failure mode is bad: a `pip install palms`
-  that resolves a napari or scanpy release which has dropped one of them fails at an
-  import line naming neither PALMS nor the package that used to supply it.
-
-  All six non-optional ones are now in `dependencies`, each with a comment saying which
-  feature needs it. `novae` becomes its own extra (`pip install "palms[novae]"`, also
-  folded into `full`) rather than a core dependency: it pulls torch, torch-geometric and
-  lightning, and requires python ≥ 3.11. The Domains tab's "not installed" message now
-  names the extra rather than `pip install novae`.
-
-### Added
-- **`tests/test_declared_dependencies.py`** — a source guard in the idiom of
-  `test_persistence_safety.py`. It walks the AST of every module under `src/palms`,
-  maps each imported top-level name back to the *distribution* that provides it
-  (`importlib.metadata.packages_distributions`, because `cv2` is `opencv-python` and
-  `sklearn` is `scikit-learn`), and fails on anything missing from `pyproject.toml`'s
-  dependencies or extras. Four of the seven above were found by writing it, not by
-  reading the code. Exemptions are listed with reasons and a second test deletes one
-  the moment nothing imports it any more.
-
 ## [1.0.0] — 2026-08-29
 
 The first release. Work started on 2026-02-28 as a handful of scripts for looking at
@@ -98,7 +54,7 @@ coordinate space, and records every action the user takes as code that replays.
   `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`;
   documentation on Read the Docs; CI running the full suite plus a lint gate on every
   push.
-- **1,388 tests** across 59 files, including source guards that fail if a fixed defect is
+- **1,392 tests** across 60 files, including source guards that fail if a fixed defect is
   reintroduced.
 
 ### Known limitations
@@ -119,6 +75,50 @@ coordinate space, and records every action the user takes as code that replays.
 Every entry below predates the 1.0.0 tag and is part of it. They were written one per
 working session, newest first, and are kept in full rather than summarised: several are
 the only record of *why* a fix took the shape it did.
+
+### 2026-08-29 (b) — dependencies declared and pinned
+
+#### Changed
+- **`insitucnv` is pinned to a tag instead of tracking `master`.** All three install
+  sites — `environment.yml`, `environment-copykat.yml` and the `cnv` extra — carried a
+  bare `git+https://…/insituCNV-copykat.git`, which resolves to whatever the fork's
+  default branch happens to be that day. Two installs a week apart could run different
+  CNV code while reporting the same everything else, which is not a dependency a
+  reproducibility claim can rest on. The fork had no tags at all; `v0.2.0` now marks
+  `172e753` and all three sites pin `@v0.2.0`. (The tag is ahead of the fork's own
+  `version = "0.1.0"`, inherited from upstream and never bumped — the git ref is what
+  pins the code, so `pip list` still says 0.1.0.)
+
+  The three must move together: the viewer's env and `palms_copykat` share no
+  site-packages, so a pin that lands in one and not the other has the CopyKAT worker
+  running different code from the viewer that launched it.
+  `tests/test_declared_dependencies.py` now fails if the three disagree, or if any of
+  them loses its `@<ref>`.
+
+#### Fixed
+- **Seven modules the app imports were declared nowhere.** `novae` (Spatial → Domains)
+  appeared in no dependency list at all; `platformdirs`, `pygments`, `geopandas`,
+  `seaborn`, `tqdm` and `numcodecs` were reached only as transitive dependencies of
+  napari, spatialdata, scanpy and zarr. Nothing was broken here, because every box that
+  has ever run PALMS also had them — but the failure mode is bad: a `pip install palms`
+  that resolves a napari or scanpy release which has dropped one of them fails at an
+  import line naming neither PALMS nor the package that used to supply it.
+
+  All six non-optional ones are now in `dependencies`, each with a comment saying which
+  feature needs it. `novae` becomes its own extra (`pip install "palms[novae]"`, also
+  folded into `full`) rather than a core dependency: it pulls torch, torch-geometric and
+  lightning, and requires python ≥ 3.11. The Domains tab's "not installed" message now
+  names the extra rather than `pip install novae`.
+
+#### Added
+- **`tests/test_declared_dependencies.py`** — a source guard in the idiom of
+  `test_persistence_safety.py`. It walks the AST of every module under `src/palms`,
+  maps each imported top-level name back to the *distribution* that provides it
+  (`importlib.metadata.packages_distributions`, because `cv2` is `opencv-python` and
+  `sklearn` is `scikit-learn`), and fails on anything missing from `pyproject.toml`'s
+  dependencies or extras. Four of the seven above were found by writing it, not by
+  reading the code. Exemptions are listed with reasons and a second test deletes one
+  the moment nothing imports it any more.
 
 ### 2026-08-29 — reproducibility measurement
 
