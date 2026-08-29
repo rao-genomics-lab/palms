@@ -70,6 +70,7 @@ pip install -e ".[celltypist]"   # CellTypist label transfer (Rank Genes tab)
 pip install -e ".[r]"            # rpy2-based reference fetcher (needs system R)
 pip install -e ".[gpu]"          # torch / torch-geometric / xgboost
 pip install -e ".[references]"   # rasterio + readfcs
+pip install -e ".[novae]"        # Novae spatial-domain inference (Domains tab)
 pip install -e ".[cnv]"          # InSituCNV/infercnvpy — already in environment.yml
 pip install -e ".[full]"         # all of the above
 ```

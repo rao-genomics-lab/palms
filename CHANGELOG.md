@@ -4,6 +4,33 @@ Dates are ISO. Versions follow [Semantic Versioning](https://semver.org). New wo
 under an `## [Unreleased]` heading above the newest release; the dated per-session
 entries under **Development log** are the closed pre-1.0.0 record.
 
+## [Unreleased]
+
+### Fixed
+- **Seven modules the app imports were declared nowhere.** `novae` (Spatial → Domains)
+  appeared in no dependency list at all; `platformdirs`, `pygments`, `geopandas`,
+  `seaborn`, `tqdm` and `numcodecs` were reached only as transitive dependencies of
+  napari, spatialdata, scanpy and zarr. Nothing was broken here, because every box that
+  has ever run PALMS also had them — but the failure mode is bad: a `pip install palms`
+  that resolves a napari or scanpy release which has dropped one of them fails at an
+  import line naming neither PALMS nor the package that used to supply it.
+
+  All six non-optional ones are now in `dependencies`, each with a comment saying which
+  feature needs it. `novae` becomes its own extra (`pip install "palms[novae]"`, also
+  folded into `full`) rather than a core dependency: it pulls torch, torch-geometric and
+  lightning, and requires python ≥ 3.11. The Domains tab's "not installed" message now
+  names the extra rather than `pip install novae`.
+
+### Added
+- **`tests/test_declared_dependencies.py`** — a source guard in the idiom of
+  `test_persistence_safety.py`. It walks the AST of every module under `src/palms`,
+  maps each imported top-level name back to the *distribution* that provides it
+  (`importlib.metadata.packages_distributions`, because `cv2` is `opencv-python` and
+  `sklearn` is `scikit-learn`), and fails on anything missing from `pyproject.toml`'s
+  dependencies or extras. Four of the seven above were found by writing it, not by
+  reading the code. Exemptions are listed with reasons and a second test deletes one
+  the moment nothing imports it any more.
+
 ## [1.0.0] — 2026-08-29
 
 The first release. Work started on 2026-02-28 as a handful of scripts for looking at

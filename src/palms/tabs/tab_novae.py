@@ -55,7 +55,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 import novae
             except ImportError:
                 raise ImportError(
-                    "novae is not installed. Run: pip install novae"
+                    'novae is not installed. Run: pip install "palms[novae]"'
                 )
 
             _adata_copy = _adata.copy()
