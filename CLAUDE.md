@@ -120,7 +120,7 @@ never call it from inside a worker that holds a reference to a tab.
 **A `build_tab` must return a scroll-wrapped widget** — `make_tab()`, or `scrollable()`
 for a tab that builds its own root. The panel is a `QTabWidget` of `QTabWidget`s, and a
 stacked widget's minimum size is the **maximum over all its pages, hidden ones included**,
-so one unwrapped page becomes the floor for the whole Xenium Controls dock and the
+so one unwrapped page becomes the floor for the whole Controls dock and the
 separator stops moving — even if nobody ever opens that page. A `QScrollArea` reports a
 fixed ~68px minimum whatever it holds, which is what keeps the floor low. The same applies
 to a button row placed *outside* a tab's scroll area: buttons cannot shrink below their

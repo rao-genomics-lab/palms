@@ -82,7 +82,7 @@ def scrollable(widget: QWidget) -> QWidget:
     The control panel is a ``QTabWidget`` of ``QTabWidget``s, and a stacked
     widget's minimum is the maximum over *all* its pages, hidden ones included.
     So a single page that reports a wide or tall minimum becomes the floor for
-    the whole Xenium Controls dock, and the separator between the dock and the
+    the whole Controls dock, and the separator between the dock and the
     canvas stops moving. A ``QScrollArea`` reports a fixed ~68px minimum
     whatever it contains, which is what keeps that floor low: every page must
     go through here (or through `make_tab`, which does).
@@ -999,17 +999,17 @@ def create_file_menu(viewer, on_open_dataset, on_preprocess_dataset=None):
     file_menu = viewer.window.file_menu
 
     sep = file_menu.addSeparator()
-    sep.setObjectName("xenium_sep")
+    sep.setObjectName("palms_sep")
 
     open_act = QAction("Open Dataset...", file_menu)
-    open_act.setObjectName("xenium_open")
+    open_act.setObjectName("palms_open")
     open_act.setShortcut("Ctrl+O")
     open_act.triggered.connect(on_open_dataset)
     file_menu.addAction(open_act)
 
     if on_preprocess_dataset is not None:
         pre_act = QAction("Preprocess Dataset...", file_menu)
-        pre_act.setObjectName("xenium_preprocess")
+        pre_act.setObjectName("palms_preprocess")
         pre_act.triggered.connect(on_preprocess_dataset)
         file_menu.addAction(pre_act)
 
@@ -1109,9 +1109,9 @@ def create_view_menu(viewer, _app):
     view_menu = viewer.window.view_menu
     view_menu.addSeparator()
 
-    # Show/hide the Xenium Controls dock panel
-    controls_action = QAction("Show Xenium Controls", view_menu, checkable=True)
-    controls_action.setObjectName("xenium_controls_toggle")
+    # Show/hide the Controls dock panel
+    controls_action = QAction("Show Controls", view_menu, checkable=True)
+    controls_action.setObjectName("palms_controls_toggle")
     controls_action.setChecked(True)
     controls_action.setShortcut("Ctrl+Shift+X")
 
@@ -1135,7 +1135,7 @@ def create_view_menu(viewer, _app):
     _app["controls_action"] = controls_action
 
     minimap_action = QAction("Show Minimap", view_menu, checkable=True)
-    minimap_action.setObjectName("xenium_minimap_toggle")
+    minimap_action.setObjectName("palms_minimap_toggle")
     minimap_action.setChecked(False)
     minimap_action.setEnabled(False)
 
@@ -1151,7 +1151,7 @@ def create_view_menu(viewer, _app):
     # Show/hide the Plots dock. Starts unchecked — the dock reveals itself when
     # the first figure arrives, so an empty gallery never takes up the canvas.
     plots_action = QAction("Show Plots", view_menu, checkable=True)
-    plots_action.setObjectName("xenium_plots_toggle")
+    plots_action.setObjectName("palms_plots_toggle")
     plots_action.setChecked(False)
     plots_action.setShortcut("Ctrl+Shift+P")
 

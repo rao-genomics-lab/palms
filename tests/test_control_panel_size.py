@@ -1,4 +1,4 @@
-"""No control-panel page may pin the size of the Xenium Controls dock.
+"""No control-panel page may pin the size of the Controls dock.
 
 The panel is a ``QTabWidget`` of ``QTabWidget``s, and a stacked widget's minimum
 size is the maximum over *all* its pages — the hidden ones included. So one page

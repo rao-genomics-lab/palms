@@ -9,7 +9,7 @@ localhost dev tool and unacceptable as a default.
 What it buys: the GUI proper and the spatial-analysis tabs have no automated
 coverage, so exercising them means a human clicking. The bridge lets an
 assistant drive the *already loaded* dataset — full-window screenshots that
-include the Xenium Controls and Plots docks, plus ``execute_code`` on the Qt
+include the Controls and Plots docks, plus ``execute_code`` on the Qt
 main thread with ``ctx`` in reach.
 
 Two things to know before using it:

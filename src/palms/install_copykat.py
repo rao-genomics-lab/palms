@@ -3,8 +3,11 @@
 CopyKAT's *dependencies* come from conda (see environment.yml), but copykat
 itself is only on GitHub, so it can't live in environment.yml. This module
 installs it via ``remotes::install_github`` through rpy2 — idempotently, so it's
-safe to call on every CopyKAT run. Exposed as the ``xenium-install-copykat``
-console script and called lazily from the CopyKAT pipeline branch.
+safe to call on every CopyKAT run. Called lazily from the CopyKAT pipeline
+branch; ``python -m palms.install_copykat`` runs it standalone. There is no
+console script on purpose: this needs rpy2 and R, which only the
+``palms_copykat`` env has, so an entry point installed by the main env would
+be a command that can never work.
 """
 
 from __future__ import annotations
@@ -47,7 +50,8 @@ def ensure_copykat_installed(quiet: bool = False) -> bool:
     except Exception as e:  # rpy2 RRuntimeError etc.
         raise RuntimeError(
             f"Failed to install the copykat R package ({COPYKAT_REPO}). Check network "
-            f"access and R, then retry `xenium-install-copykat`. Underlying error: {e}"
+            f"access and R, then re-run the CopyKAT analysis — the install is retried "
+            f"automatically. Underlying error: {e}"
         ) from e
 
     if not _copykat_available():

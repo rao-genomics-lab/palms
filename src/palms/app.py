@@ -1154,7 +1154,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
 
     panel, _state, _he_state, restore_fn = _build_control_panel(ctx)
     _app["dock_widget"] = viewer.window.add_dock_widget(
-        panel, name="Xenium Controls", area="right"
+        panel, name="Controls", area="right"
     )
     _app["restore_fn"] = restore_fn
 

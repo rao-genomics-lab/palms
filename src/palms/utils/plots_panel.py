@@ -77,7 +77,7 @@ class PlotsPanel(QWidget):
         layout.setSpacing(2)
         # A button row outside a scroll area cannot shrink below its labels and
         # would set the dock's minimum width all by itself — the defect that
-        # pinned the Xenium Controls dock at 536px. ``toolbar_row`` keeps it
+        # pinned the Controls dock at 536px. ``toolbar_row`` keeps it
         # pinned but horizontally scrollable.
         layout.addWidget(toolbar_row(clear_button))
         layout.addWidget(scrollable(self._cards))
