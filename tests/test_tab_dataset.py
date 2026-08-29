@@ -24,8 +24,8 @@ pytest.importorskip("qtpy")
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from xenium_viewer.tabs import tab_dataset  # noqa: E402
-from xenium_viewer.utils import store_inventory as si  # noqa: E402
+from palms.tabs import tab_dataset  # noqa: E402
+from palms.utils import store_inventory as si  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -199,7 +199,7 @@ def test_a_blocked_row_is_dimmed_rather_than_disabled(qapp, loaded):
 def loaded(tiny_sdata):
     """A ctx over a store with a deletable element, obs columns and sidecars."""
     from spatialdata.models import Image2DModel
-    from xenium_viewer.utils import zarr_safe
+    from palms.utils import zarr_safe
 
     cache = Path(tiny_sdata.path)
     data_path = cache.parent
@@ -229,6 +229,81 @@ def _plan(ctx, keys):
     sections = si.build_inventory(
         Path(ctx.data_path), tab_dataset._cache_path(ctx))
     return si.plan_deletion(sections, keys)
+
+
+# ── Clearing the results of stale steps ──────────────────────────────────────
+
+def _stale_graph():
+    """normalize is re-recorded, so the clustering and its ranking go stale."""
+    from palms.utils.prov_graph import SETUP, ProvGraph
+    g = ProvGraph()
+    g.upsert("preamble", "data_path = ...", kind=SETUP)
+    g.upsert("normalize", "normalize(adata)", deps=["preamble"], kind=SETUP)
+    g.upsert("clustering:leiden_r1.0", "leiden(...)", deps=["normalize"])
+    g.upsert("rank_genes:leiden_r1.0", "rank(...)",
+             deps=["normalize", "clustering:leiden_r1.0"])
+    g.upsert("normalize", "normalize(adata, target_sum=100)",
+             deps=["preamble"], kind=SETUP)
+    return g
+
+
+def _sections_of(ctx):
+    return si.build_inventory(Path(ctx.data_path), tab_dataset._cache_path(ctx))
+
+
+def test_the_stale_selection_reaches_the_real_store(loaded):
+    from palms.utils import stale_results
+    sel = stale_results.select_stale(_stale_graph(), _sections_of(loaded))
+    assert "obs:table/clustering_leiden_r1.0" in sel.keys
+    # rank_genes:leiden_r1.0 is stale and it is the only ranking, so the shared
+    # pointer goes with it; the ranking's own keyed slot was never written here.
+    assert "uns:table/rank_genes_groupby" in sel.keys
+
+
+def test_clearing_stale_results_removes_them_and_leaves_the_rest(loaded):
+    """select_stale -> plan_deletion -> _apply_deletion, end to end, no Qt."""
+    from palms.utils import stale_results
+    sections = _sections_of(loaded)
+    sel = stale_results.select_stale(_stale_graph(), sections)
+    result = tab_dataset._apply_deletion(loaded, si.plan_deletion(sections, sel.keys))
+
+    assert result.failed == [], result.failed
+    assert "clustering_leiden_r1.0" not in loaded.adata.obs.columns
+    assert "cluster_labels_leiden_r1.0" not in loaded.adata.obs.columns  # cascade
+    assert "rank_genes_groupby" not in loaded.adata.uns
+    # Untouched: nothing in the graph explains these.
+    assert "ext_slide2" in loaded.sdata.images
+    assert (Path(loaded.data_path) / "viewer_cache"
+            / "adata_norm_cache.h5ad").exists()
+
+
+def test_a_fresh_graph_selects_nothing_from_a_real_store(loaded):
+    from palms.utils import stale_results
+    from palms.utils.prov_graph import SETUP, ProvGraph
+    g = ProvGraph()
+    g.upsert("preamble", "data_path = ...", kind=SETUP)
+    g.upsert("clustering:leiden_r1.0", "leiden(...)", deps=["preamble"])
+    assert stale_results.select_stale(g, _sections_of(loaded)).keys == ()
+
+
+def test_the_rename_warning_fires_only_on_a_wholesale_restale():
+    """The one case where "everything is stale" means nothing is wrong."""
+    from palms.utils.prov_graph import SETUP
+    g = _stale_graph()
+    assert tab_dataset._rename_warning(g, 2) == ""
+
+    g.upsert("preamble", 'data_path = Path(r"/moved")', kind=SETUP)
+    warning = tab_dataset._rename_warning(g, 3)
+    assert "palms-rename-dataset" in warning and "--repair" in warning
+
+
+def test_selecting_stale_results_never_ticks_a_blocked_row(loaded):
+    """plan_deletion refuses a whole batch containing one blocked key."""
+    from palms.utils import stale_results
+    sections = _sections_of(loaded)
+    by_key = {n.key: n for s in sections for n in s.nodes}
+    for key in stale_results.select_stale(_stale_graph(), sections).keys:
+        assert by_key[key].deletable, key
 
 
 def test_deleting_an_element_removes_it_and_keeps_a_trash_copy(loaded):
@@ -292,7 +367,7 @@ def test_deleting_a_sidecar_unlinks_it(loaded):
 def test_deleting_a_session_group_also_clears_the_in_memory_mirror(loaded):
     """Otherwise the next save_session writes the affine straight back."""
     import numpy as _np
-    from xenium_viewer.utils import zarr_safe
+    from palms.utils import zarr_safe
 
     cache = Path(loaded.sdata.path)
     with zarr_safe.safe_group_update(cache, "viewer_session") as (group, _stage):

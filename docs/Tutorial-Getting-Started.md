@@ -1,6 +1,6 @@
 # Getting Started
 
-**Prerequisites:** Xenium Viewer installed; a Xenium output directory available (containing `experiment.xenium`)
+**Prerequisites:** PALMS installed; a Xenium output directory available (containing `experiment.xenium`)
 
 **Time required:** ~10 minutes
 
@@ -13,13 +13,13 @@
 Run the viewer from the terminal, passing the path to your Xenium output directory:
 
 ```bash
-xenium-viewer /path/to/xenium/output/
+palms /path/to/xenium/output/
 ```
 
 If you omit the path, a file dialog opens so you can select the directory interactively:
 
 ```bash
-xenium-viewer
+palms
 ```
 
 ![Tutorial Getting Started Step1](screenshots/tutorial-getting-started-step1.png)

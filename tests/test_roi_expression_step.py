@@ -30,9 +30,9 @@ anndata = pytest.importorskip("anndata")
 pytest.importorskip("shapely")
 pytest.importorskip("qtpy")
 
-from xenium_viewer.utils.prov_graph import ARTIFACT, TERMINAL  # noqa: E402
-from xenium_viewer.utils.steps import Step, StepExecutor, check_step  # noqa: E402
-from xenium_viewer.tabs.tab_roi import (  # noqa: E402
+from palms.utils.prov_graph import ARTIFACT, TERMINAL  # noqa: E402
+from palms.utils.steps import Step, StepExecutor, check_step  # noqa: E402
+from palms.tabs.tab_roi import (  # noqa: E402
     _ROIS_TEMPLATE, _roi_expr_template,
 )
 
@@ -305,7 +305,7 @@ def test_the_export_cell_writes_the_csv(tmp_path):
 
 def test_the_tab_no_longer_records_prose_for_either_node():
     """Source guard: both nodes were comment-only, and both must stay code."""
-    text = (Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+    text = (Path(__file__).resolve().parent.parent / "src" / "palms"
             / "tabs" / "tab_roi.py").read_text()
     for prose in ("mean expression is shown in the viewer",
                   "saved from the viewer to"):

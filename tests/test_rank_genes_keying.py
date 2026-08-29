@@ -31,7 +31,7 @@ np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 sc = pytest.importorskip("scanpy")
 
-from xenium_viewer.utils.gene_analysis import (  # noqa: E402
+from palms.utils.gene_analysis import (  # noqa: E402
     LEGACY_RANK_KEY, rank_genes_key, resolve_rank_key,
 )
 
@@ -88,7 +88,7 @@ def test_resolve_tolerates_no_groupby():
 
 @pytest.mark.parametrize("key", [rank_genes_key(GROUPBY), LEGACY_RANK_KEY])
 def test_a_stored_ranking_restores_under_either_key(key):
-    from xenium_viewer.utils.adata_persistence import load_rank_genes_from_adata
+    from palms.utils.adata_persistence import load_rank_genes_from_adata
 
     adata = _ranked(key)
     df, adata_norm, groupby = load_rank_genes_from_adata(adata, None)
@@ -100,7 +100,7 @@ def test_a_stored_ranking_restores_under_either_key(key):
 
 
 def test_an_object_with_no_ranking_restores_nothing():
-    from xenium_viewer.utils.adata_persistence import load_rank_genes_from_adata
+    from palms.utils.adata_persistence import load_rank_genes_from_adata
 
     assert load_rank_genes_from_adata(_ranked(None), None) == (None, None, None)
 
@@ -114,7 +114,7 @@ def test_a_keyed_ranking_still_counts_as_user_data():
     keying landed — and "no user data" is what lets a cache be rebuilt with no
     dialog at all.
     """
-    from xenium_viewer import loader
+    from palms import loader
 
     assert loader._is_user_uns(rank_genes_key(GROUPBY))
     assert loader._is_user_uns(LEGACY_RANK_KEY)
@@ -125,7 +125,7 @@ def test_a_keyed_ranking_still_counts_as_user_data():
 def test_a_keyed_ranking_is_still_deletable_in_the_dataset_tab():
     """Unrecognised defaults to *not* deletable, so a missed name is not
     dangerous — it is a result the user is simply unable to remove."""
-    from xenium_viewer.utils import store_inventory
+    from palms.utils import store_inventory
 
     assert store_inventory._is_deletable_uns(rank_genes_key(GROUPBY))
     assert store_inventory._is_deletable_uns(LEGACY_RANK_KEY)

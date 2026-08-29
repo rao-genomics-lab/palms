@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from xenium_viewer.utils import crop_session
+from palms.utils import crop_session
 
 
 class _Ctx:
@@ -148,7 +148,7 @@ def test_rewriting_is_prefix_only():
 
 
 def test_the_crop_export_note_names_what_was_not_carried():
-    from xenium_viewer.utils.crop_export import crop_export_note
+    from palms.utils.crop_export import crop_export_note
 
     node_id, code, label = crop_export_note(
         "crop_3", "/out", True, ["patch_HE_R2: nothing inside the crop"])
@@ -166,7 +166,7 @@ def test_the_note_is_built_in_exactly_one_place():
     """
     from pathlib import Path
 
-    tab = (Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+    tab = (Path(__file__).resolve().parent.parent / "src" / "palms"
            / "tabs" / "tab_crop_dataset.py").read_text()
 
     assert "crop_export_note" in tab, (
@@ -181,7 +181,7 @@ def test_the_written_session_is_readable_by_load_session(tmp_path):
     """`load_session` is what the viewer calls; anything else is a proxy for it."""
     import spatialdata as sd
     from spatialdata.models import Image2DModel
-    from xenium_viewer.utils.session import load_session
+    from palms.utils.session import load_session
 
     staging = tmp_path / "export"
     staging.mkdir()

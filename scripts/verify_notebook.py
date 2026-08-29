@@ -44,8 +44,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from xenium_viewer.utils import notebook_export  # noqa: E402
-from xenium_viewer.utils.prov_graph import ProvGraph  # noqa: E402
+from palms.utils import notebook_export  # noqa: E402
+from palms.utils.prov_graph import ProvGraph  # noqa: E402
 
 CACHE_DIRNAME = "sdata_cached.zarr"
 SESSION_GROUP = "viewer_session"
@@ -199,7 +199,7 @@ def comment_only_nodes(graph: ProvGraph) -> list[str]:
     equivalent (the canvas background, an overlay), declared as such and
     rendered as markdown. Counting them here buried the real gaps among them.
     """
-    from xenium_viewer.utils.prov_graph import NOTE
+    from palms.utils.prov_graph import NOTE
 
     out = []
     for node_id in graph.topo_sort():
@@ -218,7 +218,7 @@ def comment_only_nodes(graph: ProvGraph) -> list[str]:
 
 def note_nodes(graph: ProvGraph) -> list[str]:
     """Node ids declared as viewer state — no code, and none expected."""
-    from xenium_viewer.utils.prov_graph import NOTE
+    from palms.utils.prov_graph import NOTE
 
     return [nid for nid in graph.topo_sort() if graph.get(nid).kind == NOTE]
 
@@ -232,7 +232,7 @@ def template_provenance(graph: ProvGraph) -> dict:
     shipped viewer does. So the report says, explicitly, whether every step came
     from stock text.
     """
-    from xenium_viewer.utils.prov_graph import TEMPLATE_BUILTIN
+    from palms.utils.prov_graph import TEMPLATE_BUILTIN
 
     steps = []
     for node_id in graph.topo_sort():
@@ -271,7 +271,7 @@ def build_notebook(graph: ProvGraph, work_dir: Path) -> tuple[Path, list]:
     Its ``--out`` report always did; a notebook someone keeps or forwards is
     exactly where the statement matters most.
     """
-    from xenium_viewer.utils.prov_graph import graph_to_cells
+    from palms.utils.prov_graph import graph_to_cells
     derived = graph_to_cells(graph)
     node_ids = [cell.node_id for cell in derived]
     cells = [(cell.cell_type, cell.source) for cell in derived]
@@ -472,7 +472,7 @@ def compare_rank_genes(viewer_names: dict, replay_rank, top_n: int,
 
 def package_versions() -> dict:
     """The same pins the ``environment`` node records, plus the replay's own."""
-    from xenium_viewer.utils.environment import RECORDED_PACKAGES, package_versions
+    from palms.utils.environment import RECORDED_PACKAGES, package_versions
     return package_versions(RECORDED_PACKAGES + ("nbclient", "nbformat"))
 
 

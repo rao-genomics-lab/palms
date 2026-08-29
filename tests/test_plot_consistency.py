@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-TABS = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "tabs"
-UTILS = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "utils"
+TABS = Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
+UTILS = Path(__file__).resolve().parent.parent / "src" / "palms" / "utils"
 
 #: The modules allowed to call ``savefig``, each with the reason.
 _SAVE_ALLOWED = {
@@ -134,7 +134,7 @@ def test_only_plot_output_writes_a_figure_among_the_utils():
 
 def test_the_plots_directory_has_exactly_one_definition():
     """Five modules used to build ``<data_path>/plots`` by hand."""
-    package = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+    package = Path(__file__).resolve().parent.parent / "src" / "palms"
     offenders = {}
     for path in sorted(package.rglob("*.py")):
         if path.name in {

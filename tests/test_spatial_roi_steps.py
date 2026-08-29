@@ -27,16 +27,16 @@ sd = pytest.importorskip("spatialdata")
 pytest.importorskip("shapely")
 plt = pytest.importorskip("matplotlib.pyplot")
 
-from xenium_viewer.utils.steps import Step, StepExecutor, check_step  # noqa: E402
-from xenium_viewer.tabs._helpers import (  # noqa: E402
+from palms.utils.steps import Step, StepExecutor, check_step  # noqa: E402
+from palms.tabs._helpers import (  # noqa: E402
     _NORMALIZE_TEMPLATE, _SPATIAL_NEIGHBORS_TEMPLATE,
 )
-from xenium_viewer.tabs.tab_nhood import _NHOOD_TEMPLATE  # noqa: E402
-from xenium_viewer.tabs.tab_co_occurrence import _COOCCUR_TEMPLATE  # noqa: E402
-from xenium_viewer.tabs.tab_ligrec import _ligrec_template  # noqa: E402
-from xenium_viewer.tabs.tab_marker_genes import _marker_plot_template  # noqa: E402
-from xenium_viewer.tabs.tab_gene_correlation import _gene_corr_template  # noqa: E402
-from xenium_viewer.tabs.tab_roi import _ROIS_TEMPLATE, _roi_deg_template  # noqa: E402
+from palms.tabs.tab_nhood import _NHOOD_TEMPLATE  # noqa: E402
+from palms.tabs.tab_co_occurrence import _COOCCUR_TEMPLATE  # noqa: E402
+from palms.tabs.tab_ligrec import _ligrec_template  # noqa: E402
+from palms.tabs.tab_marker_genes import _marker_plot_template  # noqa: E402
+from palms.tabs.tab_gene_correlation import _gene_corr_template  # noqa: E402
+from palms.tabs.tab_roi import _ROIS_TEMPLATE, _roi_deg_template  # noqa: E402
 
 
 CLUSTER_KEY = "leiden_r1.0"
@@ -401,12 +401,12 @@ def _roi_deg_step(filtered=False):
 
 
 def test_roi_deg_no_longer_imports_the_viewer_package():
-    """The old recorded cell called `xenium_viewer.utils.gene_analysis`, so the
+    """The old recorded cell called `palms.utils.gene_analysis`, so the
     notebook was not standalone scverse code. It is plain spatialdata + scanpy
     now — the membership test is `sd.polygon_query`, not a hand-rolled
     `contains_xy` loop over centroids the template converted itself."""
     source = _roi_deg_template(False)
-    assert "xenium_viewer" not in source
+    assert "palms" not in source
     assert "sd.polygon_query(" in source
     assert "contains_xy" not in source
     assert "sc.tl.rank_genes_groups(" in source
@@ -424,7 +424,7 @@ def test_roi_deg_declares_the_pixel_scale_rather_than_applying_it():
 
 def test_roi_deg_matches_compute_roi_deg():
     """The step must reproduce what the viewer has always actually computed."""
-    from xenium_viewer.utils.gene_analysis import compute_roi_deg
+    from palms.utils.gene_analysis import compute_roi_deg
 
     adata = _adata()
     polygons = [np.array(p) for p in _roi_polygons()]

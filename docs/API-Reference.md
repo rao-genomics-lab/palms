@@ -12,10 +12,10 @@ left off.
 
 ```python
 import sys
-sys.path.insert(0, "/path/to/xenium_viewer/src")   # or: pip install -e .
+sys.path.insert(0, "/path/to/palms/src")   # or: pip install -e .
 
-from xenium_viewer import loader
-from xenium_viewer.utils import gene_analysis, spatial_analysis
+from palms import loader
+from palms.utils import gene_analysis, spatial_analysis
 ```
 
 Installing the package (`pip install -e .`, which `environment.yml` does for you)
@@ -63,11 +63,11 @@ The same entry points the viewer uses at startup. `load_sdata` returns a `Spatia
 ### `load_sdata`
 
 ```python
-from xenium_viewer.loader import load_sdata
+from palms.loader import load_sdata
 load_sdata(path: pathlib.Path, build_pyramid: bool = True, n_jobs: int = 8, use_cache: bool = True, on_stale: Optional[str] = None)
 ```
 
-Load a Xenium output directory, through the zarr cache when there is one. With a cache this takes seconds rather than the minutes a cold `spatialdata_io.xenium()` needs, and the pyramid levels come back read from disk rather than as a lazy `coarsen()` chain — which is the difference between a 1.7 GB and a 23 GB peak the moment you touch a low-resolution level. `on_stale` answers the stale-cache question in advance (`'keep'`, `'rebuild'` or `'restore'`) instead of prompting, which is what makes the load usable with no GUI attached; the `xenium-build-cache` console script is this function with that flag exposed.
+Load a Xenium output directory, through the zarr cache when there is one. With a cache this takes seconds rather than the minutes a cold `spatialdata_io.xenium()` needs, and the pyramid levels come back read from disk rather than as a lazy `coarsen()` chain — which is the difference between a 1.7 GB and a 23 GB peak the moment you touch a low-resolution level. `on_stale` answers the stale-cache question in advance (`'keep'`, `'rebuild'` or `'restore'`) instead of prompting, which is what makes the load usable with no GUI attached; the `palms-build-cache` console script is this function with that flag exposed.
 
 > Load the Xenium 3.x output as a SpatialData object.
 
@@ -75,7 +75,7 @@ Load a Xenium output directory, through the zarr cache when there is one. With a
 
 ```python
 from pathlib import Path
-from xenium_viewer import loader
+from palms import loader
 
 sdata = loader.load_sdata(Path('/data/xenium_run'))
 adata = sdata.tables['table']
@@ -85,7 +85,7 @@ print(adata)
 ### `load_clusterings`
 
 ```python
-from xenium_viewer.loader import load_clusterings
+from palms.loader import load_clusterings
 load_clusterings(path: pathlib.Path)
 ```
 
@@ -104,7 +104,7 @@ list(clusterings)          # [] for a cropped export
 ### `load_umap`
 
 ```python
-from xenium_viewer.loader import load_umap
+from palms.loader import load_umap
 load_umap(path: pathlib.Path)
 ```
 
@@ -115,7 +115,7 @@ The UMAP embedding from the Xenium output's own `analysis/` directory, if the ru
 ### `get_label_to_obs_mapping`
 
 ```python
-from xenium_viewer.loader import get_label_to_obs_mapping
+from palms.loader import get_label_to_obs_mapping
 get_label_to_obs_mapping(sdata)
 ```
 
@@ -126,22 +126,22 @@ Map label-raster values to row positions in `adata.obs`. This is what turns a pi
 ### `TranscriptLoader`
 
 ```python
-from xenium_viewer.utils.transcript_index import TranscriptLoader
+from palms.utils.transcript_index import TranscriptLoader
 TranscriptLoader(cache_dir: 'Path' = Path('.../transcript_cache'), parquet_path: 'Path' = Path('.../transcripts.parquet'), min_qv: 'int' = 20, pixel_size: 'float' = 0.2125)
 ```
 
-Per-gene transcript access. With the feather index built by `xenium-preprocess` a gene loads in ~100 ms; without it, each query falls back to scanning `transcripts.parquet` and takes seconds. `cached_genes` is a property, not a method, and is empty when the index has not been built.
+Per-gene transcript access. With the feather index built by `palms-preprocess` a gene loads in ~100 ms; without it, each query falls back to scanning `transcripts.parquet` and takes seconds. `cached_genes` is a property, not a method, and is empty when the index has not been built.
 
 > Loads per-gene transcript locations.
 
 ```python
 from pathlib import Path
-from xenium_viewer.utils.transcript_index import TranscriptLoader
+from palms.utils.transcript_index import TranscriptLoader
 
 run = Path('/data/xenium_run')
 tl = TranscriptLoader(cache_dir=run / 'transcript_cache',
                       parquet_path=run / 'transcripts.parquet')
-print(len(tl.cached_genes))     # 0 if xenium-preprocess never ran
+print(len(tl.cached_genes))     # 0 if palms-preprocess never ran
 df = tl.load_gene('EPCAM')      # x, y, and quality columns
 ```
 
@@ -152,7 +152,7 @@ These take the **normalised** AnnData. Build it the way the templates do — `sc
 ### `run_rank_genes`
 
 ```python
-from xenium_viewer.utils.gene_analysis import run_rank_genes
+from palms.utils.gene_analysis import run_rank_genes
 run_rank_genes(adata_norm: 'sc.AnnData', groupby: 'str', method: 'str' = 'wilcoxon', n_genes: 'int' = 25) -> 'pd.DataFrame'
 ```
 
@@ -162,7 +162,7 @@ Rank marker genes per cluster and return them as a tidy DataFrame, one row per g
 
 ```python
 import scanpy as sc
-from xenium_viewer.utils import gene_analysis
+from palms.utils import gene_analysis
 
 adata_norm = adata.copy()
 sc.pp.normalize_total(adata_norm, target_sum=1e4)
@@ -179,7 +179,7 @@ df.head()
 ### `rank_genes_key`
 
 ```python
-from xenium_viewer.utils.gene_analysis import rank_genes_key
+from palms.utils.gene_analysis import rank_genes_key
 rank_genes_key(groupby: 'str') -> 'str'
 ```
 
@@ -190,7 +190,7 @@ The `uns` key a ranking is stored under for a given clustering. Rankings are key
 ### `resolve_rank_key`
 
 ```python
-from xenium_viewer.utils.gene_analysis import resolve_rank_key
+from palms.utils.gene_analysis import resolve_rank_key
 resolve_rank_key(adata, groupby: 'Optional[str]') -> 'str'
 ```
 
@@ -201,7 +201,7 @@ Find the ranking actually present for a clustering, falling back to the unkeyed 
 ### `add_clustering_to_obs`
 
 ```python
-from xenium_viewer.utils.gene_analysis import add_clustering_to_obs
+from palms.utils.gene_analysis import add_clustering_to_obs
 add_clustering_to_obs(adata_norm: 'sc.AnnData', adata_orig: 'sc.AnnData', clustering_series: 'pd.Series', key_name: 'str') -> 'None'
 ```
 
@@ -212,7 +212,7 @@ Attach a clustering to `adata.obs` under the viewer's naming conventions, so the
 ### `make_rank_genes_dotplot`
 
 ```python
-from xenium_viewer.utils.gene_analysis import make_rank_genes_dotplot
+from palms.utils.gene_analysis import make_rank_genes_dotplot
 make_rank_genes_dotplot(adata_norm: 'sc.AnnData', groupby: 'str', n_genes: 'int' = 5, cluster_labels: 'Optional[dict]' = None, dendrogram: 'bool' = True, key: 'Optional[str]' = None)
 ```
 
@@ -223,7 +223,7 @@ The dotplot the Markers tab draws, as a matplotlib figure.
 ### `run_celltypist_annotation`
 
 ```python
-from xenium_viewer.utils.gene_analysis import run_celltypist_annotation
+from palms.utils.gene_analysis import run_celltypist_annotation
 run_celltypist_annotation(adata, model_name)
 ```
 
@@ -238,7 +238,7 @@ Thin, honest wrappers over squidpy: they build the neighbour graph the way the v
 ### `compute_spatial_neighbors`
 
 ```python
-from xenium_viewer.utils.spatial_analysis import compute_spatial_neighbors
+from palms.utils.spatial_analysis import compute_spatial_neighbors
 compute_spatial_neighbors(adata_norm: 'sc.AnnData', n_neighs: 'int' = 6) -> 'None'
 ```
 
@@ -247,7 +247,7 @@ Build the spatial neighbour graph on the normalised AnnData. Mutates `adata_norm
 > Compute spatial neighbor graph (modifies adata_norm in-place).
 
 ```python
-from xenium_viewer.utils import spatial_analysis as sa
+from palms.utils import spatial_analysis as sa
 
 sa.compute_spatial_neighbors(adata_norm, n_neighs=6)
 res = sa.run_nhood_enrichment(adata_norm, cluster_key=groupby,
@@ -258,7 +258,7 @@ res['zscore'].shape
 ### `run_nhood_enrichment`
 
 ```python
-from xenium_viewer.utils.spatial_analysis import run_nhood_enrichment
+from palms.utils.spatial_analysis import run_nhood_enrichment
 run_nhood_enrichment(adata_norm: 'sc.AnnData', cluster_key: 'str', n_perms: 'int' = 1000, seed: 'int' = 42) -> 'dict'
 ```
 
@@ -269,7 +269,7 @@ Neighbourhood-enrichment permutation test: which cluster pairs are adjacent more
 ### `make_nhood_enrichment_plot`
 
 ```python
-from xenium_viewer.utils.spatial_analysis import make_nhood_enrichment_plot
+from palms.utils.spatial_analysis import make_nhood_enrichment_plot
 make_nhood_enrichment_plot(result: 'dict', mode: 'str' = 'zscore', cluster_filter: 'list[str] | None' = None, cluster_labels: 'dict | None' = None, annotate: 'bool' = False) -> 'plt.Figure'
 ```
 
@@ -280,7 +280,7 @@ The enrichment heatmap, as a figure.
 ### `make_co_occurrence_plot`
 
 ```python
-from xenium_viewer.utils.spatial_analysis import make_co_occurrence_plot
+from palms.utils.spatial_analysis import make_co_occurrence_plot
 make_co_occurrence_plot(result: 'dict', clusters_to_plot: 'list[str] | None' = None, target_clusters: 'list[str] | None' = None, cluster_colors: 'dict | None' = None, cluster_labels: 'dict | None' = None) -> 'plt.Figure'
 ```
 
@@ -291,7 +291,7 @@ The co-occurrence-versus-radius plot, as a figure.
 ### `make_ligrec_plot`
 
 ```python
-from xenium_viewer.utils.spatial_analysis import make_ligrec_plot
+from palms.utils.spatial_analysis import make_ligrec_plot
 make_ligrec_plot(result: 'dict', pvalue_threshold: 'float' = 0.05, source_groups: 'list[str] | None' = None, target_groups: 'list[str] | None' = None, cluster_labels: 'dict | None' = None) -> 'plt.Figure'
 ```
 
@@ -301,12 +301,12 @@ The ligand-receptor dotplot, as a figure.
 
 ## Copy number
 
-inferCNV runs in the main environment. CopyKAT does not — it needs rpy2 and R 4.3, which pin python 3.11, so it runs in the separate `xenium_viewer_copykat` environment via a detached worker. From a notebook in the main environment, use `backend='infercnv'`.
+inferCNV runs in the main environment. CopyKAT does not — it needs rpy2 and R 4.3, which pin python 3.11, so it runs in the separate `palms_copykat` environment via a detached worker. From a notebook in the main environment, use `backend='infercnv'`.
 
 ### `run_cnv_pipeline`
 
 ```python
-from xenium_viewer.utils.cnv_analysis import run_cnv_pipeline
+from palms.utils.cnv_analysis import run_cnv_pipeline
 run_cnv_pipeline(adata, reference_series: 'pd.Series', reference_categories: 'list[str]', reference_clustering_name: 'str' = '', n_neighbors: 'int' = 15, smoothing_neighbors: 'int' = 20, window_size: 'int' = 60, step: 'int' = 10, lfc_clip: 'float' = 4.0, resolution: 'float' = 0.2, n_cores: 'int' = 1, analyze_categories: 'list[str] | None' = None, backend: 'str' = 'infercnv', copykat_output_dir: 'str | None' = None) -> 'dict'
 ```
 
@@ -315,7 +315,7 @@ Infer CNV against a reference population and cluster the result.
 > Run the InSituCNV pipeline on ``adata`` (raw counts expected in ``.X``).
 
 ```python
-from xenium_viewer.utils import cnv_analysis
+from palms.utils import cnv_analysis
 
 result = cnv_analysis.run_cnv_pipeline(
     adata,
@@ -328,7 +328,7 @@ result = cnv_analysis.run_cnv_pipeline(
 ### `check_gene_mapping`
 
 ```python
-from xenium_viewer.utils.cnv_analysis import check_gene_mapping
+from palms.utils.cnv_analysis import check_gene_mapping
 check_gene_mapping(n_mapped: 'int', n_total: 'int', var_names=None) -> 'None'
 ```
 
@@ -339,7 +339,7 @@ How many panel genes map to genomic positions — worth checking before a run, s
 ### `make_cnv_heatmap`
 
 ```python
-from xenium_viewer.utils.cnv_analysis import make_cnv_heatmap
+from palms.utils.cnv_analysis import make_cnv_heatmap
 make_cnv_heatmap(adata_cnv, groupby: 'str')
 ```
 
@@ -354,7 +354,7 @@ The maths behind the H&E and ARMS overlays. Landmark pairs in, similarity affine
 ### `compute_landmark_affine`
 
 ```python
-from xenium_viewer.utils.registration import compute_landmark_affine
+from palms.utils.registration import compute_landmark_affine
 compute_landmark_affine(xenium_pts_yx, he_pts_yx)
 ```
 
@@ -364,7 +364,7 @@ Least-squares similarity transform (rotation, uniform scale, translation) from m
 
 ```python
 import numpy as np
-from xenium_viewer.utils import registration
+from palms.utils import registration
 
 fixed  = np.array([[100, 200], [800, 250], [450, 900]])
 moving = np.array([[110, 190], [810, 260], [460, 880]])
@@ -374,7 +374,7 @@ affine = registration.compute_landmark_affine(moving, fixed)
 ### `load_he_pyramid`
 
 ```python
-from xenium_viewer.utils.registration import load_he_pyramid
+from palms.utils.registration import load_he_pyramid
 load_he_pyramid(path)
 ```
 
@@ -385,7 +385,7 @@ Read an H&E slide as a multiscale pyramid, lazily.
 ### `load_multichannel_pyramid`
 
 ```python
-from xenium_viewer.utils.registration import load_multichannel_pyramid
+from palms.utils.registration import load_multichannel_pyramid
 load_multichannel_pyramid(path)
 ```
 
@@ -396,7 +396,7 @@ The same for a multi-channel fluorescence image.
 ### `save_landmarks`
 
 ```python
-from xenium_viewer.utils.registration import save_landmarks
+from palms.utils.registration import save_landmarks
 save_landmarks(path, xenium_yx, he_yx, affine=None, he_filename=None)
 ```
 
@@ -407,7 +407,7 @@ Persist landmark pairs beside the dataset.
 ### `load_landmarks`
 
 ```python
-from xenium_viewer.utils.registration import load_landmarks
+from palms.utils.registration import load_landmarks
 load_landmarks(path)
 ```
 
@@ -418,7 +418,7 @@ Read them back.
 ### `extract_tissue_mask`
 
 ```python
-from xenium_viewer.utils.registration import extract_tissue_mask
+from palms.utils.registration import extract_tissue_mask
 extract_tissue_mask(image_gray, blur_ksize=5, open_ksize=5, close_ksize=5, min_area_ratio=0.01)
 ```
 
@@ -433,7 +433,7 @@ Segment tissue from background, for a coarse initial alignment.
 ### `verify`
 
 ```python
-from xenium_viewer.utils.cache_repair import verify
+from palms.utils.cache_repair import verify
 verify(cache_path: 'Path') -> 'HealthReport'
 ```
 
@@ -443,7 +443,7 @@ Read-only health check of a cache. Parses the root `zarr.json` with `json.loads`
 
 ```python
 from pathlib import Path
-from xenium_viewer.utils import cache_repair
+from palms.utils import cache_repair
 
 report = cache_repair.verify(Path('/data/xenium_run/sdata_cached.zarr'))
 print(report.ok, report.missing_on_disk)
@@ -452,7 +452,7 @@ print(report.ok, report.missing_on_disk)
 ### `repair`
 
 ```python
-from xenium_viewer.utils.cache_repair import repair
+from palms.utils.cache_repair import repair
 repair(cache_path: 'Path', report: 'Optional[HealthReport]' = None, *, level: 'str' = 'auto') -> 'RepairResult'
 ```
 
@@ -463,7 +463,7 @@ Fix what `verify` found. Only renames, clears debris and re-consolidates — it 
 ### `describe_store`
 
 ```python
-from xenium_viewer.utils.cache_repair import describe_store
+from palms.utils.cache_repair import describe_store
 describe_store(cache_path: 'Path') -> 'dict'
 ```
 
@@ -474,7 +474,7 @@ A human-readable summary of what is in a store.
 ### `build_inventory`
 
 ```python
-from xenium_viewer.utils.store_inventory import build_inventory
+from palms.utils.store_inventory import build_inventory
 build_inventory(data_path, cache_path=None) -> 'list[Section]'
 ```
 
@@ -483,7 +483,7 @@ Everything on disk for a dataset — raw output, cache elements, session state, 
 > Every viewer-visible thing on disk for this dataset, in five sections.
 
 ```python
-from xenium_viewer.utils import store_inventory
+from palms.utils import store_inventory
 
 for section in store_inventory.build_inventory(Path('/data/xenium_run')):
     total = sum(n.size_bytes for n in section.nodes)
@@ -493,7 +493,7 @@ for section in store_inventory.build_inventory(Path('/data/xenium_run')):
 ### `write_sdata`
 
 ```python
-from xenium_viewer.utils.sdata_write import write_sdata
+from palms.utils.sdata_write import write_sdata
 write_sdata(sdata: 'SpatialData', path: 'str | Path', progress_cb: 'Optional[ProgressCb]' = None, log: 'Optional[Callable[[str], None]]' = None, start_pct: 'int' = 0, end_pct: 'int' = 100) -> 'None'
 ```
 
@@ -502,7 +502,7 @@ Write a `SpatialData` one element at a time, capping dask's concurrency where th
 > Write *sdata* to *path*, one element at a time.
 
 ```python
-from xenium_viewer.utils import sdata_write
+from palms.utils import sdata_write
 
 sdata_write.write_sdata(sdata, Path('/tmp/out.zarr'),
                         progress_cb=lambda pct, msg: print(pct, msg))
@@ -511,7 +511,7 @@ sdata_write.write_sdata(sdata, Path('/tmp/out.zarr'),
 ### `sidecar_write_path`
 
 ```python
-from xenium_viewer.utils.adata_persistence import sidecar_write_path
+from palms.utils.adata_persistence import sidecar_write_path
 sidecar_write_path(ctx_or_sdata, name: 'str') -> 'Path'
 ```
 
@@ -522,7 +522,7 @@ Where a derived result belongs: `<data_path>/viewer_cache/`, not the zarr store 
 ### `find_sidecar`
 
 ```python
-from xenium_viewer.utils.adata_persistence import find_sidecar
+from palms.utils.adata_persistence import find_sidecar
 find_sidecar(sdata, name: 'str') -> "'Path | None'"
 ```
 
@@ -531,7 +531,7 @@ Read one back, falling back to the legacy in-store location for datasets that pr
 ### `load_session`
 
 ```python
-from xenium_viewer.utils.session import load_session
+from palms.utils.session import load_session
 load_session(zarr_path: 'Path') -> 'Optional[dict]'
 ```
 
@@ -546,7 +546,7 @@ The provenance graph is the single source of truth for reproducible code: a DAG 
 ### `ProvGraph`
 
 ```python
-from xenium_viewer.utils.prov_graph import ProvGraph
+from palms.utils.prov_graph import ProvGraph
 ProvGraph() -> 'None'
 ```
 
@@ -557,7 +557,7 @@ The DAG itself: `upsert(node_id, code, deps=…)` adds or revises a step and fla
 ```python
 import json
 from pathlib import Path
-from xenium_viewer.utils.prov_graph import ProvGraph
+from palms.utils.prov_graph import ProvGraph
 
 sidecar = Path('/data/xenium_run/viewer_cache/prov_graph.json')
 graph = ProvGraph.from_list(json.loads(sidecar.read_text()))
@@ -569,7 +569,7 @@ for node_id in graph.topo_sort():
 ### `graph_to_script`
 
 ```python
-from xenium_viewer.utils.prov_graph import graph_to_script
+from palms.utils.prov_graph import graph_to_script
 graph_to_script(graph: 'ProvGraph', include_terminals: 'bool' = True) -> 'str'
 ```
 
@@ -580,7 +580,7 @@ Render the graph as a flat `analysis.py`.
 ### `graph_to_mermaid`
 
 ```python
-from xenium_viewer.utils.prov_graph import graph_to_mermaid
+from palms.utils.prov_graph import graph_to_mermaid
 graph_to_mermaid(graph: 'ProvGraph') -> 'str'
 ```
 
@@ -591,7 +591,7 @@ Render the DAG as mermaid diagram text.
 ### `write_graph_notebook`
 
 ```python
-from xenium_viewer.utils.notebook_export import write_graph_notebook
+from palms.utils.notebook_export import write_graph_notebook
 write_graph_notebook(graph, path: 'str | Path', include_terminals: 'bool' = True) -> 'None'
 ```
 
@@ -600,7 +600,7 @@ Write the graph out as a real `.ipynb`. The notebook is code-only and replays fr
 > Convenience: derive cells from *graph* and write them to *path*.
 
 ```python
-from xenium_viewer.utils import notebook_export
+from palms.utils import notebook_export
 
 notebook_export.write_graph_notebook(graph, Path('analysis.ipynb'))
 ```
@@ -608,7 +608,7 @@ notebook_export.write_graph_notebook(graph, Path('analysis.ipynb'))
 ### `execute_notebook`
 
 ```python
-from xenium_viewer.utils.notebook_export import execute_notebook
+from palms.utils.notebook_export import execute_notebook
 execute_notebook(path: 'str | Path', cwd: 'Optional[str | Path]' = None, timeout: 'int' = 1800, on_cell_start: 'Optional[Callable]' = None, on_cell_executed: 'Optional[Callable]' = None, on_cell_error: 'Optional[Callable]' = None)
 ```
 
@@ -619,7 +619,7 @@ Execute a notebook in a throwaway kernelspec pointing at `sys.executable` — de
 ### `customisation_banner`
 
 ```python
-from xenium_viewer.utils.notebook_export import customisation_banner
+from palms.utils.notebook_export import customisation_banner
 customisation_banner(graph) -> 'str | None'
 ```
 
@@ -634,7 +634,7 @@ Read the shipped templates, or resolve them the way the viewer does with user ov
 ### `builtin_ids`
 
 ```python
-from xenium_viewer.utils.step_templates.loader import builtin_ids
+from palms.utils.step_templates.loader import builtin_ids
 builtin_ids() -> 'list[str]'
 ```
 
@@ -643,7 +643,7 @@ Every shipped template id.
 > Every registered builtin template id, sorted.
 
 ```python
-from xenium_viewer.utils.step_templates import loader as registry
+from palms.utils.step_templates import loader as registry
 
 for tid in registry.builtin_ids():
     spec = registry.builtin_spec(tid)
@@ -653,7 +653,7 @@ for tid in registry.builtin_ids():
 ### `builtin_spec`
 
 ```python
-from xenium_viewer.utils.step_templates.loader import builtin_spec
+from palms.utils.step_templates.loader import builtin_spec
 builtin_spec(template_id: 'str') -> 'TemplateSpec'
 ```
 
@@ -664,7 +664,7 @@ The parsed contract: params, requires, outputs, blocks, assemblies.
 ### `builtin_text`
 
 ```python
-from xenium_viewer.utils.step_templates.loader import builtin_text
+from palms.utils.step_templates.loader import builtin_text
 builtin_text(template_id: 'str') -> 'str'
 ```
 
@@ -675,7 +675,7 @@ The shipped body, verbatim. Ignores user overrides — which is what you want fo
 ### `resolve`
 
 ```python
-from xenium_viewer.utils.step_templates.loader import resolve
+from palms.utils.step_templates.loader import resolve
 resolve(template_id: 'str') -> 'ResolvedTemplate'
 ```
 
@@ -686,7 +686,7 @@ The template as it would actually run, with per-block user overrides merged. Nev
 ### `step_template`
 
 ```python
-from xenium_viewer.utils.step_templates.loader import step_template
+from palms.utils.step_templates.loader import step_template
 step_template(template_id: 'str', block_names: 'Iterable[str]') -> 'dict'
 ```
 
@@ -701,7 +701,7 @@ Useful when working with the full-resolution images, which are large enough that
 ### `open_ome_tiff_pyramid`
 
 ```python
-from xenium_viewer.utils.raster_io import open_ome_tiff_pyramid
+from palms.utils.raster_io import open_ome_tiff_pyramid
 open_ome_tiff_pyramid(tif_path: 'Path') -> 'list'
 ```
 
@@ -710,7 +710,7 @@ Open an OME-TIFF through its own tiles as a list of dask arrays, one per resolut
 > All resolution levels of *tif_path* as dask arrays, chunked as on disk.
 
 ```python
-from xenium_viewer.utils import raster_io
+from palms.utils import raster_io
 
 # find_morphology_tiff handles both output layouts — a
 # morphology_focus/ directory of per-channel files, and the
@@ -723,7 +723,7 @@ levels = raster_io.open_ome_tiff_pyramid(tif)
 ### `find_morphology_tiff`
 
 ```python
-from xenium_viewer.utils.raster_io import find_morphology_tiff
+from palms.utils.raster_io import find_morphology_tiff
 find_morphology_tiff(data_path: 'Path') -> 'Optional[Path]'
 ```
 
@@ -734,7 +734,7 @@ Locate the OME-TIFF holding `morphology_focus` across Xenium output layouts — 
 ### `format_memory`
 
 ```python
-from xenium_viewer.utils.mem_probe import format_memory
+from palms.utils.mem_probe import format_memory
 format_memory(tag: 'str' = '') -> 'str'
 ```
 
@@ -743,7 +743,7 @@ One line of RSS, peak RSS and napari's dask-cache occupancy — for logging insi
 > One-line memory summary: current RSS, peak RSS, and the dask cache.
 
 ```python
-from xenium_viewer.utils import mem_probe
+from palms.utils import mem_probe
 
 print(mem_probe.format_memory('after load'))
 ```
@@ -751,7 +751,7 @@ print(mem_probe.format_memory('after load'))
 ### `release`
 
 ```python
-from xenium_viewer.utils.mem_probe import release
+from palms.utils.mem_probe import release
 release(collect: 'bool' = True) -> 'None'
 ```
 

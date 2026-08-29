@@ -31,8 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 pytest.importorskip("spatialdata")
 np = pytest.importorskip("numpy")
 
-from xenium_viewer.utils import zarr_safe  # noqa: E402
-from xenium_viewer.utils.zarr_safe import (  # noqa: E402
+from palms.utils import zarr_safe  # noqa: E402
+from palms.utils.zarr_safe import (  # noqa: E402
     JOURNAL_DIR, STAGING_DIR, TRASH_DIR, ZarrSafeError,
     consolidate, list_trash, recover_pending, safe_delete_element,
     safe_write_element, store_lock,

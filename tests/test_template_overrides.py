@@ -12,7 +12,7 @@ in some other tool:
   at the version it was forked from, which is how someone quietly misses a
   correctness fix.
 
-``conftest.py`` empties ``XENIUM_VIEWER_TEMPLATE_PATH`` for the suite, so every
+``conftest.py`` empties ``PALMS_TEMPLATE_PATH`` for the suite, so every
 test here sets it explicitly to a tmp_path.
 """
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from xenium_viewer.utils.step_templates import (
+from palms.utils.step_templates import (
     ERROR,
     TEMPLATE_PATH_ENV,
     builtin_spec,
@@ -29,7 +29,7 @@ from xenium_viewer.utils.step_templates import (
     set_overrides_enabled,
     validate,
 )
-from xenium_viewer.utils.step_templates.namespace import EXECUTOR_BASE_NAMES
+from palms.utils.step_templates.namespace import EXECUTOR_BASE_NAMES
 
 LEIDEN = "clustering.leiden"
 
@@ -48,7 +48,7 @@ def write_override(directory, template_id: str, blocks: dict, *,
     """Write a partial override supplying only *blocks*."""
     spec = builtin_spec(template_id)
     lines = [
-        "# xenium-viewer template",
+        "# palms template",
         f"# id: {template_id}",
         f"# schema-version: {schema_version}",
     ]
@@ -98,7 +98,7 @@ def test_a_partial_override_is_reported_as_blended(override_dir):
 
 
 def test_the_resolved_text_is_what_would_run(override_dir):
-    from xenium_viewer.utils.step_templates import resolved_text
+    from palms.utils.step_templates import resolved_text
 
     write_override(override_dir, LEIDEN, {
         "scale": "\nsc.pp.scale(adata_leiden, max_value=99)",
@@ -114,7 +114,7 @@ def test_the_resolved_text_is_what_would_run(override_dir):
     ("\nsc.pp.scale(adata_leiden,", "not valid Python"),
     ("\nsc.pp.scale(adata_leiden, max_value=$nonsense)", "does not declare"),
     ("\nsc.pp.scale(mystery_object)", "reads"),
-    ("\nfrom xenium_viewer.utils import gene_analysis", "xenium_viewer"),
+    ("\nfrom palms.utils import gene_analysis", "palms"),
 ])
 def test_an_invalid_override_is_refused_and_the_builtin_is_used(
         override_dir, bad_block, reason):
@@ -208,14 +208,14 @@ def test_the_suite_itself_runs_with_overrides_disabled():
     """conftest empties the search path; a dev's own config must not leak in."""
     import os
 
-    from xenium_viewer.utils.step_templates import search_path
+    from palms.utils.step_templates import search_path
     assert os.environ.get(TEMPLATE_PATH_ENV) == ""
     assert search_path() == []
 
 
 def test_builtin_accessors_never_see_an_override(override_dir):
     """Why the template-pinning tests are immune by construction, not by care."""
-    from xenium_viewer.utils.step_templates import builtin_assemble
+    from palms.utils.step_templates import builtin_assemble
 
     write_override(override_dir, LEIDEN, {
         "scale": "\nsc.pp.scale(adata_leiden, max_value=99)",
@@ -236,8 +236,8 @@ def test_a_shipped_template_validates_clean():
 
 
 def test_a_bare_dollar_is_reported_clearly():
-    from xenium_viewer.utils.step_templates import placeholders
-    from xenium_viewer.utils.steps import StepError
+    from palms.utils.step_templates import placeholders
+    from palms.utils.steps import StepError
 
     with pytest.raises(StepError, match="literal dollar"):
         placeholders("cost = 5 $ each")
@@ -251,7 +251,7 @@ def test_a_rejected_override_is_reported_not_swallowed(override_dir):
     A user who edited a template and is silently getting the shipped one will
     attribute the resulting numbers to their own method.
     """
-    from xenium_viewer.utils import reporting
+    from palms.utils import reporting
 
     reporting.clear_template_rejections()
     write_override(override_dir, LEIDEN, {"scale": "\nsc.pp.scale(adata_leiden,"})
@@ -265,7 +265,7 @@ def test_a_rejected_override_is_reported_not_swallowed(override_dir):
 
 
 def test_a_valid_override_reports_nothing(override_dir):
-    from xenium_viewer.utils import reporting
+    from palms.utils import reporting
 
     reporting.clear_template_rejections()
     write_override(override_dir, LEIDEN, {
@@ -277,7 +277,7 @@ def test_a_valid_override_reports_nothing(override_dir):
 
 def test_reporting_failure_never_breaks_resolution(override_dir, monkeypatch):
     """Resolution runs at analysis time; a reporting bug must not take it down."""
-    from xenium_viewer.utils import reporting
+    from palms.utils import reporting
 
     monkeypatch.setattr(reporting, "report_template_rejected",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -288,7 +288,7 @@ def test_reporting_failure_never_breaks_resolution(override_dir, monkeypatch):
 # ── the provenance stamp ─────────────────────────────────────────────────────
 
 def test_a_stock_run_is_stamped_builtin(override_dir):
-    from xenium_viewer.utils.step_templates import step_template
+    from palms.utils.step_templates import step_template
 
     stamp = step_template(LEIDEN, ["head", "tail"])
     assert stamp["template_id"] == LEIDEN
@@ -298,7 +298,7 @@ def test_a_stock_run_is_stamped_builtin(override_dir):
 
 
 def test_a_customised_run_is_stamped_and_hashes_differently(override_dir):
-    from xenium_viewer.utils.step_templates import step_template
+    from palms.utils.step_templates import step_template
 
     stock = step_template(LEIDEN, ["head", "scale", "pca", "tail"])
     write_override(override_dir, LEIDEN, {
@@ -316,8 +316,8 @@ def test_a_customised_run_is_stamped_and_hashes_differently(override_dir):
 
 def test_the_stamp_reaches_the_provenance_node(override_dir):
     """End to end: a customised template is visible in the recorded graph."""
-    from xenium_viewer.utils.step_templates import step_template
-    from xenium_viewer.utils.steps import Step, StepExecutor
+    from palms.utils.step_templates import step_template
+    from palms.utils.steps import Step, StepExecutor
 
     write_override(override_dir, "roi.polygons", {
         "main": "\nroi_polygons = [np.array(_p) for _p in $polygons]  # customised",
@@ -338,7 +338,7 @@ def test_the_stamp_reaches_the_provenance_node(override_dir):
 
 # ── the configuration a real user actually has ───────────────────────────────
 #
-# Everything above sets XENIUM_VIEWER_TEMPLATE_PATH, and conftest sets it for
+# Everything above sets PALMS_TEMPLATE_PATH, and conftest sets it for
 # the whole suite. That is what keeps a developer's own customisations out of
 # the tests — and it meant the *default* path, with the variable unset, was
 # never executed by anything. It was infinitely recursive, and the viewer would
@@ -346,19 +346,77 @@ def test_the_stamp_reaches_the_provenance_node(override_dir):
 
 @pytest.fixture
 def no_env(monkeypatch, tmp_path):
-    """As a real user has it: no XENIUM_VIEWER_TEMPLATE_PATH at all."""
-    from xenium_viewer.utils.step_templates import loader
+    """As a real user has it: no PALMS_TEMPLATE_PATH at all."""
+    from palms.utils.step_templates import loader
 
     monkeypatch.delenv(TEMPLATE_PATH_ENV, raising=False)
-    # Redirect the platform config dir so nothing touches the real one.
+    # Redirect the platform config dirs so nothing touches the real ones — the
+    # pre-rename directory included, or whether the search path has one entry or
+    # two would depend on the developer's own machine.
     monkeypatch.setattr(loader, "_default_user_dir", lambda: tmp_path)
+    monkeypatch.setattr(loader, "_legacy_user_dir", lambda: tmp_path / "nonexistent")
     clear_cache()
     yield tmp_path
     clear_cache()
 
 
+@pytest.fixture
+def legacy_env(monkeypatch, tmp_path):
+    """A user who wrote overrides before the rename: both config dirs exist."""
+    from palms.utils.step_templates import loader
+
+    legacy, current = tmp_path / "xenium-viewer", tmp_path / "palms"
+    legacy.mkdir()
+    current.mkdir()
+    monkeypatch.delenv(TEMPLATE_PATH_ENV, raising=False)
+    monkeypatch.setattr(loader, "_default_user_dir", lambda: current)
+    monkeypatch.setattr(loader, "_legacy_user_dir", lambda: legacy)
+    clear_cache()
+    yield legacy, current
+    clear_cache()
+
+
+def test_overrides_written_before_the_rename_still_resolve(legacy_env):
+    """The rename must not orphan templates a user already wrote."""
+    from palms.utils.step_templates.overrides import render_override
+
+    legacy, _ = legacy_env
+    (legacy / f"{LEIDEN}.tmpl").write_text(
+        render_override(LEIDEN, {"scale": "\nsc.pp.scale(adata_leiden, max_value=99)"}))
+    resolved = resolve(LEIDEN)
+    assert resolved.is_customised
+    assert "max_value=99" in resolved.spec.blocks["scale"].text
+
+
+def test_a_legacy_header_line_is_not_rejected(legacy_env):
+    """Files saved before the rename open with '# xenium-viewer template'.
+
+    The banner is prose, not a header field, so it parses — this pins that,
+    because a stricter parser would silently deactivate every old override.
+    """
+    from palms.utils.step_templates.overrides import render_override
+
+    legacy, _ = legacy_env
+    text = render_override(LEIDEN, {"scale": "\nsc.pp.scale(adata_leiden, max_value=99)"})
+    text = text.replace("# palms template", "# xenium-viewer template", 1)
+    (legacy / f"{LEIDEN}.tmpl").write_text(text)
+    assert resolve(LEIDEN).is_customised
+
+
+def test_the_current_location_outranks_the_legacy_one(legacy_env):
+    """Once a user re-saves, the new copy is the one that applies."""
+    from palms.utils.step_templates.overrides import render_override
+
+    legacy, current = legacy_env
+    (legacy / f"{LEIDEN}.tmpl").write_text(
+        render_override(LEIDEN, {"scale": "\nsc.pp.scale(adata_leiden, max_value=11)"}))
+    (current / f"{LEIDEN}.tmpl").write_text(
+        render_override(LEIDEN, {"scale": "\nsc.pp.scale(adata_leiden, max_value=22)"}))
+    assert "max_value=22" in resolve(LEIDEN).spec.blocks["scale"].text
+
+
 def test_the_search_path_resolves_with_no_env_var(no_env):
-    from xenium_viewer.utils.step_templates import search_path, user_template_dir
+    from palms.utils.step_templates import search_path, user_template_dir
 
     assert search_path() == [no_env]
     assert user_template_dir() == no_env
@@ -373,7 +431,7 @@ def test_resolving_works_with_no_env_var(no_env):
 
 def test_every_template_resolves_with_no_env_var(no_env):
     """The tab populates by resolving all of them, so all of them must work."""
-    from xenium_viewer.utils.step_templates import builtin_ids
+    from palms.utils.step_templates import builtin_ids
 
     for template_id in builtin_ids():
         assert resolve(template_id).spec.blocks
@@ -381,7 +439,7 @@ def test_every_template_resolves_with_no_env_var(no_env):
 
 def test_an_override_still_applies_with_no_env_var(no_env):
     """The default location is a real location, not just a non-crashing one."""
-    from xenium_viewer.utils.step_templates.overrides import save_override
+    from palms.utils.step_templates.overrides import save_override
 
     save_override(LEIDEN, {"scale": "\nsc.pp.scale(adata_leiden, max_value=99)"})
     assert (no_env / f"{LEIDEN}.tmpl").is_file()
@@ -392,7 +450,7 @@ def test_disabling_overrides_works_with_no_env_var(no_env):
     resolve(LEIDEN)
     set_overrides_enabled(False)
     try:
-        from xenium_viewer.utils.step_templates import search_path
+        from palms.utils.step_templates import search_path
         assert search_path() == []
         assert not resolve(LEIDEN).is_customised
     finally:
@@ -409,7 +467,7 @@ def test_the_two_entry_points_do_not_delegate_to_each_other():
     import ast
     import inspect
 
-    from xenium_viewer.utils.step_templates import loader
+    from palms.utils.step_templates import loader
 
     for name, forbidden in (("search_path", "user_template_dir"),
                             ("user_template_dir", "search_path")):

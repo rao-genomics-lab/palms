@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from xenium_viewer.utils.registration import (
+from palms.utils.registration import (
     compute_landmark_affine, save_landmarks, load_landmarks,
 )
 

@@ -49,7 +49,7 @@ def _env_deps(path: Path) -> set[str]:
 
 
 def test_the_qt_backend_is_stated_not_inherited():
-    """``import xenium_viewer`` pins QT_API when PyQt6 is available.
+    """``import palms`` pins QT_API when PyQt6 is available.
 
     Skipped rather than asserted-around on an env without PyQt6: there the
     correct behaviour is to leave qtpy alone, which the next test covers.
@@ -57,7 +57,7 @@ def test_the_qt_backend_is_stated_not_inherited():
     if find_spec("PyQt6") is None:
         pytest.skip("no PyQt6 in this environment; see the next test")
 
-    import xenium_viewer  # noqa: F401  (the import is the behaviour under test)
+    import palms  # noqa: F401  (the import is the behaviour under test)
 
     assert os.environ.get("QT_API") == "pyqt6"
 
@@ -84,7 +84,7 @@ def test_qt_api_never_names_a_binding_that_is_not_installed():
     variable back with whatever binding it selected as soon as it is imported, so
     by the time a test runs it is populated regardless of what this package did.
     """
-    import xenium_viewer  # noqa: F401
+    import palms  # noqa: F401
 
     api = os.environ.get("QT_API")
     if not api:
@@ -178,7 +178,7 @@ class TestLibglxCollisionWarning:
         return tmp_path
 
     def test_warns_when_the_env_lacks_it_and_the_host_has_it(self, tmp_path):
-        from xenium_viewer.utils import gl_check
+        from palms.utils import gl_check
 
         host = tmp_path / "host-libGLX.so"
         host.write_text("")
@@ -193,7 +193,7 @@ class TestLibglxCollisionWarning:
         assert str(host) in msg
 
     def test_silent_when_the_env_has_the_unversioned_name(self, tmp_path):
-        from xenium_viewer.utils import gl_check
+        from palms.utils import gl_check
 
         prefix = self._prefix_without_the_name(tmp_path)
         (prefix / "lib" / "libGLX.so").write_text("")
@@ -204,7 +204,7 @@ class TestLibglxCollisionWarning:
         ) is None
 
     def test_silent_when_there_is_no_host_copy_to_collide_with(self, tmp_path):
-        from xenium_viewer.utils import gl_check
+        from palms.utils import gl_check
 
         assert gl_check.libglx_collision_message(
             prefix=self._prefix_without_the_name(tmp_path),
@@ -218,7 +218,7 @@ class TestLibglxCollisionWarning:
         Without this branch the warning would fire on every Mac, telling users to
         install a package that has no macOS build.
         """
-        from xenium_viewer.utils import gl_check
+        from palms.utils import gl_check
 
         host = tmp_path / "host-libGLX.so"
         host.write_text("")
@@ -235,7 +235,7 @@ class TestLibglxCollisionWarning:
         which is why this module globs known paths instead of using it. A check
         that matched ``.so.0`` would warn universally.
         """
-        from xenium_viewer.utils import gl_check
+        from palms.utils import gl_check
 
         assert gl_check.HOST_LIBGLX_PATHS
         for path in gl_check.HOST_LIBGLX_PATHS:

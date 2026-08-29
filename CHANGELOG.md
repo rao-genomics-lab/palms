@@ -1,5 +1,262 @@
 # Changelog
 
+## [Unreleased] — 2026-08-29 (stale cleanup)
+
+### Fixed
+- **A step whose recorded code does not vary with its settings could never be
+  un-flagged as stale.** `ProvGraph.upsert` returns early when the code, deps and
+  kind are unchanged, and that early return sat *above* `existing.stale = False` —
+  so re-running the step, which is exactly what the `⚠ stale — input changed;
+  re-run in the viewer` badge tells you to do, left the flag set. Permanently:
+  nothing else clears it, and it round-trips through JSON, so it survived every
+  restart.
+
+  Found on the `crop_6` demo dataset, where `clustering:cnv_leiden_res0.2` showed
+  as stale in the DAG immediately after the inferCNV run that produced it. That
+  node publishes the CNV labels onto the table with a fixed three-line snippet
+  carrying none of the run's parameters, while its parent `cnv:infercnv` carries
+  all of them. Re-running inferCNV with a different reference therefore changed
+  the parent (staling the child) and re-recorded the child byte-identically —
+  which did nothing. Reproduced in four `upsert` calls.
+
+  Only the node's own flag is cleared; descendants are deliberately untouched,
+  since nothing about their input changed (`test_rerun_identical_is_noop` still
+  holds). Safe because every caller that reaches the branch has just executed the
+  step — `StepExecutor.run` upserts only after a successful `exec`, and the
+  "ensure a node exists" paths never get there: `record_clustering` returns early
+  when the id is present, and `ensure_normalized` / `ensure_spatial_neighbors`
+  short-circuit before running their step.
+
+  This mattered more once staleness became actionable: **"Select Stale Results"
+  would have offered to delete a result that was in fact current.**
+
+### Added
+- **Two ways to act on staleness, which until now was display-only.** A node is
+  flagged `stale` when an ancestor was re-recorded with different code after that
+  node last ran, so the artifact on disk was produced by an input that no longer
+  exists. The Notebook tab drew a ⚠ badge and `dag_view` outlined the node orange;
+  nothing else looked at the flag.
+
+  - **Tools → Dataset → "Select Stale Results…"** ticks the rows that hold a stale
+    step's results and hands them to the same confirm-and-delete path every other
+    deletion goes through. It is a *selector*, not a second executor: `plan_deletion`
+    still vets the batch, `assert_node_deletable` still has the last word, and
+    `_remove_tree` remains the only function that touches the filesystem. The
+    provenance graph is left alone, so the notebook still replays and recreates
+    whatever was cleared — which is what `_plan_warnings` has always told a user who
+    deleted a clustering column by hand.
+  - **Tools → Notebook → "Drop Stale Nodes…"** prunes the steps themselves, in
+    reverse topological order, after backing the graph up to
+    `viewer_cache/prov_graph.backup_<time>.json` (a name `store_inventory` already
+    protects from deletion). Before this there was **no way to remove a node through
+    the GUI at all**: the per-cell "Delete" removed only the widget, and
+    `_sync_from_graph` put the cell straight back.
+
+  New pure module `utils/stale_results.py` is the **id bridge** between the two
+  halves, and the only place the correspondence is written down — provenance ids are
+  namespaced by the artifact they produce (`clustering:<key>`, `rank_genes:<key>`,
+  `cnv:<backend>`) while inventory keys name a row on disk
+  (`obs:table/clustering_<key>`, `sidecar:adata_cnv_cache_<backend>.h5ad`), and
+  nothing on a `ProvNode` said which is which. Qt-free and filesystem-free like
+  `store_inventory`, so it is tested on its own.
+
+  Four things the implementation had to get right, each a real failure mode:
+
+  - **Two monotonic guards assume nodes are never removed.**
+    `app._load_prov_graph_items` rejects the sidecar whenever it holds fewer nodes
+    than the session attr, and `session._build_session_attrs` refuses to write a
+    graph smaller than the stored one — both stating "nothing in the GUI removes
+    nodes". A prune that wrote only the sidecar was therefore undone at the next
+    exit *and* the next launch, with a printed line about a "partial graph" as the
+    only clue. Measured on a real store: pruning 2 of 4 nodes and writing only the
+    sidecar loaded all 4 back. `tab_notebook._persist_pruned_graph` writes both
+    copies in the same action, so the sizes agree and neither guard fires; neither
+    guard needed weakening, and a *lone* shrink still means what it always meant.
+  - **`uns['nhood_enrichment']`, `uns['co_occurrence']` and `uns['ligrec']` are
+    single unkeyed slots** while the nodes that write them are keyed per clustering.
+    A stale `nhood:A` and a fresh `nhood:B` name the same bytes, so clearing on the
+    stale one alone would destroy a perfectly current result. Such a slot is only
+    cleared when every member of its family is stale, and the report names the fresh
+    step that spared it. `cnv:copykat_propagated` is excluded from that vote because
+    it stores nothing of its own.
+  - **The stale set is not dependency-closed.** `upsert` clears `stale` on the node
+    it re-records while flagging that node's descendants, so a step recorded *after*
+    a stale one is fresh and depends on it — and `ProvGraph.remove` refuses any node
+    another still names. `plan_prune` excludes anything a fresh node can reach
+    (transitively, not one hop) and emits the rest leaves-first, so every removal is
+    legal when it happens.
+  - **A moved dataset restales everything for nothing.** `app.py` re-emits the
+    preamble for the current `data_path` on every launch, so the first launch after a
+    manual `mv` flags every descendant stale — and a one-click clear would then
+    delete every analysis in the dataset because a directory changed name. The
+    confirm dialog says so and points at `palms-rename-dataset --repair`.
+
+  Out of scope and reported as such rather than silently skipped: figures under
+  `<data_path>/plots/`, which is outside every `deletable_roots()` directory by
+  design, and CSV exports, which went to a path chosen in a save dialog and recorded
+  nowhere. A stale step whose result is simply absent is distinguished from one this
+  module has no rule for — reporting both as "nothing to remove" reads as a hole in
+  the mapping table when it is not one.
+
+  `ProvGraph.remove` also gains its first test coverage.
+
+## [Unreleased] — 2026-08-29 (crop-export notebooks)
+
+### Fixed
+- **A Crop Dataset export's recorded notebook could never replay.** The preamble
+  recorder always emitted `from spatialdata_io import xenium` /
+  `sdata = xenium(data_path)`. A crop export has no raw 10x output — the zarr store
+  the crop wrote *is* the data — so that call cannot work, and every notebook
+  recorded on one failed on its **first** cell with
+  `FileNotFoundError: …/cells.zarr.zip`.
+
+  Nothing caught it because recording and persisting the graph both succeed; only
+  *executing* the notebook fails, and the only thing that executes it is
+  `scripts/verify_notebook.py`. Measured on the demo dataset shipped in the release
+  bundle (`demo_data/crop_6`, an 18-node graph): the replay stopped at `preamble`
+  after one cell.
+
+  `_record_preamble` now branches on `loader.has_raw_xenium_source()` — the single
+  existing definition of "can this be read from raw output" — and records
+  `sd.read_zarr(data_path / "sdata_cached.zarr")` when there is none. The store is
+  derived from `data_path` rather than recorded as its own absolute path, so
+  `palms-rename-dataset`'s single `data_path = Path(r"…")` rewrite still moves the
+  notebook with its dataset; a recorded absolute store path would have been rewritten
+  in the first line and left stale in the second, which looks repaired and is not.
+
+  This matters beyond one dataset: the crop export is how the project makes a small
+  shareable dataset, so it is exactly the case where someone else replays the
+  notebook. Note that re-launching the viewer on an existing crop export re-emits the
+  corrected preamble, and the upsert flags every descendant stale — on `crop_6`, all
+  16 of them. That is the graph telling the truth: those results were produced by a
+  preamble that no longer exists.
+
+## [Unreleased] — 2026-08-29 (pre-publication audit)
+
+### Fixed
+- **`scripts/capture_screenshots.py` hardcoded a collaborator's dataset.** The
+  module constant was `/media/srao/InternalBac2/jinsen/output-XETG00160__…` —
+  a local absolute path, a collaborator's name and a real slide ID, in a tracked
+  file in a repo about to go public. It is now `argv[1]` or
+  `$PALMS_SCREENSHOT_DATASET`, resolved and validated *before* the napari import,
+  so a missing argument fails in a second instead of after a ten-second Qt load.
+
+  The docstring records why it must not become a constant again: two of the panels
+  it captures — Tools → Dataset and Tools → Cache — print the dataset path into the
+  widget, so whatever is passed ends up legible in `docs/` and on the wiki. That
+  already happened, and `docs/screenshots/tab-dataset.png` and `tab-cache.png` show
+  the path today. Recapturing them is tracked separately; an edit here cannot fix a
+  PNG.
+
+- **The control dock was still called "Xenium Controls".** The dock title, the View
+  menu's "Show Xenium Controls" and the docs table row. Unlike `experiment.xenium`
+  or "Xenium Explorer", that is the app naming *its own* panel — the exact use the
+  rename existed to remove. It is now **"Controls"**: no product name at all, since
+  the dock is unambiguous inside its own window. The five `setObjectName("xenium_*")`
+  identifiers follow it to `palms_*`; nothing reads them back (there is no
+  `objectName()` call in the tree), so they were pure identity strings.
+  `Ctrl+Shift+X` is deliberately unchanged — a moved keyboard shortcut is a worse
+  surprise than an arbitrary one.
+
+- **`install_copykat` told users to run a command that has never existed.** Both its
+  docstring ("Exposed as the `xenium-install-copykat` console script") and the error
+  raised when the R install fails named an entry point absent from
+  `[project.scripts]` under either name. Not wiring it up is correct, and now stated:
+  the module needs rpy2 and R, which only the `palms_copykat` env has, so a console
+  script installed by the main env would be a command that could never work. The
+  failure message now points at re-running the analysis, which is what actually
+  retries the install.
+
+- **Two smaller leaks in `docs/`.** `pyqt6-migration.md` pointed at a directory
+  outside the repo, which tells a reader nothing they can act on; it now says the
+  upstream reports are drafted but not filed. `readthedocs-setup.md` referenced "the
+  preprint plan's Phase A" — the only manuscript-positioning reference in the code
+  repo — and reads the same without it.
+
+### Removed
+- **`more_datasets.tsv`.** Ten candidate prostate/atlas datasets at the repo root,
+  tracked since `64fc950` and read by no code, with ChatGPT citation artifacts
+  (`:contentReference[oaicite:N]{index=N}`) inside the URLs. Moved to the private
+  planning repo rather than deleted.
+
+### Verified
+- The rest of the pre-publication audit came back clean: no secrets or credentials in
+  tracked files; `.gitignore` does cover `manuscript/`, `data/` and `report.json`;
+  `.claude/` is untracked; `LICENSE` is the MIT one `pyproject.toml` declares; both
+  open GitHub issues read acceptably in public; and the only absolute-path hits in the
+  whole tree were the two fixed above.
+
+## [Unreleased] — 2026-08-27 (rename to PALMS)
+
+### Changed
+- **The project is now PALMS — Provenance-Aware Linking of Multimodal
+  Spatial-omics.** The old name borrowed 10x Genomics' instrument trademark for
+  the identity of an independent tool, and undersold the scope: this is not a
+  transcriptomics viewer, it is where transcriptomics, histology and genomic
+  overlays are brought into one coordinate space with every step recorded as
+  replayable code. It sits beside ARMS (Adaptive Resolution Multiscale Spatial
+  DNAseq) in the same ecosystem. Renamed now because the citable release would
+  otherwise have minted the old name into a DOI permanently.
+
+  Import package `xenium_viewer` → `palms`; distribution `xenium-viewer` →
+  `palms`; the six console scripts to `palms`, `palms-preprocess`,
+  `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`,
+  `palms-build-custom-segmentation`; conda envs to `palms` and `palms_copykat`;
+  the six `XENIUM_*` environment variables to `PALMS_*`.
+
+  **No shim.** Nothing was on PyPI and the version is 0.1.0, so no external
+  consumer can break — and a compatibility package would have kept the
+  proprietary name in the tree, which is the thing being removed.
+
+- **References to the Xenium *data format* are untouched, deliberately.**
+  `experiment.xenium`, `spatialdata_io.xenium()`, "Xenium 3.x output" and the
+  comparison to Xenium Explorer all describe what the tool reads, not what it
+  is called. A blind substitution would have broken the loader; every
+  replacement was anchored on an identity token instead, and the format
+  references were diffed before and after to prove they did not move.
+
+### Fixed
+- **Three names that reach onto users' disks keep working.** A rename that
+  silently orphans existing work is a data-loss bug, not a cosmetic change:
+  - Template overrides written to `~/.config/xenium-viewer/templates/` still
+    resolve. `search_path()` reads the pre-rename directory below the current
+    one, and only while it exists, so it retires itself.
+  - `.tmpl` files whose banner reads `# xenium-viewer template` still parse —
+    the banner is prose, not a header field. Now pinned by a test, because a
+    stricter parser would deactivate every old override at once.
+  - `xenium_viewer.log` in an existing dataset directory is still listed and
+    deletable in Tools → Dataset. Dropping the key would not have hidden the
+    file, it would have relabelled it "original 10x output, never modified by
+    the viewer" — false, and un-deletable.
+
+## [Unreleased] — 2026-08-26 (doc counts)
+
+### Fixed
+- **Four counts in the docs were wrong, three of them badly.** The test suite is
+  **1318 tests across 56 files**, not the "~320" `CLAUDE.md` had carried for
+  months — off by a factor of four. There are **26 tabs** in 5 groups, not the
+  11 in `CLAUDE.md` or the 21 in `README.md`; `app.py`'s `addTab` calls are the
+  authoritative count and `src/xenium_viewer/tabs/*.py` agrees with them.
+  `README.md`'s per-group listing was also short: the Tools group showed 3 of its
+  7 tabs, omitting Crop Dataset, Dataset, Cache and Templates. `app.py` is ~1800
+  lines, not ~1300.
+
+  Counted rather than recalled: `pytest --collect-only -q` (1314 passed + 4
+  skipped confirms it), `grep '\.addTab(' src/xenium_viewer/app.py`, `wc -l`.
+  `CLAUDE.md` now says how to re-measure the test count instead of stating a
+  number that will drift again.
+
+### Removed
+- **`tabs/__init__.py` no longer re-exports `build_*_tab`.** It aliased
+  `build_tab` from 11 of the 26 tab modules — the 11 that existed when it was
+  written — and nothing has ever imported them: `app.py` imports each module
+  directly, *inside* the function that builds the panel, precisely so the
+  napari-heavy tab modules load only when a viewer is being constructed. The
+  eager re-exports quietly undid that for anything touching the package, which
+  includes three test modules doing `from xenium_viewer.tabs import tab_cache`.
+  Completing the list to 26 would have made that worse, so the dead surface is
+  gone and the docstring says what to import instead.
+
 ## [Unreleased] — 2026-08-26 (plots)
 
 ### Fixed

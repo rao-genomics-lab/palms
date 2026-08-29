@@ -38,7 +38,7 @@ def _figure():
 
 @pytest.fixture
 def panel(qapp):
-    from xenium_viewer.utils.plots_panel import PlotsPanel
+    from palms.utils.plots_panel import PlotsPanel
     return PlotsPanel()
 
 
@@ -64,7 +64,7 @@ def test_figures_arrive_newest_first(panel):
 
 
 def test_the_gallery_is_capped_and_drops_the_oldest(panel):
-    from xenium_viewer.utils.plots_panel import MAX_ENTRIES
+    from palms.utils.plots_panel import MAX_ENTRIES
 
     for i in range(MAX_ENTRIES + 3):
         panel.add_figure(_figure(), f"plot {i}", [])
@@ -114,7 +114,7 @@ def test_a_scanpy_plot_object_is_resolved_to_its_figure():
     import warnings
     from matplotlib.figure import Figure
 
-    from xenium_viewer.utils.fig_render import to_figure
+    from palms.utils.fig_render import to_figure
 
     n = 60
     rng = np.random.default_rng(0)
@@ -148,8 +148,8 @@ def test_a_scanpy_plot_object_can_be_shown_and_saved(panel, tmp_path):
     import types
     import warnings
 
-    from xenium_viewer.tabs._helpers import create_shared_helpers
-    from xenium_viewer.utils.viewer_context import ViewerContext
+    from palms.tabs._helpers import create_shared_helpers
+    from palms.utils.viewer_context import ViewerContext
 
     n = 60
     rng = np.random.default_rng(0)
@@ -178,7 +178,7 @@ def test_a_scanpy_plot_object_can_be_shown_and_saved(panel, tmp_path):
 
 def test_a_thing_that_is_not_a_figure_at_all_says_so():
     """Better a named TypeError here than an AttributeError inside Qt."""
-    from xenium_viewer.utils.fig_render import to_figure
+    from palms.utils.fig_render import to_figure
 
     with pytest.raises(TypeError, match="expected a matplotlib Figure"):
         to_figure(object())

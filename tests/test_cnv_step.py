@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 pytest.importorskip("anndata")
 pytest.importorskip("scanpy")
 
-from xenium_viewer.utils.steps import Step, check_step  # noqa: E402
-from xenium_viewer.tabs.tab_cnv import _cnv_template  # noqa: E402
+from palms.utils.steps import Step, check_step  # noqa: E402
+from palms.tabs.tab_cnv import _cnv_template  # noqa: E402
 
 
 def _step(subset=False):
@@ -91,7 +91,7 @@ def test_step_binds_the_names_the_tab_reads_back():
 
 
 def test_notebook_does_not_import_the_viewer_package():
-    assert "xenium_viewer" not in _cnv_template(True)
+    assert "palms" not in _cnv_template(True)
 
 
 # ── the two implementations must not drift apart again ───────────────────────
@@ -99,7 +99,7 @@ def test_notebook_does_not_import_the_viewer_package():
 def test_run_cnv_pipeline_still_normalises_the_way_the_template_does():
     """``run_cnv_pipeline`` is still the CopyKAT path. If its normalisation
     changes, the inferCNV template has to change with it."""
-    from xenium_viewer.utils import cnv_analysis, gene_analysis
+    from palms.utils import cnv_analysis, gene_analysis
 
     assert "get_normalized_adata(adata)" in inspect.getsource(
         cnv_analysis.run_cnv_pipeline)
@@ -110,7 +110,7 @@ def test_run_cnv_pipeline_still_normalises_the_way_the_template_does():
 
 
 def test_run_cnv_pipeline_still_uses_the_parameters_the_template_records():
-    from xenium_viewer.utils import cnv_analysis
+    from palms.utils import cnv_analysis
 
     src = inspect.getsource(cnv_analysis.run_cnv_pipeline)
     for fragment in ("lfc_clip=lfc_clip", "dendrogram=False",
@@ -136,7 +136,7 @@ def test_the_arrow_shim_actually_converts_the_index():
     pd = pytest.importorskip("pandas")
     np = pytest.importorskip("numpy")
     anndata = pytest.importorskip("anndata")
-    from xenium_viewer.tabs.tab_cnv import _CNV_ARROW_SHIM
+    from palms.tabs.tab_cnv import _CNV_ARROW_SHIM
 
     adata_cnv = anndata.AnnData(np.ones((4, 3), dtype="float32"))
     adata_cnv.var_names = ["GENE1", "GENE2", "GENE3"]
@@ -157,7 +157,7 @@ def test_the_shim_restores_the_option_it_changed():
     pd = pytest.importorskip("pandas")
     np = pytest.importorskip("numpy")
     anndata = pytest.importorskip("anndata")
-    from xenium_viewer.tabs.tab_cnv import _CNV_ARROW_SHIM
+    from palms.tabs.tab_cnv import _CNV_ARROW_SHIM
 
     adata_cnv = anndata.AnnData(np.ones((2, 2), dtype="float32"))
     before = pd.options.future.infer_string
@@ -175,8 +175,8 @@ def test_the_template_shim_matches_the_helper_run_cnv_pipeline_uses():
     logic as plain source — and omitted exactly that line, so the CopyKAT path
     worked while inferCNV died.
     """
-    from xenium_viewer.tabs.tab_cnv import _CNV_ARROW_SHIM
-    from xenium_viewer.utils.adata_persistence import _convert_adata_arrow_strings
+    from palms.tabs.tab_cnv import _CNV_ARROW_SHIM
+    from palms.utils.adata_persistence import _convert_adata_arrow_strings
 
     helper = inspect.getsource(_convert_adata_arrow_strings)
     for fragment in ("pd.options.future.infer_string = False",

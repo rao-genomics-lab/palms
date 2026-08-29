@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-TABS = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "tabs"
+TABS = Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
 
 # Nodes still recording prose, each with the reason it has not been migrated.
 # Shrinking this list is the remaining Phase 0.3 work; growing it needs a reason.

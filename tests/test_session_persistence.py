@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 np = pytest.importorskip("numpy")
 
-from xenium_viewer.utils.session import (  # noqa: E402
+from palms.utils.session import (  # noqa: E402
     _PRESERVED_ON_SAVE, _build_session_attrs, _json_safe, _session_summary,
 )
 
@@ -56,7 +56,7 @@ def test_migration_markers_survive_a_save():
 # ── the provenance graph must never shrink on save ───────────────────────────
 
 def _graph(*ids):
-    from xenium_viewer.utils.prov_graph import ProvGraph
+    from palms.utils.prov_graph import ProvGraph
     graph = ProvGraph()
     for node_id in ids:
         graph.upsert(node_id, f"# {node_id}", kind="setup")
@@ -214,7 +214,7 @@ def test_a_real_ui_snapshot_still_wins():
 # ── on-disk behaviour ────────────────────────────────────────────────────────
 
 def test_save_session_roundtrips(tiny_sdata):
-    from xenium_viewer.utils.session import save_session
+    from palms.utils.session import save_session
 
     cache = Path(tiny_sdata.path)
     save_session(cache, {"marker_genes_json": '{"A": ["g1"]}'},
@@ -230,7 +230,7 @@ def test_save_session_roundtrips(tiny_sdata):
 def test_a_failed_save_leaves_the_previous_session_intact(tiny_sdata, monkeypatch):
     """The reported failure shape: the group must survive a mid-save error."""
     import zarr
-    from xenium_viewer.utils import session as session_mod
+    from palms.utils import session as session_mod
 
     cache = Path(tiny_sdata.path)
     session_mod.save_session(cache, {}, {"he_filename": "original.tif"}, {})
@@ -249,7 +249,7 @@ def test_a_failed_save_leaves_the_previous_session_intact(tiny_sdata, monkeypatc
 def test_markers_written_by_migrations_survive_a_real_save(tiny_sdata):
     """End-to-end version of the marker regression, through zarr."""
     import zarr
-    from xenium_viewer.utils.session import save_session
+    from palms.utils.session import save_session
 
     cache = Path(tiny_sdata.path)
     save_session(cache, {}, {}, {})
@@ -267,7 +267,7 @@ def test_markers_written_by_migrations_survive_a_real_save(tiny_sdata):
 def test_clearing_a_registration_removes_its_stored_affine(tiny_sdata):
     """The seeded copy must not leave a stale affine behind."""
     import zarr
-    from xenium_viewer.utils.session import save_session
+    from palms.utils.session import save_session
 
     cache = Path(tiny_sdata.path)
     save_session(cache, {}, {"affine_3x3": np.eye(3)}, {})

@@ -12,6 +12,7 @@ Inventory everything this dataset holds on disk — the original Xenium output, 
 | Item tree | Three columns: **Item**, **Size**, **Detail**. Rows are grouped into the five sections below. Selection is by **checkbox only** — clicking a row does not highlight it. A row that cannot be deleted is dimmed and unticksable, with the reason as its tooltip. |
 | Expand All | Expands every section and group in the tree. |
 | Collapse All | Collapses the tree back to its five section rows. |
+| Select Stale Results... | Disabled until a scan has run. Ticks the rows holding the results of steps the [Notebook](Tab-Notebook) tab marks stale — a step is stale when something it depends on was re-run with different settings, so its stored result no longer matches the recorded code — then offers to delete them through the same confirmation dialog as the button below. The steps themselves stay in the provenance graph, so the notebook still replays and recreates whatever you clear. A report above the tree lists what was ticked, what was deliberately left alone, and why. |
 | Delete Selected... | Disabled until a scan has run. Builds a deletion plan from the ticked rows and shows a confirmation dialog listing every item, its size and its full path before anything is touched. |
 | Empty Trash | Enabled only when the cache has a `.xv_trash` directory. Removes the previous copies of elements kept aside by earlier writes — that is, exactly what the [Cache](Tab-Cache) tab's "previous version" recovery restores from. |
 | Report area | Appears after the first deletion. Lists what was removed and how much was reclaimed, and names each item that could not be removed with its reason. |
@@ -46,6 +47,6 @@ Inventory everything this dataset holds on disk — the original Xenium output, 
 - Deleting an external image also removes its two landmark shape layers, since the landmarks are meaningless without the image they register.
 - Deleting `obs`/`uns`/`obsm` entries rewrites the whole table, so those rows have no path of their own. The rewrite happens **once** per batch however many entries you tick, and a deleted clustering disappears from every clustering dropdown in the viewer immediately.
 - If a deletion fails with "in use", the element is still backed by a live napari layer — reload the dataset when offered and try again.
-- Written into the dataset folder but outside the viewer's deletable directories: `analysis.py`, `analysis_notebook.ipynb`, `plots/` and `xenium_viewer.log`. They are listed read-only; remove them by hand if you want them gone.
-- Deleting `transcript_cache/` reclaims real space but drops transcript loading back to scanning `transcripts.parquet` (seconds per gene instead of milliseconds) until `xenium-preprocess` is run again.
+- Written into the dataset folder but outside the viewer's deletable directories: `analysis.py`, `analysis_notebook.ipynb`, `plots/` and `palms.log`. They are listed read-only; remove them by hand if you want them gone.
+- Deleting `transcript_cache/` reclaims real space but drops transcript loading back to scanning `transcripts.parquet` (seconds per gene instead of milliseconds) until `palms-preprocess` is run again.
 - The tab still works under `--no-cache`. Nothing is being written in that session, but earlier sessions may well have left sidecars and backups on disk.

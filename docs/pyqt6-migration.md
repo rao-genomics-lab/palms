@@ -133,13 +133,13 @@ Three things worth remembering:
   it — which is why `app.py`'s check reports the missing package rather than repairing it.
 
 Upstream reports (root cause is PyOpenGL's loader ordering; napari's import order exposes it)
-are drafted in `/media/srao/InternalBac2/software_development/napari_issue/`.
+are drafted, but not yet filed.
 
 ## How to reproduce the verification
 
 ```bash
 ./scripts/install.sh                    # now resolves the Qt6 stack, on Linux and macOS
-conda activate xenium_viewer
+conda activate palms
 python -c "import qtpy; print(qtpy.API_NAME, qtpy.QT_VERSION)"   # PyQt6 6.8.1
 pytest
 ```

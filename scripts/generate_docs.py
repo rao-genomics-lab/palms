@@ -335,7 +335,7 @@ TEMPLATES_INTRO = """\
 # Analysis Templates
 
 Every analysis the viewer runs is a **template**: a piece of plain scverse source
-with a declared contract, kept in `src/xenium_viewer/utils/step_templates/builtin/`
+with a declared contract, kept in `src/palms/utils/step_templates/builtin/`
 as a `.tmpl` file. When you click a button, the owning tab builds a dictionary of
 parameters, the template is rendered once, and *that same string* is both executed
 and recorded in the provenance graph — so the code below is the code that runs,
@@ -428,7 +428,7 @@ def render_templates_page() -> str:
     # rather than what this machine's config resolves to. Run sites must use
     # step_template() instead — test_every_step_resolves_user_overrides checks
     # that — but a catalogue of defaults is the one place the rule inverts.
-    from xenium_viewer.utils.step_templates import loader as registry
+    from palms.utils.step_templates import loader as registry
 
     ids = registry.builtin_ids()
     missing = sorted(set(ids) - set(TEMPLATE_NOTES))
@@ -524,10 +524,10 @@ left off.
 
 ```python
 import sys
-sys.path.insert(0, "/path/to/xenium_viewer/src")   # or: pip install -e .
+sys.path.insert(0, "/path/to/palms/src")   # or: pip install -e .
 
-from xenium_viewer import loader
-from xenium_viewer.utils import gene_analysis, spatial_analysis
+from palms import loader
+from palms.utils import gene_analysis, spatial_analysis
 ```
 
 Installing the package (`pip install -e .`, which `environment.yml` does for you)
@@ -567,7 +567,7 @@ API_SECTIONS: list[ApiSection] = [
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.loader", "load_sdata",
+                "palms.loader", "load_sdata",
                 "Load a Xenium output directory, through the zarr cache when there "
                 "is one. With a cache this takes seconds rather than the minutes a "
                 "cold `spatialdata_io.xenium()` needs, and the pyramid levels come "
@@ -576,11 +576,11 @@ API_SECTIONS: list[ApiSection] = [
                 "moment you touch a low-resolution level. `on_stale` answers the "
                 "stale-cache question in advance (`'keep'`, `'rebuild'` or "
                 "`'restore'`) instead of prompting, which is what makes the load "
-                "usable with no GUI attached; the `xenium-build-cache` console "
+                "usable with no GUI attached; the `palms-build-cache` console "
                 "script is this function with that flag exposed.",
                 snippet=(
                     "from pathlib import Path\n"
-                    "from xenium_viewer import loader\n\n"
+                    "from palms import loader\n\n"
                     "sdata = loader.load_sdata(Path('/data/xenium_run'))\n"
                     "adata = sdata.tables['table']\n"
                     "print(adata)"
@@ -588,7 +588,7 @@ API_SECTIONS: list[ApiSection] = [
                 caveat="Builds and writes the cache on a miss; `use_cache=False` avoids that.",
             ),
             ApiEntry(
-                "xenium_viewer.loader", "load_clusterings",
+                "palms.loader", "load_clusterings",
                 "The clusterings 10x shipped with the run, read from the output's "
                 "`analysis/clustering/` directory — `graphclust`, the `kmeans_*` "
                 "series — as a dict of name to a Series indexed by cell barcode. "
@@ -604,30 +604,30 @@ API_SECTIONS: list[ApiSection] = [
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.loader", "load_umap",
+                "palms.loader", "load_umap",
                 "The UMAP embedding from the Xenium output's own `analysis/` "
                 "directory, if the run produced one.",
             ),
             ApiEntry(
-                "xenium_viewer.loader", "get_label_to_obs_mapping",
+                "palms.loader", "get_label_to_obs_mapping",
                 "Map label-raster values to row positions in `adata.obs`. This is "
                 "what turns a pixel you clicked into a cell, and it is needed "
                 "whenever you colour the segmentation raster by a per-cell value.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.transcript_index", "TranscriptLoader",
+                "palms.utils.transcript_index", "TranscriptLoader",
                 "Per-gene transcript access. With the feather index built by "
-                "`xenium-preprocess` a gene loads in ~100 ms; without it, each "
+                "`palms-preprocess` a gene loads in ~100 ms; without it, each "
                 "query falls back to scanning `transcripts.parquet` and takes "
                 "seconds. `cached_genes` is a property, not a method, and is "
                 "empty when the index has not been built.",
                 snippet=(
                     "from pathlib import Path\n"
-                    "from xenium_viewer.utils.transcript_index import TranscriptLoader\n\n"
+                    "from palms.utils.transcript_index import TranscriptLoader\n\n"
                     "run = Path('/data/xenium_run')\n"
                     "tl = TranscriptLoader(cache_dir=run / 'transcript_cache',\n"
                     "                      parquet_path=run / 'transcripts.parquet')\n"
-                    "print(len(tl.cached_genes))     # 0 if xenium-preprocess never ran\n"
+                    "print(len(tl.cached_genes))     # 0 if palms-preprocess never ran\n"
                     "df = tl.load_gene('EPCAM')      # x, y, and quality columns"
                 ),
             ),
@@ -643,12 +643,12 @@ API_SECTIONS: list[ApiSection] = [
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.utils.gene_analysis", "run_rank_genes",
+                "palms.utils.gene_analysis", "run_rank_genes",
                 "Rank marker genes per cluster and return them as a tidy DataFrame, "
                 "one row per gene per group.",
                 snippet=(
                     "import scanpy as sc\n"
-                    "from xenium_viewer.utils import gene_analysis\n\n"
+                    "from palms.utils import gene_analysis\n\n"
                     "adata_norm = adata.copy()\n"
                     "sc.pp.normalize_total(adata_norm, target_sum=1e4)\n"
                     "sc.pp.log1p(adata_norm)\n"
@@ -661,28 +661,28 @@ API_SECTIONS: list[ApiSection] = [
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.gene_analysis", "rank_genes_key",
+                "palms.utils.gene_analysis", "rank_genes_key",
                 "The `uns` key a ranking is stored under for a given clustering. "
                 "Rankings are keyed per clustering so a second one does not "
                 "overwrite the first — use this rather than assuming "
                 "`'rank_genes_groups'`.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.gene_analysis", "resolve_rank_key",
+                "palms.utils.gene_analysis", "resolve_rank_key",
                 "Find the ranking actually present for a clustering, falling back "
                 "to the unkeyed default for results saved before keying existed.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.gene_analysis", "add_clustering_to_obs",
+                "palms.utils.gene_analysis", "add_clustering_to_obs",
                 "Attach a clustering to `adata.obs` under the viewer's naming "
                 "conventions, so the GUI and the session store recognise it.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.gene_analysis", "make_rank_genes_dotplot",
+                "palms.utils.gene_analysis", "make_rank_genes_dotplot",
                 "The dotplot the Markers tab draws, as a matplotlib figure.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.gene_analysis", "run_celltypist_annotation",
+                "palms.utils.gene_analysis", "run_celltypist_annotation",
                 "Annotate cell types with CellTypist against a downloaded "
                 "reference model.",
             ),
@@ -698,11 +698,11 @@ API_SECTIONS: list[ApiSection] = [
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.utils.spatial_analysis", "compute_spatial_neighbors",
+                "palms.utils.spatial_analysis", "compute_spatial_neighbors",
                 "Build the spatial neighbour graph on the normalised AnnData. "
                 "Mutates `adata_norm` in place, as squidpy does.",
                 snippet=(
-                    "from xenium_viewer.utils import spatial_analysis as sa\n\n"
+                    "from palms.utils import spatial_analysis as sa\n\n"
                     "sa.compute_spatial_neighbors(adata_norm, n_neighs=6)\n"
                     "res = sa.run_nhood_enrichment(adata_norm, cluster_key=groupby,\n"
                     "                              n_perms=100)\n"
@@ -710,20 +710,20 @@ API_SECTIONS: list[ApiSection] = [
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.spatial_analysis", "run_nhood_enrichment",
+                "palms.utils.spatial_analysis", "run_nhood_enrichment",
                 "Neighbourhood-enrichment permutation test: which cluster pairs "
                 "are adjacent more or less often than chance.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.spatial_analysis", "make_nhood_enrichment_plot",
+                "palms.utils.spatial_analysis", "make_nhood_enrichment_plot",
                 "The enrichment heatmap, as a figure.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.spatial_analysis", "make_co_occurrence_plot",
+                "palms.utils.spatial_analysis", "make_co_occurrence_plot",
                 "The co-occurrence-versus-radius plot, as a figure.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.spatial_analysis", "make_ligrec_plot",
+                "palms.utils.spatial_analysis", "make_ligrec_plot",
                 "The ligand-receptor dotplot, as a figure.",
             ),
         ],
@@ -733,15 +733,15 @@ API_SECTIONS: list[ApiSection] = [
         intro=(
             "inferCNV runs in the main environment. CopyKAT does not — it needs "
             "rpy2 and R 4.3, which pin python 3.11, so it runs in the separate "
-            "`xenium_viewer_copykat` environment via a detached worker. From a "
+            "`palms_copykat` environment via a detached worker. From a "
             "notebook in the main environment, use `backend='infercnv'`."
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.utils.cnv_analysis", "run_cnv_pipeline",
+                "palms.utils.cnv_analysis", "run_cnv_pipeline",
                 "Infer CNV against a reference population and cluster the result.",
                 snippet=(
-                    "from xenium_viewer.utils import cnv_analysis\n\n"
+                    "from palms.utils import cnv_analysis\n\n"
                     "result = cnv_analysis.run_cnv_pipeline(\n"
                     "    adata,\n"
                     "    reference_series=adata.obs['leiden'],\n"
@@ -751,14 +751,14 @@ API_SECTIONS: list[ApiSection] = [
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.cnv_analysis", "check_gene_mapping",
+                "palms.utils.cnv_analysis", "check_gene_mapping",
                 "How many panel genes map to genomic positions — worth checking "
                 "before a run, since a Xenium panel covers a few hundred genes and "
                 "coverage per chromosome arm drives whether the result means "
                 "anything.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.cnv_analysis", "make_cnv_heatmap",
+                "palms.utils.cnv_analysis", "make_cnv_heatmap",
                 "The chromosome-ordered CNV heatmap, as a figure.",
             ),
         ],
@@ -772,35 +772,35 @@ API_SECTIONS: list[ApiSection] = [
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.utils.registration", "compute_landmark_affine",
+                "palms.utils.registration", "compute_landmark_affine",
                 "Least-squares similarity transform (rotation, uniform scale, "
                 "translation) from matched landmark pairs.",
                 snippet=(
                     "import numpy as np\n"
-                    "from xenium_viewer.utils import registration\n\n"
+                    "from palms.utils import registration\n\n"
                     "fixed  = np.array([[100, 200], [800, 250], [450, 900]])\n"
                     "moving = np.array([[110, 190], [810, 260], [460, 880]])\n"
                     "affine = registration.compute_landmark_affine(moving, fixed)"
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.registration", "load_he_pyramid",
+                "palms.utils.registration", "load_he_pyramid",
                 "Read an H&E slide as a multiscale pyramid, lazily.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.registration", "load_multichannel_pyramid",
+                "palms.utils.registration", "load_multichannel_pyramid",
                 "The same for a multi-channel fluorescence image.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.registration", "save_landmarks",
+                "palms.utils.registration", "save_landmarks",
                 "Persist landmark pairs beside the dataset.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.registration", "load_landmarks",
+                "palms.utils.registration", "load_landmarks",
                 "Read them back.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.registration", "extract_tissue_mask",
+                "palms.utils.registration", "extract_tissue_mask",
                 "Segment tissue from background, for a coarse initial alignment.",
             ),
         ],
@@ -816,65 +816,65 @@ API_SECTIONS: list[ApiSection] = [
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.utils.cache_repair", "verify",
+                "palms.utils.cache_repair", "verify",
                 "Read-only health check of a cache. Parses the root `zarr.json` "
                 "with `json.loads` rather than opening the store, so it works on "
                 "one too broken to open.",
                 snippet=(
                     "from pathlib import Path\n"
-                    "from xenium_viewer.utils import cache_repair\n\n"
+                    "from palms.utils import cache_repair\n\n"
                     "report = cache_repair.verify(Path('/data/xenium_run/sdata_cached.zarr'))\n"
                     "print(report.ok, report.missing_on_disk)"
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.cache_repair", "repair",
+                "palms.utils.cache_repair", "repair",
                 "Fix what `verify` found. Only renames, clears debris and "
                 "re-consolidates — it never deletes a cache.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.cache_repair", "describe_store",
+                "palms.utils.cache_repair", "describe_store",
                 "A human-readable summary of what is in a store.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.store_inventory", "build_inventory",
+                "palms.utils.store_inventory", "build_inventory",
                 "Everything on disk for a dataset — raw output, cache elements, "
                 "session state, derived caches, backups — with sizes and an honest "
                 "`recoverable` flag per node. Filesystem-only and read-only.",
                 snippet=(
-                    "from xenium_viewer.utils import store_inventory\n\n"
+                    "from palms.utils import store_inventory\n\n"
                     "for section in store_inventory.build_inventory(Path('/data/xenium_run')):\n"
                     "    total = sum(n.size_bytes for n in section.nodes)\n"
                     "    print(f'{section.title:24s} {total / 2**30:6.2f} GiB')"
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.sdata_write", "write_sdata",
+                "palms.utils.sdata_write", "write_sdata",
                 "Write a `SpatialData` one element at a time, capping dask's "
                 "concurrency where the intermediates are large and releasing "
                 "memory between elements. Interchangeable with "
                 "`SpatialData.write()` — a test asserts the stores match — but it "
                 "reports progress and holds a far lower peak.",
                 snippet=(
-                    "from xenium_viewer.utils import sdata_write\n\n"
+                    "from palms.utils import sdata_write\n\n"
                     "sdata_write.write_sdata(sdata, Path('/tmp/out.zarr'),\n"
                     "                        progress_cb=lambda pct, msg: print(pct, msg))"
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.adata_persistence", "sidecar_write_path",
+                "palms.utils.adata_persistence", "sidecar_write_path",
                 "Where a derived result belongs: `<data_path>/viewer_cache/`, not "
                 "the zarr store root. Files in the store root make zarr's "
                 "hierarchy walk warn on every consolidation, and a rebuild deletes "
                 "them.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.adata_persistence", "find_sidecar",
+                "palms.utils.adata_persistence", "find_sidecar",
                 "Read one back, falling back to the legacy in-store location for "
                 "datasets that predate the move.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.session", "load_session",
+                "palms.utils.session", "load_session",
                 "Read the viewer session — ROIs, registrations, clusterings, DEG "
                 "results, the provenance graph — out of a cache without starting "
                 "the GUI.",
@@ -892,7 +892,7 @@ API_SECTIONS: list[ApiSection] = [
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.utils.prov_graph", "ProvGraph",
+                "palms.utils.prov_graph", "ProvGraph",
                 "The DAG itself: `upsert(node_id, code, deps=…)` adds or revises a "
                 "step and flags its descendants stale; a missing dependency errors "
                 "at record time rather than at replay. `topo_sort()` returns node "
@@ -900,7 +900,7 @@ API_SECTIONS: list[ApiSection] = [
                 snippet=(
                     "import json\n"
                     "from pathlib import Path\n"
-                    "from xenium_viewer.utils.prov_graph import ProvGraph\n\n"
+                    "from palms.utils.prov_graph import ProvGraph\n\n"
                     "sidecar = Path('/data/xenium_run/viewer_cache/prov_graph.json')\n"
                     "graph = ProvGraph.from_list(json.loads(sidecar.read_text()))\n\n"
                     "for node_id in graph.topo_sort():\n"
@@ -908,31 +908,31 @@ API_SECTIONS: list[ApiSection] = [
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.prov_graph", "graph_to_script",
+                "palms.utils.prov_graph", "graph_to_script",
                 "Render the graph as a flat `analysis.py`.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.prov_graph", "graph_to_mermaid",
+                "palms.utils.prov_graph", "graph_to_mermaid",
                 "Render the DAG as mermaid diagram text.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.notebook_export", "write_graph_notebook",
+                "palms.utils.notebook_export", "write_graph_notebook",
                 "Write the graph out as a real `.ipynb`. The notebook is code-only "
                 "and replays from the raw Xenium output.",
                 snippet=(
-                    "from xenium_viewer.utils import notebook_export\n\n"
+                    "from palms.utils import notebook_export\n\n"
                     "notebook_export.write_graph_notebook(graph, Path('analysis.ipynb'))"
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.notebook_export", "execute_notebook",
+                "palms.utils.notebook_export", "execute_notebook",
                 "Execute a notebook in a throwaway kernelspec pointing at "
                 "`sys.executable` — deliberately not the installed `python3` "
                 "kernel, which on a conda box belongs to whichever environment "
                 "registered it last.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.notebook_export", "customisation_banner",
+                "palms.utils.notebook_export", "customisation_banner",
                 "The markdown cell prepended when any step ran from a "
                 "non-shipped template.",
             ),
@@ -947,35 +947,35 @@ API_SECTIONS: list[ApiSection] = [
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.utils.step_templates.loader", "builtin_ids",
+                "palms.utils.step_templates.loader", "builtin_ids",
                 "Every shipped template id.",
                 snippet=(
-                    "from xenium_viewer.utils.step_templates import loader as registry\n\n"
+                    "from palms.utils.step_templates import loader as registry\n\n"
                     "for tid in registry.builtin_ids():\n"
                     "    spec = registry.builtin_spec(tid)\n"
                     "    print(tid, '->', spec.doc)"
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.step_templates.loader", "builtin_spec",
+                "palms.utils.step_templates.loader", "builtin_spec",
                 "The parsed contract: params, requires, outputs, blocks, "
                 "assemblies.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.step_templates.loader", "builtin_text",
+                "palms.utils.step_templates.loader", "builtin_text",
                 "The shipped body, verbatim. Ignores user overrides — which is "
                 "what you want for reading the default, and not what a run site "
                 "wants.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.step_templates.loader", "resolve",
+                "palms.utils.step_templates.loader", "resolve",
                 "The template as it would actually run, with per-block user "
                 "overrides merged. Never raises and never returns nothing: an "
                 "invalid override is skipped and the problems ride along on the "
                 "result.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.step_templates.loader", "step_template",
+                "palms.utils.step_templates.loader", "step_template",
                 "Resolved text **and** its provenance stamp together — a stamp "
                 "fetched separately could describe a different resolution than the "
                 "text it labels.",
@@ -990,13 +990,13 @@ API_SECTIONS: list[ApiSection] = [
         ),
         entries=[
             ApiEntry(
-                "xenium_viewer.utils.raster_io", "open_ome_tiff_pyramid",
+                "palms.utils.raster_io", "open_ome_tiff_pyramid",
                 "Open an OME-TIFF through its own tiles as a list of dask arrays, "
                 "one per resolution level. `dask_image.imread` gives one chunk per "
                 "full channel page instead — 5.93 GB each on a full slide, which "
                 "must be decoded whole before a single tile comes out.",
                 snippet=(
-                    "from xenium_viewer.utils import raster_io\n\n"
+                    "from palms.utils import raster_io\n\n"
                     "# find_morphology_tiff handles both output layouts — a\n"
                     "# morphology_focus/ directory of per-channel files, and the\n"
                     "# single morphology.ome.tif older runs produced.\n"
@@ -1006,23 +1006,23 @@ API_SECTIONS: list[ApiSection] = [
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.raster_io", "find_morphology_tiff",
+                "palms.utils.raster_io", "find_morphology_tiff",
                 "Locate the OME-TIFF holding `morphology_focus` across Xenium "
                 "output layouts — a `morphology_focus/` directory of per-channel "
                 "files on 3.x, a single `morphology.ome.tif` on older runs. "
                 "Returns `None` rather than raising when there is neither.",
             ),
             ApiEntry(
-                "xenium_viewer.utils.mem_probe", "format_memory",
+                "palms.utils.mem_probe", "format_memory",
                 "One line of RSS, peak RSS and napari's dask-cache occupancy — for "
                 "logging inside a long loop.",
                 snippet=(
-                    "from xenium_viewer.utils import mem_probe\n\n"
+                    "from palms.utils import mem_probe\n\n"
                     "print(mem_probe.format_memory('after load'))"
                 ),
             ),
             ApiEntry(
-                "xenium_viewer.utils.mem_probe", "release",
+                "palms.utils.mem_probe", "release",
                 "`gc.collect()` plus `malloc_trim(0)`. glibc keeps freed blocks in "
                 "per-thread arenas, so without the trim RSS ratchets to the "
                 "high-water mark and stays there — which looks exactly like a leak.",
