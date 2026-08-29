@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 pytest.importorskip("anndata")
 pytest.importorskip("scanpy")
 
+from palms.utils.cnv_analysis import MIN_MAPPED_GENE_FRACTION
 from palms.utils.steps import Step, check_step  # noqa: E402
 from palms.tabs.tab_cnv import _cnv_template  # noqa: E402
 
@@ -35,6 +36,7 @@ def _step(subset=False):
         "reference_categories": ["0"],
         "n_neighbors": 15, "smoothing_neighbors": 20,
         "window_size": 60, "step": 10, "lfc_clip": 4.0, "resolution": 0.2,
+        "min_mapped_fraction": MIN_MAPPED_GENE_FRACTION,
     }
     if subset:
         params["include"] = ["0", "1", "2"]
@@ -188,3 +190,117 @@ def test_the_template_shim_matches_the_helper_run_cnv_pipeline_uses():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── The run path refuses a panel that barely maps ────────────────────────────
+# 418cf07 added cnv_analysis.check_gene_mapping, but the migration to
+# ctx.run_step moved execution into the template and left the guard behind on
+# the CopyKAT worker's path only — so inferCNV silently reproduced the exact
+# defect it was written to prevent. The tests that called check_gene_mapping
+# directly stayed green throughout, which is why these run the rendered
+# template through a real StepExecutor instead.
+
+class _FakeTl:
+    """Stands in for ``insitucnv.tl``, dropping every gene the reference misses.
+
+    Only the third-party calls are faked; the template, its rendering and the
+    executor are the real ones, so the guard is exercised where it actually
+    lives.
+    """
+
+    def __init__(self, keep):
+        self.keep = keep
+        self.ran_infercnv = False
+
+    def prepare_cnv_input(self, adata, **kw):
+        return adata[:, list(self.keep)].copy()
+
+    def run_infercnv(self, adata, **kw):
+        self.ran_infercnv = True
+
+    def compute_cnv_neighbors(self, adata, **kw):
+        pass
+
+    def cluster_cnv_resolutions(self, adata, resolutions, key_prefix="cnv_leiden_res",
+                                **kw):
+        import numpy as np
+        key = f"{key_prefix}{resolutions[0]}"
+        adata.obs[key] = np.zeros(adata.n_obs, dtype=int).astype(str)
+        adata.obsm["X_cnv"] = np.zeros((adata.n_obs, 4))
+        return [key]
+
+
+def _panel_adata(names):
+    np = pytest.importorskip("numpy")
+    ad = pytest.importorskip("anndata")
+    pd = pytest.importorskip("pandas")
+    a = ad.AnnData(np.random.default_rng(0).random((12, len(names))).astype("float32"))
+    a.var_names = list(names)
+    a.obs["leiden_r1.0"] = pd.Categorical(["0", "1"] * 6)
+    a.obs["cell_id"] = [f"c{i}" for i in range(12)]
+    return a
+
+
+def _run_with(monkeypatch, names, keep):
+    """Execute the real rendered template with insitucnv stubbed out."""
+    import sys
+    import types
+    import numpy as np
+    import pandas as pd
+    import scanpy as sc
+    from palms.utils.steps import StepExecutor
+
+    fake = _FakeTl(keep)
+    module = types.ModuleType("insitucnv.tl")
+    for name in ("prepare_cnv_input", "run_infercnv", "compute_cnv_neighbors",
+                 "cluster_cnv_resolutions"):
+        setattr(module, name, getattr(fake, name))
+    monkeypatch.setitem(sys.modules, "insitucnv", types.ModuleType("insitucnv"))
+    monkeypatch.setitem(sys.modules, "insitucnv.tl", module)
+
+    adata = _panel_adata(names)
+    ex = StepExecutor(namespace={"sc": sc, "np": np, "pd": pd, "adata": adata})
+    ex.graph.upsert("clustering:leiden_r1.0", "# recorded elsewhere")
+    return fake, ex
+
+
+#: Mouse nomenclature: Title-case symbols. Against the human Maynard 2020
+#: reference only the handful spelled identically in both survive — on the
+#: dataset that prompted the guard, 8 of 5,006 (0.16%). Sized so the mapped
+#: fraction lands below MIN_MAPPED_GENE_FRACTION rather than merely looking
+#: small: 4 of 44 is 9%, which passes, and an earlier draft of this test said
+#: nothing was wrong because of it.
+_MOUSE_PANEL = [f"Gene{i}" for i in range(96)] + ["C2", "C3", "C6", "C7"]
+
+
+def test_a_barely_mapping_panel_is_refused_by_the_run_path(monkeypatch):
+    from palms.utils.steps import StepError
+
+    fake, ex = _run_with(monkeypatch, _MOUSE_PANEL, keep=["C2", "C3", "C6", "C7"])
+    with pytest.raises(StepError) as excinfo:
+        ex.run(_step())
+
+    message = str(excinfo.value)
+    assert "4 of 100 panel genes" in message
+    assert "gene-position reference" in message
+    assert not fake.ran_infercnv, "it must refuse instead of producing a result"
+
+
+def test_a_well_mapping_panel_runs(monkeypatch):
+    """The guard must not refuse the ordinary case — crop_6 maps 5,092 of 5,101."""
+    names = [f"GENE{i}" for i in range(40)]
+    fake, ex = _run_with(monkeypatch, names, keep=names[:38])
+    ex.run(_step())
+    assert fake.ran_infercnv
+
+
+def test_the_template_threshold_is_the_one_the_helper_uses(monkeypatch):
+    """One definition: the CopyKAT worker still reaches check_gene_mapping."""
+    source = _step().render()
+    assert f"* {MIN_MAPPED_GENE_FRACTION}" in source
+
+
+def test_the_guard_survives_the_cell_type_subset_assembly():
+    """Both declared assemblies include the `prepare` block the guard lives in."""
+    for subset in (False, True):
+        assert "panel genes have genomic" in _step(subset).render()

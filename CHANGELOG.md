@@ -2,6 +2,37 @@
 
 ## [Unreleased] — 2026-08-29 (reproducibility measurement)
 
+### Fixed
+- **inferCNV ran without the gene-mapping guard, and reproduced the exact defect that
+  guard was written to prevent.** `418cf07` added `cnv_analysis.check_gene_mapping`,
+  which refuses a panel where under 5% of genes map to genomic coordinates. Migrating
+  inferCNV to `ctx.run_step` moved execution into the `genes.cnv_infercnv` template,
+  and `run_cnv_pipeline` — the guard's only caller — was left serving the CopyKAT
+  worker alone. So the inferCNV path called
+  `prepare_cnv_input(add_gene_positions=True, drop_unmapped_genes=True)` and carried
+  straight on; `n_genes_mapped` was computed *after* the run, only for the summary.
+
+  The failure is silent and late. On the dataset that prompted this, a **mouse** panel
+  against insitucnv's default **human** reference (infercnvpy Maynard 2020) mapped 8 of
+  5,006 genes into 5 genomic windows. The run completed, clustered into 27 clusters and
+  persisted a result; the first symptom came several steps later when the heatmap
+  crashed. A notebook replay died at `cnv:infercnv` with `ArpackError -9`, which names
+  nothing useful.
+
+  The check now lives in the **template**, so it travels with the recorded code and a
+  replayed notebook refuses for the same reason the GUI does — rather than dying
+  opaquely somewhere downstream. The threshold is passed in from
+  `MIN_MAPPED_GENE_FRACTION` rather than spelled again, so the template and
+  `check_gene_mapping` cannot drift, and the CopyKAT worker still reaches the helper
+  directly.
+
+  **The decision is the mapped fraction, not the species.** A mouse panel given a mouse
+  annotation table should run, and a human panel against a broken reference should not;
+  species only sharpens the message. `tests/test_cnv_step.py` now runs the *rendered
+  template through a real executor* and asserts it refuses and never reaches
+  `run_infercnv` — the previous tests called `check_gene_mapping` directly and stayed
+  green throughout the regression, which is how it went unnoticed.
+
 ### Changed
 - **`verify_notebook.py` treats 10x's own clusterings as inputs, not results.**
   `compare_clusterings` marked any persisted clustering the replay did not produce
