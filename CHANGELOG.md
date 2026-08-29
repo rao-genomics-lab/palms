@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased] — 2026-08-29 (reproducibility measurement)
+
+### Changed
+- **`verify_notebook.py` treats 10x's own clusterings as inputs, not results.**
+  `compare_clusterings` marked any persisted clustering the replay did not produce
+  as `not_in_replay`, and `passed = not failures` counted those — so a session
+  could reproduce every step it recorded and still report `passed: false`. On the
+  `crop_6` demo dataset all four recorded clusterings replayed at ARI exactly
+  1.000000 with identical labels, and the verdict was still `false`, purely
+  because `graphclust` and nine `kmeans_*` columns came in with the dataset and
+  nothing in the session produced them.
+
+  Those are **inputs**: 10x computed them, the loader read them, no recorded step
+  makes them, and a notebook replaying from raw output is not expected to. They
+  now carry `status: "input"`, are excluded from `passed`, and are still listed
+  in the report and named in the summary — "not compared" and "compared and
+  agreed" are different statements, so neither is allowed to hide the other.
+
+  **A viewer-derived clustering with no step behind it stays a failure**, which is
+  the distinction that had to be made carefully: that is the defect
+  `tests/test_clustering_recording.py` guards against, and the two are
+  indistinguishable in `obs` — both are `clustering_<key>` columns. So the native
+  ones are identified by the new `loader.is_native_clustering`, not by the absence
+  of a node. Disk decides where it can: membership in `analysis/clustering/` is
+  definitive. Only when a dataset has no `analysis/` folder at all does the name
+  decide — a Crop Dataset export drops that folder while keeping the columns, and
+  refusing to answer there would make every crop export look as though it had lost
+  ten analyses.
+
 ## [Unreleased] — 2026-08-29 (stale cleanup)
 
 ### Fixed

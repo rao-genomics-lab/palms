@@ -44,6 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from palms import loader  # noqa: E402
 from palms.utils import notebook_export  # noqa: E402
 from palms.utils.prov_graph import ProvGraph  # noqa: E402
 
@@ -364,7 +365,21 @@ def _align(viewer_obs, replay_obs):
 _NULL_STRINGS = {"nan", "<NA>", "None", "NaN", "NA", ""}
 
 
-def compare_clusterings(viewer_obs, replay_obs) -> list[dict]:
+def compare_clusterings(viewer_obs, replay_obs, data_path=None) -> list[dict]:
+    """Compare each persisted clustering against the replayed one.
+
+    A clustering 10x shipped with the dataset is an **input**, not a result:
+    nothing in the recorded session produced it, so the notebook is not expected
+    to and its absence is not a divergence. It is still listed, with
+    ``status="input"``, because "not compared" and "compared and agreed" are
+    different statements and the report has to keep them apart.
+
+    A clustering the *viewer* persisted with no step behind it stays a failure —
+    that is the defect ``tests/test_clustering_recording.py`` guards against, and
+    the two are indistinguishable in ``obs`` (both are ``clustering_<key>``), so
+    the native ones are identified by :func:`loader.is_native_clustering` rather
+    than by the absence of a node.
+    """
     from sklearn.metrics import adjusted_rand_score
 
     left, right, n_shared = _align(viewer_obs, replay_obs)
@@ -374,11 +389,19 @@ def compare_clusterings(viewer_obs, replay_obs) -> list[dict]:
             continue
         key = column[len(CLUSTERING_PREFIX):]
         if key not in right.columns:
-            results.append({
-                "clustering": key, "status": "not_in_replay",
-                "note": "the viewer persisted this clustering but the notebook "
-                        "did not produce it",
-            })
+            if loader.is_native_clustering(key, data_path):
+                results.append({
+                    "clustering": key, "status": "input",
+                    "note": "10x shipped this clustering with the dataset; no "
+                            "recorded step produces it, so the notebook is not "
+                            "expected to reproduce it",
+                })
+            else:
+                results.append({
+                    "clustering": key, "status": "not_in_replay",
+                    "note": "the viewer persisted this clustering but the notebook "
+                            "did not produce it",
+                })
             continue
         # Unlabelled cells are legitimate — a CNV clustering computed on a
         # subset is reindexed onto the whole table — so compare where both
@@ -595,7 +618,8 @@ def main(argv=None) -> int:
         viewer_obs = read_viewer_obs(cache)
         viewer_names, groupby = read_viewer_rank_genes(cache)
 
-        report["clusterings"] = compare_clusterings(viewer_obs, replay_obs)
+        report["clusterings"] = compare_clusterings(viewer_obs, replay_obs,
+                                                   data_path)
         report["rank_genes"] = compare_rank_genes(viewer_names, replay_rank,
                                                   args.top_n, groupby)
         report["rank_genes"]["groupby"] = groupby
@@ -603,7 +627,10 @@ def main(argv=None) -> int:
         if cleanup is not None:
             shutil.rmtree(cleanup, ignore_errors=True)
 
-    failures = [c for c in report["clusterings"] if c.get("status") != "ok"]
+    # "input" is not a failure: see compare_clusterings. Anything else that is
+    # not "ok" is, including a viewer-derived clustering with no step behind it.
+    failures = [c for c in report["clusterings"]
+                if c.get("status") not in ("ok", "input")]
     if report["rank_genes"].get("status") == "diverged":
         failures.append({"rank_genes": "diverged"})
     report["passed"] = not failures
@@ -616,14 +643,23 @@ def main(argv=None) -> int:
 def _print_summary(report: dict, out_path: Path) -> None:
     print()
     print(f"Replayed in {report['execution']['total_seconds']}s")
+    inputs = [e for e in report["clusterings"] if e.get("status") == "input"]
     for entry in report["clusterings"]:
         if entry.get("status") == "ok":
             print(f"  ✓ {entry['clustering']}: ARI = {entry['ari']:.6f} "
                   f"({entry['n_clusters_viewer']} clusters, "
                   f"{entry['n_cells_compared']} cells)")
+        elif entry.get("status") == "input":
+            continue          # summarised together below, not one line each
         else:
             print(f"  ✗ {entry['clustering']}: {entry.get('status')} "
                   f"{entry.get('ari', '')}")
+    if inputs:
+        # Listed, not silent: "not compared" and "compared and agreed" are
+        # different statements, and a reader of the report needs to see which.
+        print(f"  – {len(inputs)} clustering(s) shipped with the dataset, not "
+              f"compared (10x output, no recorded step produces them): "
+              f"{', '.join(e['clustering'] for e in inputs)}")
     rank = report["rank_genes"]
     if rank.get("status") == "ok":
         print(f"  ✓ rank genes: top-{rank['top_n']} identical in all "

@@ -13,6 +13,7 @@ Returns a SpatialData object with:
 """
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -1020,6 +1021,51 @@ def load_umap(path: Path):
     return umap_df
 
 
+#: Directory-name prefix 10x uses under ``analysis/clustering/``.
+_TENX_CLUSTERING_DIR_PREFIX = "gene_expression_"
+
+#: What 10x's own clustering names look like. Only consulted when the CSVs are
+#: not on disk to be asked — see :func:`is_native_clustering`.
+_TENX_CLUSTERING_NAME = re.compile(r"^(graphclust|kmeans_\d+_clusters)$")
+
+
+def native_clustering_names(path) -> set:
+    """The clusterings 10x shipped with this dataset, read from disk.
+
+    Empty for a dataset with no ``analysis/`` folder, which is not the same
+    statement as "it has none" — a Crop Dataset export carries the obs columns
+    into its cache without copying the CSVs they came from.
+    """
+    root = Path(path) / "analysis" / "clustering"
+    if not root.is_dir():
+        return set()
+    return {d.name.replace(_TENX_CLUSTERING_DIR_PREFIX, "")
+            for d in root.iterdir() if (d / "clusters.csv").exists()}
+
+
+def is_native_clustering(key: str, path=None) -> bool:
+    """Whether *key* is 10x's own clustering rather than one the viewer derived.
+
+    The distinction matters wherever the two must not be conflated: a native
+    clustering is an **input** that arrived with the dataset, so no recorded
+    step produces it and a replayed notebook is not expected to. A
+    viewer-derived clustering with no step behind it is a defect
+    (``tests/test_clustering_recording.py``), and the two look identical in
+    ``obs`` — both are ``clustering_<key>`` columns.
+
+    Disk wins where it can answer: if this dataset has an ``analysis/clustering``
+    folder, membership in it is definitive. Only when there is none does the
+    name decide, because a Crop Dataset export drops that folder while keeping
+    the columns, and refusing to answer there would make every crop export look
+    like it had lost ten analyses.
+    """
+    if path is not None:
+        on_disk = native_clustering_names(path)
+        if on_disk:
+            return key in on_disk
+    return bool(_TENX_CLUSTERING_NAME.match(key))
+
+
 def load_clusterings(path: Path):
     """
     Load all cluster assignments from analysis/clustering/.
@@ -1040,7 +1086,7 @@ def load_clusterings(path: Path):
         if not csv_path.exists():
             continue
         # strip leading "gene_expression_" prefix for display
-        name = subdir.name.replace("gene_expression_", "")
+        name = subdir.name.replace(_TENX_CLUSTERING_DIR_PREFIX, "")
         df = pd.read_csv(csv_path, index_col=0)
         clusterings[name] = df.iloc[:, 0]  # first column = cluster id
     print(f"Loaded {len(clusterings)} clusterings: {list(clusterings.keys())}")
