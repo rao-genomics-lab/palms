@@ -6,6 +6,23 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Changed
+- **`insitucnv` is pinned to a tag instead of tracking `master`.** All three install
+  sites — `environment.yml`, `environment-copykat.yml` and the `cnv` extra — carried a
+  bare `git+https://…/insituCNV-copykat.git`, which resolves to whatever the fork's
+  default branch happens to be that day. Two installs a week apart could run different
+  CNV code while reporting the same everything else, which is not a dependency a
+  reproducibility claim can rest on. The fork had no tags at all; `v0.2.0` now marks
+  `172e753` and all three sites pin `@v0.2.0`. (The tag is ahead of the fork's own
+  `version = "0.1.0"`, inherited from upstream and never bumped — the git ref is what
+  pins the code, so `pip list` still says 0.1.0.)
+
+  The three must move together: the viewer's env and `palms_copykat` share no
+  site-packages, so a pin that lands in one and not the other has the CopyKAT worker
+  running different code from the viewer that launched it.
+  `tests/test_declared_dependencies.py` now fails if the three disagree, or if any of
+  them loses its `@<ref>`.
+
 ### Fixed
 - **Seven modules the app imports were declared nowhere.** `novae` (Spatial → Domains)
   appeared in no dependency list at all; `platformdirs`, `pygments`, `geopandas`,

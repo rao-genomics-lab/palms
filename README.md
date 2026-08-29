@@ -84,7 +84,8 @@ The `cnv` extra is the exception: it is already covered by `environment.yml`, so
 you only need it if you installed with plain `pip` instead of conda. It pulls
 `insitucnv` from the [`insituCNV-copykat`](https://github.com/sraorao/insituCNV-copykat)
 fork, which is public and resolves cleanly against this app's `anndata`/`pandas`
-versions.
+versions. It is pinned to the tag `v0.2.0`, so an install today and an install next year
+get the same code.
 
 ### CopyKAT backend (optional second environment)
 

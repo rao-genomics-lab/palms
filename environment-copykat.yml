@@ -60,4 +60,4 @@ dependencies:
   - r-transport
   - pip:
       - infercnvpy>=0.6.0
-      - insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git
+      - insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git@v0.2.0

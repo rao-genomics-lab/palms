@@ -114,3 +114,28 @@ def test_exemptions_are_still_imported(module, reason):
     assert module in _imported_top_level_modules(), (
         f"{module} is exempted ({reason}) but nothing in src/palms imports it any more"
     )
+
+
+# The insituCNV fork is installed from a git URL in three places. The two conda
+# envs share no site-packages, so all three must name the *same* distribution at
+# the *same* revision or the CopyKAT worker runs different code from the viewer.
+_INSITUCNV_SITES = ("environment.yml", "environment-copykat.yml", "pyproject.toml")
+
+
+def test_insitucnv_is_pinned_and_identical_in_all_three_sites():
+    found = {}
+    for name in _INSITUCNV_SITES:
+        text = (REPO / name).read_text()
+        lines = [ln for ln in text.splitlines() if "insituCNV-copykat.git" in ln]
+        assert len(lines) == 1, f"{name}: expected one insitucnv requirement, got {lines}"
+        # Strip yaml/toml decoration: "- x @ y", '"x @ y",'
+        found[name] = lines[0].strip().lstrip("-").strip().strip('",').strip()
+
+    assert len(set(found.values())) == 1, f"the three sites disagree: {found}"
+
+    requirement = next(iter(found.values()))
+    url = requirement.split("@", 1)[1].strip()      # git+https://…git@<ref>
+    assert "@" in url.split("//", 1)[1], (
+        f"insitucnv is installed unpinned ({requirement}) — a git URL with no @<ref> "
+        "tracks the fork's default branch, so two installs a day apart can differ"
+    )

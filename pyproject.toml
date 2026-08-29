@@ -83,7 +83,7 @@ references = ["readfcs", "rasterio"]
 # in a separate env — see environment-copykat.yml.)
 cnv = [
     "infercnvpy>=0.6.0",
-    "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git",
+    "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git@v0.2.0",
 ]
 # Novae spatial-domain inference (Spatial -> Domains). Deliberately out of
 # environment.yml: it pulls torch + torch-geometric + lightning, and requires
