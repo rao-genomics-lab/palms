@@ -846,7 +846,9 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 None if not analyze_ids or set(analyze_ids) >= _all_cluster_ids(reference_key)
                 else list(analyze_ids)
             )
-        from palms.utils.cnv_analysis import CNV_REFERENCE_OBS_KEY
+        from palms.utils.cnv_analysis import (
+            CNV_REFERENCE_OBS_KEY, MIN_MAPPED_GENE_FRACTION,
+        )
 
         reference_categories = [str(c) for c in (reference_ids or [])]
         analyze_cats = [str(c) for c in analyze_categories] if analyze_categories else []
@@ -860,6 +862,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "step": coerce(cnv_step.value),
             "lfc_clip": 4.0,
             "resolution": coerce(cnv_resolution.value),
+            # Sourced from the constant rather than spelled again, so the
+            # template's threshold and check_gene_mapping's cannot drift; the
+            # CopyKAT worker still reaches the latter directly. Pinned by
+            # tests/test_cnv_step.py.
+            "min_mapped_fraction": float(MIN_MAPPED_GENE_FRACTION),
         }
         if analyze_cats:
             params["include"] = sorted(set(analyze_cats) | set(reference_categories))

@@ -197,6 +197,7 @@ Infers copy-number variation against a reference population with inferCNV, in-pr
 | `step` | `int` | yes |
 | `lfc_clip` | `float` | yes |
 | `resolution` | `float` | yes |
+| `min_mapped_fraction` | `float` | yes |
 | `include` | `list` | no |
 
 - **Requires:** `adata`, `np`, `pd`, `sc`
@@ -230,6 +231,7 @@ adata_cnv = adata_cnv[
 
 #--- block prepare
 adata_cnv.obs[$reference_obs_key] = adata_cnv.obs[$reference_clustering].values
+_n_panel = adata_cnv.n_vars
 _raw_counts = adata_cnv.X.copy()
 sc.pp.normalize_total(adata_cnv, target_sum=1e4)
 sc.pp.log1p(adata_cnv)
@@ -241,6 +243,27 @@ adata_cnv = prepare_cnv_input(
     adata_cnv, raw_layer='raw_counts', smoothing_neighbors=$smoothing_neighbors,
     add_gene_positions=True, drop_unmapped_genes=True, copy=False,
 )
+
+# Refuse a panel that barely maps, before anything reads a copy number from it.
+# insitucnv's default gene-position reference is the *human* infercnvpy Maynard
+# 2020 table, so a mouse panel matches only the symbols spelled identically in
+# both nomenclatures — 8 of 5006 on the dataset that prompted this check. CNV
+# inference reads copy number from runs of neighbouring genes along a
+# chromosome, so a result built from that many genes is noise rather than a weak
+# signal, and nothing downstream says so: the run completes, clusters, and the
+# first symptom appears several steps later.
+#
+# The decision is the mapped *fraction*, not the species: a mouse panel given a
+# mouse annotation table should run, and a human panel against a broken
+# reference should not. Hand-written because no library API covers it.
+if adata_cnv.n_vars < max(1, _n_panel * $min_mapped_fraction):
+    raise RuntimeError(
+        f"Only {adata_cnv.n_vars} of {_n_panel} panel genes have genomic "
+        f"coordinates ({adata_cnv.n_vars / _n_panel:.1%}). CNV inference needs a "
+        f"gene-position reference matching this panel's species, and the default "
+        f"one is human — a mouse panel needs an annotation table with gene_name, "
+        f"chromosome, start and end columns."
+    )
 
 #--- block arrow_shim        # frozen: not customisable
 _old_infer = pd.options.future.infer_string

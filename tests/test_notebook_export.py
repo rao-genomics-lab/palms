@@ -6,6 +6,8 @@ Run with:  pytest tests/test_notebook_export.py
 """
 from __future__ import annotations
 
+import pytest
+
 from palms.utils.prov_graph import ProvGraph, SETUP
 from palms.utils import notebook_export
 
@@ -112,3 +114,80 @@ def test_a_stock_run_gets_no_banner_from_the_verifier(tmp_path):
     assert "did not use the shipped templates" not in cells[0][1]
     assert len(node_ids) == len(cells)
     assert node_ids[-1] is None
+
+
+# ── 10x-native clusterings are inputs, not results ───────────────────────────
+# A clustering 10x shipped with the dataset is not produced by any recorded
+# step, so a replayed notebook is not expected to reproduce it and its absence
+# is not a divergence. A clustering the *viewer* persisted with no step behind
+# it still is: that is the defect tests/test_clustering_recording.py guards
+# against, and the two are indistinguishable in obs — both are
+# `clustering_<key>` columns.
+
+def _obs_frame(pd, **columns):
+    return pd.DataFrame(columns, index=[f"cell{i}" for i in range(4)])
+
+
+def test_native_clusterings_are_read_from_disk_when_the_dataset_has_them(tmp_path):
+    from palms import loader
+
+    root = tmp_path / "analysis" / "clustering"
+    (root / "gene_expression_graphclust").mkdir(parents=True)
+    (root / "gene_expression_graphclust" / "clusters.csv").write_text("Barcode,Cluster\n")
+    (root / "gene_expression_my_own").mkdir(parents=True)
+    (root / "gene_expression_my_own" / "clusters.csv").write_text("Barcode,Cluster\n")
+
+    assert loader.native_clustering_names(tmp_path) == {"graphclust", "my_own"}
+    # Disk wins over the naming rule in both directions.
+    assert loader.is_native_clustering("my_own", tmp_path) is True
+    assert loader.is_native_clustering("kmeans_5_clusters", tmp_path) is False
+
+
+def test_the_name_decides_only_when_the_dataset_has_no_analysis_folder(tmp_path):
+    """A crop export drops analysis/ but keeps the obs columns.
+
+    Refusing to answer there would make every crop export look as though it had
+    lost ten analyses.
+    """
+    from palms import loader
+
+    assert loader.native_clustering_names(tmp_path) == set()
+    assert loader.is_native_clustering("graphclust", tmp_path) is True
+    assert loader.is_native_clustering("kmeans_10_clusters", tmp_path) is True
+    assert loader.is_native_clustering("leiden_igraph_r1.0", tmp_path) is False
+    assert loader.is_native_clustering("cnv_leiden_res0.2", tmp_path) is False
+    # Near-misses must not be swept in.
+    assert loader.is_native_clustering("my_kmeans", tmp_path) is False
+    assert loader.is_native_clustering("kmeans_clusters", tmp_path) is False
+
+
+def test_a_native_clustering_absent_from_the_replay_is_an_input_not_a_failure(tmp_path):
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("sklearn")
+    vn = _verify_notebook_module()
+
+    viewer = _obs_frame(pd, **{
+        "clustering_graphclust": ["1", "2", "1", "2"],
+        "clustering_leiden_r1.0": ["a", "b", "a", "b"],
+    })
+    replay = _obs_frame(pd, **{"leiden_r1.0": ["a", "b", "a", "b"]})
+
+    by_key = {e["clustering"]: e for e in
+              vn.compare_clusterings(viewer, replay, tmp_path)}
+    assert by_key["graphclust"]["status"] == "input"
+    assert by_key["leiden_r1.0"]["status"] == "ok"
+    assert by_key["leiden_r1.0"]["ari"] == 1.0
+
+
+def test_a_viewer_derived_clustering_with_no_step_is_still_a_failure(tmp_path):
+    """The guard that must survive treating native clusterings as inputs."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("sklearn")
+    vn = _verify_notebook_module()
+
+    viewer = _obs_frame(pd, **{"clustering_leiden_r1.0": ["a", "b", "a", "b"]})
+    replay = _obs_frame(pd, **{"unrelated": ["x", "y", "x", "y"]})
+
+    entry = vn.compare_clusterings(viewer, replay, tmp_path)[0]
+    assert entry["status"] == "not_in_replay"
+    assert entry["status"] not in ("ok", "input"), "must still count as a failure"

@@ -1,5 +1,65 @@
 # Changelog
 
+## [Unreleased] — 2026-08-29 (reproducibility measurement)
+
+### Fixed
+- **inferCNV ran without the gene-mapping guard, and reproduced the exact defect that
+  guard was written to prevent.** `418cf07` added `cnv_analysis.check_gene_mapping`,
+  which refuses a panel where under 5% of genes map to genomic coordinates. Migrating
+  inferCNV to `ctx.run_step` moved execution into the `genes.cnv_infercnv` template,
+  and `run_cnv_pipeline` — the guard's only caller — was left serving the CopyKAT
+  worker alone. So the inferCNV path called
+  `prepare_cnv_input(add_gene_positions=True, drop_unmapped_genes=True)` and carried
+  straight on; `n_genes_mapped` was computed *after* the run, only for the summary.
+
+  The failure is silent and late. On the dataset that prompted this, a **mouse** panel
+  against insitucnv's default **human** reference (infercnvpy Maynard 2020) mapped 8 of
+  5,006 genes into 5 genomic windows. The run completed, clustered into 27 clusters and
+  persisted a result; the first symptom came several steps later when the heatmap
+  crashed. A notebook replay died at `cnv:infercnv` with `ArpackError -9`, which names
+  nothing useful.
+
+  The check now lives in the **template**, so it travels with the recorded code and a
+  replayed notebook refuses for the same reason the GUI does — rather than dying
+  opaquely somewhere downstream. The threshold is passed in from
+  `MIN_MAPPED_GENE_FRACTION` rather than spelled again, so the template and
+  `check_gene_mapping` cannot drift, and the CopyKAT worker still reaches the helper
+  directly.
+
+  **The decision is the mapped fraction, not the species.** A mouse panel given a mouse
+  annotation table should run, and a human panel against a broken reference should not;
+  species only sharpens the message. `tests/test_cnv_step.py` now runs the *rendered
+  template through a real executor* and asserts it refuses and never reaches
+  `run_infercnv` — the previous tests called `check_gene_mapping` directly and stayed
+  green throughout the regression, which is how it went unnoticed.
+
+### Changed
+- **`verify_notebook.py` treats 10x's own clusterings as inputs, not results.**
+  `compare_clusterings` marked any persisted clustering the replay did not produce
+  as `not_in_replay`, and `passed = not failures` counted those — so a session
+  could reproduce every step it recorded and still report `passed: false`. On the
+  `crop_6` demo dataset all four recorded clusterings replayed at ARI exactly
+  1.000000 with identical labels, and the verdict was still `false`, purely
+  because `graphclust` and nine `kmeans_*` columns came in with the dataset and
+  nothing in the session produced them.
+
+  Those are **inputs**: 10x computed them, the loader read them, no recorded step
+  makes them, and a notebook replaying from raw output is not expected to. They
+  now carry `status: "input"`, are excluded from `passed`, and are still listed
+  in the report and named in the summary — "not compared" and "compared and
+  agreed" are different statements, so neither is allowed to hide the other.
+
+  **A viewer-derived clustering with no step behind it stays a failure**, which is
+  the distinction that had to be made carefully: that is the defect
+  `tests/test_clustering_recording.py` guards against, and the two are
+  indistinguishable in `obs` — both are `clustering_<key>` columns. So the native
+  ones are identified by the new `loader.is_native_clustering`, not by the absence
+  of a node. Disk decides where it can: membership in `analysis/clustering/` is
+  definitive. Only when a dataset has no `analysis/` folder at all does the name
+  decide — a Crop Dataset export drops that folder while keeping the columns, and
+  refusing to answer there would make every crop export look as though it had lost
+  ten analyses.
+
 ## [Unreleased] — 2026-08-29 (stale cleanup)
 
 ### Fixed
