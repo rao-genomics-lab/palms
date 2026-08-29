@@ -63,6 +63,15 @@ dependencies = [
     "pillow",
     "xarray",
     "omnipath",
+    # Imported directly by the app, and until now present only as transitive
+    # dependencies of napari, zarr, spatialdata and scanpy. Each is a real
+    # requirement of ours; see tests/test_declared_dependencies.py.
+    "platformdirs",   # resolves ~/.config/palms/templates for user template overrides
+    "pygments",       # syntax highlighting in the Notebook tab
+    "numcodecs",      # Blosc compressor on the zarr-v2 path of build_custom_segmentation
+    "geopandas",      # ROI/annotation polygons in adata_persistence and crop_overlays
+    "seaborn",        # violin/box/strip plots in the annotation-distance and gene tabs
+    "tqdm",           # the progress bar that reports into the napari status bar
 ]
 
 [project.optional-dependencies]
@@ -76,7 +85,11 @@ cnv = [
     "infercnvpy>=0.6.0",
     "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git",
 ]
-full = ["palms[celltypist,r,gpu,references,cnv]"]
+# Novae spatial-domain inference (Spatial -> Domains). Deliberately out of
+# environment.yml: it pulls torch + torch-geometric + lightning, and requires
+# python >= 3.11, which `full` therefore inherits.
+novae = ["novae"]
+full = ["palms[celltypist,r,gpu,references,cnv,novae]"]
 # Dev only, and deliberately out of `full` and environment.yml: `--mcp` starts an
 # unauthenticated localhost server that executes arbitrary Python in the viewer
 # process. Alpha software with loose pins; see src/palms/dev_mcp.py.
