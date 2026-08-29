@@ -72,7 +72,7 @@ dependencies:
       # InSituCNV CNV inference (inferCNV backend; the fork also provides run_copykat,
       # but the CopyKAT R backend runs in the separate palms_copykat env).
       - infercnvpy>=0.6.0
-      - insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git@v0.2.0
+      - insitucnv-copykat>=0.3
       # the package itself, editable
       - -e .
 

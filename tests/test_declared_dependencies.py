@@ -28,7 +28,14 @@ SRC = REPO / "src" / "palms"
 # Import name -> declared distribution, for the cases the installed metadata
 # cannot bridge: conda-forge ships OpenCV as `py-opencv`, whose dist-info is
 # named `cv2`, so nothing links the import back to the `opencv-python` we declare.
-ALIASES = {"cv2": "opencv-python"}
+ALIASES = {
+    "cv2": "opencv-python",
+    # The InSituCNV fork is published as `insitucnv-copykat` because `insitucnv`
+    # on PyPI is upstream's, but it imports under upstream's name either way —
+    # and an environment built before the rename still has the `insitucnv`
+    # distribution installed, which is equally valid here.
+    "insitucnv": "insitucnv-copykat",
+}
 
 # Import names that are deliberately undeclared, each with the reason.
 EXEMPT = {
@@ -116,9 +123,12 @@ def test_exemptions_are_still_imported(module, reason):
     )
 
 
-# The insituCNV fork is installed from a git URL in three places. The two conda
-# envs share no site-packages, so all three must name the *same* distribution at
-# the *same* revision or the CopyKAT worker runs different code from the viewer.
+# The InSituCNV fork is named in three places. The two conda envs share no
+# site-packages, so all three must name the *same* distribution at the *same*
+# version or the CopyKAT worker runs different code from the viewer. It reached
+# PyPI only in 0.3.0; before that all three carried a `git+https://…@ref` direct
+# reference, which is what made PALMS itself unpublishable — PyPI rejects any
+# distribution whose metadata contains one.
 _INSITUCNV_SITES = ("environment.yml", "environment-copykat.yml", "pyproject.toml")
 
 
@@ -126,16 +136,23 @@ def test_insitucnv_is_pinned_and_identical_in_all_three_sites():
     found = {}
     for name in _INSITUCNV_SITES:
         text = (REPO / name).read_text()
-        lines = [ln for ln in text.splitlines() if "insituCNV-copykat.git" in ln]
+        lines = [
+            ln for ln in text.splitlines()
+            if "insitucnv" in ln.lower() and not ln.lstrip().startswith("#")
+        ]
         assert len(lines) == 1, f"{name}: expected one insitucnv requirement, got {lines}"
-        # Strip yaml/toml decoration: "- x @ y", '"x @ y",'
+        # Strip yaml/toml decoration: "- x>=1", '"x>=1",'
         found[name] = lines[0].strip().lstrip("-").strip().strip('",').strip()
 
     assert len(set(found.values())) == 1, f"the three sites disagree: {found}"
 
     requirement = next(iter(found.values()))
-    url = requirement.split("@", 1)[1].strip()      # git+https://…git@<ref>
-    assert "@" in url.split("//", 1)[1], (
-        f"insitucnv is installed unpinned ({requirement}) — a git URL with no @<ref> "
-        "tracks the fork's default branch, so two installs a day apart can differ"
+    assert "git+" not in requirement, (
+        f"{requirement!r} is a direct reference. PyPI rejects any distribution whose "
+        "metadata contains one, so this makes PALMS itself unpublishable — and it "
+        "resolves to whatever the fork's branch holds that day."
+    )
+    assert any(op in requirement for op in ("==", ">=", "~=")), (
+        f"{requirement!r} carries no version constraint, so two installs a week apart "
+        "can differ"
     )
