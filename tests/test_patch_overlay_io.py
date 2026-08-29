@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from xenium_viewer.utils.patch_overlay_io import (
+from palms.utils.patch_overlay_io import (
     _candidate_sizes, infer_patch_size_from_path, estimate_stride,
 )
 

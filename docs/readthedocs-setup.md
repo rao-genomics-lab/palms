@@ -6,7 +6,7 @@ site by `exclude_docs` in `mkdocs.yml`).
 ## What is already done
 
 `mkdocs.yml` had shipped a complete 44-page nav for months, and `site_url` already
-pointed at `https://xenium-viewer.readthedocs.io` — but **the site had never been
+pointed at `https://palms.readthedocs.io` — but **the site had never been
 built**, and would not have worked if it had. `docs/` is authored as GitHub Wiki
 source, where links are extensionless (`[Clustering](Tab-Clustering)`); mkdocs reads
 those as paths to files that do not exist. Measured: **158 dead cross-links**.
@@ -37,15 +37,15 @@ mkdocs build --strict     # or: mkdocs serve
 ## What is left, and what blocks it
 
 **Connecting the Read the Docs project requires the repository to be public.**
-RTD Community only builds public repos; `sraorao/xenium_viewer` is still private.
-This is the same step the preprint plan's Phase A needs, so the sequence is: make the
-repo public, then connect RTD — not pay for RTD Business to work around a step that
-is happening anyway.
+RTD Community only builds public repos; `sraorao/palms` is still private.
+Going public is planned independently, so the sequence is: make the repo public,
+then connect RTD — not pay for RTD Business to work around a step that is happening
+anyway.
 
 Once public:
 
 1. Sign in at <https://readthedocs.org> with GitHub and grant access to the repo.
-2. **Import a Project** → `sraorao/xenium_viewer`. RTD detects `.readthedocs.yaml`;
+2. **Import a Project** → `sraorao/palms`. RTD detects `.readthedocs.yaml`;
    no settings need changing.
 3. Confirm the first build is green, then check a cross-link on the rendered site —
    that is the thing that was broken and is the only part CI cannot prove.

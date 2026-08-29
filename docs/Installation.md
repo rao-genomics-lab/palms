@@ -9,13 +9,13 @@
 ## Standard Install
 
 ```bash
-git clone https://github.com/sraorao/xenium_viewer.git
-cd xenium_viewer
+git clone https://github.com/sraorao/palms.git
+cd palms
 ./scripts/install.sh
-conda activate xenium_viewer
+conda activate palms
 ```
 
-This installs the `xenium-viewer` package in editable mode along with all required dependencies. It also installs the CNV inference stack (`infercnvpy` and `insitucnv`), so the CNV tab's **inferCNV** backend works immediately — no extra step required.
+This installs the `palms` package in editable mode along with all required dependencies. It also installs the CNV inference stack (`infercnvpy` and `insitucnv`), so the CNV tab's **inferCNV** backend works immediately — no extra step required.
 
 ### What `install.sh` does, and the manual equivalent
 
@@ -25,7 +25,7 @@ To run conda yourself:
 
 ```bash
 conda env create -f environment.yml                          # all platforms
-conda env update -n xenium_viewer -f environment-linux.yml   # Linux and WSL only
+conda env update -n palms -f environment-linux.yml   # Linux and WSL only
 ```
 
 Forgetting the second command on Linux is not silent — the viewer detects it at startup and prints the command to run, instead of aborting with no traceback.
@@ -34,7 +34,7 @@ Forgetting the second command on Linux is not silent — the viewer detects it a
 
 ## Optional Extras
 
-These are the extras declared in `pyproject.toml`. Install them after activating the `xenium_viewer` environment:
+These are the extras declared in `pyproject.toml`. Install them after activating the `palms` environment:
 
 | Extra | Install command | What it adds |
 |-------|----------------|--------------|
@@ -53,14 +53,14 @@ Each extra is independent — install only what you need. A tab whose optional d
 
 The `cnv` extra is the exception to "optional": `environment.yml` already installs it, so you only need it for a plain `pip` install. It pulls `insitucnv` from the [`insituCNV-copykat`](https://github.com/sraorao/insituCNV-copykat) fork, which is public and resolves cleanly against this app's `anndata`/`pandas` versions.
 
-To download pre-built reference panels, use the `xenium-fetch-references` command (see [Console Scripts](#console-scripts) below) — it ships with the package and needs no extra install.
+To download pre-built reference panels, use the `palms-fetch-references` command (see [Console Scripts](#console-scripts) below) — it ships with the package and needs no extra install.
 
 ## CopyKAT Backend (Optional Second Environment)
 
 The CNV tab's inferCNV backend runs in the main environment. Its **CopyKAT** backend does not: CopyKAT needs rpy2 with R 4.3, a stack that only builds on python 3.11, which cannot coexist with the main environment's python 3.12. It therefore lives in a separate environment:
 
 ```bash
-conda env create -f environment-copykat.yml   # creates 'xenium_viewer_copykat'
+conda env create -f environment-copykat.yml   # creates 'palms_copykat'
 ```
 
 **Linux only.** This environment does not solve on Apple Silicon: `r-dlm`, a CopyKAT dependency, is published only on the Anaconda `r` channel, which has no `osx-arm64` builds. The inferCNV backend runs in the main environment and works on every supported platform.
@@ -71,8 +71,8 @@ To use a differently-named environment, set one of:
 
 | Variable | Meaning |
 |----------|---------|
-| `XENIUM_COPYKAT_ENV` | Name of the conda environment to use |
-| `XENIUM_COPYKAT_PYTHON` | Full path to that environment's `python` |
+| `PALMS_COPYKAT_ENV` | Name of the conda environment to use |
+| `PALMS_COPYKAT_PYTHON` | Full path to that environment's `python` |
 
 Skip this section entirely if you only need inferCNV.
 
@@ -81,11 +81,11 @@ Skip this section entirely if you only need inferCNV.
 If the conda environment becomes broken or corrupted, remove it and start fresh:
 
 ```bash
-conda env remove -n xenium_viewer
-git clone https://github.com/sraorao/xenium_viewer.git
-cd xenium_viewer
+conda env remove -n palms
+git clone https://github.com/sraorao/palms.git
+cd palms
 ./scripts/install.sh
-conda activate xenium_viewer
+conda activate palms
 ```
 
 Your analyses stored in the dataset directory (`sdata_cached.zarr/viewer_session/`) are not affected by reinstalling the environment.
@@ -95,32 +95,32 @@ Your analyses stored in the dataset directory (`sdata_cached.zarr/viewer_session
 ```bash
 # Optional one-time transcript preprocessing per dataset (~30-60 min)
 # Speeds up per-gene transcript loading from ~5 s to <100 ms
-xenium-preprocess /path/to/xenium/output/
+palms-preprocess /path/to/xenium/output/
 
 # Launch viewer (a file dialog opens if no path is given)
-xenium-viewer [/path/to/xenium/output/]
+palms [/path/to/xenium/output/]
 
 # Launch without building or reading the SpatialData zarr cache.
 # Expect a slow start and high memory use — see "Memory" under Troubleshooting.
-xenium-viewer /path/to/xenium/output/ --no-cache
+palms /path/to/xenium/output/ --no-cache
 
 # Launch ignoring any customised analysis templates, running the shipped ones
-xenium-viewer /path/to/xenium/output/ --no-user-templates
+palms /path/to/xenium/output/ --no-user-templates
 ```
 
-`python -m xenium_viewer` is equivalent to `xenium-viewer` and accepts the same arguments.
+`python -m palms` is equivalent to `palms` and accepts the same arguments.
 
 ### Building the zarr cache ahead of time
 
-The first launch on a dataset reads the raw Xenium output and writes `sdata_cached.zarr/` beside it, which takes tens of minutes and tens of GB. That happens automatically, so this step is optional — but it holds a napari window open for the duration, which is awkward over ssh. `xenium-build-cache` does the same work with no GUI:
+The first launch on a dataset reads the raw Xenium output and writes `sdata_cached.zarr/` beside it, which takes tens of minutes and tens of GB. That happens automatically, so this step is optional — but it holds a napari window open for the duration, which is awkward over ssh. `palms-build-cache` does the same work with no GUI:
 
 ```bash
 # Build it (or refresh it) — safe to run detached or overnight
-xenium-build-cache /path/to/xenium/output/
+palms-build-cache /path/to/xenium/output/
 
 # Report on an existing cache and exit; builds nothing, writes nothing.
 # Exits non-zero if the cache is missing, stale, or does not verify.
-xenium-build-cache /path/to/xenium/output/ --check
+palms-build-cache /path/to/xenium/output/ --check
 ```
 
 With no GUI attached there is nobody to answer the "this cache looks stale — rebuild it?" question, so by default the command **keeps the existing cache** rather than discarding work you cannot get back. `--on-stale` answers in advance:
@@ -132,15 +132,15 @@ With no GUI attached there is nobody to answer the "this cache looks stale — r
 | `rebuild` | Rebuild and discard them (the old cache is still moved aside, never deleted) |
 | `keep` | Load the cache as it is, and stop asking |
 
-Run `--check` first if you are not sure what a rebuild would cost you — it lists the user-generated data the cache holds. This is separate from `xenium-preprocess`, which builds the per-gene transcript cache; the two are independent and can be run in either order.
+Run `--check` first if you are not sure what a rebuild would cost you — it lists the user-generated data the cache holds. This is separate from `palms-preprocess`, which builds the per-gene transcript cache; the two are independent and can be run in either order.
 
 ### Environment variables
 
 | Variable | Meaning |
 |----------|---------|
-| `XENIUM_COPYKAT_ENV` | Name of the conda environment holding the CopyKAT stack |
-| `XENIUM_COPYKAT_PYTHON` | Full path to that environment's `python` |
-| `XENIUM_VIEWER_TEMPLATE_PATH` | Colon-separated search path replacing the default location for customised analysis templates. Set it to an empty value to disable overrides entirely. See [Templates](Tab-Templates). |
+| `PALMS_COPYKAT_ENV` | Name of the conda environment holding the CopyKAT stack |
+| `PALMS_COPYKAT_PYTHON` | Full path to that environment's `python` |
+| `PALMS_TEMPLATE_PATH` | Colon-separated search path replacing the default location for customised analysis templates. Set it to an empty value to disable overrides entirely. See [Templates](Tab-Templates). |
 
 ## Console Scripts
 
@@ -148,11 +148,11 @@ The following commands are available after activating the environment:
 
 | Command | Description |
 |---------|-------------|
-| `xenium-viewer` | Launch the viewer |
-| `xenium-preprocess` | Preprocess transcripts for fast per-gene loading |
-| `xenium-build-cache` | Build or inspect the SpatialData zarr cache without the GUI |
-| `xenium-fetch-references` | Download pre-built label transfer reference datasets |
-| `xenium-build-custom-segmentation` | Run the custom cell segmentation pipeline |
+| `palms` | Launch the viewer |
+| `palms-preprocess` | Preprocess transcripts for fast per-gene loading |
+| `palms-build-cache` | Build or inspect the SpatialData zarr cache without the GUI |
+| `palms-fetch-references` | Download pre-built label transfer reference datasets |
+| `palms-build-custom-segmentation` | Run the custom cell segmentation pipeline |
 
 All commands accept `--help` for usage details.
 
@@ -201,7 +201,7 @@ Freshness is decided by a content hash of `experiment.xenium` recorded when the 
 Caches built before content hashing existed fall back to comparing modification times. That is treated as an uncertain signal: it prompts rather than rebuilding, and choosing to keep the cache records a hash so it stops asking.
 
 **Where the viewer writes**
-Besides the zarr cache, a dataset directory accumulates `viewer_cache/` (normalised expression, CNV profiles, cached DEG tables, the analysis provenance graph), `plots/` (saved figures), `transcript_cache/` (per-gene transcript files), `analysis.py`, `analysis_notebook.ipynb`, and a rotating `xenium_viewer.log`. The [Dataset](Tab-Dataset) tab lists all of it with sizes and can delete the regenerable parts.
+Besides the zarr cache, a dataset directory accumulates `viewer_cache/` (normalised expression, CNV profiles, cached DEG tables, the analysis provenance graph), `plots/` (saved figures), `transcript_cache/` (per-gene transcript files), `analysis.py`, `analysis_notebook.ipynb`, and a rotating `palms.log`. The [Dataset](Tab-Dataset) tab lists all of it with sizes and can delete the regenerable parts.
 
 
 ## Troubleshooting: `Could not initialize GLX` / `Aborted (core dumped)`
@@ -220,7 +220,7 @@ with a bare `conda env create -f environment.yml` instead of `./scripts/install.
 predates the package being added at all. Apply the Linux overlay:
 
 ```bash
-conda env update -n xenium_viewer -f environment-linux.yml
+conda env update -n palms -f environment-linux.yml
 ```
 
 The viewer checks for this at startup and prints the same command, so you should not have to

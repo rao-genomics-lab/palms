@@ -25,19 +25,19 @@ from dataclasses import replace
 
 import pytest
 
-from xenium_viewer.utils.step_templates import (
+from palms.utils.step_templates import (
     TEMPLATE_PATH_ENV,
     builtin_spec,
     clear_cache,
     resolve,
 )
-from xenium_viewer.utils.step_templates import loader
-from xenium_viewer.utils.step_templates.overrides import (
+from palms.utils.step_templates import loader
+from palms.utils.step_templates.overrides import (
     read_manifest,
     remove_override,
     save_override,
 )
-from xenium_viewer.utils.step_templates.spec import BlockSpec
+from palms.utils.step_templates.spec import BlockSpec
 
 LEIDEN = "clustering.leiden"
 CUSTOM_SCALE = "\nsc.pp.scale(adata_leiden, max_value=99)"
@@ -212,7 +212,7 @@ def test_an_override_with_no_manifest_entry_is_not_flagged(home):
 
 def _tab(home):
     from types import SimpleNamespace
-    from xenium_viewer.tabs.tab_templates import build_tab
+    from palms.tabs.tab_templates import build_tab
     widget, _ = build_tab(SimpleNamespace(state={}))
     return widget
 
@@ -252,7 +252,7 @@ def test_the_diff_shows_both_versions(qapp, home, monkeypatch):
         "scale": "\nsc.pp.scale(adata_leiden, max_value=10, zero_center=False)",
     })
 
-    from xenium_viewer.tabs.tab_templates import _diff_text
+    from palms.tabs.tab_templates import _diff_text
     diff = _diff_text(resolve(LEIDEN))
     # Each on its own line: block text has no trailing newline, and keeping line
     # endings ran the '-' and '+' together in the one pane whose job is showing
@@ -292,7 +292,7 @@ def test_the_take_button_is_hidden_when_there_is_nothing_to_review(qapp, home):
 # ── making it visible downstream ─────────────────────────────────────────────
 
 def _graph_with(origin: str, **kw):
-    from xenium_viewer.utils.prov_graph import ProvGraph
+    from palms.utils.prov_graph import ProvGraph
     graph = ProvGraph()
     graph.upsert("preamble", "import scanpy as sc", kind="setup")
     graph.upsert("clustering:k", "x = 1", deps=["preamble"],
@@ -302,7 +302,7 @@ def _graph_with(origin: str, **kw):
 
 def test_a_stock_notebook_gets_no_banner():
     """Don't clutter the ordinary case with a note saying nothing happened."""
-    from xenium_viewer.utils import notebook_export
+    from palms.utils import notebook_export
 
     graph = _graph_with("builtin")
     assert notebook_export.customisation_banner(graph) is None
@@ -311,7 +311,7 @@ def test_a_stock_notebook_gets_no_banner():
 
 
 def test_a_customised_notebook_says_so_at_the_top():
-    from xenium_viewer.utils import notebook_export
+    from palms.utils import notebook_export
 
     graph = _graph_with("user", template_id="clustering.leiden",
                         template_hash="abc123def456789")
@@ -326,7 +326,7 @@ def test_a_customised_notebook_says_so_at_the_top():
 
 def test_the_banner_does_not_disturb_the_code_cells():
     """The replay test asserts code cells are node.code verbatim."""
-    from xenium_viewer.utils import notebook_export
+    from palms.utils import notebook_export
 
     graph = _graph_with("user", template_id="clustering.leiden")
     code = [s for t, s in notebook_export.graph_to_cells(graph) if t == "code"]
@@ -335,7 +335,7 @@ def test_the_banner_does_not_disturb_the_code_cells():
 
 def test_a_hand_edited_cell_is_called_out_specifically():
     """It is the one origin whose code may not describe what produced the result."""
-    from xenium_viewer.utils import notebook_export
+    from palms.utils import notebook_export
 
     banner = notebook_export.customisation_banner(_graph_with("hand-edited"))
     assert "not re-executed" in banner

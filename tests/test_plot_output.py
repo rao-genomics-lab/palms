@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from xenium_viewer.utils import plot_output as po  # noqa: E402
+from palms.utils import plot_output as po  # noqa: E402
 
 
 # ── formats ──────────────────────────────────────────────────────────────────

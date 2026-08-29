@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from xenium_viewer.utils.cnv_analysis import (
+from palms.utils.cnv_analysis import (
     subsample_indices, _MIN_REFERENCE_CELLS,
 )
 

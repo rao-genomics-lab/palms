@@ -1,4 +1,4 @@
-# Reproducible Notebook Capture for Xenium Viewer — Provenance DAG
+# Reproducible Notebook Capture for PALMS — Provenance DAG
 
 ## Context
 
@@ -28,10 +28,10 @@ VSCode outside the viewer and continue their analysis. Confirmed decisions:
 
 ## What already exists (reuse, don't rebuild)
 
-- **In-app Notebook tab** — `src/xenium_viewer/tabs/tab_notebook.py` renders the code
+- **In-app Notebook tab** — `src/palms/tabs/tab_notebook.py` renders the code
   journal as live, editable Jupyter-style cells; `record_code()` auto-appends via the
   `state["_notebook_sync_fn"]` hook. Syntax highlighting + inline output.
-- **Execution engine** — `src/xenium_viewer/utils/notebook_engine.py` runs cells in
+- **Execution engine** — `src/palms/utils/notebook_engine.py` runs cells in
   napari's in-process IPython kernel (`adata`/`sdata`/`ctx` in scope in-app).
 - **Recorders** — `_helpers.py:238-318`: `record_code(code, tag)` plus `record_preamble`,
   `record_normalize`, `record_clustering`, `record_spatial_neighbors`. The
@@ -118,7 +118,7 @@ omitted; not on the replay critical path.
 
 ## Implementation steps
 
-### 1. New `src/xenium_viewer/utils/prov_graph.py`
+### 1. New `src/palms/utils/prov_graph.py`
 `ProvNode` dataclass; graph container with `upsert(node)`, cycle check, `mark_stale`
 (descendant propagation), `topo_sort()`, `prune()`, and `graph_to_notebook(graph) ->
 nbformat.NotebookNode`. Pure, unit-testable module with no Qt/napari deps.
@@ -177,12 +177,12 @@ same conda env). Keep this file in sync.
 
 | File | Change |
 |---|---|
-| `src/xenium_viewer/utils/prov_graph.py` | **New** — ProvNode, graph, upsert/staleness/topo-sort/prune, `graph_to_notebook` |
-| `src/xenium_viewer/utils/notebook_export.py` | **New** — nbformat read/write around derived cells |
-| `src/xenium_viewer/tabs/_helpers.py` | Replace recorder family with `record_node`; preamble `Path`/`data_path`; compat shim |
-| `src/xenium_viewer/app.py` | Init/seed graph from session; emit preamble node; stable `analysis.py`/`.ipynb` |
-| `src/xenium_viewer/utils/session.py` | Serialize/deserialize graph JSON in `viewer_session` |
-| `src/xenium_viewer/tabs/tab_notebook.py` | Render derived cells; stale badges; Export .ipynb; `restore_session`+`get_cells` |
+| `src/palms/utils/prov_graph.py` | **New** — ProvNode, graph, upsert/staleness/topo-sort/prune, `graph_to_notebook` |
+| `src/palms/utils/notebook_export.py` | **New** — nbformat read/write around derived cells |
+| `src/palms/tabs/_helpers.py` | Replace recorder family with `record_node`; preamble `Path`/`data_path`; compat shim |
+| `src/palms/app.py` | Init/seed graph from session; emit preamble node; stable `analysis.py`/`.ipynb` |
+| `src/palms/utils/session.py` | Serialize/deserialize graph JSON in `viewer_session` |
+| `src/palms/tabs/tab_notebook.py` | Render derived cells; stale badges; Export .ipynb; `restore_session`+`get_cells` |
 | `tab_clustering, tab_nhood, tab_co_occurrence, tab_ligrec, tab_gene_analysis, tab_roi, tab_arms, tab_he_registration, tab_cnv, tab_novae, tab_transcripts, tab_cell_coloring` | Migrate call sites to `record_node`; fix `fig`/determinism/comment-only |
 | `environment.yml` | Add `nbformat` |
 | `CLAUDE.md`, `CHANGELOG.md`, `docs/reproducible_notebook_plan.md` | Docs |

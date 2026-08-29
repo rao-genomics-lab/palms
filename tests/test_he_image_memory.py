@@ -30,12 +30,12 @@ import pytest
 da = pytest.importorskip("dask.array")
 tifffile = pytest.importorskip("tifffile")
 
-from xenium_viewer.utils.raster_io import level_is_computed  # noqa: E402
-from xenium_viewer.utils.registration import (  # noqa: E402
+from palms.utils.raster_io import level_is_computed  # noqa: E402
+from palms.utils.registration import (  # noqa: E402
     describe_pyramid, load_he_pyramid, parse_rgb_image_for_store,
 )
 
-SRC = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+SRC = Path(__file__).resolve().parent.parent / "src" / "palms"
 
 
 def _write_flat_rgb(path, shape=(512, 384, 3), tile=(128, 128)):

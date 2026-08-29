@@ -22,8 +22,8 @@ np = pytest.importorskip("numpy")
 pytest.importorskip("geopandas")
 pytest.importorskip("shapely")
 
-from xenium_viewer.utils import adata_persistence as ap  # noqa: E402
-from xenium_viewer.utils.zarr_safe import JOURNAL_DIR, STAGING_DIR  # noqa: E402
+from palms.utils import adata_persistence as ap  # noqa: E402
+from palms.utils.zarr_safe import JOURNAL_DIR, STAGING_DIR  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +68,7 @@ def test_persist_table_roundtrips_and_leaves_no_debris(tiny_sdata):
 
 
 def test_persist_table_keeps_the_previous_version_recoverable(tiny_sdata):
-    from xenium_viewer.utils.zarr_safe import list_trash
+    from palms.utils.zarr_safe import list_trash
 
     cache = Path(tiny_sdata.path)
     ctx = _ctx(tiny_sdata)
@@ -174,7 +174,7 @@ def test_no_source_file_still_does_delete_then_write():
     bug. Nothing in src/ may reintroduce it."""
     import re
 
-    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+    src = Path(__file__).resolve().parent.parent / "src" / "palms"
     pattern = re.compile(r"delete_element_from_disk\([^)]*\)", re.S)
     offenders = []
     for path in sorted(src.rglob("*.py")):
@@ -204,7 +204,7 @@ def test_restore_is_not_gated_on_a_stored_session():
     """
     import ast
 
-    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "app.py"
+    src = Path(__file__).resolve().parent.parent / "src" / "palms" / "app.py"
     tree = ast.parse(src.read_text(), str(src))
 
     calls = [n for n in ast.walk(tree)
@@ -246,7 +246,7 @@ def test_an_empty_session_never_overwrites_a_stored_registration():
     """
     import re
 
-    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "tabs"
+    src = Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
     for name, element in (("tab_arms.py", "arms_he_image"),
                           ("tab_he_registration.py", "he_image")):
         text = (src / name).read_text()

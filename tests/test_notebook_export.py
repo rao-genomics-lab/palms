@@ -6,8 +6,8 @@ Run with:  pytest tests/test_notebook_export.py
 """
 from __future__ import annotations
 
-from xenium_viewer.utils.prov_graph import ProvGraph, SETUP
-from xenium_viewer.utils import notebook_export
+from palms.utils.prov_graph import ProvGraph, SETUP
+from palms.utils import notebook_export
 
 
 def _graph():
@@ -62,7 +62,7 @@ def _verify_notebook_module():
 
 
 def _customised_graph():
-    from xenium_viewer.utils.prov_graph import TEMPLATE_BLENDED
+    from palms.utils.prov_graph import TEMPLATE_BLENDED
 
     g = _graph()
     g.upsert("clustering:leiden_x", "sc.tl.leiden(adata, resolution=1.0 * 2)",

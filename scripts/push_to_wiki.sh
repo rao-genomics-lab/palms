@@ -2,7 +2,7 @@
 # Push docs/ content to the GitHub Wiki.
 #
 # Prerequisites:
-#   1. Initialize the wiki by visiting https://github.com/sraorao/xenium_viewer/wiki
+#   1. Initialize the wiki by visiting https://github.com/sraorao/palms/wiki
 #      and creating any first page (e.g. titled "Home", any content).
 #   2. Run this script from the repo root.
 #
@@ -12,11 +12,11 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WIKI_DIR="/tmp/xenium_viewer.wiki"
+WIKI_DIR="/tmp/palms.wiki"
 
 echo "Cloning wiki repo..."
 rm -rf "$WIKI_DIR"
-git clone https://github.com/sraorao/xenium_viewer.wiki.git "$WIKI_DIR"
+git clone https://github.com/sraorao/palms.wiki.git "$WIKI_DIR"
 
 echo "Copying docs to wiki..."
 # docs/ doubles as the wiki source, so every .md added there would be published
@@ -55,4 +55,4 @@ git add -A
 git commit -m "Update documentation from docs/ in main repo" || echo "Nothing to commit."
 git push
 
-echo "Done. Wiki updated: https://github.com/sraorao/xenium_viewer/wiki"
+echo "Done. Wiki updated: https://github.com/sraorao/palms/wiki"

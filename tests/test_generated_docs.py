@@ -49,7 +49,7 @@ def test_page_is_not_stale(page: Path):
 # ── Templates ────────────────────────────────────────────────────────────────
 
 def _builtin_ids() -> list[str]:
-    from xenium_viewer.utils.step_templates import loader as registry
+    from palms.utils.step_templates import loader as registry
     return registry.builtin_ids()
 
 
@@ -89,7 +89,7 @@ def test_every_template_body_appears_verbatim():
     mangles the source (a stray indent, a swallowed line) fails here even though
     the freshness test would still pass.
     """
-    from xenium_viewer.utils.step_templates import loader as registry
+    from palms.utils.step_templates import loader as registry
 
     page = (DOCS / "Analysis-Templates.md").read_text()
     for tid in _builtin_ids():

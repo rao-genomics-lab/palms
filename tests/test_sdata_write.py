@@ -52,7 +52,7 @@ def sample_sdata(make_table):
 
 
 def _write_both(sample_sdata, tmp_path, **kwargs):
-    from xenium_viewer.utils import sdata_write
+    from palms.utils import sdata_write
 
     reference, produced = tmp_path / "ref.zarr", tmp_path / "new.zarr"
     with warnings.catch_warnings():
@@ -66,7 +66,7 @@ def _write_both(sample_sdata, tmp_path, **kwargs):
 def test_matches_spatialdata_write(sample_sdata, tmp_path):
     np = pytest.importorskip("numpy")
     from spatialdata import read_zarr
-    from xenium_viewer.utils import sdata_write
+    from palms.utils import sdata_write
 
     reference, produced = _write_both(sample_sdata, tmp_path)
     with warnings.catch_warnings():
@@ -92,7 +92,7 @@ def test_matches_spatialdata_write(sample_sdata, tmp_path):
 
 
 def test_reports_progress_for_every_element(sample_sdata, tmp_path):
-    from xenium_viewer.utils import sdata_write
+    from palms.utils import sdata_write
 
     seen = []
     _write_both(sample_sdata, tmp_path,
@@ -108,7 +108,7 @@ def test_reports_progress_for_every_element(sample_sdata, tmp_path):
 
 def test_sets_path_and_consolidates_like_write(sample_sdata, tmp_path):
     from spatialdata import read_zarr
-    from xenium_viewer.utils import sdata_write
+    from palms.utils import sdata_write
 
     sdata = sample_sdata()
     assert sdata.path is None
@@ -129,7 +129,7 @@ def test_failure_restores_the_original_path(sample_sdata, tmp_path, monkeypatch)
     is about to be deleted.
     """
     from spatialdata import SpatialData
-    from xenium_viewer.utils import sdata_write
+    from palms.utils import sdata_write
 
     sdata = sample_sdata()
     sdata.path = tmp_path / "original.zarr"
@@ -149,7 +149,7 @@ def test_failure_restores_the_original_path(sample_sdata, tmp_path, monkeypatch)
 def test_writing_points_sdata_at_the_destination(sample_sdata, tmp_path):
     """``sdata.path`` follows the write — which is what makes the loader's
     post-rename fixup necessary; see the source guard below."""
-    from xenium_viewer.utils import sdata_write, zarr_safe
+    from palms.utils import sdata_write, zarr_safe
 
     staging = tmp_path / ".sdata_cached__building.zarr"
     sdata = sample_sdata()
@@ -178,7 +178,7 @@ def test_loader_repoints_sdata_after_renaming_staging_into_place():
     import inspect
     import textwrap
 
-    from xenium_viewer import loader
+    from palms import loader
 
     tree = ast.parse(textwrap.dedent(inspect.getsource(loader.load_sdata)))
     renamed_at = repointed_at = None
@@ -238,8 +238,8 @@ def test_reopen_returns_arrays_that_are_read_rather_than_recomputed(
     each level is an array on disk, which shows up as one task per chunk.
     """
     pytest.importorskip("spatialdata")
-    from xenium_viewer import loader
-    from xenium_viewer.utils import sdata_write
+    from palms import loader
+    from palms.utils import sdata_write
 
     cache = tmp_path / "sdata_cached.zarr"
     built = sample_sdata()
@@ -274,7 +274,7 @@ def test_reopen_falls_back_to_the_in_memory_dataset(sample_sdata, tmp_path,
     pytest.importorskip("spatialdata")
     from pathlib import Path
 
-    from xenium_viewer import loader
+    from palms import loader
 
     def _boom(_path):
         raise RuntimeError("nope")
@@ -291,7 +291,7 @@ def test_reopen_falls_back_to_the_in_memory_dataset(sample_sdata, tmp_path,
 
 def test_element_names_matches_gen_elements(sample_sdata):
     """The order elements are written in is spatialdata's, not ours."""
-    from xenium_viewer.utils import sdata_write
+    from palms.utils import sdata_write
 
     sdata = sample_sdata()
     assert sdata_write.element_names(sdata) == [
@@ -301,7 +301,7 @@ def test_element_names_matches_gen_elements(sample_sdata):
 
 def test_write_workers_is_shared_with_crop_export():
     """One bounded write path, not two that can drift apart."""
-    from xenium_viewer.utils import crop_export, sdata_write
+    from palms.utils import crop_export, sdata_write
 
     assert crop_export._TRANSCRIPT_WRITE_WORKERS == sdata_write.WRITE_WORKERS
 
@@ -315,7 +315,7 @@ def test_images_keep_the_default_scheduler_width():
     transcript partition is ~150 MB. If someone adds "images" here, they should
     have a measurement saying why.
     """
-    from xenium_viewer.utils import sdata_write
+    from palms.utils import sdata_write
 
     assert set(sdata_write.ELEMENT_WORKERS) == {"labels", "points"}
 
@@ -325,7 +325,7 @@ def test_images_keep_the_default_scheduler_width():
 ])
 def test_scheduler_is_bounded_only_where_declared(element_type, expected):
     import dask
-    from xenium_viewer.utils import sdata_write
+    from palms.utils import sdata_write
 
     with sdata_write._scheduler_for(element_type):
         assert dask.config.get("num_workers", None) == expected

@@ -18,8 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from xenium_viewer.utils.step_templates import Preview, builtin_ids, builtin_spec
-from xenium_viewer.utils.steps import Step
+from palms.utils.step_templates import Preview, builtin_ids, builtin_spec
+from palms.utils.steps import Step
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def ctx():
 
 @pytest.fixture
 def tab(qapp, ctx):
-    from xenium_viewer.tabs.tab_templates import build_tab
+    from palms.tabs.tab_templates import build_tab
     widget, exports = build_tab(ctx)
     return widget, exports
 
@@ -61,7 +61,7 @@ def test_templates_are_grouped_by_owner(tab):
 
 def test_the_preview_is_the_real_rendered_source(ctx):
     """Not a reconstruction: identical to what StepExecutor would compile."""
-    from xenium_viewer.tabs.tab_templates import _preview
+    from palms.tabs.tab_templates import _preview
 
     spec = builtin_spec("clustering.leiden")
     assembly = spec.assemblies[0]
@@ -75,7 +75,7 @@ def test_the_preview_is_the_real_rendered_source(ctx):
 
 def test_a_live_tab_supplies_the_real_widget_values(ctx):
     """When the owning tab registers a provider, the preview uses it."""
-    from xenium_viewer.tabs.tab_templates import _preview
+    from palms.tabs.tab_templates import _preview
 
     spec = builtin_spec("clustering.leiden")
     ctx.state["template_preview"] = {
@@ -96,7 +96,7 @@ def test_the_provider_chooses_the_blocks_not_just_the_values(ctx):
     while the code stayed the same. Block selection lives at the call site by
     design, which is exactly why the provider has to carry it.
     """
-    from xenium_viewer.tabs.tab_templates import _preview
+    from palms.tabs.tab_templates import _preview
 
     spec = builtin_spec("clustering.leiden")
     without_hvg = ["head", "tail"]
@@ -116,7 +116,7 @@ def test_the_provider_chooses_the_blocks_not_just_the_values(ctx):
 
 def test_a_note_names_the_value_that_is_not_settled_yet(ctx):
     """A path the save dialog has not returned must not read as a real one."""
-    from xenium_viewer.tabs.tab_templates import _preview
+    from palms.tabs.tab_templates import _preview
 
     spec = builtin_spec("roi.export_expression")
     blocks = list(spec.blocks)
@@ -131,7 +131,7 @@ def test_a_note_names_the_value_that_is_not_settled_yet(ctx):
 
 def test_a_broken_provider_does_not_break_the_view(ctx):
     """A half-built tab must degrade to sample values, not raise into the GUI."""
-    from xenium_viewer.tabs.tab_templates import _preview
+    from palms.tabs.tab_templates import _preview
 
     spec = builtin_spec("clustering.leiden")
     ctx.state["template_preview"] = {
@@ -144,7 +144,7 @@ def test_a_broken_provider_does_not_break_the_view(ctx):
 
 def test_a_provider_naming_an_unknown_block_reports_rather_than_raises(ctx):
     """An override may drop a block the call site still selects."""
-    from xenium_viewer.tabs.tab_templates import _preview
+    from palms.tabs.tab_templates import _preview
 
     spec = builtin_spec("clustering.leiden")
     ctx.state["template_preview"] = {
@@ -176,7 +176,7 @@ def _tab_sources() -> dict[str, str]:
     """Every tab module's source, by module name."""
     import pkgutil
 
-    from xenium_viewer import tabs
+    from palms import tabs
 
     out = {}
     for info in pkgutil.iter_modules(tabs.__path__):
@@ -413,7 +413,7 @@ def live_providers(qapp, stub_ctx):
 
     held = []
     for name in _PROVIDER_TABS:
-        module = importlib.import_module(f"xenium_viewer.tabs.{name}")
+        module = importlib.import_module(f"palms.tabs.{name}")
         held.append(module.build_tab(stub_ctx))
     return stub_ctx.state.get("template_preview", {}), held
 
@@ -474,8 +474,8 @@ def test_toggling_a_real_widget_changes_the_previews_shape(ctx, qapp, stub_ctx):
     """
     from qtpy.QtWidgets import QCheckBox
 
-    from xenium_viewer.tabs import tab_clustering
-    from xenium_viewer.tabs.tab_templates import _preview
+    from palms.tabs import tab_clustering
+    from palms.tabs.tab_templates import _preview
 
     held, _exports = tab_clustering.build_tab(stub_ctx)  # held: Qt collects it
     spec = builtin_spec("clustering.leiden")
@@ -513,7 +513,7 @@ def test_a_provider_renders_the_template_it_selected(ctx, live_providers):
     Not sample values, and not an error message — the two things the pane shows
     when something upstream has gone wrong.
     """
-    from xenium_viewer.tabs.tab_templates import _preview
+    from palms.tabs.tab_templates import _preview
 
     providers, _held = live_providers
     ctx.state["template_preview"] = providers
@@ -528,7 +528,7 @@ def test_a_provider_renders_the_template_it_selected(ctx, live_providers):
 
 
 def test_the_contract_block_reports_the_declared_interface(tab):
-    from xenium_viewer.tabs.tab_templates import _contract_text
+    from palms.tabs.tab_templates import _contract_text
 
     spec = builtin_spec("roi.expression")
     text = _contract_text(spec)
@@ -539,7 +539,7 @@ def test_the_contract_block_reports_the_declared_interface(tab):
 
 def test_a_frozen_block_says_so(tab):
     """The Arrow shim is not editable; the view has to make that visible."""
-    from xenium_viewer.tabs.tab_templates import _contract_text
+    from palms.tabs.tab_templates import _contract_text
 
     text = _contract_text(builtin_spec("genes.cnv_infercnv"))
     assert "frozen    : arrow_shim" in text
@@ -586,7 +586,7 @@ def editable(qapp, tmp_path, monkeypatch):
     reader does not look. Before that, these tests wrote into the developer's
     actual ``~/.config``.
     """
-    from xenium_viewer.utils.step_templates import (
+    from palms.utils.step_templates import (
         TEMPLATE_PATH_ENV, clear_cache, user_template_dir,
     )
 
@@ -594,7 +594,7 @@ def editable(qapp, tmp_path, monkeypatch):
     clear_cache()
     assert user_template_dir() == tmp_path, "saves must be redirected too"
 
-    from xenium_viewer.tabs.tab_templates import build_tab
+    from palms.tabs.tab_templates import build_tab
     widget, _ = build_tab(SimpleNamespace(state={}))
     yield widget, tmp_path
     clear_cache()
@@ -630,7 +630,7 @@ def test_the_editor_round_trips_every_template_body(template_id):
     block name, so editing the CNV Arrow shim silently created a new block
     instead of modifying the protected one.
     """
-    from xenium_viewer.tabs.tab_templates import blocks_to_text, text_to_blocks
+    from palms.tabs.tab_templates import blocks_to_text, text_to_blocks
 
     spec = builtin_spec(template_id)
     assert text_to_blocks(blocks_to_text(spec)) == {
@@ -649,12 +649,12 @@ def test_validate_reports_a_broken_edit_without_saving(editable):
 
 
 def test_saving_a_valid_edit_activates_it(editable):
-    from xenium_viewer.utils.step_templates import resolve
+    from palms.utils.step_templates import resolve
 
     widget, tmp_path = editable
     _select(widget)
     spec = builtin_spec("clustering.leiden")
-    from xenium_viewer.tabs.tab_templates import blocks_to_text
+    from palms.tabs.tab_templates import blocks_to_text
     edited = blocks_to_text(spec).replace("max_value=10", "max_value=99")
     _editor(widget).setPlainText(edited)
 
@@ -670,11 +670,11 @@ def test_saving_a_valid_edit_activates_it(editable):
 
 def test_saving_a_broken_edit_keeps_the_text_but_does_not_activate(editable):
     """Never refuse the write; gate activation instead."""
-    from xenium_viewer.utils.step_templates import resolve
+    from palms.utils.step_templates import resolve
 
     widget, tmp_path = editable
     _select(widget)
-    from xenium_viewer.tabs.tab_templates import blocks_to_text
+    from palms.tabs.tab_templates import blocks_to_text
     spec = builtin_spec("clustering.leiden")
     _editor(widget).setPlainText(
         blocks_to_text(spec).replace("sc.pp.scale(adata_leiden, max_value=10)",
@@ -689,11 +689,11 @@ def test_saving_a_broken_edit_keeps_the_text_but_does_not_activate(editable):
 
 
 def test_reverting_removes_the_override(editable):
-    from xenium_viewer.utils.step_templates import resolve
+    from palms.utils.step_templates import resolve
 
     widget, tmp_path = editable
     _select(widget)
-    from xenium_viewer.tabs.tab_templates import blocks_to_text
+    from palms.tabs.tab_templates import blocks_to_text
     spec = builtin_spec("clustering.leiden")
     _editor(widget).setPlainText(
         blocks_to_text(spec).replace("max_value=10", "max_value=99"))

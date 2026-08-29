@@ -10,7 +10,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from xenium_viewer.utils.gene_analysis import (
+from palms.utils.gene_analysis import (
     parse_llm_annotation_response, build_llm_annotation_prompt, _build_label_mapping,
 )
 

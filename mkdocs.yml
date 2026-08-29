@@ -1,8 +1,8 @@
-site_name: Xenium Viewer Documentation
+site_name: PALMS Documentation
 site_description: napari-based spatial transcriptomics viewer for Xenium 3.x output
-site_url: https://xenium-viewer.readthedocs.io
-repo_url: https://github.com/sraorao/xenium_viewer
-repo_name: sraorao/xenium_viewer
+site_url: https://palms.readthedocs.io
+repo_url: https://github.com/sraorao/palms
+repo_name: sraorao/palms
 
 docs_dir: docs
 

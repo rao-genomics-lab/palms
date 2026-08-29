@@ -17,8 +17,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from xenium_viewer.utils import reporting  # noqa: E402
-from xenium_viewer.utils.reporting import (  # noqa: E402
+from palms.utils import reporting  # noqa: E402
+from palms.utils.reporting import (  # noqa: E402
     LOG_FILENAME, classify, failure_summary, failures, get_logger,
     report_write_failure, reset_failures, setup_logging,
 )
@@ -45,7 +45,7 @@ def test_setup_creates_a_log_beside_the_dataset(tmp_path):
 
 def test_warnings_reach_the_file(tmp_path):
     setup_logging(tmp_path)
-    get_logger("xenium_viewer.tests").warning("could not persist adata table: disk full")
+    get_logger("palms.tests").warning("could not persist adata table: disk full")
     assert "disk full" in (tmp_path / LOG_FILENAME).read_text()
 
 
@@ -75,7 +75,7 @@ def test_switching_datasets_moves_the_log(tmp_path):
     setup_logging(first)
     setup_logging(second)
 
-    get_logger("xenium_viewer.tests").warning("after the switch")
+    get_logger("palms.tests").warning("after the switch")
     assert "after the switch" in (second / LOG_FILENAME).read_text()
     assert "after the switch" not in (first / LOG_FILENAME).read_text()
 
@@ -92,7 +92,7 @@ def test_a_read_only_dataset_directory_is_not_fatal(tmp_path, monkeypatch):
     )
     assert setup_logging(tmp_path) is None
     # console logging still works
-    get_logger("xenium_viewer.tests").warning("still reported")
+    get_logger("palms.tests").warning("still reported")
 
 
 def test_the_log_lives_outside_the_zarr_store(tmp_path):
@@ -175,7 +175,7 @@ def test_headless_platforms_are_recognised(monkeypatch, platform, headless):
     by asserting a loop is running — otherwise every case would be True and the
     parametrization would prove nothing.
     """
-    import xenium_viewer.utils.reporting as reporting
+    import palms.utils.reporting as reporting
 
     monkeypatch.setenv("QT_QPA_PLATFORM", platform)
     monkeypatch.setattr(reporting, "_event_loop_running", lambda: True)
@@ -196,7 +196,7 @@ def test_a_display_without_an_event_loop_is_still_headless(monkeypatch, qapp):
     The precondition that matters is not "is there a screen" but "is anyone
     processing events".
     """
-    import xenium_viewer.utils.reporting as reporting
+    import palms.utils.reporting as reporting
 
     monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
     assert reporting._event_loop_running() is False
@@ -211,7 +211,7 @@ def test_a_real_event_loop_is_detected(monkeypatch, qapp):
     """
     from qtpy.QtCore import QTimer
 
-    import xenium_viewer.utils.reporting as reporting
+    import palms.utils.reporting as reporting
 
     monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
     seen = {}
@@ -234,7 +234,7 @@ def test_the_loop_check_is_conservative_when_qt_cannot_answer(monkeypatch):
     Suppressing wrongly means the user is told nothing about a save that did not
     happen; showing wrongly means a dialog they did not need. Prefer the dialog.
     """
-    import xenium_viewer.utils.reporting as reporting
+    import palms.utils.reporting as reporting
 
     class _Boom:
         @staticmethod
@@ -257,7 +257,7 @@ def test_no_modal_is_raised_when_qt_is_headless(tmp_path, monkeypatch, qapp):
     """
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     import qtpy.QtWidgets as qtw
-    import xenium_viewer.utils.reporting as reporting
+    import palms.utils.reporting as reporting
 
     constructed = []
 
@@ -343,7 +343,7 @@ def test_a_recording_failure_never_raises_a_modal(tmp_path, monkeypatch, qapp):
 
 def test_the_recorder_does_not_fall_back_to_warnings(tmp_path):
     """Source guard: ``warnings.warn`` in the recorder is what this replaces."""
-    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+    src = Path(__file__).resolve().parent.parent / "src" / "palms"
     text = (src / "tabs" / "_helpers.py").read_text()
     assert "warnings.warn" not in text
 
@@ -351,7 +351,7 @@ def test_the_recorder_does_not_fall_back_to_warnings(tmp_path):
 # ── the shim keeps old call sites working ────────────────────────────────────
 
 def test_permission_dialog_shim_routes_to_the_reporter(tmp_path):
-    from xenium_viewer.utils.adata_persistence import _maybe_show_permission_dialog
+    from palms.utils.adata_persistence import _maybe_show_permission_dialog
 
     setup_logging(tmp_path)
     _maybe_show_permission_dialog(PermissionError("legacy path"), "ROI shapes")
@@ -364,7 +364,7 @@ def test_no_persistence_module_still_prints_warnings_instead_of_logging():
     """Source guard: cache write paths must log, so the file captures them."""
     import re
 
-    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+    src = Path(__file__).resolve().parent.parent / "src" / "palms"
     offenders = []
     for name in ("utils/adata_persistence.py", "utils/session.py"):
         text = (src / name).read_text()

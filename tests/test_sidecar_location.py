@@ -26,7 +26,7 @@ pytest.importorskip("spatialdata")
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from xenium_viewer.utils.adata_persistence import (  # noqa: E402
+from palms.utils.adata_persistence import (  # noqa: E402
     ARMS_DEG_CACHE, ROI_DEG_CACHE, SIDECAR_DIRNAME, find_sidecar, glob_sidecars,
     load_arms_tile_deg_from_sdata, load_roi_deg_from_sdata,
     save_arms_tile_deg_to_sdata, save_roi_deg_to_sdata, sidecar_dir,
@@ -125,7 +125,7 @@ def test_glob_finds_both_locations_with_the_new_one_winning(tiny_sdata):
 
 def test_new_sidecars_do_not_make_consolidation_warn(tiny_sdata):
     """The store root is where the ZarrUserWarnings came from."""
-    from xenium_viewer.utils.zarr_safe import consolidate
+    from palms.utils.zarr_safe import consolidate
 
     ctx = _ctx(tiny_sdata)
     save_roi_deg_to_sdata(ctx, _df())
@@ -150,7 +150,7 @@ def test_a_cache_rebuild_cannot_destroy_them(tiny_sdata):
 
 def test_legacy_sidecars_still_count_as_user_data_at_stake(tmp_path):
     """A rebuild must still warn about CNV results left in the old location."""
-    from xenium_viewer.loader import _detect_user_data, _has_any_user_data
+    from palms.loader import _detect_user_data, _has_any_user_data
 
     cache = tmp_path / "sdata_cached.zarr"
     cache.mkdir()
@@ -159,7 +159,7 @@ def test_legacy_sidecars_still_count_as_user_data_at_stake(tmp_path):
 
 
 def test_new_location_sidecars_are_reported_too(tmp_path):
-    from xenium_viewer.loader import _detect_user_data
+    from palms.loader import _detect_user_data
 
     cache = tmp_path / "sdata_cached.zarr"
     cache.mkdir()
@@ -174,7 +174,7 @@ def test_no_writer_targets_the_store_root_any_more():
     """Source guard: sidecar writes must go through the sidecar helpers."""
     import re
 
-    src = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer"
+    src = Path(__file__).resolve().parent.parent / "src" / "palms"
     pattern = re.compile(
         r"Path\((?:ctx\.)?sdata\.path\)\s*/\s*[\"'f]?[^\"')]*"
         r"(?:\.h5ad|\.parquet|_result\.json)")

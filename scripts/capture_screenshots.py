@@ -1,9 +1,16 @@
 #!/usr/bin/env python
 """
-Automated screenshot capture for xenium_viewer wiki documentation.
+Automated screenshot capture for palms wiki documentation.
 
 Run with:
-    conda run -n xenium_viewer python scripts/capture_screenshots.py
+    conda run -n palms python scripts/capture_screenshots.py /path/to/xenium/output
+    PALMS_SCREENSHOT_DATASET=/path/to/xenium/output \
+        conda run -n palms python scripts/capture_screenshots.py
+
+The dataset is an argument rather than a constant because these screenshots are
+published: two of the panels (Tools > Dataset, Tools > Cache) print the dataset
+path into the widget, so whatever is passed here ends up legible in docs/ and on
+the wiki. Point it at a dataset whose path you are willing to publish.
 
 Saves PNGs to docs/screenshots/ and exits when done.
 """
@@ -12,11 +19,23 @@ import sys
 import time
 from pathlib import Path
 
-DATASET = Path(
-    "/media/srao/InternalBac2/jinsen"
-    "/output-XETG00160__0032831__Region_1__20240918__163546"
-)
 SCREENSHOTS = Path(__file__).parent.parent / "docs/screenshots"
+
+
+def _dataset_from_args() -> Path:
+    """Dataset path from argv[1], else $PALMS_SCREENSHOT_DATASET."""
+    raw = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PALMS_SCREENSHOT_DATASET")
+    if not raw:
+        sys.exit(
+            "error: no dataset given.\n"
+            "  usage: python scripts/capture_screenshots.py /path/to/xenium/output\n"
+            "     or: PALMS_SCREENSHOT_DATASET=/path/to/xenium/output "
+            "python scripts/capture_screenshots.py"
+        )
+    path = Path(raw).expanduser()
+    if not path.is_dir():
+        sys.exit(f"error: not a directory: {path}")
+    return path
 
 os.environ.setdefault("DISPLAY", ":0")
 
@@ -165,12 +184,16 @@ def capture_all(viewer, dock, panel):
 
 
 def main():
+    # Resolve the dataset before the napari import: a missing argument should
+    # fail in a second, not after a ten-second Qt/scanpy import.
+    dataset = _dataset_from_args()
+
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
     import napari
     from qtpy.QtCore import QTimer
     # Import internal helpers — these are private but stable across the codebase
-    from xenium_viewer.app import _do_full_init  # noqa: PLC2701
+    from palms.app import _do_full_init  # noqa: PLC2701
 
     _app = {
         "dock_widget": None,
@@ -179,11 +202,11 @@ def main():
         "reload_in_progress": False,
     }
 
-    viewer = napari.Viewer(title="Xenium Viewer — Screenshot Capture")
+    viewer = napari.Viewer(title="PALMS — Screenshot Capture")
     viewer.window.resize(1400, 900)
 
-    print(f"Loading dataset: {DATASET}")
-    _do_full_init(viewer, DATASET, no_cache=False, _app=_app)
+    print(f"Loading dataset: {dataset}")
+    _do_full_init(viewer, dataset, no_cache=False, _app=_app)
 
     dock = _app["dock_widget"]
     # The dock wraps the outer QTabWidget (5 top-level groups)

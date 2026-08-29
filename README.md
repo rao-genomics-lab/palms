@@ -1,12 +1,16 @@
-# xenium_viewer
+# PALMS
 
-![CI](https://github.com/sraorao/xenium_viewer/actions/workflows/ci.yml/badge.svg)
+**P**rovenance-**A**ware **L**inking of **M**ultimodal **S**patial-omics
+
+![CI](https://github.com/sraorao/palms/actions/workflows/ci.yml/badge.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 
-A napari-based spatial transcriptomics viewer for 10x Genomics Xenium 3.x output —
-an open alternative to the commercial Xenium Explorer, which does not ship a Linux
-build. Runs on Linux, macOS and WSL2. Visualises high-resolution spatial gene
+A napari-based viewer that brings spatial transcriptomics, histology and genomic
+overlays into one coordinate space — and records every action you take as
+replayable code. It reads 10x Genomics Xenium 3.x output, and is an open
+alternative to the commercial Xenium Explorer, which does not ship a Linux build.
+Runs on Linux, macOS and WSL2. Visualises high-resolution spatial gene
 expression at cell-level resolution with:
 
 - **Cell visualisation** — colour by gene expression, cluster, or metadata; load
@@ -29,14 +33,14 @@ The viewer pulls in a heavy scientific stack (napari, scanpy, squidpy, spatialda
 zarr, dask, Qt). The recommended way to install is via conda:
 
 ```bash
-git clone https://github.com/sraorao/xenium_viewer.git
-cd xenium_viewer
+git clone https://github.com/sraorao/palms.git
+cd palms
 
 ./scripts/install.sh
-conda activate xenium_viewer
+conda activate palms
 ```
 
-The env file installs the core stack via conda-forge and `xenium-viewer` itself
+The env file installs the core stack via conda-forge and `palms` itself
 in editable mode, so source edits in this checkout are picked up immediately.
 It also installs the CNV inference stack (`infercnvpy` and `insitucnv`), so the
 CNV tab's **inferCNV** backend works out of the box — no extra step needed.
@@ -49,7 +53,7 @@ does not solve on macOS at all. If you prefer to run conda yourself:
 
 ```bash
 conda env create -f environment.yml                              # all platforms
-conda env update -n xenium_viewer -f environment-linux.yml       # Linux/WSL only
+conda env update -n palms -f environment-linux.yml       # Linux/WSL only
 ```
 
 Skipping the second line on Linux is not silent: the viewer checks for it at
@@ -59,7 +63,7 @@ startup and tells you what to run.
 
 Several features depend on heavier or more niche packages that aren't installed
 by default. Add them on top of the core install, after `conda activate
-xenium_viewer`:
+palms`:
 
 ```bash
 pip install -e ".[celltypist]"   # CellTypist label transfer (Rank Genes tab)
@@ -89,7 +93,7 @@ python 3.11 and so cannot coexist with the main env's python 3.12. It therefore
 lives in a second environment:
 
 ```bash
-conda env create -f environment-copykat.yml   # creates 'xenium_viewer_copykat'
+conda env create -f environment-copykat.yml   # creates 'palms_copykat'
 ```
 
 **Linux only.** This env is not solvable on Apple Silicon: `r-dlm` (a CopyKAT
@@ -99,8 +103,8 @@ builds. inferCNV runs in the main env and is unaffected on every platform.
 The viewer finds that environment by name and launches CopyKAT there as a
 detached background job, which survives the GUI closing. The `copykat` R package
 itself is GitHub-only and installs automatically on first run. To point the
-viewer at a differently-named environment, set `XENIUM_COPYKAT_ENV` (env name) or
-`XENIUM_COPYKAT_PYTHON` (full path to its python).
+viewer at a differently-named environment, set `PALMS_COPYKAT_ENV` (env name) or
+`PALMS_COPYKAT_PYTHON` (full path to its python).
 
 Skip this entirely if you only need inferCNV.
 
@@ -110,49 +114,49 @@ To wipe the environment and start fresh (e.g. after a dependency conflict or a
 major update), remove the old environment, re-clone the repo, and reinstall:
 
 ```bash
-conda env remove -n xenium_viewer
+conda env remove -n palms
 
-git clone https://github.com/sraorao/xenium_viewer.git
-cd xenium_viewer
+git clone https://github.com/sraorao/palms.git
+cd palms
 ./scripts/install.sh
-conda activate xenium_viewer
+conda activate palms
 ```
 
 ## Usage
 
 ```bash
 # Launch the viewer (file dialog opens if no path given)
-xenium-viewer [/path/to/xenium/output]
+palms [/path/to/xenium/output]
 
 # One-time per-gene transcript preprocessing (~30–60 min, ~1 GB output)
 # Produces transcript_cache/ next to the dataset, used for fast gene loading.
-xenium-preprocess /path/to/xenium/output
+palms-preprocess /path/to/xenium/output
 
 # Build the SpatialData zarr cache without starting the GUI (tens of minutes).
 # The viewer does this on first launch anyway; this is how to get it out of the
 # way over ssh or overnight. `--check` reports on an existing cache instead.
-xenium-build-cache /path/to/xenium/output
+palms-build-cache /path/to/xenium/output
 
 # Skip the SpatialData zarr cache (force reload from raw output)
-xenium-viewer /path/to/xenium/output --no-cache
+palms /path/to/xenium/output --no-cache
 ```
 
 Console scripts shipped:
 
 | Command                            | Purpose                                                      |
 | ---------------------------------- | ------------------------------------------------------------ |
-| `xenium-viewer`                    | Launch the GUI                                               |
-| `xenium-preprocess`                | Build the per-gene transcript feather cache (run once)       |
-| `xenium-build-cache`               | Build/inspect the SpatialData zarr cache without the GUI     |
-| `xenium-fetch-references`          | Download public scRNA-seq references for label transfer      |
-| `xenium-build-custom-segmentation` | Build custom segmentation assets from Seurat extract output  |
+| `palms`                    | Launch the GUI                                               |
+| `palms-preprocess`                | Build the per-gene transcript feather cache (run once)       |
+| `palms-build-cache`               | Build/inspect the SpatialData zarr cache without the GUI     |
+| `palms-fetch-references`          | Download public scRNA-seq references for label transfer      |
+| `palms-build-custom-segmentation` | Build custom segmentation assets from Seurat extract output  |
 
-You can also invoke the package directly: `python -m xenium_viewer ...`.
+You can also invoke the package directly: `python -m palms ...`.
 
 ## Repo layout
 
 ```
-src/xenium_viewer/          # the installable package
+src/palms/          # the installable package
 ├── app.py                  # main GUI entry point (~1800 lines)
 ├── loader.py               # SpatialData loader with zarr cache
 ├── preprocess.py           # transcript feather cache builder
@@ -185,7 +189,7 @@ reference_datasets/                 # fetched scRNA-seq references + metadata
 
 ## Documentation
 
-Full documentation with screenshots is available on the [GitHub Wiki](https://github.com/sraorao/xenium_viewer/wiki).
+Full documentation with screenshots is available on the [GitHub Wiki](https://github.com/sraorao/palms/wiki).
 
 - `CLAUDE.md` — architecture overview and developer notes
 - `CHANGELOG.md` — release history

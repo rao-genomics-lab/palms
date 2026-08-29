@@ -70,13 +70,13 @@ The viewer adds three menus to napari's own menu bar.
 | Item | Description |
 |------|-------------|
 | Open Dataset... (Ctrl+O) | Close the current dataset and open another. The session is saved first. |
-| Preprocess Dataset... | Run the one-time per-gene transcript preprocessing on a dataset, the same work `xenium-preprocess` does from the command line. |
+| Preprocess Dataset... | Run the one-time per-gene transcript preprocessing on a dataset, the same work `palms-preprocess` does from the command line. |
 
 ### View
 
 | Item | Description |
 |------|-------------|
-| Show Xenium Controls (Ctrl+Shift+X) | Show or hide the control panel dock. On by default. |
+| Show Controls (Ctrl+Shift+X) | Show or hide the control panel dock. On by default. |
 | Show Minimap | Show or hide the overview minimap. Off, and disabled until a minimap exists. |
 | Show Plots (Ctrl+Shift+P) | Show or hide the [Plots](Plots-Window) dock, where every figure the viewer produces is collected. Off until the first plot, which reveals it. |
 
@@ -156,4 +156,4 @@ Your analyses are automatically saved to `sdata_cached.zarr/viewer_session/` wit
 
 No explicit save action is required; the session is written whenever a relevant action is performed.
 
-Larger derived results are written beside the store rather than inside it, in `<dataset>/viewer_cache/` — normalised expression, CNV profiles, cached DEG tables and the provenance graph. Keeping them out of the zarr store means rebuilding the cache does not discard hours of computation. Generated figures go to `<dataset>/plots/`, and the session log to `<dataset>/xenium_viewer.log`. All of these are listed, with their sizes, in the [Dataset](Tab-Dataset) tab.
+Larger derived results are written beside the store rather than inside it, in `<dataset>/viewer_cache/` — normalised expression, CNV profiles, cached DEG tables and the provenance graph. Keeping them out of the zarr store means rebuilding the cache does not discard hours of computation. Generated figures go to `<dataset>/plots/`, and the session log to `<dataset>/palms.log`. All of these are listed, with their sizes, in the [Dataset](Tab-Dataset) tab.

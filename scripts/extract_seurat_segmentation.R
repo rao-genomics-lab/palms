@@ -169,4 +169,4 @@ write.csv(meta, file.path(output_dir, "cell_metadata.csv"), row.names = FALSE, q
 message(sprintf("Metadata saved: %d cells, %d columns", nrow(meta), ncol(meta)))
 
 message("Stage 1 complete.")
-message(sprintf("Next step: conda activate xenium_viewer && python scripts/build_custom_segmentation.py <xenium_dir> %s", output_dir))
+message(sprintf("Next step: conda activate palms && python scripts/build_custom_segmentation.py <xenium_dir> %s", output_dir))

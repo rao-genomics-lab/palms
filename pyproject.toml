@@ -3,14 +3,18 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "xenium-viewer"
+name = "palms"
 version = "0.1.0"
-description = "napari-based spatial transcriptomics viewer for Xenium 3.x output (open alternative to Xenium Explorer, which has no Linux build)"
+description = "PALMS (Provenance-Aware Linking of Multimodal Spatial-omics) — a napari-based viewer that brings spatial transcriptomics, histology and genomic overlays into one coordinate space, and records every action as replayable code"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Srinivasa Rao Rao" }]
-keywords = ["xenium", "spatial-transcriptomics", "napari", "single-cell", "10x"]
+keywords = [
+    "xenium", "spatial-transcriptomics", "spatial-omics", "multimodal",
+    "histopathology", "image-registration", "provenance", "reproducibility",
+    "napari", "single-cell", "10x",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: X11 Applications :: Qt",
@@ -72,10 +76,10 @@ cnv = [
     "infercnvpy>=0.6.0",
     "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git",
 ]
-full = ["xenium-viewer[celltypist,r,gpu,references,cnv]"]
+full = ["palms[celltypist,r,gpu,references,cnv]"]
 # Dev only, and deliberately out of `full` and environment.yml: `--mcp` starts an
 # unauthenticated localhost server that executes arbitrary Python in the viewer
-# process. Alpha software with loose pins; see src/xenium_viewer/dev_mcp.py.
+# process. Alpha software with loose pins; see src/palms/dev_mcp.py.
 #
 # fastmcp is pinned below 3.0 because napari-mcp declares only `fastmcp>=2.10.3`
 # while reaching into `FastMCP._tool_manager._tools` (bridge_server.py drops
@@ -89,24 +93,24 @@ mcp = ["napari-mcp>=0.1.0", "fastmcp>=2.10.3,<3"]
 # The replay tests execute an exported notebook in a real kernel, so the test
 # extra carries nbclient/ipykernel as well as pytest.
 test = ["pytest", "nbformat", "nbclient", "ipykernel"]
-dev = ["xenium-viewer[test]", "ruff"]
+dev = ["palms[test]", "ruff"]
 
 [project.scripts]
-xenium-viewer = "xenium_viewer.app:main"
-xenium-preprocess = "xenium_viewer.preprocess:main"
-xenium-build-cache = "xenium_viewer.loader:main"
-xenium-rename-dataset = "xenium_viewer.scripts.rename_dataset:main"
-xenium-fetch-references = "xenium_viewer.scripts.fetch_reference_datasets:main"
-xenium-build-custom-segmentation = "xenium_viewer.scripts.build_custom_segmentation:main"
+palms = "palms.app:main"
+palms-preprocess = "palms.preprocess:main"
+palms-build-cache = "palms.loader:main"
+palms-rename-dataset = "palms.scripts.rename_dataset:main"
+palms-fetch-references = "palms.scripts.fetch_reference_datasets:main"
+palms-build-custom-segmentation = "palms.scripts.build_custom_segmentation:main"
 
 [project.urls]
-Homepage = "https://github.com/sraorao/xenium_viewer"
-Repository = "https://github.com/sraorao/xenium_viewer"
-Issues = "https://github.com/sraorao/xenium_viewer/issues"
+Homepage = "https://github.com/sraorao/palms"
+Repository = "https://github.com/sraorao/palms"
+Issues = "https://github.com/sraorao/palms/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]        # import xenium_viewer.* without installing the package
+pythonpath = ["src"]        # import palms.* without installing the package
 addopts = "-q"
 
 # The optional `cnv` extra pins insitucnv via a git URL (a direct reference).
@@ -117,11 +121,11 @@ addopts = "-q"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/xenium_viewer"]
+packages = ["src/palms"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/xenium_viewer",
+    "src/palms",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",

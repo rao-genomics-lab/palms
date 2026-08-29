@@ -25,7 +25,7 @@ from string import Template
 
 import pytest
 
-_TABS = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "tabs"
+_TABS = Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
 _TAB_SOURCES = sorted(_TABS.glob("*.py"))
 
 
@@ -107,7 +107,7 @@ def test_every_variant_of_the_de_hacked_templates_renders(module, fn, variants):
     that used to be impossible: ``substitute`` raises on a token that is not
     supplied, which is what the ``str.replace`` was hiding.
     """
-    mod = pytest.importorskip(f"xenium_viewer.tabs.{module}")
+    mod = pytest.importorskip(f"palms.tabs.{module}")
     assemble = getattr(mod, fn)
     for variant in variants:
         template = assemble(*variant)

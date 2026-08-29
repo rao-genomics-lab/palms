@@ -46,6 +46,6 @@ Inventory everything this dataset holds on disk — the original Xenium output, 
 - Deleting an external image also removes its two landmark shape layers, since the landmarks are meaningless without the image they register.
 - Deleting `obs`/`uns`/`obsm` entries rewrites the whole table, so those rows have no path of their own. The rewrite happens **once** per batch however many entries you tick, and a deleted clustering disappears from every clustering dropdown in the viewer immediately.
 - If a deletion fails with "in use", the element is still backed by a live napari layer — reload the dataset when offered and try again.
-- Written into the dataset folder but outside the viewer's deletable directories: `analysis.py`, `analysis_notebook.ipynb`, `plots/` and `xenium_viewer.log`. They are listed read-only; remove them by hand if you want them gone.
-- Deleting `transcript_cache/` reclaims real space but drops transcript loading back to scanning `transcripts.parquet` (seconds per gene instead of milliseconds) until `xenium-preprocess` is run again.
+- Written into the dataset folder but outside the viewer's deletable directories: `analysis.py`, `analysis_notebook.ipynb`, `plots/` and `palms.log`. They are listed read-only; remove them by hand if you want them gone.
+- Deleting `transcript_cache/` reclaims real space but drops transcript loading back to scanning `transcripts.parquet` (seconds per gene instead of milliseconds) until `palms-preprocess` is run again.
 - The tab still works under `--no-cache`. Nothing is being written in that session, but earlier sessions may well have left sidecars and backups on disk.

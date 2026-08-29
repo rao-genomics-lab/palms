@@ -4,7 +4,7 @@ Infer copy-number variation from expression data: pick an existing clustering, m
 
 ![CNV](screenshots/tab-cnv.png)
 
-Requires the `cnv` optional extra, and CopyKAT additionally requires the `xenium_viewer_copykat` environment — see [Installation](Installation).
+Requires the `cnv` optional extra, and CopyKAT additionally requires the `palms_copykat` environment — see [Installation](Installation).
 
 ## Controls
 
@@ -72,7 +72,7 @@ Neighbors/Smoothing neighbors/Window size/Window step defaults match InSituCNV's
 
 - **Human panels only.** The GRCh38 gene-position reference is the only annotation table available, so a run refuses outright when under 5% of the panel maps to gene coordinates, and says so — the message calls out mouse nomenclature explicitly, since that is the usual cause. A mouse annotation table would be needed to support mouse panels.
 - The reference population must be explicitly chosen; no cluster is treated as "normal" by default, and at least one reference category is required to run.
-- **CopyKAT runs as a detached background process** in the separate `xenium_viewer_copykat` environment, taking roughly two hours. It survives closing the viewer — if you quit mid-run you are asked whether to stop it, leave it running in the background, or cancel quitting. Its results are picked up the next time you open the dataset.
+- **CopyKAT runs as a detached background process** in the separate `palms_copykat` environment, taking roughly two hours. It survives closing the viewer — if you quit mid-run you are asked whether to stop it, leave it running in the background, or cancel quitting. Its results are picked up the next time you open the dataset.
 - CopyKAT is unavailable under `--no-cache`, which reports "CopyKAT needs the zarr cache".
 - CopyKAT produces its own clustering keys — `copykat_leiden_res<resolution>` alongside `cnv_status` and `copykat_pred` — kept separate from inferCNV's, so the two backends' answers can be compared rather than overwriting one another.
 - With **Extrapolate CopyKAT calls to all cells** ticked, each of those columns gains a `<col>_propagated` twin covering every cell: a cell CopyKAT did not sample takes the majority call of its group in the reference clustering, and a group with no sampled cell at all becomes `unknown`.

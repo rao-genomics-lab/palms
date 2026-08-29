@@ -1,0 +1,53 @@
+# palms template
+# id: genes.marker_plot
+# schema-version: 1
+# assemblies: head+call.dotplot+save | head+relabel+call.dotplot+save |
+#          head+call.heatmap+save | head+relabel+call.heatmap+save |
+#          head+call.matrixplot+save | head+relabel+call.matrixplot+save |
+#          head+call.tracksplot+save | head+relabel+call.tracksplot+save |
+#          head+call.correlation_matrix+save |
+#          head+relabel+call.correlation_matrix+save
+# doc: Scanpy marker-gene figure; one call.* block per plot type.
+# requires: sc, pd, plt, Path, adata, adata_norm
+# outputs: fig
+# params: plot_name:str, groupby:str, markers:dict?, paths:list,
+#         categories:dict?
+
+#--- block head
+# $plot_name: $groupby
+adata_norm.obs[$groupby] = adata.obs[$groupby].values
+
+#--- block relabel
+# .map() rather than .cat.rename_categories(): naming two clusters the same
+# thing is a request to merge them, and rename_categories refuses it outright
+# ("Categorical categories must be unique"). dict.fromkeys dedupes the names
+# while keeping cluster order.
+_display = $categories
+adata_norm.obs[$groupby] = pd.Categorical(
+    adata_norm.obs[$groupby].astype(str).map(_display),
+    categories=list(dict.fromkeys(_display.values())),
+)
+
+#--- block call.dotplot
+sc.pl.dotplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)
+
+#--- block call.heatmap
+sc.pl.heatmap(adata_norm, var_names=$markers, groupby=$groupby, show=False)
+
+#--- block call.matrixplot
+sc.pl.matrixplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)
+
+#--- block call.tracksplot
+sc.pl.tracksplot(adata_norm, var_names=$markers, groupby=$groupby, show=False)
+
+#--- block call.correlation_matrix
+sc.tl.dendrogram(adata_norm, $groupby)
+sc.pl.correlation_matrix(adata_norm, $groupby, show=False)
+
+#--- block save
+# One figure, every configured format — the viewer writes a PNG to look at and
+# a PDF to publish, and the notebook writes the same files to the same places.
+fig = plt.gcf()
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, bbox_inches='tight', dpi=300)

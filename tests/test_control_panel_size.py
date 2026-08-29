@@ -1,4 +1,4 @@
-"""No control-panel page may pin the size of the Xenium Controls dock.
+"""No control-panel page may pin the size of the Controls dock.
 
 The panel is a ``QTabWidget`` of ``QTabWidget``s, and a stacked widget's minimum
 size is the maximum over *all* its pages — the hidden ones included. So one page
@@ -32,7 +32,7 @@ MAX_MINIMUM = 250
 
 @pytest.fixture
 def notebook_tab(qapp):
-    from xenium_viewer.tabs.tab_notebook import build_tab
+    from palms.tabs.tab_notebook import build_tab
     ctx = SimpleNamespace(state={}, viewer=None, data_path=None,
                           set_status=lambda *a, **k: None)
     widget, _ = build_tab(ctx)
@@ -41,7 +41,7 @@ def notebook_tab(qapp):
 
 @pytest.fixture
 def templates_tab(qapp):
-    from xenium_viewer.tabs.tab_templates import build_tab
+    from palms.tabs.tab_templates import build_tab
     widget, _ = build_tab(SimpleNamespace(state={}))
     return widget
 
@@ -53,7 +53,7 @@ def umap_tab(qapp):
     Worth measuring: it gained a ``QListWidget`` and five buttons, which is the
     shape that pinned the dock twice before.
     """
-    from xenium_viewer.tabs.tab_umap import build_tab
+    from palms.tabs.tab_umap import build_tab
     ctx = SimpleNamespace(
         state={}, viewer=None, adata=None, data_path=None,
         gene_names=[f"Gene{i}" for i in range(20)],
@@ -142,7 +142,7 @@ def test_make_tab_renders_a_widgets_label(qapp):
     from qtpy.QtWidgets import QLabel
     from magicgui.widgets import Slider
 
-    from xenium_viewer.tabs._helpers import make_tab
+    from palms.tabs._helpers import make_tab
 
     page = make_tab(Slider(label="probe_label", min=0, max=10, value=5))
     texts = [w.text() for w in page.findChildren(QLabel)]
@@ -160,7 +160,7 @@ def test_make_tab_does_not_label_a_widget_that_paints_its_own_text(qapp):
 
     from magicgui.widgets import CheckBox
 
-    from xenium_viewer.tabs._helpers import make_tab
+    from palms.tabs._helpers import make_tab
 
     page = make_tab(CheckBox(label="Use HVGs only", value=False))
     on_control = [w.text() for w in page.findChildren(QCheckBox)]
@@ -180,7 +180,7 @@ def test_make_tab_invents_no_label_for_an_unlabelled_widget(qapp):
     from qtpy.QtWidgets import QLabel
     from magicgui.widgets import Slider
 
-    from xenium_viewer.tabs._helpers import make_tab
+    from palms.tabs._helpers import make_tab
 
     page = make_tab(Slider(min=0, max=10, value=5))
     captions = [w.text() for w in page.findChildren(QLabel) if w.text()]
@@ -191,7 +191,7 @@ def test_a_page_with_wide_content_reports_a_small_minimum(qapp):
     """The mechanism itself: this is why every page must be wrapped."""
     from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
-    from xenium_viewer.tabs._helpers import scrollable
+    from palms.tabs._helpers import scrollable
 
     wide = QWidget()
     layout = QHBoxLayout()

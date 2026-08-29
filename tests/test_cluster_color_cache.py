@@ -24,7 +24,7 @@ np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 anndata = pytest.importorskip("anndata")
 
-from xenium_viewer.utils.coloring import CellColorManager  # noqa: E402
+from palms.utils.coloring import CellColorManager  # noqa: E402
 
 
 N_CELLS = 12
@@ -116,7 +116,7 @@ def test_every_producer_that_replaces_a_clustering_invalidates_it():
     never invalidates is the bug returning under a different name."""
     import re
 
-    tabs = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "tabs"
+    tabs = Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
     assignment = re.compile(r"ctx\.clusterings\[([A-Za-z_][\w]*)\]\s*=")
     offenders = []
     for path in sorted(tabs.glob("tab_*.py")):

@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from xenium_viewer.utils.step_templates.namespace import (
+from palms.utils.step_templates.namespace import (
     EXECUTOR_BASE_NAMES,
     NamespaceMismatch,
     check_base_namespace,
 )
 
-_HELPERS = Path(__file__).resolve().parent.parent / "src" / "xenium_viewer" / "tabs" / "_helpers.py"
+_HELPERS = Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs" / "_helpers.py"
 
 
 def _seeded_namespace_keys() -> set[str]:

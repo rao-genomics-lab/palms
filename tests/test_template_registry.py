@@ -13,7 +13,7 @@ What it establishes, per rendering:
   declared ``requires`` — so no template can quietly depend on a leftover from a
   previous step in a long session, which would replay as a ``NameError``;
 * every name it declares as an output is actually bound at module level;
-* it never reaches back into ``xenium_viewer``, because the notebook has to run
+* it never reaches back into ``palms``, because the notebook has to run
   without this package installed.
 
 Pure Python — no Qt, no napari. The block *selection* logic lives in the tab
@@ -27,12 +27,12 @@ import ast
 
 import pytest
 
-from xenium_viewer.utils.step_templates import (
+from palms.utils.step_templates import (
     EXECUTOR_BASE_NAMES,
     builtin_ids,
     builtin_spec,
 )
-from xenium_viewer.utils.steps import Step, check_step
+from palms.utils.steps import Step, check_step
 
 #: (template id, assembly) for every legal rendering the registry declares.
 ALL_ASSEMBLIES = [
@@ -125,8 +125,8 @@ def test_declared_outputs_are_bound(case):
 def test_no_template_imports_the_viewer(tid):
     """The notebook replays from raw Xenium output, without this package."""
     for block in builtin_spec(tid).blocks.values():
-        assert "xenium_viewer" not in block.text, (
-            f"{tid}/{block.name} reaches back into xenium_viewer; the exported "
+        assert "palms" not in block.text, (
+            f"{tid}/{block.name} reaches back into palms; the exported "
             f"notebook must run without it installed"
         )
 

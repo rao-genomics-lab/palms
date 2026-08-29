@@ -24,15 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 pytest.importorskip("numpy")
 pytest.importorskip("qtpy")
 
-from xenium_viewer.utils.environment import (  # noqa: E402
+from palms.utils.environment import (  # noqa: E402
     RECORDED_PACKAGES, environment_code, package_versions, pins, same_environment,
 )
 
 
 @pytest.fixture
 def ctx(tmp_path, qapp):
-    from xenium_viewer.tabs._helpers import create_shared_helpers
-    from xenium_viewer.utils.viewer_context import ViewerContext
+    from palms.tabs._helpers import create_shared_helpers
+    from palms.utils.viewer_context import ViewerContext
 
     context = ViewerContext(
         data_path=tmp_path,
@@ -83,7 +83,7 @@ def test_a_package_that_is_not_installed_is_named_rather_than_omitted():
 
 def test_the_recorded_set_covers_what_a_step_can_depend_on():
     for name in ("scanpy", "anndata", "squidpy", "numpy", "pandas",
-                 "scikit-learn", "leidenalg", "xenium-viewer"):
+                 "scikit-learn", "leidenalg", "palms"):
         assert name in RECORDED_PACKAGES, name
 
 
@@ -158,7 +158,7 @@ def test_re_recording_in_the_same_environment_leaves_the_node_alone(ctx):
 
 def test_a_restored_session_keeps_its_original_stamp_when_versions_match(ctx):
     """The graph comes back from disk; the node must survive the next launch."""
-    from xenium_viewer.utils.prov_graph import ProvGraph
+    from palms.utils.prov_graph import ProvGraph
 
     ctx.record_preamble()
     items = ctx.state["prov_graph"].to_list()

@@ -1,6 +1,6 @@
-# Xenium Viewer
+# PALMS
 
-Xenium Viewer is an open-source, napari-based viewer for 10x Genomics Xenium spatial transcriptomics data, designed as an open alternative to the commercial Xenium Explorer, which ships no Linux build. It runs on Linux, macOS and WSL2. It provides interactive, high-resolution visualisation of cell-level gene expression data directly from Xenium 3.x output directories, with no data export or conversion required. The project is released under the MIT licence and is currently at version 0.1.0 (alpha).
+PALMS is an open-source, napari-based viewer for 10x Genomics Xenium spatial transcriptomics data, designed as an open alternative to the commercial Xenium Explorer, which ships no Linux build. It runs on Linux, macOS and WSL2. It provides interactive, high-resolution visualisation of cell-level gene expression data directly from Xenium 3.x output directories, with no data export or conversion required. The project is released under the MIT licence and is currently at version 0.1.0 (alpha).
 
 ## Key Features
 
@@ -33,8 +33,8 @@ Xenium Viewer is an open-source, napari-based viewer for 10x Genomics Xenium spa
 
 ```bash
 ./scripts/install.sh
-conda activate xenium_viewer
-xenium-viewer /path/to/xenium/output/
+conda activate palms
+palms /path/to/xenium/output/
 ```
 
 `install.sh` creates the environment from `environment.yml` and, on Linux and WSL, applies the `environment-linux.yml` overlay that a Qt6/GLX fix needs.

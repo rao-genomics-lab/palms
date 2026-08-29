@@ -5,7 +5,7 @@
 # Analysis Templates
 
 Every analysis the viewer runs is a **template**: a piece of plain scverse source
-with a declared contract, kept in `src/xenium_viewer/utils/step_templates/builtin/`
+with a declared contract, kept in `src/palms/utils/step_templates/builtin/`
 as a `.tmpl` file. When you click a button, the owning tab builds a dictionary of
 parameters, the template is rendered once, and *that same string* is both executed
 and recorded in the provenance graph — so the code below is the code that runs,

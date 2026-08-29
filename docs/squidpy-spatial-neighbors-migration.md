@@ -16,9 +16,9 @@ sq.gr.spatial_neighbors(adata_norm, coord_type='generic', n_neighs=k)
 sq.gr.spatial_neighbors_knn(adata_norm, n_neighs=k)
 ```
 
-1. `src/xenium_viewer/utils/step_templates/builtin/spatial_neighbors.tmpl` — the recorded
+1. `src/palms/utils/step_templates/builtin/spatial_neighbors.tmpl` — the recorded
    code, reached through `ctx.ensure_spatial_neighbors()` in `tabs/_helpers.py`.
-2. `src/xenium_viewer/utils/spatial_analysis.py::compute_spatial_neighbors` — used
+2. `src/palms/utils/spatial_analysis.py::compute_spatial_neighbors` — used
    directly by `tabs/tab_annot_nhood.py`, whose call is unrecorded. Its signature
    (`adata_norm`, `n_neighs=6`) is unchanged, so that tab needed no edit.
 

@@ -16,8 +16,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from xenium_viewer.utils.prov_graph import SETUP, ProvGraph  # noqa: E402
-from xenium_viewer.utils.steps import (  # noqa: E402
+from palms.utils.prov_graph import SETUP, ProvGraph  # noqa: E402
+from palms.utils.steps import (  # noqa: E402
     ParamError, Step, StepError, StepExecutor,
     check_step, coerce, free_names, render, validate_param,
 )

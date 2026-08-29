@@ -20,7 +20,7 @@ import json
 
 import pytest
 
-from xenium_viewer.utils.prov_graph import (
+from palms.utils.prov_graph import (
     ARTIFACT,
     TEMPLATE_BUILTIN,
     TEMPLATE_HAND_EDITED,
@@ -28,7 +28,7 @@ from xenium_viewer.utils.prov_graph import (
     TEMPLATE_USER,
     ProvGraph,
 )
-from xenium_viewer.utils.steps import Step, StepExecutor
+from palms.utils.steps import Step, StepExecutor
 
 
 # ── backward compatibility ───────────────────────────────────────────────────
@@ -154,7 +154,7 @@ def test_reconcile_edits_marks_the_node_hand_edited():
     the one guarantee every other node carries. It must say so.
     """
     pytest.importorskip("qtpy")
-    from xenium_viewer.tabs.tab_notebook import reconcile_edits
+    from palms.tabs.tab_notebook import reconcile_edits
 
     graph = ProvGraph()
     graph.upsert("a", "x = 1", kind="setup", template_id="demo.step",
@@ -175,7 +175,7 @@ def test_reconcile_edits_marks_the_node_hand_edited():
 
 def test_reconcile_edits_leaves_untouched_cells_alone():
     pytest.importorskip("qtpy")
-    from xenium_viewer.tabs.tab_notebook import reconcile_edits
+    from palms.tabs.tab_notebook import reconcile_edits
 
     graph = ProvGraph()
     graph.upsert("a", "x = 1", kind="setup")
@@ -194,6 +194,6 @@ def test_reconcile_edits_leaves_untouched_cells_alone():
 def test_reconcile_edits_tolerates_no_graph():
     """Called on every export, including before anything has been recorded."""
     pytest.importorskip("qtpy")
-    from xenium_viewer.tabs.tab_notebook import reconcile_edits
+    from palms.tabs.tab_notebook import reconcile_edits
 
     assert reconcile_edits(None, [_FakeCell("a", "x = 1")]) == []

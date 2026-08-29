@@ -1,6 +1,6 @@
 # Crop Dataset
 
-Draw one or more polygons in the "Crop Regions" layer and export each as its own standalone, independently-openable xenium-viewer data directory — a cropped morphology image, cell/nucleus labels, transcripts, AnnData table, and everything you registered or drew on top, ready to `xenium-viewer <output_dir>`. This tab is in the "Tools" control panel group.
+Draw one or more polygons in the "Crop Regions" layer and export each as its own standalone, independently-openable palms data directory — a cropped morphology image, cell/nucleus labels, transcripts, AnnData table, and everything you registered or drew on top, ready to `palms <output_dir>`. This tab is in the "Tools" control panel group.
 
 ![Crop Dataset](screenshots/tab-crop-dataset.png)
 
@@ -22,7 +22,7 @@ Draw one or more polygons in the "Crop Regions" layer and export each as its own
    - A name prompt asks for the dataset's folder name (e.g. `core_A`). If that folder already exists, you're asked to confirm overwriting it.
 4. A progress dialog tracks each region's export (image/label cropping, cell and transcript filtering, writing the dataset, building the transcript cache).
 5. A summary dialog reports success or failure per region, with the output path for each successful export.
-6. Open a completed export directly: `xenium-viewer <output_dir>/<name>`.
+6. Open a completed export directly: `palms <output_dir>/<name>`.
 
 ## Notes
 

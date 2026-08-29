@@ -24,8 +24,8 @@ pytest.importorskip("qtpy")
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from xenium_viewer.tabs import tab_dataset  # noqa: E402
-from xenium_viewer.utils import store_inventory as si  # noqa: E402
+from palms.tabs import tab_dataset  # noqa: E402
+from palms.utils import store_inventory as si  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -199,7 +199,7 @@ def test_a_blocked_row_is_dimmed_rather_than_disabled(qapp, loaded):
 def loaded(tiny_sdata):
     """A ctx over a store with a deletable element, obs columns and sidecars."""
     from spatialdata.models import Image2DModel
-    from xenium_viewer.utils import zarr_safe
+    from palms.utils import zarr_safe
 
     cache = Path(tiny_sdata.path)
     data_path = cache.parent
@@ -292,7 +292,7 @@ def test_deleting_a_sidecar_unlinks_it(loaded):
 def test_deleting_a_session_group_also_clears_the_in_memory_mirror(loaded):
     """Otherwise the next save_session writes the affine straight back."""
     import numpy as _np
-    from xenium_viewer.utils import zarr_safe
+    from palms.utils import zarr_safe
 
     cache = Path(loaded.sdata.path)
     with zarr_safe.safe_group_update(cache, "viewer_session") as (group, _stage):

@@ -9,13 +9,13 @@
 #
 #   conda env create -f environment-copykat.yml     # (mamba is much faster)
 #
-# The viewer auto-detects the env by name (xenium_viewer_copykat). Override with the
-# XENIUM_COPYKAT_ENV (env name) or XENIUM_COPYKAT_PYTHON (full python path) env vars.
+# The viewer auto-detects the env by name (palms_copykat). Override with the
+# PALMS_COPYKAT_ENV (env name) or PALMS_COPYKAT_PYTHON (full python path) env vars.
 #
 # The copykat R package (GitHub-only) auto-installs on first CopyKAT run; to
-# pre-install it:  conda run -n xenium_viewer_copykat \
+# pre-install it:  conda run -n palms_copykat \
 #   R -e 'remotes::install_github("navinlabcode/copykat", dependencies=FALSE)'
-name: xenium_viewer_copykat
+name: palms_copykat
 channels:
   - conda-forge
   - bioconda
