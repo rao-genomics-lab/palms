@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+title: "PALMS: Provenance-Aware Linking of Multimodal Spatial-omics"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - given-names: "Srinivasa Rao"
+    family-names: "Rao"
+    email: "go2rsr@gmail.com"
+repository-code: "https://github.com/sraorao/palms"
+url: "https://palms.readthedocs.io"
+abstract: >-
+  PALMS is a napari-based viewer for Xenium 3.x spatial transcriptomics output that brings
+  transcripts, cells, histology and genomic overlays into one coordinate space, and records
+  every action the user takes as a node in a provenance graph. The graph is exported as a
+  Jupyter notebook that replays the session from the raw data, so an exploratory analysis
+  ends with runnable, reviewable code rather than an undocumented result. It runs on Linux,
+  macOS and WSL2.
+keywords:
+  - spatial transcriptomics
+  - spatial omics
+  - provenance
+  - reproducibility
+  - multimodal imaging
+  - image registration
+  - napari
+  - single-cell
+  - Xenium
+license: MIT
+version: 1.0.0
+date-released: "2026-08-29"
+
+# Add once the Zenodo DOI is minted:
+#   doi: "10.5281/zenodo.XXXXXXX"
+# Add once the paper is out, so `cff` prefers it over the software entry:
+#   preferred-citation:
+#     type: article
+#     ...

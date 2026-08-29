@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "palms"
-version = "0.1.0"
+version = "1.0.0"
 description = "PALMS (Provenance-Aware Linking of Multimodal Spatial-omics) — a napari-based viewer that brings spatial transcriptomics, histology and genomic overlays into one coordinate space, and records every action as replayable code"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,7 +16,7 @@ keywords = [
     "napari", "single-cell", "10x",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: X11 Applications :: Qt",
     "Environment :: MacOS X :: Cocoa",
     "Intended Audience :: Science/Research",
