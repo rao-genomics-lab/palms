@@ -2,6 +2,34 @@
 
 ## [Unreleased] — 2026-08-29 (stale cleanup)
 
+### Fixed
+- **A step whose recorded code does not vary with its settings could never be
+  un-flagged as stale.** `ProvGraph.upsert` returns early when the code, deps and
+  kind are unchanged, and that early return sat *above* `existing.stale = False` —
+  so re-running the step, which is exactly what the `⚠ stale — input changed;
+  re-run in the viewer` badge tells you to do, left the flag set. Permanently:
+  nothing else clears it, and it round-trips through JSON, so it survived every
+  restart.
+
+  Found on the `crop_6` demo dataset, where `clustering:cnv_leiden_res0.2` showed
+  as stale in the DAG immediately after the inferCNV run that produced it. That
+  node publishes the CNV labels onto the table with a fixed three-line snippet
+  carrying none of the run's parameters, while its parent `cnv:infercnv` carries
+  all of them. Re-running inferCNV with a different reference therefore changed
+  the parent (staling the child) and re-recorded the child byte-identically —
+  which did nothing. Reproduced in four `upsert` calls.
+
+  Only the node's own flag is cleared; descendants are deliberately untouched,
+  since nothing about their input changed (`test_rerun_identical_is_noop` still
+  holds). Safe because every caller that reaches the branch has just executed the
+  step — `StepExecutor.run` upserts only after a successful `exec`, and the
+  "ensure a node exists" paths never get there: `record_clustering` returns early
+  when the id is present, and `ensure_normalized` / `ensure_spatial_neighbors`
+  short-circuit before running their step.
+
+  This mattered more once staleness became actionable: **"Select Stale Results"
+  would have offered to delete a result that was in fact current.**
+
 ### Added
 - **Two ways to act on staleness, which until now was display-only.** A node is
   flagged `stale` when an ancestor was re-recorded with different code after that

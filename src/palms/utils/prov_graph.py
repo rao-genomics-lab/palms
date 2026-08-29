@@ -185,6 +185,25 @@ class ProvGraph:
             if template_hash is not None:
                 existing.template_hash = template_hash
             if unchanged:
+                # The step just ran again, against its inputs as they are now,
+                # so this node is fresh — even though the code it emits is
+                # byte-identical. Without this, a step whose recorded source
+                # does not vary with its settings could never be un-flagged:
+                # re-running it is what the badge tells you to do, and for
+                # `clustering:cnv_leiden_res0.2` (a fixed "publish the CNV
+                # labels onto the table" snippet, downstream of a `cnv:*` node
+                # whose code carries every parameter) that left it stale
+                # permanently. Descendants are deliberately *not* touched here:
+                # nothing about their input changed.
+                #
+                # Safe because every caller reaching here has just executed the
+                # step: `StepExecutor.run` upserts only after a successful
+                # `exec`, and `record_node`'s callers record after doing the
+                # work. The "ensure a node exists" paths never get this far —
+                # `record_clustering` returns early when the id is present, and
+                # `ensure_normalized` / `ensure_spatial_neighbors` short-circuit
+                # before running their step.
+                existing.stale = False
                 return existing
             existing.code = code
             existing.deps = deps

@@ -64,6 +64,37 @@ def test_three_session_rerun_revises_in_place():
     assert "n_neighbors=30" in g.get("clustering:leiden_r1.0").code
 
 
+def test_rerunning_a_step_clears_its_own_stale_flag_even_when_the_code_is_identical():
+    """Re-running is what the ⚠ badge tells you to do; it has to work.
+
+    Found on a real dataset (crop_6): `clustering:cnv_leiden_res0.2` publishes
+    the CNV labels onto the table with a snippet that carries none of the run's
+    parameters, so re-running inferCNV with a different reference changed
+    `cnv:infercnv` (staling the child) and then re-recorded the child with
+    byte-identical code. The early return skipped `stale = False`, so that node
+    was stuck stale permanently with no way to clear it.
+    """
+    g = ProvGraph()
+    g.upsert("cnv:infercnv", "CODE_A", kind=SETUP)
+    g.upsert("clustering:cnv", "PUBLISH", deps=["cnv:infercnv"])
+
+    g.upsert("cnv:infercnv", "CODE_B", kind=SETUP)          # different settings
+    assert g.get("clustering:cnv").stale is True
+
+    g.upsert("clustering:cnv", "PUBLISH", deps=["cnv:infercnv"])   # same code
+    assert g.get("clustering:cnv").stale is False
+
+
+def test_an_identical_rerun_still_does_not_stale_descendants():
+    """Only the node's own flag changes — its output did not."""
+    g = ProvGraph()
+    g.upsert("a", "A", kind=SETUP)
+    g.upsert("b", "B", deps=["a"])
+    g.upsert("c", "C", deps=["b"])
+    g.upsert("b", "B", deps=["a"])          # identical re-run of the middle node
+    assert g.get("c").stale is False
+
+
 def test_rerun_identical_is_noop():
     g = _pipeline()
     g.upsert("nhood:leiden_r1.0", "sq.gr.nhood_enrichment(adata, 'leiden_r1.0')",
