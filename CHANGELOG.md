@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased] — 2026-08-29 (crop-export notebooks)
+
+### Fixed
+- **A Crop Dataset export's recorded notebook could never replay.** The preamble
+  recorder always emitted `from spatialdata_io import xenium` /
+  `sdata = xenium(data_path)`. A crop export has no raw 10x output — the zarr store
+  the crop wrote *is* the data — so that call cannot work, and every notebook
+  recorded on one failed on its **first** cell with
+  `FileNotFoundError: …/cells.zarr.zip`.
+
+  Nothing caught it because recording and persisting the graph both succeed; only
+  *executing* the notebook fails, and the only thing that executes it is
+  `scripts/verify_notebook.py`. Measured on the demo dataset shipped in the release
+  bundle (`demo_data/crop_6`, an 18-node graph): the replay stopped at `preamble`
+  after one cell.
+
+  `_record_preamble` now branches on `loader.has_raw_xenium_source()` — the single
+  existing definition of "can this be read from raw output" — and records
+  `sd.read_zarr(data_path / "sdata_cached.zarr")` when there is none. The store is
+  derived from `data_path` rather than recorded as its own absolute path, so
+  `palms-rename-dataset`'s single `data_path = Path(r"…")` rewrite still moves the
+  notebook with its dataset; a recorded absolute store path would have been rewritten
+  in the first line and left stale in the second, which looks repaired and is not.
+
+  This matters beyond one dataset: the crop export is how the project makes a small
+  shareable dataset, so it is exactly the case where someone else replays the
+  notebook. Note that re-launching the viewer on an existing crop export re-emits the
+  corrected preamble, and the upsert flags every descendant stale — on `crop_6`, all
+  16 of them. That is the graph telling the truth: those results were produced by a
+  preamble that no longer exists.
+
 ## [Unreleased] — 2026-08-29 (pre-publication audit)
 
 ### Fixed
