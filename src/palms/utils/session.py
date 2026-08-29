@@ -154,11 +154,18 @@ def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
     attrs["segmentation_source"] = state.get("segmentation_source", "xenium")
 
     # ── Reproducible-code provenance graph ───────────────────────────────
-    # Never shrinks. Nothing in the GUI removes nodes, so a smaller graph means
-    # the in-memory one is not the session's — a restore that did not happen, a
-    # launch that seeded only the preamble. Saving it anyway is how a 13-node
-    # analysis became a 1-node stub: the viewer came up empty, and its exit
-    # wrote that emptiness over the only remaining copy.
+    # Never shrinks *here*. A smaller in-memory graph means it is not the
+    # session's — a restore that did not happen, a launch that seeded only the
+    # preamble. Saving it anyway is how a 13-node analysis became a 1-node stub:
+    # the viewer came up empty, and its exit wrote that emptiness over the only
+    # remaining copy.
+    #
+    # Deliberate removal exists — the Notebook tab's "Drop Stale Nodes" — but it
+    # never relies on this path. It writes the pruned graph straight to the attr
+    # itself (tab_notebook._persist_pruned_graph), so by the time an exit reaches
+    # here `previous` is already the pruned copy and the sizes agree. Which is
+    # what lets this stay a flat "never shrinks" rather than needing to tell a
+    # prune apart from a failed restore, a distinction it has no way to make.
     prov = state.get("prov_graph")
     try:
         items = prov.to_list() if prov is not None and len(prov) else None

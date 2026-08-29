@@ -1,5 +1,77 @@
 # Changelog
 
+## [Unreleased] — 2026-08-29 (stale cleanup)
+
+### Added
+- **Two ways to act on staleness, which until now was display-only.** A node is
+  flagged `stale` when an ancestor was re-recorded with different code after that
+  node last ran, so the artifact on disk was produced by an input that no longer
+  exists. The Notebook tab drew a ⚠ badge and `dag_view` outlined the node orange;
+  nothing else looked at the flag.
+
+  - **Tools → Dataset → "Select Stale Results…"** ticks the rows that hold a stale
+    step's results and hands them to the same confirm-and-delete path every other
+    deletion goes through. It is a *selector*, not a second executor: `plan_deletion`
+    still vets the batch, `assert_node_deletable` still has the last word, and
+    `_remove_tree` remains the only function that touches the filesystem. The
+    provenance graph is left alone, so the notebook still replays and recreates
+    whatever was cleared — which is what `_plan_warnings` has always told a user who
+    deleted a clustering column by hand.
+  - **Tools → Notebook → "Drop Stale Nodes…"** prunes the steps themselves, in
+    reverse topological order, after backing the graph up to
+    `viewer_cache/prov_graph.backup_<time>.json` (a name `store_inventory` already
+    protects from deletion). Before this there was **no way to remove a node through
+    the GUI at all**: the per-cell "Delete" removed only the widget, and
+    `_sync_from_graph` put the cell straight back.
+
+  New pure module `utils/stale_results.py` is the **id bridge** between the two
+  halves, and the only place the correspondence is written down — provenance ids are
+  namespaced by the artifact they produce (`clustering:<key>`, `rank_genes:<key>`,
+  `cnv:<backend>`) while inventory keys name a row on disk
+  (`obs:table/clustering_<key>`, `sidecar:adata_cnv_cache_<backend>.h5ad`), and
+  nothing on a `ProvNode` said which is which. Qt-free and filesystem-free like
+  `store_inventory`, so it is tested on its own.
+
+  Four things the implementation had to get right, each a real failure mode:
+
+  - **Two monotonic guards assume nodes are never removed.**
+    `app._load_prov_graph_items` rejects the sidecar whenever it holds fewer nodes
+    than the session attr, and `session._build_session_attrs` refuses to write a
+    graph smaller than the stored one — both stating "nothing in the GUI removes
+    nodes". A prune that wrote only the sidecar was therefore undone at the next
+    exit *and* the next launch, with a printed line about a "partial graph" as the
+    only clue. Measured on a real store: pruning 2 of 4 nodes and writing only the
+    sidecar loaded all 4 back. `tab_notebook._persist_pruned_graph` writes both
+    copies in the same action, so the sizes agree and neither guard fires; neither
+    guard needed weakening, and a *lone* shrink still means what it always meant.
+  - **`uns['nhood_enrichment']`, `uns['co_occurrence']` and `uns['ligrec']` are
+    single unkeyed slots** while the nodes that write them are keyed per clustering.
+    A stale `nhood:A` and a fresh `nhood:B` name the same bytes, so clearing on the
+    stale one alone would destroy a perfectly current result. Such a slot is only
+    cleared when every member of its family is stale, and the report names the fresh
+    step that spared it. `cnv:copykat_propagated` is excluded from that vote because
+    it stores nothing of its own.
+  - **The stale set is not dependency-closed.** `upsert` clears `stale` on the node
+    it re-records while flagging that node's descendants, so a step recorded *after*
+    a stale one is fresh and depends on it — and `ProvGraph.remove` refuses any node
+    another still names. `plan_prune` excludes anything a fresh node can reach
+    (transitively, not one hop) and emits the rest leaves-first, so every removal is
+    legal when it happens.
+  - **A moved dataset restales everything for nothing.** `app.py` re-emits the
+    preamble for the current `data_path` on every launch, so the first launch after a
+    manual `mv` flags every descendant stale — and a one-click clear would then
+    delete every analysis in the dataset because a directory changed name. The
+    confirm dialog says so and points at `palms-rename-dataset --repair`.
+
+  Out of scope and reported as such rather than silently skipped: figures under
+  `<data_path>/plots/`, which is outside every `deletable_roots()` directory by
+  design, and CSV exports, which went to a path chosen in a save dialog and recorded
+  nowhere. A stale step whose result is simply absent is distinguished from one this
+  module has no rule for — reporting both as "nothing to remove" reads as a hole in
+  the mapping table when it is not one.
+
+  `ProvGraph.remove` also gains its first test coverage.
+
 ## [Unreleased] — 2026-08-29 (crop-export notebooks)
 
 ### Fixed

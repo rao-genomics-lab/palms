@@ -10,18 +10,133 @@ replayable notebook (graph cells + any user cells).
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit, QLabel,
-    QPushButton, QFrame, QScrollArea, QFileDialog,
+    QPushButton, QFrame, QScrollArea, QFileDialog, QMessageBox,
 )
 from qtpy.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 from qtpy.QtCore import Qt
 
-from palms.tabs._helpers import toolbar_row
+from palms.tabs._helpers import PROV_GRAPH_SIDECAR, toolbar_row
+from palms.utils import stale_results
 from palms.utils.prov_graph import NOTE, TEMPLATE_HAND_EDITED
+from palms.utils.reporting import get_logger
+
+log = get_logger(__name__)
 
 if TYPE_CHECKING:
     from palms.utils.viewer_context import ViewerContext
+
+
+# ── Pruning stale nodes ──────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class PrunePlan:
+    """Which stale nodes can be dropped, and which are held by a fresh one."""
+
+    #: Ids to remove, in reverse topological order — a parent is only removed
+    #: after everything depending on it, which is the order ``ProvGraph.remove``
+    #: requires.
+    remove: tuple[str, ...] = ()
+    #: (stale id, the non-stale nodes that still depend on it). Kept, because
+    #: removing one would break a step that is current.
+    blocked: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.remove
+
+
+def plan_prune(graph) -> PrunePlan:
+    """Every stale node that can be removed without orphaning a fresh one.
+
+    The stale set is **not** dependency-closed. ``upsert`` clears ``stale`` on
+    the node it re-records while flagging that node's descendants, so a step run
+    *after* a stale one is fresh and depends on it — and ``ProvGraph.remove``
+    refuses any node another still names. Both halves are handled here: the
+    removable set excludes anything reachable from a fresh node, and what
+    survives is emitted in reverse topological order so each removal is legal
+    when it happens.
+    """
+    if graph is None or not len(graph):
+        return PrunePlan()
+
+    stale = {n.id for n in graph.nodes() if n.stale}
+    if not stale:
+        return PrunePlan()
+
+    # Walk up from every fresh node: anything it can reach must stay.
+    held: dict[str, set[str]] = {}
+    for node in graph.nodes():
+        if node.id in stale:
+            continue
+        seen: set[str] = set()
+        stack = list(node.deps)
+        while stack:
+            dep = stack.pop()
+            if dep in seen:
+                continue
+            seen.add(dep)
+            if dep in stale:
+                held.setdefault(dep, set()).add(node.id)
+            parent = graph.get(dep)
+            if parent is not None:
+                stack.extend(parent.deps)
+
+    try:
+        order = graph.topo_sort()
+    except Exception:
+        # A cycle means the graph is already broken; pruning is not the repair.
+        return PrunePlan()
+
+    remove = tuple(reversed([nid for nid in order
+                             if nid in stale and nid not in held]))
+    blocked = tuple(sorted(
+        (nid, tuple(sorted(holders))) for nid, holders in held.items()))
+    return PrunePlan(remove=remove, blocked=blocked)
+
+
+def describe_prune(plan: PrunePlan, orphans: dict[str, tuple[str, ...]],
+                   inventory_known: bool = True) -> str:
+    """The confirm-dialog body.
+
+    *orphans* maps an id to the results it left in the store. ``inventory_known``
+    is False when no scan has happened this session, in which case the dialog has
+    to say that it cannot tell rather than implying there is nothing there — an
+    empty ``orphans`` means two very different things.
+    """
+    lines = [f"Remove {len(plan.remove)} stale step(s) from the provenance graph:"]
+    lines += [f"  • {nid}" for nid in plan.remove]
+    if not inventory_known:
+        lines += [
+            "",
+            "Whether these steps left results in the dataset was not checked —",
+            "run Tools → Dataset → Scan Dataset first if you want to know.",
+        ]
+    if orphans:
+        lines += [
+            "",
+            "⚠ These steps still have results stored in the dataset. Dropping the",
+            "  step leaves the result with nothing to explain it — clear them first",
+            "  with Tools → Dataset → Select Stale Results if that is what you want:",
+        ]
+        for nid in plan.remove:
+            for key in orphans.get(nid, ()):
+                lines.append(f"      {nid} → {key}")
+    if plan.blocked:
+        lines += ["", "Kept — a step that is still current depends on them:"]
+        for nid, holders in plan.blocked:
+            lines.append(f"  • {nid} (required by {', '.join(holders)})")
+    lines += [
+        "",
+        "The notebook loses these steps permanently. A copy of the graph is saved",
+        f"to {PROV_GRAPH_SIDECAR.replace('.json', '.backup_<time>.json')} first.",
+    ]
+    return "\n".join(lines)
 
 
 # ── Folding user edits back into the graph ───────────────────────────────────
@@ -284,9 +399,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
     run_all_btn = QPushButton("Run All")
     clear_btn = QPushButton("Clear Outputs")
     dag_btn = QPushButton("Show DAG")
+    prune_btn = QPushButton("Drop Stale Nodes...")
     export_btn = QPushButton("Export .ipynb")
     outer_layout.addWidget(toolbar_row(
-        sync_btn, add_btn, run_all_btn, clear_btn, dag_btn, export_btn
+        sync_btn, add_btn, run_all_btn, clear_btn, dag_btn, prune_btn, export_btn
     ))
 
     # Scrollable cell area
@@ -425,6 +541,129 @@ def build_tab(ctx: ViewerContext) -> tuple:
         except Exception as e:
             ctx.set_status(f"DAG render failed: {e}")
 
+    def _persist_pruned_graph(graph) -> str:
+        """Write the shrunken graph to *both* records that store it.
+
+        The sidecar alone is not enough, and the failure is silent. Two guards —
+        ``app._load_prov_graph_items`` and ``session._build_session_attrs`` —
+        refuse a graph smaller than the one already stored, on the stated
+        assumption that nothing in the GUI removes nodes. Writing only the
+        sidecar therefore has the pruned steps restored from the session attr at
+        the next exit *and* the next launch, with a printed line about a "partial
+        graph" as the only clue. Writing both leaves the two the same size, so
+        neither guard fires and neither needs weakening.
+
+        Returns "" on success, or a message naming what could not be written —
+        in which case the guards will restore the pre-prune graph, which is a
+        safe way to fail but has to be said out loud.
+        """
+        from palms.utils import zarr_safe
+
+        ctx.save_prov_graph()
+        cache = None
+        if ctx.sdata is not None and getattr(ctx.sdata, "path", None):
+            cache = zarr_safe.cache_path_of(ctx.sdata)
+        elif ctx.data_path is not None:
+            candidate = Path(ctx.data_path) / "sdata_cached.zarr"
+            cache = candidate if candidate.is_dir() else None
+        if cache is None:
+            return ("no zarr cache for this dataset, so only the sidecar was "
+                    "updated")
+        try:
+            with zarr_safe.safe_group_update(cache, "viewer_session") as (group, _):
+                group.attrs["prov_graph"] = graph.to_list()
+        except Exception as e:
+            log.warning("could not write the pruned provenance graph to the "
+                        "session attrs: %s", e)
+            return (f"the session copy could not be updated ({e}); the pruned "
+                    "steps will come back on the next launch")
+        return ""
+
+    def _backup_graph(graph) -> str:
+        """Snapshot the graph before pruning. Returns the path, or "" if it failed.
+
+        ``prov_graph.backup_*.json`` is already protected from deletion by
+        ``store_inventory``'s prov-graph prefix rule, so the copy cannot be
+        swept away by the Dataset tab afterwards.
+        """
+        try:
+            from palms.utils.adata_persistence import sidecar_write_path
+            from palms.utils.zarr_safe import atomic_json
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            name = PROV_GRAPH_SIDECAR.replace(".json", f".backup_{stamp}.json")
+            path = sidecar_write_path(ctx, name)
+            atomic_json(path, graph.to_list())
+            return str(path)
+        except Exception as e:
+            log.warning("could not back up the provenance graph: %s", e)
+            return ""
+
+    def _stale_artifacts(graph) -> dict:
+        """Which pruned steps still have results in the store, id → keys.
+
+        Reuses the inventory the Dataset tab already scanned rather than walking
+        the dataset itself: ``build_inventory`` sizes every file under a store
+        that is routinely tens of gigabytes, and doing that from a button
+        callback would freeze the GUI for as long as it took — to decorate a
+        dialog. If no scan has happened this session the dialog says so instead,
+        which is a smaller cost than the freeze and is honest about what it does
+        not know.
+        """
+        sections = state.get("_dataset_sections")
+        if not sections:
+            return {}
+        try:
+            return {nid: keys
+                    for nid, keys in stale_results.select_stale(graph, sections).matched}
+        except Exception as e:
+            log.warning("could not resolve stored results for the prune dialog: %s", e)
+            return {}
+
+    def _on_prune_stale():
+        graph = state.get("prov_graph")
+        plan = plan_prune(graph)
+        if plan.is_empty:
+            if plan.blocked:
+                ctx.set_status(
+                    f"{len(plan.blocked)} stale step(s), all still required by "
+                    "steps that are current — nothing to drop.")
+            else:
+                ctx.set_status("Nothing in the provenance graph is stale.")
+            return
+
+        body = describe_prune(plan, _stale_artifacts(graph),
+                              inventory_known=bool(state.get("_dataset_sections")))
+        if QMessageBox.question(
+            None, "Drop stale nodes from the notebook", body,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            ctx.set_status("Prune cancelled.")
+            return
+
+        backup = _backup_graph(graph)
+        dropped, failed = [], []
+        for node_id in plan.remove:
+            try:
+                graph.remove(node_id)
+                dropped.append(node_id)
+            except ValueError as e:
+                # Only reachable if the plan and the graph disagree, which is a
+                # bug — name it rather than pruning around it.
+                failed.append(f"{node_id}: {e}")
+        problem = _persist_pruned_graph(graph) if dropped else ""
+        _sync_from_graph()
+
+        msg = f"Dropped {len(dropped)} stale step(s)."
+        if backup:
+            msg += f" Backup: {backup}."
+        if failed:
+            msg += f" Could not drop: {'; '.join(failed)}."
+        if problem:
+            msg += f" ⚠ {problem}."
+        ctx.set_status(msg)
+        log.info("prune: %s", msg)
+
     def _on_export_ipynb():
         from palms.utils import notebook_export
         default = str(ctx.data_path / "analysis_notebook.ipynb")
@@ -445,6 +684,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     run_all_btn.clicked.connect(_run_all)
     clear_btn.clicked.connect(_clear_all_outputs)
     dag_btn.clicked.connect(_on_show_dag)
+    prune_btn.clicked.connect(_on_prune_stale)
     export_btn.clicked.connect(_on_export_ipynb)
 
     # ── Register auto-sync callback (called by record_node) ──────────────

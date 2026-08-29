@@ -38,12 +38,13 @@ from palms.tabs._helpers import (
     make_progress_bar,
     make_tab,
 )
-from palms.utils import store_inventory, zarr_safe
+from palms.utils import stale_results, store_inventory, zarr_safe
 from palms.utils.adata_persistence import (
     CLUSTERING_PREFIX,
     _persist_table,
 )
 from palms.utils.cache_repair import human_bytes
+from palms.utils.plot_output import plots_dir
 from palms.utils.reporting import get_logger, report_write_failure
 
 if TYPE_CHECKING:
@@ -91,13 +92,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
     scan_btn = PushButton(label="Scan Dataset")
     expand_btn = PushButton(label="Expand All")
     collapse_btn = PushButton(label="Collapse All")
+    stale_btn = PushButton(label="Select Stale Results...", enabled=False)
     delete_btn = PushButton(label="Delete Selected...", enabled=False)
     trash_btn = PushButton(label="Empty Trash", enabled=False)
 
     def _set_busy(busy: bool):
         progress.setVisible(busy)
         scan_btn.enabled = not busy
-        for button in (delete_btn, trash_btn):
+        for button in (stale_btn, delete_btn, trash_btn):
             button.enabled = not busy and bool(state.get("_dataset_sections"))
 
     def _no_cache_message() -> str:
@@ -168,12 +170,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _start(_run, _done, "Scan failed")
 
     def _after_refresh(sections):
+        stale_btn.enabled = True
         delete_btn.enabled = True
         trash_btn.enabled = any(
             n.key == "trash:all" for s in sections for n in s.nodes)
 
     # ── Deleting ─────────────────────────────────────────────────────────
-    def _confirm_and_delete(keys, title):
+    def _confirm_and_delete(keys, title, extra: str = ""):
         sections = state.get("_dataset_sections")
         if not sections:
             status.value = "Scan the dataset first."
@@ -190,8 +193,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if plan.is_empty:
             status.value = "Nothing selected."
             return
+        body = store_inventory.describe_plan(plan)
+        if extra:
+            body = f"{extra}\n\n{body}"
         answer = QMessageBox.question(
-            None, title, store_inventory.describe_plan(plan),
+            None, title, body,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel,
         )
         if answer != QMessageBox.StandardButton.Yes:
@@ -224,6 +230,40 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     def _on_empty_trash():
         _confirm_and_delete(["trash:all"], "Empty the cache trash")
+
+    def _on_select_stale():
+        """Tick, then offer to delete, the results of every stale step.
+
+        A selector, not a second executor: it produces a key set and hands it to
+        the same _confirm_and_delete every other deletion goes through, so
+        plan_deletion vets it and assert_node_deletable still has the last word.
+        The rows are ticked first so the match is visible in the tree rather than
+        only in the dialog — and stay ticked if the user cancels.
+        """
+        sections = state.get("_dataset_sections")
+        if not sections:
+            status.value = "Scan the dataset first."
+            return
+        graph = state.get("prov_graph")
+        sel = stale_results.select_stale(graph, sections)
+        _populate(sections, _checked_keys() | set(sel.keys))
+        report_text.setVisible(True)
+        # plots_dir(), not a hand-built path: it is the one definition of
+        # <data_path>/plots, and `create` stays False — a report must not bring
+        # the directory into existence.
+        plots_note = ("" if ctx.data_path is None else
+                      f"Figures stay where they are: {plots_dir(ctx.data_path)}")
+        report_text.setPlainText(
+            stale_results.describe_selection(sel, plots_note=plots_note))
+        n_stale = len(stale_results.stale_ids(graph))
+        if not sel.keys:
+            status.value = (
+                f"{n_stale} stale step(s), none with results this tab can remove."
+                if n_stale else "Nothing in the provenance graph is stale."
+            )
+            return
+        _confirm_and_delete(sorted(sel.keys), "Clear stale analysis results",
+                            extra=_rename_warning(graph, n_stale))
 
     def _offer_reload(result):
         """Element deletions need the dataset rebuilt to leave the viewer sane.
@@ -281,6 +321,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     # connects, and a Qt builtin slot has none to find.
     expand_btn.clicked.connect(lambda: tree.expandAll())
     collapse_btn.clicked.connect(lambda: tree.collapseAll())
+    stale_btn.clicked.connect(_on_select_stale)
     delete_btn.clicked.connect(_on_delete)
     trash_btn.clicked.connect(_on_empty_trash)
 
@@ -291,13 +332,35 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     widget = make_tab(
         header, scan_btn, progress, tree,
-        expand_btn, collapse_btn, delete_btn, trash_btn, report_text,
+        expand_btn, collapse_btn, stale_btn, delete_btn, trash_btn, report_text,
     )
 
     def _restore_session(session):
         return None
 
     return widget, {"restore_session": _restore_session}
+
+
+def _rename_warning(graph, n_stale: int) -> str:
+    """The one case where "everything is stale" means nothing is wrong.
+
+    ``app.py`` re-emits the ``preamble`` node for the current ``data_path`` on
+    every launch, so the first launch after a dataset was moved or renamed by
+    hand revises it and flags every descendant stale — for nothing. Clearing
+    then deletes every analysis in the dataset because a directory changed name.
+    Module-level and Qt-free so the wording is testable without a viewer.
+    """
+    if not stale_results.looks_like_a_path_rewrite(graph):
+        return ""
+    return (
+        f"⚠ All {n_stale} recorded steps are stale, which is the signature of a "
+        "dataset that was moved or renamed rather than of results that are "
+        "wrong: the viewer re-records the preamble with the new path on every "
+        "launch, and that alone flags everything downstream.\n\n"
+        "If you moved this dataset, cancel and run "
+        "`palms-rename-dataset <path> --repair` first — it rewrites the "
+        "recorded paths and the staleness goes away with the results intact."
+    )
 
 
 def _display_name(node) -> str:

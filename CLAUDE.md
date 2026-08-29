@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1318 tests** across 56 files, measured 2026-08-26 —
+There is a `pytest` suite in `tests/` (**1378 tests** across 59 files, measured 2026-08-29 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -294,6 +294,56 @@ at exit. Failures are per node and named in the report — a partly applied batc
 describable, since several of these are irreversible. `_remove_tree` is the only function
 that touches the filesystem, enforced by a test that parses the module.
 
+### Acting on staleness (`utils/stale_results.py`)
+
+A node is `stale` when an ancestor was re-recorded with different code after it ran, so
+its artifact was produced by an input that no longer exists. Two actions consume that
+flag; **they are deliberately separate**, because clearing a result is always safe (the
+step stays, so the notebook recreates it) while dropping a step discards provenance.
+
+- **Tools → Dataset → "Select Stale Results…"** ticks the rows a stale step wrote and
+  routes them through the *existing* `_confirm_and_delete`. It is a selector, not a
+  second executor — `plan_deletion` vets the batch and `_remove_tree` is still the only
+  thing that touches the filesystem.
+- **Tools → Notebook → "Drop Stale Nodes…"** prunes the steps, leaves-first, after
+  backing the graph up to `viewer_cache/prov_graph.backup_<time>.json` (already
+  protected by `store_inventory`'s `prov_graph` prefix rule).
+
+`stale_results.py` is the **id bridge** and the only place the correspondence is
+written down: prov ids name the artifact (`clustering:<key>`, `cnv:<backend>`),
+inventory keys name a row on disk (`obs:table/clustering_<key>`,
+`sidecar:adata_cnv_cache_<backend>.h5ad`), and nothing on a `ProvNode` says which is
+which — `Step.outputs` names in-memory bindings, not files. Qt- and filesystem-free
+like `store_inventory`, matched by `(kind, short name)` against the scanned sections so
+it never needs to know which table or sidecar location it is looking at.
+
+Four rules, each of which was a real failure:
+
+- **A prune must write the session attr *and* the sidecar.** `app._load_prov_graph_items`
+  and `session._build_session_attrs` both refuse a graph smaller than the stored one,
+  on the stated assumption that nothing in the GUI removes nodes. Writing only the
+  sidecar had the pruned steps back at the next exit *and* the next launch — measured:
+  pruning 2 of 4 nodes loaded all 4 again. `_persist_pruned_graph` writes both, so the
+  sizes agree and neither guard fires. Neither guard was weakened; a *lone* shrink is
+  still the partial-write bug it always was.
+- **An unkeyed `uns` slot is spared while any sibling is fresh.** `nhood_enrichment`,
+  `co_occurrence` and `ligrec` are single slots (`adata_persistence.save_*_to_adata`)
+  written by nodes keyed per clustering, so a stale `nhood:A` and a fresh `nhood:B`
+  name the same bytes. `SHARED_UNS` lists them once. `cnv:copykat_propagated` is
+  excluded from the `cnv` family vote — it stores nothing, so it cannot be the reason
+  a registry is current *or* stale.
+- **The stale set is not dependency-closed.** `upsert` clears `stale` on the node it
+  re-records while flagging descendants, so a step recorded after a stale one is fresh
+  and depends on it — and `ProvGraph.remove` refuses any node another still names.
+  `plan_prune` excludes whatever a fresh node reaches *transitively* and emits the rest
+  in reverse topological order.
+- **Unmapped means untouched, and it is said out loud.** There is no fallback rule; a
+  guessed mapping deletes the wrong file. Figures under `<data_path>/plots/` are
+  outside every `deletable_roots()` directory by design and CSV exports went to a
+  dialog-chosen path recorded nowhere, so both are reported as left alone. "Its result
+  is not in this dataset" is a *different* message from "no rule for this id" —
+  collapsing them reads as a hole in the mapping table when there is none.
+
 ### Code Recording (provenance DAG)
 
 User actions are recorded as a **provenance graph** (`utils/prov_graph.py`), the
@@ -490,8 +540,11 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   the Notebook tab's "Export .ipynb". The notebook is code-only and replays from the raw
   Xenium output.
 - **Notebook tab** (`tabs/tab_notebook.py`) renders the graph as topo-ordered cells with a
-  ⚠ stale badge, an editable free-form cell area, and a "Show DAG" button (`utils/dag_view.py`,
-  matplotlib+networkx). `graph_to_mermaid` / `graph_to_dot` give diagram text.
+  ⚠ stale badge, an editable free-form cell area, a "Show DAG" button (`utils/dag_view.py`,
+  matplotlib+networkx) and "Drop Stale Nodes…" (see "Acting on staleness").
+  `graph_to_mermaid` / `graph_to_dot` give diagram text. Note the per-cell **Delete**
+  removes only the widget — `_sync_from_graph` re-adds it — so the prune is the only
+  thing that removes a node.
 - **Persistence**: the graph is written to `<data_path>/viewer_cache/prov_graph.json`
   **on every recorded step** (`_helpers._save_prov_graph`) *and* serialized into
   `sdata_cached.zarr/viewer_session/` by `save_session` (dataset switch / exit).

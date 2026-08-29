@@ -874,8 +874,14 @@ def _load_prov_graph_items(data_path, session: dict) -> list:
         # exit, so the sidecar is never legitimately *smaller*. If it is,
         # something wrote a partial graph (see prov_graph_restored) and the attr
         # is the better record — losing an analysis to a stale file is the one
-        # outcome worth being conservative about. Nothing in the GUI removes
-        # nodes, so a smaller graph is never a deliberate edit.
+        # outcome worth being conservative about.
+        #
+        # The Notebook tab's "Drop Stale Nodes" is the one deliberate shrink, and
+        # it does not arrive here as a mismatch: tab_notebook._persist_pruned_graph
+        # writes the pruned graph to the session attr *and* the sidecar in the
+        # same action, so both copies are the same size and this branch never
+        # sees it. A lone shrink still means what it always meant — a partial
+        # write — and is still refused.
         print(f"  Provenance sidecar has {len(items)} node(s) but the session "
               f"attr has {len(attr_items)}; using the session attr.")
         return list(attr_items)
