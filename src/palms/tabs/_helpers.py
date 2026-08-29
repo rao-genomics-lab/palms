@@ -560,6 +560,32 @@ def create_shared_helpers(ctx: ViewerContext):
 
     # ── record_preamble ──────────────────────────────────────────────────
     def _record_preamble():
+        # A Crop Dataset export has no raw 10x output — the zarr store *is* the
+        # data — so ``spatialdata_io.xenium()`` cannot read it, and a notebook
+        # recorded with that call fails on its very first cell. Branch on
+        # ``has_raw_xenium_source``, the single definition of "can this be read
+        # from raw output", rather than guessing from the directory contents
+        # here. Imported lazily: this module is on the tab import path and
+        # ``loader`` pulls in spatialdata.
+        from palms.loader import has_raw_xenium_source
+
+        if has_raw_xenium_source(ctx.data_path):
+            load = (
+                "from spatialdata_io import xenium\n"
+                f"data_path = Path(r\"{ctx.data_path}\")\n"
+                "sdata = xenium(data_path)\n"
+            )
+        else:
+            # Derived from data_path, not recorded as an absolute cache path, so
+            # palms-rename-dataset's single ``data_path = Path(r"…")`` rewrite
+            # keeps moving this notebook with its dataset.
+            load = (
+                "# This dataset is a Crop Dataset export: it has no raw 10x output,\n"
+                "# so the zarr store written by the crop is the thing to read.\n"
+                f"data_path = Path(r\"{ctx.data_path}\")\n"
+                "sdata = sd.read_zarr(data_path / \"sdata_cached.zarr\")\n"
+            )
+
         _record_environment()
         _record_node(
             "preamble",
@@ -572,10 +598,8 @@ def create_shared_helpers(ctx: ViewerContext):
             "from pathlib import Path\n"
             f"\nplt.rcParams['font.size'] = {state.get('plot_font_size', 10)}\n"
             f"\n# Load data\n"
-            "from spatialdata_io import xenium\n"
-            f"data_path = Path(r\"{ctx.data_path}\")\n"
-            "sdata = xenium(data_path)\n"
-            "adata = sdata[\"table\"].copy()",
+            + load
+            + "adata = sdata[\"table\"].copy()",
             kind=SETUP,
             label="Setup & data loading",
         )
