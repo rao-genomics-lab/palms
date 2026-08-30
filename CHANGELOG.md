@@ -20,6 +20,32 @@ entries under **Development log** are the closed pre-1.0.0 record.
   and `scripts/push_to_wiki.sh` both take Title-Case as "page" and lower-case as
   "internal note".
 
+- **`.github/workflows/release.yml`** — a `v*` tag builds the sdist and wheel and
+  publishes them with PyPI **Trusted Publishing** (OIDC), so no API token is stored in
+  the repo or anywhere else. Build and publish are separate jobs, and only the publish
+  job holds `id-token: write`, so build code from the tree cannot reach the credential.
+  Two checks run before the upload, because both failures otherwise surface only after a
+  tag is public: the metadata must contain no direct references, and `pyproject`'s
+  version must equal the tag.
+
+### Changed
+- **The CNV dependency comes from PyPI instead of a git URL, which is what makes PALMS
+  itself publishable.** PyPI rejects any distribution whose metadata carries a direct
+  URL reference, and `palms`'s `cnv` and `full` extras carried
+  `insitucnv @ git+https://…@v0.2.0`. The upload fails on that line alone, after the tag
+  exists. Upstream's own `insitucnv` on PyPI cannot stand in: 0.1.0 pins `anndata<0.12`
+  and `pandas<3`, which is exactly what the fork relaxed and why it exists.
+
+  So the fork is published under its own name, `insitucnv-copykat` — `insitucnv` on PyPI
+  is upstream's and stays theirs — and `environment.yml`, `environment-copykat.yml` and
+  the `cnv` extra all require `insitucnv-copykat>=0.3`. It still **imports** as
+  `insitucnv`, so no code changed; installing it beside upstream's distribution would
+  have the two fight over that import name.
+
+  `[tool.hatch.metadata] allow-direct-references` is removed with the last direct
+  reference: it existed only to let hatchling emit one, and without it a future direct
+  reference fails at build time rather than at upload time.
+
 ### Fixed
 - **A dead import wearing an invalid `# noqa`.** `tab_he_registration._restore_session`
   opened with `from palms.tabs._helpers import StatusProxy as _SP  # noqa: avoid
@@ -84,6 +110,7 @@ entries under **Development log** are the closed pre-1.0.0 record.
   Rebuild's refusal enumerates the absent raw files, which is a sentence contradicted
   by a declared export that has them.
 
+## [1.0.0] — 2026-08-29
 
 The first release. Work started on 2026-02-28 as a handful of scripts for looking at
 Xenium output on Linux, where 10x's own Explorer has no build; `0.1.0` was a number in

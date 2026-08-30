@@ -83,7 +83,10 @@ references = ["readfcs", "rasterio"]
 # in a separate env — see environment-copykat.yml.)
 cnv = [
     "infercnvpy>=0.6.0",
-    "insitucnv @ git+https://github.com/sraorao/insituCNV-copykat.git@v0.2.0",
+    # The `insituCNV-copykat` fork, published under its own name because
+    # `insitucnv` on PyPI is upstream's. It imports as `insitucnv` either way;
+    # do not install both distributions into one environment.
+    "insitucnv-copykat>=0.3",
 ]
 # Novae spatial-domain inference (Spatial -> Domains). Deliberately out of
 # environment.yml: it pulls torch + torch-geometric + lightning, and requires
@@ -125,13 +128,6 @@ Issues = "https://github.com/sraorao/palms/issues"
 testpaths = ["tests"]
 pythonpath = ["src"]        # import palms.* without installing the package
 addopts = "-q"
-
-# The optional `cnv` extra pins insitucnv via a git URL (a direct reference).
-# Hatchling rejects direct references in project metadata unless this is enabled,
-# which otherwise breaks `pip install -e .` (metadata generation) even when the
-# extra isn't requested.
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/palms"]
