@@ -110,6 +110,30 @@ entries under **Development log** are the closed pre-1.0.0 record.
   Rebuild's refusal enumerates the absent raw files, which is a sentence contradicted
   by a declared export that has them.
 
+## [Unreleased]
+
+### Fixed
+- **The libGLX warning fired on an install that cannot have the problem, and told the
+  user to run a command they did not have.** `gl_check` warned whenever the environment
+  lacked the unversioned `libGLX.so` and the host had one. Its own docstring says "both
+  halves of the collision must be present", but the abort needs *two glvnd builds in one
+  process* — and the half it checked was the wrong one.
+
+  Found by the fresh-machine install test, on the first `pip install palms[cnv]` ever
+  run: that environment has **neither** `libGLX.so` nor `libGLX.so.0`, because PyQt6
+  brings Qt inside its wheel and nothing pulls conda's `libglx`. PyOpenGL and Qt load the
+  one host copy, nothing can disagree — and the viewer greeted a working app with a
+  warning about an abort that could not happen. Measured beside the conda dev env, which
+  has both names and was correctly silent.
+
+  The check now also requires the environment's own `libGLX.so.0`. The message says which
+  condition actually holds rather than naming a conda package unconditionally, and the
+  remedy is derived from the running prefix: `mamba install -n <that env> libglx-devel`,
+  with the `environment-linux.yml` route offered second and only where a conda env is
+  running. It previously said `-n palms` whatever the environment was called — the one
+  that reported this was named `test` — and pointed at `./scripts/install.sh`, which a
+  user who installed from PyPI has no checkout to run.
+
 ## [1.0.0] — 2026-08-29
 
 The first release. Work started on 2026-02-28 as a handful of scripts for looking at

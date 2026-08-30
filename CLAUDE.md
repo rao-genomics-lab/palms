@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1406 tests** across 60 files, measured 2026-08-29 —
+There is a `pytest` suite in `tests/` (**1409 tests** across 60 files, measured 2026-08-30 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -665,11 +665,18 @@ reproducibility defect rather than a kernel-discovery one.
   be tested without importing napari. It only reports; it does **not** repair: preloading the
   env's `libGLX.so.0` with `RTLD_GLOBAL` does not work, because PyOpenGL still `dlopen`s the
   host's *unversioned* `libGLX.so` as a separate mapping — only the unversioned name existing
-  inside the env fixes it. It fires only when both halves of the collision are present (env
-  lacks the name, host has a copy); warning on the missing package alone would fire on every
-  correctly-working box with no `libglx-dev` installed. **Both checks are for the unversioned
-  name**: `ctypes.util.find_library('GLX')` returns `libGLX.so.0`, which every working box
-  has, so it cannot answer this question — hence the globbed path list.
+  inside the env fixes it. It fires only when **all three** halves of the collision are
+  present, because the abort needs *two glvnd builds in one process*: the env has its own
+  `libGLX.so.0`, it lacks the unversioned `libGLX.so` beside it, and the host has an
+  unversioned copy. The first of those was missing until 2026-08-30, which made the warning
+  fire at a wheel-only install (`pip install palms`) that has **neither** name — Qt comes
+  inside the PyQt6 wheel, nothing pulls conda's `libglx`, so there is one copy and nothing to
+  collide. Warning on the host copy alone would fire on every correctly-working box with no
+  `libglx-dev` installed. The *host* check is for the unversioned name specifically:
+  `ctypes.util.find_library('GLX')` returns `libGLX.so.0`, which every working box has, so it
+  cannot answer this question — hence the globbed path list. The remedy text is derived from
+  `sys.prefix` rather than spelled: it named `-n palms` and `./scripts/install.sh` to every
+  reader, including ones whose env is called something else and ones with no checkout at all.
 - **pandas 3.0 PyArrow strings** — `_convert_arrow_strings()` in `src/palms/loader.py`
 - **NumPy 2.0** — `np.NAN` fallback for omnipath compatibility
 - **matplotlib 3.9 `cm.get_cmap` removal** — `_patch_matplotlib_cm_compat()` in
