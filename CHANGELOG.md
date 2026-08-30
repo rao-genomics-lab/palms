@@ -6,6 +6,20 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Added
+- **`docs/user-authored-analyses.md` is tracked.** A 751-line design note, written
+  2026-08-26 and untracked since: can a user add a *new* analysis and a GUI element for
+  it, with the app linting it and generating its tests. The answer is yes and most of the
+  machinery exists — but not the part it looks like: `~/.config/palms/templates/` is a
+  *shadowing* mechanism, not a plugin one, so a template id that this package did not
+  ship cannot exist. Untracked, that finding lived in one working copy.
+
+  It joins the design notes already in `docs/` (`user-configurable-templates-todo.md`,
+  `reproducible_notebook_plan.md`, the two migration notes). Its lower-case filename is
+  what keeps it out of the published site and the wiki — `mkdocs.yml`'s `exclude_docs`
+  and `scripts/push_to_wiki.sh` both take Title-Case as "page" and lower-case as
+  "internal note".
+
 ### Fixed
 - **A dead import wearing an invalid `# noqa`.** `tab_he_registration._restore_session`
   opened with `from palms.tabs._helpers import StatusProxy as _SP  # noqa: avoid
