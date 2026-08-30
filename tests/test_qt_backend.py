@@ -166,36 +166,62 @@ class TestLibglxCollisionWarning:
     calling ``qFatal`` during ``import``, which produces no Python traceback and
     no clue about the cause.
 
-    Both halves of the collision must be present. Warning on a missing package
-    alone would fire on every correctly-working machine that simply has no host
-    ``libglx-dev`` installed, and a warning that is usually wrong is a warning
-    people learn to scroll past.
+    **All three** halves of the collision must be present, because the abort needs
+    two glvnd builds in one process: the environment's own ``libGLX.so.0``, no
+    unversioned link beside it, and a host copy for PyOpenGL to find instead.
+    Warning on a missing package alone would fire on every correctly-working
+    machine that simply has no host ``libglx-dev`` — and, until 2026-08-30, on
+    every wheel-only install, which has no glvnd of its own at all. A warning that
+    is usually wrong is a warning people learn to scroll past.
     """
 
     @staticmethod
-    def _prefix_without_the_name(tmp_path):
-        (tmp_path / "lib").mkdir()
-        return tmp_path
+    def _defective_conda_prefix(tmp_path):
+        """The shape that actually aborts: own glvnd, no unversioned link."""
+        env = tmp_path / "palms"
+        (env / "lib").mkdir(parents=True)
+        (env / "lib" / "libGLX.so.0").write_text("")
+        (env / "conda-meta").mkdir()
+        return env
 
-    def test_warns_when_the_env_lacks_it_and_the_host_has_it(self, tmp_path):
+    def test_warns_when_the_env_lacks_the_link_and_the_host_has_it(self, tmp_path):
         from palms.utils import gl_check
 
         host = tmp_path / "host-libGLX.so"
         host.write_text("")
         msg = gl_check.libglx_collision_message(
-            prefix=self._prefix_without_the_name(tmp_path),
+            prefix=self._defective_conda_prefix(tmp_path),
             host_paths=(str(host),),
             platform="linux",
         )
         assert msg is not None
         # The point of the message is the command, not the diagnosis.
-        assert "environment-linux.yml" in msg
+        assert "libglx-devel" in msg
         assert str(host) in msg
+
+    def test_silent_when_the_env_ships_no_glvnd_of_its_own(self, tmp_path):
+        """A wheel-only install cannot have this problem, and was told it did.
+
+        Measured 2026-08-30: a fresh ``pip install palms[cnv]`` env has neither
+        ``libGLX.so`` nor ``libGLX.so.0`` — PyQt6 brings Qt inside its wheel and
+        nothing pulls conda's ``libglx`` — so PyOpenGL and Qt load the one host
+        copy. The old check saw only "no unversioned name in the env" and warned,
+        at a working app, recommending a conda command the user could not run.
+        """
+        from palms.utils import gl_check
+
+        env = tmp_path / "venv"
+        (env / "lib").mkdir(parents=True)
+        host = tmp_path / "host-libGLX.so"
+        host.write_text("")
+        assert gl_check.libglx_collision_message(
+            prefix=env, host_paths=(str(host),), platform="linux"
+        ) is None
 
     def test_silent_when_the_env_has_the_unversioned_name(self, tmp_path):
         from palms.utils import gl_check
 
-        prefix = self._prefix_without_the_name(tmp_path)
+        prefix = self._defective_conda_prefix(tmp_path)
         (prefix / "lib" / "libGLX.so").write_text("")
         host = tmp_path / "host-libGLX.so"
         host.write_text("")
@@ -207,7 +233,7 @@ class TestLibglxCollisionWarning:
         from palms.utils import gl_check
 
         assert gl_check.libglx_collision_message(
-            prefix=self._prefix_without_the_name(tmp_path),
+            prefix=self._defective_conda_prefix(tmp_path),
             host_paths=(str(tmp_path / "nope.so"),),
             platform="linux",
         ) is None
@@ -223,10 +249,49 @@ class TestLibglxCollisionWarning:
         host = tmp_path / "host-libGLX.so"
         host.write_text("")
         assert gl_check.libglx_collision_message(
-            prefix=self._prefix_without_the_name(tmp_path),
+            prefix=self._defective_conda_prefix(tmp_path),
             host_paths=(str(host),),
             platform="darwin",
         ) is None
+
+    def test_the_remedy_names_the_environment_that_is_running(self, tmp_path):
+        """It said ``-n palms`` whatever the env was called.
+
+        The env that reported this was named ``test``; running the suggested
+        command would have updated a different environment, or none.
+        """
+        from palms.utils import gl_check
+
+        env = tmp_path / "not_palms"
+        (env / "lib").mkdir(parents=True)
+        (env / "lib" / "libGLX.so.0").write_text("")
+        (env / "conda-meta").mkdir()
+        host = tmp_path / "host-libGLX.so"
+        host.write_text("")
+
+        msg = gl_check.libglx_collision_message(
+            prefix=env, host_paths=(str(host),), platform="linux")
+
+        assert "-n not_palms" in msg
+        assert "-n palms" not in msg
+
+    def test_a_non_conda_prefix_is_not_told_to_run_mamba(self, tmp_path):
+        """``environment-linux.yml`` and ``install.sh`` need a checkout to exist."""
+        from palms.utils import gl_check
+
+        env = tmp_path / "venv"
+        (env / "lib").mkdir(parents=True)
+        (env / "lib" / "libGLX.so.0").write_text("")     # but no conda-meta
+        host = tmp_path / "host-libGLX.so"
+        host.write_text("")
+
+        msg = gl_check.libglx_collision_message(
+            prefix=env, host_paths=(str(host),), platform="linux")
+
+        assert msg is not None
+        assert "mamba" not in msg
+        assert "install.sh" not in msg
+        assert "ln -s libGLX.so.0" in msg
 
     def test_the_checked_paths_are_the_unversioned_name(self):
         """``libGLX.so.0`` is present on every working box; it proves nothing.

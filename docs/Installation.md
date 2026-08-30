@@ -223,8 +223,10 @@ predates the package being added at all. Apply the Linux overlay:
 conda env update -n palms -f environment-linux.yml
 ```
 
-The viewer checks for this at startup and prints the same command, so you should not have to
-diagnose the abort from the message above.
+The viewer checks for this at startup and prints a fix naming *your* environment, so you
+should not have to diagnose the abort from the message above. A wheel-only install
+(`pip install palms`) cannot hit this and is not warned: PyQt6 brings Qt inside its wheel and
+nothing pulls conda's `libglx`, so there is only one copy of the library in the process.
 
 Why: conda ships `libGLX.so.0` but not the unversioned `libGLX.so`. PyOpenGL's loader looks
 for the unversioned name first, misses the environment, and loads your *system's* copy

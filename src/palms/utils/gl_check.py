@@ -13,6 +13,12 @@ This module lives apart from ``app.py`` for two reasons: the check has to run
 before ``import napari`` (that import is what aborts), and keeping it here means
 it can be tested without importing napari at all.
 
+An install with no glvnd of its own cannot hit this: a wheel-only install
+(``pip install palms``) brings Qt inside the PyQt6 wheel and pulls no conda
+``libglx``, so PyOpenGL and Qt load the one host copy and there is no second
+build to disagree with. The check requires the environment's own
+``libGLX.so.0`` for that reason.
+
 **It reports; it does not repair.** Preloading conda's ``libGLX.so.0`` with
 ``RTLD_GLOBAL`` does not help — PyOpenGL still ``dlopen``s the host's unversioned
 copy as a separate mapping. Only the unversioned name existing *inside* the env
@@ -42,14 +48,25 @@ def libglx_collision_message(
 ) -> str | None:
     """Return a warning for the defective configuration, or ``None``.
 
-    Both halves of the collision must be present for it to be reachable, so an
-    env merely missing the package on a box with no host ``libGLX.so`` says
-    nothing — there is no second copy for PyOpenGL to find.
+    **Three** things must hold, because the abort needs *two* glvnd builds in one
+    process:
 
-    Both checks are for the *unversioned* name specifically. Every box with
-    working graphics has ``libGLX.so.0``, and ``ctypes.util.find_library('GLX')``
-    finds exactly that, so it cannot answer this question. It is the unversioned
-    link that decides which copy PyOpenGL loads.
+    1. the environment ships its own ``libGLX.so.0`` — that is the second build;
+    2. it lacks the unversioned ``libGLX.so`` link, so PyOpenGL misses it;
+    3. the host has an unversioned copy for PyOpenGL to find instead.
+
+    Condition 1 was missing, and its absence made the warning fire on an install
+    that cannot have the problem. Measured 2026-08-30 on one box: the conda dev
+    env has both names and was correctly silent; a fresh ``pip install
+    palms[cnv]`` env has **neither** — PyQt6 comes from a wheel with Qt bundled
+    and nothing pulls conda's ``libglx`` — and the warning fired anyway, at a
+    working app. With one glvnd in the process there is nothing to collide.
+
+    Both file checks are for the names they name. Every box with working graphics
+    has *a* ``libGLX.so.0``, and ``ctypes.util.find_library('GLX')`` returns
+    exactly that, so it cannot answer this question — what matters is whether the
+    *environment's* lib directory holds one, and whether the unversioned link
+    sits beside it.
 
     The arguments exist for testing; the defaults describe the running process.
     """
@@ -57,8 +74,11 @@ def libglx_collision_message(
         return None                     # no GLX on macOS; Qt uses the cocoa plugin
 
     prefix = Path(prefix if prefix is not None else sys.prefix)
-    if (prefix / "lib" / "libGLX.so").exists():
+    lib = prefix / "lib"
+    if (lib / "libGLX.so").exists():
         return None                     # libglx-devel is installed — nothing to warn about
+    if not (lib / "libGLX.so.0").exists():
+        return None                     # no glvnd of its own — a pip/venv install, one copy
 
     for candidate in (host_paths if host_paths is not None else HOST_LIBGLX_PATHS):
         if os.path.exists(candidate):
@@ -69,14 +89,37 @@ def libglx_collision_message(
 
     return (
         "\n"
-        "WARNING: this environment is missing `libglx-devel`, and a system libGLX\n"
-        f"         was found at {host}. napari may abort at startup with\n"
+        "WARNING: this environment has libGLX.so.0 but not the unversioned libGLX.so\n"
+        f"         (conda's `libglx-devel`), and a system libGLX was found at\n"
+        f"         {host}. napari may abort at startup with\n"
         '         "Could not initialize GLX" / "Aborted (core dumped)" and no traceback,\n'
         "         most likely over a remote display (ThinLinc/VNC/x2go/xrdp).\n"
         "\n"
         "         Fix it with:\n"
-        "             mamba env update -n palms -f environment-linux.yml\n"
-        "         (or re-run ./scripts/install.sh, which applies it automatically)\n"
+        f"{_remedy(prefix)}"
+    )
+
+
+def _remedy(prefix: Path) -> str:
+    """The command to run, for the environment actually running.
+
+    The old text named ``-n palms`` and ``./scripts/install.sh`` unconditionally.
+    An env is routinely called something else, and a user who installed from PyPI
+    has no checkout to run a script from — advice that cannot be followed is
+    worse than none, because it reads as though the app is broken.
+    """
+    env = prefix.name
+    if not (prefix / "conda-meta").is_dir():
+        return (
+            f"             ln -s libGLX.so.0 {prefix / 'lib' / 'libGLX.so'}\n"
+            "         (this environment provides libGLX.so.0 without the unversioned\n"
+            "          link PyOpenGL looks for first)\n"
+        )
+    return (
+        f"             mamba install -n {env} libglx-devel\n"
+        "         or, from a checkout of the repository:\n"
+        f"             mamba env update -n {env} -f environment-linux.yml\n"
+        "         (./scripts/install.sh applies that automatically)\n"
     )
 
 
