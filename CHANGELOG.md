@@ -6,6 +6,28 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Added
+- **`docs/user-authored-analyses.md` is tracked.** A 751-line design note, written
+  2026-08-26 and untracked since: can a user add a *new* analysis and a GUI element for
+  it, with the app linting it and generating its tests. The answer is yes and most of the
+  machinery exists — but not the part it looks like: `~/.config/palms/templates/` is a
+  *shadowing* mechanism, not a plugin one, so a template id that this package did not
+  ship cannot exist. Untracked, that finding lived in one working copy.
+
+  It joins the design notes already in `docs/` (`user-configurable-templates-todo.md`,
+  `reproducible_notebook_plan.md`, the two migration notes). Its lower-case filename is
+  what keeps it out of the published site and the wiki — `mkdocs.yml`'s `exclude_docs`
+  and `scripts/push_to_wiki.sh` both take Title-Case as "page" and lower-case as
+  "internal note".
+
+- **`.github/workflows/release.yml`** — a `v*` tag builds the sdist and wheel and
+  publishes them with PyPI **Trusted Publishing** (OIDC), so no API token is stored in
+  the repo or anywhere else. Build and publish are separate jobs, and only the publish
+  job holds `id-token: write`, so build code from the tree cannot reach the credential.
+  Two checks run before the upload, because both failures otherwise surface only after a
+  tag is public: the metadata must contain no direct references, and `pyproject`'s
+  version must equal the tag.
+
 ### Changed
 - **The CNV dependency comes from PyPI instead of a git URL, which is what makes PALMS
   itself publishable.** PyPI rejects any distribution whose metadata carries a direct
@@ -24,14 +46,69 @@ entries under **Development log** are the closed pre-1.0.0 record.
   reference: it existed only to let hatchling emit one, and without it a future direct
   reference fails at build time rather than at upload time.
 
-### Added
-- **`.github/workflows/release.yml`** — a `v*` tag builds the sdist and wheel and
-  publishes them with PyPI **Trusted Publishing** (OIDC), so no API token is stored in
-  the repo or anywhere else. Build and publish are separate jobs, and only the publish
-  job holds `id-token: write`, so build code from the tree cannot reach the credential.
-  Two checks run before the upload, because both failures otherwise surface only after a
-  tag is public: the metadata must contain no direct references, and `pyproject`'s
-  version must equal the tag.
+### Fixed
+- **A dead import wearing an invalid `# noqa`.** `tab_he_registration._restore_session`
+  opened with `from palms.tabs._helpers import StatusProxy as _SP  # noqa: avoid
+  circular`. `_SP` is never used, `StatusProxy` is already imported at module level and
+  used there, and "avoid circular" is prose where ruff expects rule codes — so the
+  directive was invalid, suppressed nothing, and printed a warning on every lint run
+  including CI. Removed rather than corrected: there is nothing left to suppress.
+- **A crop export rewrote recorded paths into files it does not copy.**
+  `rewrite_graph_paths` repoints *every* absolute path in the carried provenance
+  graph at the export. That is right for the preamble's `data_path` and wrong for
+  anything under a directory the export does not carry. The case that bites is 10x's
+  own clustering CSVs: a parent's `clustering:<key>` node legitimately reads
+  `<parent>/analysis/clustering/<key>/clusters.csv`, the rewrite turns it into
+  `<export>/analysis/…`, and an export carries `experiment.xenium`,
+  `transcripts.parquet` and the zarr — never `analysis/`. Measured on
+  `demo_data/crop_6`: with the preamble fixed, the replay got three cells in and died
+  with `FileNotFoundError`, and all three `clustering:*` nodes were of that shape.
+  A relaunch could not repair it, because `_record_clustering` returns early when the
+  node exists — deliberately, so a loader never overwrites a producer's code.
+
+  The export now checks each rewritten path against **what the staging directory
+  actually holds**, rather than against a list of what an export is believed to hold,
+  and substitutes the reload-from-the-store cell for a `clustering:<key>` node whose
+  file is not there. Copying `analysis/` instead would be wrong: a crop is a cell
+  subset, so the parent's CSV reindexes to NaN for every cell the crop does not
+  contain. A dangling path with no such substitution is **reported in the export's
+  own notes** rather than silently left, since the notebook will fail on it.
+
+  **A reloaded clustering is not a recomputed one**, and the cell says so where the
+  reader is. A crop export's notebook can reproduce the parent's labels but cannot
+  re-derive them, which matters to anything quoting an ARI off a crop export.
+  `utils/clustering_code.py` now holds that cell's text once, because
+  `_record_clustering` and the export must not drift.
+
+- **A Crop Dataset export declares itself cache-only, and nothing read the
+  declaration.** `crop_export` stamps `cache_only: True` into the export's cache
+  manifest, and `write_manifest`'s own docstring says it is there "for readers that
+  would otherwise have to infer it from absent files". Five readers inferred it
+  anyway — both `loader` call sites, the dataset inventory's description of the raw
+  section, the Force Rebuild guard and the recorded preamble all recomputed
+  `not has_raw_xenium_source(path)`, which is the inference the stamp exists to
+  replace.
+
+  It agreed by luck: an export writes none of the raw markers, so absence and
+  declaration said the same thing. The moment an export also writes a raw-shaped
+  file — the raw-format export this is a prerequisite for — the inference flips, the
+  loader reopens rebuild paths on a dataset whose cache is the *only* copy of the
+  data, and the recorded preamble silently reverts to `xenium(data_path)`, which
+  reads the raw half and drops every derived layer the crop carried. That notebook
+  runs and produces less, which is worse than the first-cell crash fixed in the
+  previous release.
+
+  `loader.is_cache_only()` is now the single question every reader asks, with
+  `has_raw_xenium_source` left as the definition of the *inference* it falls back to.
+  **Only a `True` stamp overrides**: a `false` one is read but not trusted to unset
+  cache-only, because being wrong in that direction sends the loader down a rebuild
+  path on data that cannot be rebuilt — the stamp may add certainty, never remove
+  protection. A manifest that is missing, unparseable or silent makes no claim and
+  never raises on the load path.
+
+  `loader.cache_only_reason()` exists so the two *messages* stay true: Force
+  Rebuild's refusal enumerates the absent raw files, which is a sentence contradicted
+  by a declared export that has them.
 
 ## [1.0.0] — 2026-08-29
 

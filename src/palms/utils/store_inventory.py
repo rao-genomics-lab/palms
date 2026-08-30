@@ -373,7 +373,7 @@ def _raw_section(data_path: Path, cache_path: Optional[Path]) -> Section:
     By exclusion, never by a hardcoded Xenium file list: a vendor file nobody
     has heard of must show up read-only, not become selectable.
     """
-    from palms.loader import has_raw_xenium_source
+    from palms.loader import is_cache_only
 
     owned = _viewer_owned_names(data_path, cache_path)
     # In a Crop Dataset export the "raw" files (experiment.xenium,
@@ -381,7 +381,7 @@ def _raw_section(data_path: Path, cache_path: Optional[Path]) -> Section:
     # read-only — they are still the only copy — but calling them 10x output
     # the viewer never touched is simply untrue, and it is the same wrong
     # mental model that let Force Rebuild loose on these datasets.
-    cache_only = not has_raw_xenium_source(data_path)
+    cache_only = is_cache_only(data_path)
     reason = (
         "the only copy of this dataset's source data — a Crop Dataset export "
         "has no 10x output to fall back on"

@@ -9,7 +9,6 @@ import numpy as np
 from qtpy.QtWidgets import QWidget, QVBoxLayout
 from superqt.utils import ensure_main_thread
 
-from palms.utils.adata_persistence import CLUSTERING_PREFIX
 from palms.utils.prov_graph import (
     ProvGraph, CycleError, SETUP, ARTIFACT, TERMINAL,
 )
@@ -563,13 +562,15 @@ def create_shared_helpers(ctx: ViewerContext):
         # A Crop Dataset export has no raw 10x output — the zarr store *is* the
         # data — so ``spatialdata_io.xenium()`` cannot read it, and a notebook
         # recorded with that call fails on its very first cell. Branch on
-        # ``has_raw_xenium_source``, the single definition of "can this be read
-        # from raw output", rather than guessing from the directory contents
-        # here. Imported lazily: this module is on the tab import path and
-        # ``loader`` pulls in spatialdata.
-        from palms.loader import has_raw_xenium_source
+        # ``is_cache_only``, which prefers what the export *declared* in its
+        # cache manifest over what the directory listing suggests: an export
+        # that also wrote raw-shaped files would otherwise flip this branch back
+        # to ``xenium(data_path)`` and silently drop every derived layer the
+        # crop carried. Imported lazily: this module is on the tab import path
+        # and ``loader`` pulls in spatialdata.
+        from palms.loader import is_cache_only
 
-        if has_raw_xenium_source(ctx.data_path):
+        if not is_cache_only(ctx.data_path):
             load = (
                 "from spatialdata_io import xenium\n"
                 f"data_path = Path(r\"{ctx.data_path}\")\n"
@@ -681,16 +682,13 @@ def create_shared_helpers(ctx: ViewerContext):
             # Reload it, and say so in the cell — the previous version emitted a
             # read_csv of this path regardless, so the exported notebook died with
             # FileNotFoundError on every viewer-derived clustering.
-            cache = os.path.join(ctx.data_path, "sdata_cached.zarr")
-            code = (
-                f"\n# Clustering '{key}' was computed in an earlier session, before its\n"
-                f"# producer recorded code. This RELOADS the stored labels from the\n"
-                f"# viewer's cache — it does not recompute them.\n"
-                f"import zarr\n"
-                f"from anndata.io import read_elem\n"
-                f"_cached_obs = read_elem(zarr.open(r\"{cache}\", mode='r')['tables/table/obs'])\n"
-                f"adata.obs[\"{key}\"] = pd.Categorical(\n"
-                f"    _cached_obs[\"{CLUSTERING_PREFIX}{key}\"].reindex(adata.obs_names).astype(str).values)"
+            from palms.utils.clustering_code import reload_clustering_code
+
+            code = reload_clustering_code(
+                key,
+                os.path.join(ctx.data_path, "sdata_cached.zarr"),
+                reason=(f"Clustering '{key}' was computed in an earlier session, "
+                        "before its producer recorded code."),
             )
         _record_node(
             f"clustering:{key}",
