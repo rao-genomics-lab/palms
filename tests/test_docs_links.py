@@ -437,3 +437,54 @@ def test_every_bare_link_in_docs_rewrites_onto_a_real_page():
             if page not in pages:
                 missing.add(f"{md.name} -> {target}")
     assert not missing, f"links that rewrite onto a page that does not exist: {sorted(missing)}"
+
+
+# ── The site needs a page at its root ────────────────────────────────────────
+# A GitHub wiki's landing page is `Home.md`; mkdocs's is `index.md`. `docs/` is
+# wiki source, so it has the first and not the second, and mkdocs builds a site
+# with nothing at its root without complaint — `--strict` passed here and in CI
+# while Read the Docs refused the result ("Index file is not present in HTML
+# output directory"). `mkdocs_hooks.on_files` maps one to the other.
+#
+# Exercised through a stand-in for mkdocs's `File`, since mkdocs is not in the
+# test env (it is installed in the lint job, which builds the site for real and
+# then checks that `index.html` exists).
+
+class _FakeFile:
+    def __init__(self, src_uri):
+        self.src_uri = src_uri
+        self.name = src_uri.rsplit(".", 1)[0]
+        self.dest_uri = f"{self.name}/index.html"
+        self.url = f"{self.name}/"
+        self.dest_dir = "/site"
+        self.abs_dest_path = f"/site/{self.dest_uri}"
+
+
+def test_the_wiki_home_page_becomes_the_site_root():
+    home = _FakeFile("Home.md")
+    mkdocs_hooks.on_files([home], config=None)
+
+    assert home.dest_uri == "index.html"
+    assert home.abs_dest_path == "/site/index.html"
+    assert home.url == "./"
+
+
+def test_no_other_page_is_moved():
+    page = _FakeFile("Tab-Clustering.md")
+    mkdocs_hooks.on_files([page], config=None)
+
+    assert page.dest_uri == "Tab-Clustering/index.html"
+
+
+def test_the_home_page_the_hook_looks_for_exists():
+    """The hook matches by name, so a rename in `docs/` must not pass silently:
+    it would leave the site with no root page and fail only at Read the Docs."""
+    assert (DOCS / "Home.md").exists()
+
+
+def test_an_index_md_would_be_excluded_from_the_site():
+    """Why the mapping is a hook and not a file. `exclude_docs` treats lower-case
+    as "internal note", which is how planning notes are kept off the site — so
+    adding `docs/index.md` would drop it from the build without saying so."""
+    assert not (DOCS / "index.md").exists()
+    assert "[a-z]*.md" in MKDOCS.read_text()

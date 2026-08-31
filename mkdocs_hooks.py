@@ -20,6 +20,7 @@ is exactly the kind of thing that has leaked to the public wiki before.
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 
@@ -49,3 +50,33 @@ def _rewrite(target: str) -> str:
 def on_page_markdown(markdown: str, **_kwargs) -> str:
     """Append ``.md`` to bare wiki-style link targets."""
     return _LINK.sub(lambda m: f"{m.group(1)}({_rewrite(m.group(2))})", markdown)
+
+
+def on_files(files, config, **_kwargs):
+    """Serve the wiki's ``Home.md`` at the site root, as ``index.html``.
+
+    A GitHub wiki's landing page must be called ``Home.md``; mkdocs's is
+    ``index.md``. ``docs/`` is wiki source, so it has the first and not the
+    second — and mkdocs is happy to build a site with no page at its root. Read
+    the Docs is not: the first build after the repo went public failed with
+    "Index file is not present in HTML output directory", after ``mkdocs build
+    --strict`` had passed locally and in CI. Nothing in mkdocs itself checks it.
+
+    Renaming the file is not an option in either direction: ``Home.md`` is what
+    ``scripts/push_to_wiki.sh`` publishes as the wiki home, and a lower-case
+    ``index.md`` would be dropped by ``exclude_docs`` (``[a-z]*.md``) — silently,
+    since that pattern is how internal notes are kept out of the site.
+
+    So the mapping happens here, with the same reasoning as the link rewrite
+    above: the source keeps the wiki's one convention. Only ``File.name`` is
+    set; ``dest_uri`` and ``url`` are lazy and mkdocs derives both from it —
+    the same route it already takes for ``README.md``. Setting them by hand
+    would hard-code the two places mkdocs decides directory-URL layout.
+    """
+    for file in files:
+        if file.src_uri == "Home.md":
+            file.name = "index"
+            file.dest_uri = "index.html"
+            file.url = "./"
+            file.abs_dest_path = os.path.join(file.dest_dir, "index.html")
+    return files

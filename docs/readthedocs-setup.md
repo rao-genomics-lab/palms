@@ -34,19 +34,35 @@ pip install -r requirements-docs.txt
 mkdocs build --strict     # or: mkdocs serve
 ```
 
-## What is left, and what blocks it
+## The site root, and why it is a hook
 
-**Connecting the Read the Docs project requires the repository to be public.**
-RTD Community only builds public repos; `sraorao/palms` is still private.
-Going public is planned independently, so the sequence is: make the repo public,
-then connect RTD — not pay for RTD Business to work around a step that is happening
-anyway.
+A GitHub wiki's landing page must be `Home.md`; mkdocs's must be `index.md`. `docs/` is
+wiki source, so it has the first and not the second — and **mkdocs builds a site with no
+page at its root without complaint, `--strict` included**. RTD does not serve one: the
+first build failed with *"Index file is not present in HTML output directory"* after this
+repo's CI had been building the site green on every push.
 
-Once public:
+Renaming is not available in either direction. `Home.md` is what `push_to_wiki.sh`
+publishes as the wiki home, and a lower-case `docs/index.md` would be excluded from the
+site by `exclude_docs` (`[a-z]*.md`) — silently, because that pattern is what keeps
+internal notes like this file off the published site. So `mkdocs_hooks.on_files` retargets
+`Home.md` to the root at build time, and CI checks `index.html` exists afterwards, since
+`--strict` cannot.
 
-1. Sign in at <https://readthedocs.org> with GitHub and grant access to the repo.
+## Connecting the project
+
+The repository is public (2026-08-31), which was the one blocker — RTD Community does not
+build private repos, and that is why this was never worth paying RTD Business to work
+around.
+
+1. Sign in at <https://readthedocs.org> with GitHub and grant access to the repo. A repo
+   that has been *renamed* usually needs **Settings → Connected Services → GitHub →
+   Resync** before it appears in the import list.
 2. **Import a Project** → `sraorao/palms`. RTD detects `.readthedocs.yaml`;
-   no settings need changing.
+   no settings need changing. The slug must come out as **`palms`**, since `site_url`
+   already says so — if an older `xenium-viewer` project is still in the dashboard, delete
+   it rather than renaming: on RTD Community the slug is fixed at creation, and that
+   project has never built.
 3. Confirm the first build is green, then check a cross-link on the rendered site —
    that is the thing that was broken and is the only part CI cannot prove.
 4. Add the RTD webhook (RTD offers it during import) so pushes rebuild.
