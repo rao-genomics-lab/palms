@@ -2,7 +2,7 @@
 
 **P**rovenance-**A**ware **L**inking of **M**ultimodal **S**patial-omics
 
-![CI](https://github.com/sraorao/palms/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/rao-genomics-lab/palms/actions/workflows/ci.yml/badge.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 
@@ -49,7 +49,7 @@ heavy scientific stack (napari, scanpy, squidpy, spatialdata, zarr, dask, Qt), a
 resolves it more reliably than pip:
 
 ```bash
-git clone https://github.com/sraorao/palms.git
+git clone https://github.com/rao-genomics-lab/palms.git
 cd palms
 
 ./scripts/install.sh
@@ -134,7 +134,7 @@ major update), remove the old environment, re-clone the repo, and reinstall:
 ```bash
 conda env remove -n palms
 
-git clone https://github.com/sraorao/palms.git
+git clone https://github.com/rao-genomics-lab/palms.git
 cd palms
 ./scripts/install.sh
 conda activate palms
@@ -207,7 +207,7 @@ reference_datasets/                 # fetched scRNA-seq references + metadata
 
 ## Documentation
 
-Full documentation with screenshots is available on the [GitHub Wiki](https://github.com/sraorao/palms/wiki).
+Full documentation with screenshots is available on the [GitHub Wiki](https://github.com/rao-genomics-lab/palms/wiki).
 
 - `CLAUDE.md` — architecture overview and developer notes
 - `CHANGELOG.md` — release history

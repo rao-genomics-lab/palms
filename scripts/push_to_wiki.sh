@@ -2,7 +2,7 @@
 # Push docs/ content to the GitHub Wiki.
 #
 # Prerequisites:
-#   1. Initialize the wiki by visiting https://github.com/sraorao/palms/wiki
+#   1. Initialize the wiki by visiting https://github.com/rao-genomics-lab/palms/wiki
 #      and creating any first page (e.g. titled "Home", any content).
 #   2. Run this script from the repo root.
 #
@@ -16,7 +16,7 @@ WIKI_DIR="/tmp/palms.wiki"
 
 echo "Cloning wiki repo..."
 rm -rf "$WIKI_DIR"
-git clone https://github.com/sraorao/palms.wiki.git "$WIKI_DIR"
+git clone https://github.com/rao-genomics-lab/palms.wiki.git "$WIKI_DIR"
 
 echo "Copying docs to wiki..."
 # docs/ doubles as the wiki source, so every .md added there would be published
@@ -82,4 +82,4 @@ git add -A
 git commit -m "Update documentation from docs/ in main repo" || echo "Nothing to commit."
 git push
 
-echo "Done. Wiki updated: https://github.com/sraorao/palms/wiki"
+echo "Done. Wiki updated: https://github.com/rao-genomics-lab/palms/wiki"

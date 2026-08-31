@@ -1,8 +1,11 @@
 site_name: PALMS Documentation
 site_description: napari-based spatial transcriptomics viewer for Xenium 3.x output
 site_url: https://palms.readthedocs.io
-repo_url: https://github.com/sraorao/palms
-repo_name: sraorao/palms
+repo_url: https://github.com/rao-genomics-lab/palms
+repo_name: rao-genomics-lab/palms
+# mkdocs defaults this to `edit/master/docs/`, and the default branch is `main` — so
+# every page's "Edit on GitHub" link 404'd, on the first site this repo ever published.
+edit_uri: edit/main/docs/
 
 docs_dir: docs
 

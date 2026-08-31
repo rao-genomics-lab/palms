@@ -37,7 +37,7 @@ lost.
 Use this to develop PALMS, to run the test suite, or to get the CopyKAT backend.
 
 ```bash
-git clone https://github.com/sraorao/palms.git
+git clone https://github.com/rao-genomics-lab/palms.git
 cd palms
 ./scripts/install.sh
 conda activate palms
@@ -112,7 +112,7 @@ If the conda environment becomes broken or corrupted, remove it and start fresh:
 
 ```bash
 conda env remove -n palms
-git clone https://github.com/sraorao/palms.git
+git clone https://github.com/rao-genomics-lab/palms.git
 cd palms
 ./scripts/install.sh
 conda activate palms

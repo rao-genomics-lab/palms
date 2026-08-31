@@ -6,7 +6,7 @@ authors:
   - given-names: "Srinivasa Rao"
     family-names: "Rao"
     email: "go2rsr@gmail.com"
-repository-code: "https://github.com/sraorao/palms"
+repository-code: "https://github.com/rao-genomics-lab/palms"
 url: "https://palms.readthedocs.io"
 abstract: >-
   PALMS is a napari-based viewer for Xenium 3.x spatial transcriptomics output that brings
