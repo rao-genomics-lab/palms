@@ -99,7 +99,7 @@ position or meaning as a result.
 
 | Item | Description |
 |------|-------------|
-| Plot format | **PNG** or **SVG** for every automatically saved figure. Defaults to SVG. |
+| Plot format | What every automatically saved figure is written as: **PNG + PDF**, **PNG**, **PDF** or **SVG**. Defaults to PNG + PDF — a PNG to look at, a PDF to hand to a journal. |
 | Plot font size | Base font size for generated figures, from 1 to 20. Defaults to 10. |
 | CPU cores | The core budget for parallel analyses — currently CopyKAT only. Choices scale to the machine, with "half" and "all" labelled; defaults to half. |
 | Record reproducible code | Whether user actions are recorded into the provenance graph. On by default. |

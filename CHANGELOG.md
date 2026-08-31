@@ -80,6 +80,33 @@ entries under **Development log** are the closed pre-1.0.0 record.
   reference fails at build time rather than at upload time.
 
 ### Fixed
+- **The docs never told anyone to `pip install palms`.** PALMS 1.0.0 has been on PyPI
+  since 2026-08-30 and the fresh-machine install was verified on Linux and macOS, but
+  `README.md`, `Home.md` and `Installation.md` all opened with `git clone` +
+  `./scripts/install.sh`, and the extras table gave only the checkout form
+  (`pip install -e ".[cnv]"`). A reviewer who installs the published package was reading
+  instructions for a different route. All three now lead with the wheel and keep the
+  conda install as what it actually is: the way to develop PALMS, run the suite, or reach
+  the CopyKAT backend. `Home.md` also listed conda/mamba as a *requirement*.
+
+- **Preferences → Plot format was documented as the wrong menu with the wrong default.**
+  `Interface-Overview.md` said "**PNG** or **SVG** … Defaults to SVG". The menu offers
+  PNG + PDF, PNG, PDF and SVG, and defaults to **PNG + PDF** — a PNG to look at, a PDF to
+  hand to a journal. Stale since the plots rework.
+
+- **Two CNV controls were quoted in the docs with a spelling the app does not use** —
+  "Neighbors (expression graph)" and "Smoothing neighbors" against the UI's
+  "Neighbours". A reader searching the page for the label in front of them missed it.
+  `README.md` also still named the CNV dependency `insitucnv`, which is upstream's
+  distribution; PALMS requires `insitucnv-copykat`.
+
+- **`push_to_wiki.sh` could publish but never unpublish.** The copy loop only ever wrote,
+  so a page or screenshot deleted from `docs/` stayed on the wiki indefinitely — the five
+  screenshots whose tutorial steps were dropped were still being served, and an internal
+  note that leaked before the naming convention existed could never be taken down. It now
+  prunes anything the wiki holds that `docs/` no longer has, or that is not a wiki page by
+  the convention.
+
 - **Every tutorial illustrated all of its steps with a photograph of its first one.**
   30 `tutorial-*.png` were 9 distinct images: all five H&E-registration steps were one
   picture, all six ARMS steps another, all five ROI steps a third. `TUTORIAL_SHOTS`

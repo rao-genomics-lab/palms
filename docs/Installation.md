@@ -4,9 +4,37 @@
 
 - **Operating system**: Linux, macOS (Apple Silicon or Intel), or WSL2. Linux is the primary development and CI platform; macOS is supported but less exercised. Native Windows (outside WSL) is not supported.
 - **Memory**: 8 GB RAM minimum; 32 GB or more is recommended for large datasets (500k+ cells)
-- **Package manager**: [mamba](https://mamba.readthedocs.io/) or [conda](https://docs.conda.io/)
+- **Package manager**: `pip` (Python 3.10+) for the released package, or
+  [mamba](https://mamba.readthedocs.io/) / [conda](https://docs.conda.io/) for the
+  development environment. Only the CopyKAT CNV backend requires conda — see below.
 
-## Standard Install
+## Install from PyPI
+
+```bash
+pip install palms
+palms /path/to/xenium/output/
+```
+
+That is the whole install for using the viewer. PyQt6 brings Qt inside its wheel, so
+there is no system Qt or GL package to add, and nothing to clone. Verified on Linux and
+macOS against the published 1.0.0.
+
+Add the CNV stack, or everything, with an extra:
+
+```bash
+pip install "palms[cnv]"     # inferCNV backend
+pip install "palms[full]"    # every optional feature
+```
+
+One thing a wheel install does not get: the **CopyKAT** CNV backend. It needs a second
+conda environment carrying rpy2, R 4.3 and the `copykat` R package, so it is reachable
+only from a conda install (and, on Apple Silicon, not at all — see below). The
+**inferCNV** backend runs in-process and works everywhere, so CNV inference itself is not
+lost.
+
+## Install from source (conda)
+
+Use this to develop PALMS, to run the test suite, or to get the CopyKAT backend.
 
 ```bash
 git clone https://github.com/sraorao/palms.git
@@ -15,7 +43,7 @@ cd palms
 conda activate palms
 ```
 
-This installs the `palms` package in editable mode along with all required dependencies. It also installs the CNV inference stack (`infercnvpy` and `insitucnv`), so the CNV tab's **inferCNV** backend works immediately — no extra step required.
+This installs the `palms` package in editable mode along with all required dependencies. It also installs the CNV inference stack (`infercnvpy` and `insitucnv-copykat`), so the CNV tab's **inferCNV** backend works immediately — no extra step required.
 
 ### What `install.sh` does, and the manual equivalent
 
@@ -34,18 +62,20 @@ Forgetting the second command on Linux is not silent — the viewer detects it a
 
 ## Optional Extras
 
-These are the extras declared in `pyproject.toml`. Install them after activating the `palms` environment:
+These are the extras declared in `pyproject.toml`. From PyPI they are
+`pip install "palms[<extra>]"`; in a checkout, with the environment activated, the same
+extra is `pip install -e ".[<extra>]"`.
 
 | Extra | Install command | What it adds |
 |-------|----------------|--------------|
-| CellTypist | `pip install -e ".[celltypist]"` | Automated cell type annotation using pre-trained models |
-| R integration | `pip install -e ".[r]"` | rpy2 + anndata2ri, for the R-based reference fetcher (needs a system R) |
-| GPU support | `pip install -e ".[gpu]"` | torch, torch-geometric, pytorch-lightning, xgboost |
-| Reference datasets | `pip install -e ".[references]"` | readfcs + rasterio, for reading reference panel formats |
-| CNV inference | `pip install -e ".[cnv]"` | infercnvpy + insitucnv — **already included** in `environment.yml` |
-| Everything | `pip install -e ".[full]"` | All of the above |
-| Test suite | `pip install -e ".[test]"` | pytest + nbformat, nbclient and ipykernel, needed to run the notebook-replay test |
-| Development | `pip install -e ".[dev]"` | The `test` extra plus ruff, matching what CI runs |
+| CellTypist | `pip install "palms[celltypist]"` | Automated cell type annotation using pre-trained models |
+| R integration | `pip install "palms[r]"` | rpy2 + anndata2ri, for the R-based reference fetcher (needs a system R) |
+| GPU support | `pip install "palms[gpu]"` | torch, torch-geometric, pytorch-lightning, xgboost |
+| Reference datasets | `pip install "palms[references]"` | readfcs + rasterio, for reading reference panel formats |
+| CNV inference | `pip install "palms[cnv]"` | infercnvpy + insitucnv-copykat — **already included** in `environment.yml` |
+| Everything | `pip install "palms[full]"` | All of the above |
+| Test suite | `pip install "palms[test]"` | pytest + nbformat, nbclient and ipykernel, needed to run the notebook-replay test |
+| Development | `pip install "palms[dev]"` | The `test` extra plus ruff, matching what CI runs |
 
 `full` deliberately does *not* include `test` or `dev` — install those explicitly if you intend to run the suite. A plain `pip` install needs Python 3.10 or newer; the conda environment pins 3.12.
 

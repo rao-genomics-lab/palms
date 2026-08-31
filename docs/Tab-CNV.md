@@ -29,13 +29,13 @@ Requires the `cnv` optional extra, and CopyKAT additionally requires the `palms_
 
 | Control | Description |
 |---|---|
-| Neighbors (expression graph) | Spin box (5–100, default 15) — neighbors for the expression PCA graph used for smoothing |
-| Smoothing neighbors | Spin box (5–200, default 20) — neighbors used by the graph-smoothing step |
+| Neighbours (expression graph) | Spin box (5–100, default 15) — neighbours for the expression PCA graph used for smoothing |
+| Smoothing neighbours | Spin box (5–200, default 20) — neighbours used by the graph-smoothing step |
 | Window size (genes) | Spin box (2–200, default 60) — infercnvpy sliding-window size, in genes, computed independently per chromosome |
 | Window step | Spin box (1–50, default 10) — infercnvpy sliding-window step |
 | Cluster resolution | Float spin box (0.05–2.0, default 0.2) — Leiden clustering resolution for CNV subclones. Hover for a tooltip, or see the hint text below the field: this default may need tuning per dataset — check the chromosome heatmap and cluster count after running |
 
-Neighbors/Smoothing neighbors/Window size/Window step defaults match InSituCNV's own reference notebook ([`run_insitucnv.ipynb`](https://github.com/Moldia/InSituCNV/blob/main/notebooks/run_insitucnv.ipynb)).
+Neighbours/Smoothing neighbours/Window size/Window step defaults match InSituCNV's own reference notebook ([`run_insitucnv.ipynb`](https://github.com/Moldia/InSituCNV/blob/main/notebooks/run_insitucnv.ipynb)).
 
 ### Backend
 
