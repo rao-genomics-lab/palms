@@ -49,6 +49,33 @@ if ls "$REPO_ROOT"/docs/screenshots/*.png 2>/dev/null; then
     cp "$REPO_ROOT"/docs/screenshots/*.png "$WIKI_DIR"/screenshots/
 fi
 
+# Remove what docs/ no longer has. The copy loop above only ever writes, so a page
+# or a screenshot deleted from docs/ stayed on the wiki forever — five screenshots
+# whose tutorial steps had been dropped were still being served, and a renamed page
+# would leave its old title live beside the new one.
+echo "Pruning pages and screenshots that docs/ no longer has..."
+for page in "$WIKI_DIR"/*.md; do
+    name="$(basename "$page")"
+    # Two reasons to remove: docs/ no longer has it, or it is not a wiki page by the
+    # convention above. The second clears an internal note that leaked before the
+    # convention existed — user-configurable-templates-todo.md reached the public wiki
+    # as an orphan exactly that way, and copying by convention alone never unpublished it.
+    if [ ! -f "$REPO_ROOT/docs/$name" ] || ! [[ "$name" =~ $WIKI_PAGE_RE ]]; then
+        echo "  removing $name"
+        rm -f "$page"
+    fi
+done
+if [ -d "$WIKI_DIR/screenshots" ]; then
+    for shot in "$WIKI_DIR"/screenshots/*.png; do
+        [ -e "$shot" ] || continue
+        name="$(basename "$shot")"
+        if [ ! -f "$REPO_ROOT/docs/screenshots/$name" ]; then
+            echo "  removing screenshots/$name"
+            rm -f "$shot"
+        fi
+    done
+fi
+
 echo "Committing and pushing..."
 cd "$WIKI_DIR"
 git add -A

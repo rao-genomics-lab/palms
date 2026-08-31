@@ -27,14 +27,21 @@ PALMS is an open-source, napari-based viewer for 10x Genomics Xenium spatial tra
 ## Requirements
 
 - Linux, macOS, or WSL2 (native Windows is not supported)
-- conda or mamba
+- Python 3.10 or newer. conda or mamba only for a source install, or for the CopyKAT CNV backend.
 
 ## Quick Install
 
 ```bash
+pip install palms
+palms /path/to/xenium/output/
+```
+
+PyQt6 carries Qt inside its wheel, so there is nothing else to install. To develop PALMS,
+run the test suite, or use the CopyKAT CNV backend, install from source instead:
+
+```bash
 ./scripts/install.sh
 conda activate palms
-palms /path/to/xenium/output/
 ```
 
 `install.sh` creates the environment from `environment.yml` and, on Linux and WSL, applies the `environment-linux.yml` overlay that a Qt6/GLX fix needs.
@@ -49,6 +56,7 @@ For full installation instructions, optional extras, and troubleshooting, see th
 |------|-------------|
 | [Installation](Installation) | Full install guide, launch commands, optional extras, troubleshooting |
 | [Interface Overview](Interface-Overview) | Canvas, control panel, layers, UMAP window, session persistence |
+| [Plots Window](Plots-Window) | The dock every figure is collected in, and where figures are written |
 
 ### Tab Reference
 

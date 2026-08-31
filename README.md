@@ -29,8 +29,24 @@ expression at cell-level resolution with:
 
 ## Install
 
-The viewer pulls in a heavy scientific stack (napari, scanpy, squidpy, spatialdata,
-zarr, dask, Qt). The recommended way to install is via conda:
+```bash
+pip install palms
+palms /path/to/xenium/output/
+```
+
+That is the whole install for using the viewer: PyQt6 carries Qt inside its wheel, so
+there is no system Qt or GL package to add. Python 3.10 or newer. Extras are
+`pip install "palms[cnv]"` (inferCNV) or `"palms[full]"`.
+
+The one thing a wheel install cannot reach is the **CopyKAT** CNV backend, which needs a
+second conda environment for rpy2 + R 4.3. The **inferCNV** backend runs in-process, so
+CNV inference itself is available either way.
+
+### From source
+
+To develop PALMS, run the test suite, or use the CopyKAT backend. The viewer pulls in a
+heavy scientific stack (napari, scanpy, squidpy, spatialdata, zarr, dask, Qt), and conda
+resolves it more reliably than pip:
 
 ```bash
 git clone https://github.com/sraorao/palms.git
@@ -42,7 +58,7 @@ conda activate palms
 
 The env file installs the core stack via conda-forge and `palms` itself
 in editable mode, so source edits in this checkout are picked up immediately.
-It also installs the CNV inference stack (`infercnvpy` and `insitucnv`), so the
+It also installs the CNV inference stack (`infercnvpy` and `insitucnv-copykat`), so the
 CNV tab's **inferCNV** backend works out of the box — no extra step needed.
 
 `install.sh` is just `conda env create -f environment.yml` plus one OS-dependent
