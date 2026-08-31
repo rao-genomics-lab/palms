@@ -27,3 +27,8 @@ Replace the native Xenium cell segmentation with a custom segmentation produced 
 - A custom segmentation is cached in `sdata_cached.zarr` on first load; subsequent loads use the cached version automatically.
 - Building a custom segmentation is a two-stage pipeline. The boundaries are extracted first (typically in R/Seurat), then `palms-build-custom-segmentation` turns them into the label raster the viewer loads. Its output is a `custom_labels.zarr` that must stay **beside** the `.h5ad` you select here — selecting an `.h5ad` on its own fails with "not found alongside h5ad".
 - Swapping segmentation resets active clusterings. You will need to re-run Leiden clustering on the new segmentation before cluster-dependent visualisations and analyses are available.
+- The swap is recorded. The exported notebook's load cell binds `adata` from the custom
+  table cached in `sdata_cached.zarr` rather than from the Xenium one, so a replay is
+  about the same cells you were looking at. Results recorded *before* the swap are marked
+  stale in the Notebook tab for the same reason the viewer clears them here: they were
+  computed on cells that are no longer loaded.

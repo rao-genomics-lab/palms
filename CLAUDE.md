@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1409 tests** across 60 files, measured 2026-08-30 —
+There is a `pytest` suite in `tests/` (**1418 tests** across 61 files, measured 2026-08-31 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -527,7 +527,15 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   `environment` node: package versions as a comment block plus seeds and
   `sc.logging.print_header()`, sorting first and with **no dependents**, so a version
   change is readable without flagging every result stale), `record_clustering`
-  (`clustering:<key>`), `record_spatial_neighbors`. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
+  (`clustering:<key>`), `record_spatial_neighbors`.
+  **The preamble is also what says which *cells* the analysis is about.** Tools →
+  Segmentation swaps in a custom segmentation, and the swap is recorded by upserting
+  `preamble` — its last line binds `tables["custom_table"]` from the cached store
+  instead of `sdata["table"]` — so the notebook loads the right cells *and* every
+  earlier result is flagged stale, which it is: it was computed on cells that are no
+  longer bound. `app.py` seeds `state["segmentation_source"]` from the session before
+  the launch re-emit, or the correction made by the tab's own restore handler would
+  flag the whole notebook stale on every launch. Identity conventions: `clustering:<col>`, `rank_genes:<key>`,
   `nhood:<key>`, `cooccur:<key>`, `ligrec:<key>`, `annotation:<col>`, `rois`, `roi_deg`,
   `cnv:<backend>` (`cnv:infercnv` / `cnv:copykat`); terminals `plot:*`
   (incl. `plot:cnv_heatmap:<backend>:<key>`) / `export:*` / `he:*` / `arms:*`;

@@ -1238,6 +1238,16 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     have_session = stored is not None
     session = stored or {}
 
+    # Which segmentation the recorded preamble binds ``adata`` from. Seeded here,
+    # from the session, because the preamble is re-emitted below *before*
+    # ``restore_fn`` reaches Tools → Segmentation's own restore handler: emitting
+    # the Xenium form first and letting that handler correct it would upsert a
+    # changed preamble on every launch, flagging the entire notebook stale for
+    # nothing — the same defect a manual dataset rename used to cause.
+    ctx.state.setdefault(
+        "segmentation_source", session.get("segmentation_source", "xenium")
+    )
+
     if have_session:
         # One-time migration of legacy zarr landmark arrays and GeoJSON/CSV tile
         # data into sdata.shapes. Gated because it reads the group it migrates

@@ -7,6 +7,32 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **A custom segmentation now reaches the recorded notebook.** Tools → Segmentation
+  swaps the Xenium cells for a custom set, rebinding `ctx.adata` and clearing every
+  derived result — and it recorded nothing at all. The preamble went on saying
+  `adata = sdata["table"].copy()`, so every node recorded after the swap claimed to be
+  about the Xenium cells. That is the worst shape a provenance defect can take: replaying
+  such a notebook does not fail. It runs the whole analysis against a different set of
+  cells and reports success, so `allow_errors=False` — and `verify_notebook.py` with it —
+  sees nothing wrong. The numbers come out; they are about something else.
+
+  The swap is recorded by **upserting `preamble`**, not by adding a node of its own,
+  because the preamble is what says where `adata` comes from. Two things follow, both
+  wanted: the notebook's load cell reads `tables["custom_table"]`, and every result
+  already in the graph is flagged stale — they were computed on cells that are no longer
+  bound, which the GUI already acts on by dropping them from its own state. The custom
+  table is not in the 10x output (it comes from `extract_seurat_segmentation.R` +
+  `build_custom_segmentation.py`), so the recorded cell reads it from the store the tab
+  caches it into — directly on a crop export, whose `sdata` *is* that store, and via one
+  `sd.read_zarr` on a raw dataset.
+
+  `app.py` seeds `segmentation_source` from the session **before** the launch re-emit of
+  the preamble. Letting the tab's own restore handler correct it afterwards would upsert
+  a changed preamble on every launch and mark the whole notebook ⚠ for nothing — the same
+  defect a manual dataset rename used to cause. `tests/test_segmentation_recording.py`
+  covers both directions, both store layouts, the staleness, and the launch round trip,
+  and guards at the source that neither swap path stops recording.
+
 - **`scripts/prepare_demo_dataset.sh`** — stages a publishable copy of a dataset for
   `capture_screenshots.py`. The screenshots are published and two panels print the
   dataset's absolute path into the widget, so the path in the copy is the path on the

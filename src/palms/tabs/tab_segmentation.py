@@ -267,6 +267,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             active_label.setText(
                 "Active segmentation: Custom (cache not found — please reload)"
             )
+            _restore_failed()
             return
         try:
             _apply_custom_segmentation(ctx, adata, scales)
@@ -277,8 +278,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
             revert_btn.enabled = True
         except Exception as exc:
             active_label.setText(f"Active segmentation: Restore failed — {exc}")
+            _restore_failed()
             import traceback
             traceback.print_exc()
+
+    def _restore_failed():
+        """The session asked for the custom cells and they did not load.
+
+        ``app.py`` seeds ``segmentation_source`` from the session before it
+        re-emits the preamble, so the recorded load cell currently claims a
+        custom table that is not bound — and anything recorded from here would
+        be about the Xenium cells under that claim. Put the flag back to what is
+        actually loaded, but do *not* re-emit: the preamble on disk still
+        matches the results on disk, and rewriting it here would flag the whole
+        notebook stale over a failure the user did not cause. The next recorded
+        step re-emits it and flags then, which is exactly when it matters.
+        """
+        ctx.state["segmentation_source"] = "xenium"
 
     # ── Layout ────────────────────────────────────────────────────────────────
     container = QWidget()
@@ -399,6 +415,28 @@ def _apply_custom_segmentation(ctx: ViewerContext, new_adata, scales: list):
     # ── Update gene names ─────────────────────────────────────────────────────
     ctx.gene_names = list(new_adata.var_names)
 
+    _record_segmentation(ctx)
+
+
+def _record_segmentation(ctx: ViewerContext) -> None:
+    """Re-emit the preamble so it binds ``adata`` from the active segmentation.
+
+    A swap changes *which cells every recorded node is about*, and it is the
+    preamble that says where ``adata`` comes from — so the swap is recorded by
+    upserting that node rather than by adding one of its own. Two things follow
+    from doing it that way, both wanted: the notebook's own load cell reads the
+    custom table, and every result already in the graph is flagged stale,
+    because it was computed on cells that are no longer bound. The GUI has
+    already dropped those results from its own state here; the graph now says
+    the same thing instead of silently keeping them.
+
+    A no-op when code recording is off, and cheap when the source is unchanged:
+    ``upsert`` compares the rendered code and flags nothing when it matches.
+    """
+    record = getattr(ctx, "record_preamble", None)
+    if record is not None:
+        record()
+
 
 def _extract_dt_scales(dt) -> list:
     """Extract ordered dask arrays from a spatialdata DataTree (multiscale labels)."""
@@ -484,6 +522,8 @@ def _revert_xenium_segmentation(ctx: ViewerContext):
     ctx.state["label_to_cluster"] = None
     ctx.state["active_clustering_name"] = None
     ctx.gene_names = list(new_adata.var_names)
+
+    _record_segmentation(ctx)
 
 
 def _import_loader():
