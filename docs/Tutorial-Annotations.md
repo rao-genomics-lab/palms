@@ -64,8 +64,6 @@ Click **Export GeoJSON...** and choose a save path. The exported file contains:
 
 The coordinates are in the Xenium pixel coordinate system. To convert to physical micrometres, multiply by the pixel size (typically 0.2125 µm/pixel, found in `experiment.xenium`).
 
-![Tutorial Annotations Step7](screenshots/tutorial-annotations-step7.png)
-
 ---
 
 ## Importing annotations in another session

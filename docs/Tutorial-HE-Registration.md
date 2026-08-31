@@ -87,8 +87,6 @@ Use the **Opacity** slider in the tab to blend the H&E image against the morphol
 
 Click **Save Landmarks...** and choose a save location. The file is saved as JSON and can be shared with collaborators or used to reproduce the registration on a reinstalled viewer.
 
-![Tutorial He Registration Step8](screenshots/tutorial-he-registration-step8.png)
-
 ---
 
 ## Notes

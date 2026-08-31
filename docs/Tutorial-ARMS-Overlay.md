@@ -46,8 +46,6 @@ Click **Compute Registration**. Inspect the residuals display. Values under ~20 
 
 Click **Save Landmarks...** and choose a save location. The JSON file records the landmark coordinates and computed transform.
 
-![Tutorial Arms Overlay Step6](screenshots/tutorial-arms-overlay-step6.png)
-
 ---
 
 ## Part 2: Load tile polygons
@@ -97,8 +95,6 @@ Click **Run ARMS Tile DEG**. The viewer identifies Xenium cells within each tile
 
 - Click **Export ARMS DEG CSV...** to save the full ranked gene list for all cluster comparisons to a CSV file.
 - Click **Generate ARMS Volcano Plots...** and choose a directory. One PNG volcano plot is saved for each pairwise cluster comparison.
-
-![Tutorial Arms Overlay Step12](screenshots/tutorial-arms-overlay-step12.png)
 
 ---
 
