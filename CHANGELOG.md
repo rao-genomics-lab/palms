@@ -7,6 +7,20 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **`scripts/prepare_demo_dataset.sh`** — stages a publishable copy of a dataset for
+  `capture_screenshots.py`. The screenshots are published and two panels print the
+  dataset's absolute path into the widget, so the path in the copy is the path on the
+  wiki. Three steps, and the third is the one that gets forgotten: copy (dropping the
+  legacy `xenium_viewer.log` the Cache tab lists by name), repoint the absolute paths
+  recorded in the provenance graph, and replace the ARMS scan's filename — which reaches
+  the napari layer list and is therefore in *every* full-window screenshot, and which is
+  a slide identifier. It refuses to remove anything at the destination that is not
+  already a Xenium dataset, and refuses a destination inside the source in either
+  direction — that second case would `rm -rf` a subdirectory of the source, and `cp`
+  only catches it afterwards. The replacement step goes through `zarr_safe`'s
+  `safe_group_update` like every other write to a store, and deliberately does not echo
+  the previous filename: a pasted log is a published log.
+
 - **`docs/user-authored-analyses.md` is tracked.** A 751-line design note, written
   2026-08-26 and untracked since: can a user add a *new* analysis and a GUI element for
   it, with the app linting it and generating its tests. The answer is yes and most of the
