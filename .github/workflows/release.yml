@@ -1,8 +1,14 @@
 # Publishes to PyPI when a v* tag is pushed, using Trusted Publishing (OIDC):
 # GitHub mints a short-lived token for this workflow, so no API token is stored
 # in the repo or in anyone's keyring. It requires a one-time setup on PyPI:
-# Manage project -> Publishing -> add a GitHub publisher for sraorao/palms with
+# Manage project -> Publishing -> add a GitHub publisher for rao-genomics-lab/palms with
 # workflow `release.yml` and environment `pypi`.
+#
+# That registration names the repository, so **a transfer invalidates it**: the OIDC
+# claim carries the new owner and PyPI rejects the upload at the end of the run, after
+# the tag is already public. The repo moved from `sraorao` to `rao-genomics-lab` on
+# 2026-08-31, so the publisher has to be re-added under the new name before the next
+# tag — 1.0.0 published from the old one and is unaffected.
 #
 # The build and the publish are separate jobs on purpose: only the second holds
 # `id-token: write`, so nothing that runs arbitrary build code from the tree can

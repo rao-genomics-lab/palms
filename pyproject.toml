@@ -120,9 +120,9 @@ palms-fetch-references = "palms.scripts.fetch_reference_datasets:main"
 palms-build-custom-segmentation = "palms.scripts.build_custom_segmentation:main"
 
 [project.urls]
-Homepage = "https://github.com/sraorao/palms"
-Repository = "https://github.com/sraorao/palms"
-Issues = "https://github.com/sraorao/palms/issues"
+Homepage = "https://github.com/rao-genomics-lab/palms"
+Repository = "https://github.com/rao-genomics-lab/palms"
+Issues = "https://github.com/rao-genomics-lab/palms/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

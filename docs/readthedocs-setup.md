@@ -58,7 +58,7 @@ around.
 1. Sign in at <https://readthedocs.org> with GitHub and grant access to the repo. A repo
    that has been *renamed* usually needs **Settings → Connected Services → GitHub →
    Resync** before it appears in the import list.
-2. **Import a Project** → `sraorao/palms`. RTD detects `.readthedocs.yaml`;
+2. **Import a Project** → `rao-genomics-lab/palms`. RTD detects `.readthedocs.yaml`;
    no settings need changing. The slug must come out as **`palms`**, since `site_url`
    already says so — if an older `xenium-viewer` project is still in the dashboard, delete
    it rather than renaming: on RTD Community the slug is fixed at creation, and that

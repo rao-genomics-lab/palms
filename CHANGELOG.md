@@ -105,7 +105,28 @@ entries under **Development log** are the closed pre-1.0.0 record.
   reference: it existed only to let hatchling emit one, and without it a future direct
   reference fails at build time rather than at upload time.
 
+### Changed
+- **The repository moved to `rao-genomics-lab/palms`.** GitHub redirects the old
+  `sraorao/palms` URLs, so nothing was broken — but a redirect is not what a citation
+  should carry, and `CITATION.cff` is what Zenodo reads when it mints the DOI. All 17
+  in-repo references now name the new owner: `CITATION.cff`, `pyproject.toml`'s three
+  `[project.urls]`, `mkdocs.yml`, the README badge and clone lines, `docs/Installation.md`,
+  and `scripts/push_to_wiki.sh` (the wiki moved with the repo — verified by resolving
+  `palms.wiki.git` under the new owner, since that was an open question at the rename).
+  The four `sraorao/insituCNV-copykat` links are deliberately unchanged: the fork did not
+  move.
+
+  **`release.yml` says what the move costs.** PyPI Trusted Publishing registers a
+  *repository*, so a transfer invalidates it: the OIDC claim carries the new owner and
+  PyPI rejects the upload at the end of the run, **after the tag is already public**. The
+  publisher has to be re-added under the new name before the next tag. 1.0.0 published
+  from the old one and is unaffected.
+
 ### Fixed
+- **Every "Edit on GitHub" link on the docs site 404'd.** mkdocs defaults `edit_uri` to
+  `edit/master/docs/` and the default branch is `main`. Set explicitly, on the first site
+  this repo has ever published.
+
 - **The docs site had no page at its root, so Read the Docs refused to serve it.** The
   first RTD build after the repo went public failed with "Index file is not present in
   HTML output directory" — after `mkdocs build --strict` had passed locally and in CI on
