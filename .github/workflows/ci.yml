@@ -135,3 +135,12 @@ jobs:
 
       - name: Build the docs site (strict)
         run: mkdocs build --strict --site-dir /tmp/site
+
+      # mkdocs builds a site with no page at its root without complaint, and
+      # --strict does not change that: docs/ is wiki source, so its landing page
+      # is Home.md, not index.md. Read the Docs refuses to serve the result
+      # ("Index file is not present in HTML output directory"), which is how the
+      # first RTD build failed after this job had passed. mkdocs_hooks.on_files
+      # maps one to the other; this is the check that says so.
+      - name: The built site has a page at its root
+        run: test -f /tmp/site/index.html

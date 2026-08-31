@@ -106,6 +106,25 @@ entries under **Development log** are the closed pre-1.0.0 record.
   reference fails at build time rather than at upload time.
 
 ### Fixed
+- **The docs site had no page at its root, so Read the Docs refused to serve it.** The
+  first RTD build after the repo went public failed with "Index file is not present in
+  HTML output directory" — after `mkdocs build --strict` had passed locally and in CI on
+  every push for weeks. `docs/` is GitHub Wiki source, where the landing page must be
+  `Home.md`; mkdocs's is `index.md`, and mkdocs builds a rootless site without complaint.
+  `--strict` does not change that, which is why only the publisher caught it.
+
+  Renaming works in neither direction: `Home.md` is what `scripts/push_to_wiki.sh`
+  publishes as the wiki home, and a lower-case `docs/index.md` would be dropped by
+  `exclude_docs` (`[a-z]*.md`) — silently, since that pattern is how internal notes are
+  kept off the site. So the mapping is a build-time hook, like the wiki link rewrite
+  beside it, and the source keeps one convention. `mkdocs_hooks.on_files` retargets
+  `Home.md` to the site root; the page *moves* rather than being duplicated, so there is
+  one URL for it, the nav resolves, and `sitemap.xml` carries the root.
+
+  CI gained the check `--strict` cannot make: `test -f /tmp/site/index.html` after the
+  build. Verified against mkdocs 1.6.1 — before, `site/` had `Home/index.html` and no
+  root page; after, no dangling `Home/` href survives anywhere in the built HTML.
+
 - **The pre-publication audit's own entry reprinted the path it removed.** The
   2026-08-29 entry quoted the deleted `capture_screenshots.py` constant verbatim —
   absolute path, collaborator's name, slide ID — so making the repo public would have
