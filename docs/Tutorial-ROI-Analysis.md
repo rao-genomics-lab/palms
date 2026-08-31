@@ -86,8 +86,6 @@ Click **Export DEG CSV...** and choose a save location. The file contains the fu
 
 Click **Save Volcano Plot(s)...** and choose a directory. One PNG volcano plot is generated per region pair (e.g. `Region1_vs_Region2.png`). Genes above the significance threshold are labelled with their names.
 
-![Tutorial Roi Analysis Step8](screenshots/tutorial-roi-analysis-step8.png)
-
 ---
 
 ## Notes

@@ -7,6 +7,20 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **`scripts/prepare_demo_dataset.sh`** — stages a publishable copy of a dataset for
+  `capture_screenshots.py`. The screenshots are published and two panels print the
+  dataset's absolute path into the widget, so the path in the copy is the path on the
+  wiki. Three steps, and the third is the one that gets forgotten: copy (dropping the
+  legacy `xenium_viewer.log` the Cache tab lists by name), repoint the absolute paths
+  recorded in the provenance graph, and replace the ARMS scan's filename — which reaches
+  the napari layer list and is therefore in *every* full-window screenshot, and which is
+  a slide identifier. It refuses to remove anything at the destination that is not
+  already a Xenium dataset, and refuses a destination inside the source in either
+  direction — that second case would `rm -rf` a subdirectory of the source, and `cp`
+  only catches it afterwards. The replacement step goes through `zarr_safe`'s
+  `safe_group_update` like every other write to a store, and deliberately does not echo
+  the previous filename: a pasted log is a published log.
+
 - **`docs/user-authored-analyses.md` is tracked.** A 751-line design note, written
   2026-08-26 and untracked since: can a user add a *new* analysis and a GUI element for
   it, with the app linting it and generating its tests. The answer is yes and most of the
@@ -29,6 +43,25 @@ entries under **Development log** are the closed pre-1.0.0 record.
   version must equal the tag.
 
 ### Changed
+- **Two reference tabs are photographed with something in them.** Tools → Dataset was
+  captured before **Scan Dataset** had been pressed, so the page documenting the
+  inventory tree showed an empty box; Tools → Templates was captured with no template
+  selected, so the contract, the default-vs-yours panes and the live preview were all
+  blank. The capture now primes both. `--only <substring>` re-takes matching shots
+  without redoing the other fifty-one, since a full run drives real analyses and takes
+  half an hour.
+
+- **The screenshot capture stages the canvas before it shoots, and shoots wider.** A
+  dataset carrying a real session restores registration landmarks, an ARMS scan and patch
+  overlays; they sit outside the Xenium extent, so the camera framed their union and left
+  the tissue a few pixels across. The capture now hides everything outside an allow-list —
+  an allow-list, because a session can restore arbitrarily named overlays and an
+  unrecognised one must not end up in a published image — and sets the camera from
+  `cell_labels`' own extent, since napari's `fit_to_view` measures
+  `layers._extent_world_augmented` and ignores `visible`. The window is 1800×1000 rather
+  than 1400×900: at the old size the Controls dock and the layer panel left the canvas
+  about 400px across.
+
 - **The CNV dependency comes from PyPI instead of a git URL, which is what makes PALMS
   itself publishable.** PyPI rejects any distribution whose metadata carries a direct
   URL reference, and `palms`'s `cnv` and `full` extras carried
@@ -47,6 +80,51 @@ entries under **Development log** are the closed pre-1.0.0 record.
   reference fails at build time rather than at upload time.
 
 ### Fixed
+- **Every tutorial illustrated all of its steps with a photograph of its first one.**
+  30 `tutorial-*.png` were 9 distinct images: all five H&E-registration steps were one
+  picture, all six ARMS steps another, all five ROI steps a third. `TUTORIAL_SHOTS`
+  named a tab per step and consecutive steps of a tutorial name the same tab, so with
+  nothing acting on the app between grabs the capture wrote byte-identical files. It was
+  invisible while every one of them was wallpaper.
+
+  The capture now **drives the app into each step's state** before grabbing — it runs
+  Leiden, ranks genes, colours by gene and by cluster, loads transcripts, opens the linked
+  UMAP window, calculates ROI expression and ROI DEG, coarse-aligns the H&E, runs the ARMS
+  tile DEG, draws annotation polygons and assigns types to them — through the real widgets,
+  found by magicgui's `native._magic_widget` back-reference rather than by Qt layout
+  position. All 52 images are now distinct, checked by pixel hash.
+
+  Five files are gone rather than duplicated: the steps whose only action is a file dialog
+  (Save Landmarks…, Export GeoJSON…, Save Volcano Plot…) cannot be driven, and their
+  tutorial pages carry one fewer image instead of a repeat of the previous one.
+
+- **Every full-window docs screenshot was a picture of the desktop wallpaper.**
+  `scripts/capture_screenshots.py` grabbed the window with
+  `QScreen.grabWindow(qt_window.winId())`. Under Qt6 that argument form is unsupported
+  on this platform and returns a fragment of the *root* window, so `interface-overview`
+  and all 30 `tutorial-*.png` — one on nearly every docs page and on the wiki — showed
+  wallpaper and GL debris with no window, no Controls dock and no canvas. The 26
+  `tab-*.png` were unaffected: they already went through `dock.widget().grab()`.
+  Now `qt_window.grab()`, a widget render, which does not depend on a compositor, works
+  over remote X, and excludes the WM title bar — so `viewer.title` can no longer leak a
+  dataset folder name into a published image.
+
+  A widget grab alone was still wrong, though: it reads the vispy canvas's last painted
+  framebuffer, and the part of that framebuffer covering an overlay drawn before the
+  camera moved is never repainted. Shots came back with a block of an earlier draw frozen
+  in the corner, pixel-identical across frames while the rest of the canvas tracked the
+  layers correctly; `repaint()` on the canvas widget does not clear it. The canvas is now
+  rendered on demand through vispy (`viewer.screenshot(canvas_only=True)`) and painted
+  over the canvas widget's rectangle in the grab.
+
+- **The published screenshots showed a local path, a collaborator's name and a real
+  slide ID.** `docs/screenshots/tab-dataset.png` and `tab-cache.png` printed a dataset
+  directory into the panel, and that directory was a working dataset. The capture already
+  took the dataset as an argument; the images are recaptured against one whose path is
+  publishable. `tab-crop-dataset.png` also still read "opened directly with xenium-viewer"
+  and predated the "Controls" dock rename — both were stale pictures of current, correct
+  source.
+
 - **A dead import wearing an invalid `# noqa`.** `tab_he_registration._restore_session`
   opened with `from palms.tabs._helpers import StatusProxy as _SP  # noqa: avoid
   circular`. `_SP` is never used, `StatusProxy` is already imported at module level and
@@ -110,9 +188,6 @@ entries under **Development log** are the closed pre-1.0.0 record.
   Rebuild's refusal enumerates the absent raw files, which is a sentence contradicted
   by a declared export that has them.
 
-## [Unreleased]
-
-### Fixed
 - **The libGLX warning fired on an install that cannot have the problem, and told the
   user to run a command they did not have.** `gl_check` warned whenever the environment
   lacked the unversioned `libGLX.so` and the host had one. Its own docstring says "both
