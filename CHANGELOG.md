@@ -80,6 +80,15 @@ entries under **Development log** are the closed pre-1.0.0 record.
   reference fails at build time rather than at upload time.
 
 ### Fixed
+- **The pre-publication audit's own entry reprinted the path it removed.** The
+  2026-08-29 entry quoted the deleted `capture_screenshots.py` constant verbatim —
+  absolute path, collaborator's name, slide ID — so making the repo public would have
+  published exactly what the audit existed to prevent, in the record of its own removal.
+  It now describes the leak the way the 2026-08-31 screenshot entry does, which is the
+  form to keep: a changelog is a published file, and a fixed leak quoted in full is
+  still a leak. Two references to a planning document outside this repo went with it;
+  they named a phase a reader here cannot resolve.
+
 - **The docs never told anyone to `pip install palms`.** PALMS 1.0.0 has been on PyPI
   since 2026-08-30 and the fresh-machine install was verified on Linux and macOS, but
   `README.md`, `Home.md` and `Installation.md` all opened with `git clone` +
@@ -547,9 +556,9 @@ the only record of *why* a fix took the shape it did.
 
 #### Fixed
 - **`scripts/capture_screenshots.py` hardcoded a collaborator's dataset.** The
-  module constant was `/media/srao/InternalBac2/jinsen/output-XETG00160__…` —
-  a local absolute path, a collaborator's name and a real slide ID, in a tracked
-  file in a repo about to go public. It is now `argv[1]` or
+  module constant was an absolute path into a working dataset directory, carrying a
+  collaborator's name and a real slide ID in a tracked file in a repo about to go
+  public — so it is described here rather than quoted. It is now `argv[1]` or
   `$PALMS_SCREENSHOT_DATASET`, resolved and validated *before* the napari import,
   so a missing argument fails in a second instead of after a ten-second Qt load.
 
@@ -581,9 +590,9 @@ the only record of *why* a fix took the shape it did.
 
 - **Two smaller leaks in `docs/`.** `pyqt6-migration.md` pointed at a directory
   outside the repo, which tells a reader nothing they can act on; it now says the
-  upstream reports are drafted but not filed. `readthedocs-setup.md` referenced "the
-  preprint plan's Phase A" — the only manuscript-positioning reference in the code
-  repo — and reads the same without it.
+  upstream reports are drafted but not filed. `readthedocs-setup.md` pointed at a
+  phase of a planning document that lives outside this repo — the only such reference
+  in it — and reads the same without it.
 
 #### Removed
 - **`more_datasets.tsv`.** Ten candidate prostate/atlas datasets at the repo root,
@@ -1324,7 +1333,7 @@ and run in CI.
 **Connecting the Read the Docs project needs the repository to be public** — RTD
 Community does not build private repos. Everything above is done and verified; the
 connection is the one step that cannot be. `docs/readthedocs-setup.md` records the
-remaining steps. That unblocks with the preprint plan's Phase A rather than needing
+remaining steps. It unblocks when the repository is made public, rather than needing
 anything bought.
 
 `tests/test_docs_links.py` gained 11 tests covering the rewrite rule, including that
