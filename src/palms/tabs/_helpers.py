@@ -570,7 +570,8 @@ def create_shared_helpers(ctx: ViewerContext):
         # and ``loader`` pulls in spatialdata.
         from palms.loader import is_cache_only
 
-        if not is_cache_only(ctx.data_path):
+        cache_only = is_cache_only(ctx.data_path)
+        if not cache_only:
             load = (
                 "from spatialdata_io import xenium\n"
                 f"data_path = Path(r\"{ctx.data_path}\")\n"
@@ -587,6 +588,31 @@ def create_shared_helpers(ctx: ViewerContext):
                 "sdata = sd.read_zarr(data_path / \"sdata_cached.zarr\")\n"
             )
 
+        # Which *cells* the analysis is about. Tools → Segmentation swaps the
+        # Xenium segmentation for a custom one, rebinding ``ctx.adata`` to a
+        # different set of cells — and every node recorded after that swap is
+        # about those cells while the preamble still said ``sdata["table"]``.
+        # A replay then reproduced the whole notebook against the Xenium cells
+        # and reported no error, which is the worst shape a provenance defect
+        # can take: the numbers come out, and they are about something else.
+        #
+        # The custom table is not in the 10x output — it is built by
+        # ``scripts/extract_seurat_segmentation.R`` + ``build_custom_segmentation.py``
+        # and cached into the store by the tab, which is the only copy a replay
+        # can rely on (the h5ad the user picked may be anywhere, or gone).
+        if state.get("segmentation_source") == "custom":
+            source = "sdata" if cache_only else (
+                "sd.read_zarr(data_path / \"sdata_cached.zarr\")"
+            )
+            table = (
+                "\n# Custom cell segmentation (Tools -> Segmentation), not part of the\n"
+                "# 10x output: PALMS caches it in the viewer's store, which is where a\n"
+                "# replay has to read it from.\n"
+                f"adata = {source}.tables[\"custom_table\"].copy()"
+            )
+        else:
+            table = "adata = sdata[\"table\"].copy()"
+
         _record_environment()
         _record_node(
             "preamble",
@@ -600,7 +626,7 @@ def create_shared_helpers(ctx: ViewerContext):
             f"\nplt.rcParams['font.size'] = {state.get('plot_font_size', 10)}\n"
             f"\n# Load data\n"
             + load
-            + "adata = sdata[\"table\"].copy()",
+            + table,
             kind=SETUP,
             label="Setup & data loading",
         )

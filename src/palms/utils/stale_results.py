@@ -91,7 +91,7 @@ _SHARED_CNV_OBSM = ("X_cnv",)
 #: test, or a stale propagation step alone would clear the run registry that
 #: describes a CNV run which is still current.
 _NO_ARTIFACT = {
-    "preamble": "defines data_path; writes nothing",
+    "preamble": "defines data_path and binds adata; writes nothing",
     "environment": "records package versions; writes nothing",
     "spatial_neighbors": "builds the graph on adata_norm, stored only inside "
                          "adata_norm_cache.h5ad",
