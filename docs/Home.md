@@ -48,6 +48,20 @@ conda activate palms
 
 For full installation instructions, optional extras, and troubleshooting, see the [Installation](Installation) page.
 
+## Citing PALMS
+
+If PALMS contributes to work you publish, please cite it. The archived releases carry a
+DOI:
+
+- **[10.5281/zenodo.22218654](https://doi.org/10.5281/zenodo.22218654)** — cite this one.
+  It is the *concept* DOI and always resolves to the newest version.
+- [10.5281/zenodo.22218655](https://doi.org/10.5281/zenodo.22218655) — v1.0.1
+  specifically, for when the exact version is what matters.
+
+[`CITATION.cff`](https://github.com/rao-genomics-lab/palms/blob/main/CITATION.cff) in the
+repository root holds the machine-readable metadata, and carries the concept DOI; GitHub's
+"Cite this repository" button reads it directly.
+
 ## Navigation
 
 ### Getting Started
