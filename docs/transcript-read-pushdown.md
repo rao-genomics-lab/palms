@@ -1,8 +1,9 @@
 # Sorting the cached transcripts by gene — measured, and rejected
 
-Status: **rejected by measurement (2026-09-01)**, beads `xv-qiq.7`. Kept as the record of
-why, because the idea is an obvious one that will occur to the next reader, and the
-metadata number that motivated it is genuinely misleading.
+Status: **the sort is rejected by measurement (2026-09-01)**, beads `xv-qiq.7`. The
+reader fix it was standing in for **shipped** the same day — see §5. Kept as the record of
+why the sort was dropped, because it is an obvious idea that will occur to the next
+reader, and the metadata number that motivated it is genuinely misleading.
 
 ## The proposal
 
@@ -122,10 +123,54 @@ has no raw source — `loader.has_raw_xenium_source()`), and it means hand-rolli
 renames and the micron→pixel transform that `spatialdata_io` and the element's own
 transformation already declare, which is exactly the smell rule (e) in CLAUDE.md names.
 
-So the fix belongs upstream: one `filesystem="arrow"` in `spatialdata._io.io_points`, after
-which the template's one-token predicate change is worth 4×. Until then the feather index
-stays the fast path for preprocessed datasets, and **`palms-preprocess` cannot be retired** —
-the possible outcome the original task floated is off the table on this route.
+So the fix belongs upstream: one `filesystem="arrow"` in `spatialdata._io.io_points`. That
+is filed as beads `xv-5n7`; §5 is what PALMS does until it lands.
+
+## 5. What shipped
+
+Both halves, together, because neither works alone:
+
+- `utils/arrow_points_read.py` — a context manager applied around the `read_zarr` in
+  `loader._open_cache`, rebinding `spatialdata._io.io_points.read_parquet` to pass
+  `filesystem="arrow"`. Scoped rather than process-wide: the pyarrow reader returns
+  identical data (same rows, dtypes, partition count, transformations) in a different
+  partition **order**, and keeps `__null_dask_index__` as the index name. Nothing in PALMS
+  depends on points row order — `crop_export` does its own filtered read and then
+  `reset_index(drop=True)`, the density step histograms, the overlay uses the feather
+  index — but a caller's own spatialdata objects should not inherit ours. Remote stores
+  (`simplecache::`, `s3://`, `https://`) are left on fsspec, which cannot parse a chained
+  fsspec URL.
+- `transcripts.gene.tmpl` now says `(_transcripts['is_gene'] == True)`.
+
+Measured through `loader._open_cache`, the same six-gene sequence, warm cache:
+
+| gene | stock | patched |
+|---|---|---|
+| CXCR3 | 2.15 s | 0.97 s |
+| BSG | 2.14 s | 0.94 s |
+| CXCR3 *(again)* | 2.26 s | 0.92 s |
+| NOSIP | 2.34 s | 0.95 s |
+| CTLA4 | 2.31 s | 0.96 s |
+| BSG *(again)* | 2.26 s | 0.91 s |
+| **total** | **13.45 s** | **5.65 s** |
+
+2.4× warm, and larger cold (5.62 s → 1.49 s on the first gene) because pushdown also
+avoids reading the bytes. Row counts are identical throughout. Note the shape change: on
+the stock reader a 1,645-row gene costs the same as a 2.5 M-row one, because the cost is
+scanning `feature_name`; patched, the cost tracks what actually matches.
+
+This does **not** restore the ~100 ms the per-gene feather index gave, and nothing on this
+route will — the floor is decoding `feature_name`. So **`palms-preprocess` cannot be
+retired**, and the feather index stays the fast path for the point overlay.
+
+### Removing it
+
+`tests/test_arrow_points_read.py::test_delete_this_patch_once_spatialdata_passes_a_filesystem`
+reads `_read_points`' source and fails the moment upstream names a filesystem itself. That
+is the signal to delete the module, its call site, the rationale comment in
+`transcripts.gene.tmpl`, and the test file. The wrapper also declines to act when a
+`filesystem` is already supplied, so an upstream fix takes effect even before the deletion
+happens.
 
 ## Reproducing
 

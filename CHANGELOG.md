@@ -25,6 +25,27 @@ entries under **Development log** are the closed pre-1.0.0 record.
   category order — the order `sq.pl.nhood_enrichment` draws — instead of carrying a
   separate label list that could disagree with the matrix.
 
+- **Transcript queries are 2.4× faster, and the density tab is usable again.** Switching
+  genes in the density tab cost ~2.3 s per gene on a warm cache (worse cold), because
+  `spatialdata` reads points through dask's fsspec reader, which never pushes a filter into
+  the parquet scan — so a one-gene question read all 128.7 M rows. Two changes, which only
+  work together: `utils/arrow_points_read.py` makes the cache read use pyarrow's filesystem
+  (the one dask reader that supports predicate pushdown), and `transcripts.gene.tmpl` states
+  `is_gene` as a comparison, since dask drops the whole conjunction if any term is a bare
+  boolean. Measured over a six-gene sequence: **13.45 s → 5.65 s** warm, 5.62 s → 1.49 s on
+  a cold first gene, with identical row counts. The cost also changes shape — a rare gene
+  used to cost the same as an abundant one, and now tracks what actually matches.
+
+  This does *not* restore the ~100 ms the per-gene feather index gave; the floor is decoding
+  `feature_name`. `palms-preprocess` stays, and the point overlay still uses it.
+
+  **The spatialdata half is a monkeypatch of a private module path** — the only one in the
+  codebase — so it is written to fail quiet (if the path moves, reads stay stock and merely
+  slower), scoped to `loader._open_cache` rather than applied process-wide, and covered by
+  `tests/test_arrow_points_read.py`, which **fails as soon as upstream passes a `filesystem`
+  itself**. That is the signal to delete it. The wrapper also stands aside when a filesystem
+  is already supplied, so an upstream fix takes effect before anyone gets to the deletion.
+
 - **`docs/transcript-read-pushdown.md`** records why the cached transcripts are *not*
   sorted by gene, so the idea does not get re-derived. Sorting cannot help: `feature_name`
   is dictionary-encoded and pyarrow does not prune row groups on such a column's

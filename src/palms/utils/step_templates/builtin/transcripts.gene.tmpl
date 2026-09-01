@@ -20,11 +20,20 @@ _transcripts = sdata.points['transcripts']
 # per-gene feather files, stated here instead of inherited: qv is the
 # call-quality floor, and is_gene drops the control probes, which are not
 # transcripts of anything.
+#
+# `is_gene == True` rather than a bare `is_gene`, which reads more naturally and
+# is what a linter would ask for. dask turns this mask into a parquet filter
+# only if every term is a comparison: a bare boolean column makes the whole
+# conjunction unpushable, so the reader scans all 128.7 M rows instead of the
+# row groups that can hold the gene. Measured 4.1x on a real cache. The
+# comparison form is worth nothing on its own — see
+# docs/transcript-read-pushdown.md and utils/arrow_points_read.py, which is the
+# other half — but it costs nothing either, and the two together are the win.
 transcript_points = (
     _transcripts[
         (_transcripts['feature_name'] == $gene)
         & (_transcripts['qv'] >= $min_qv)
-        & _transcripts['is_gene']
+        & (_transcripts['is_gene'] == True)
     ][['x', 'y', 'cell_id']]
     .compute()
     # A filtered frame keeps the original row labels, and PointsModel.parse

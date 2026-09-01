@@ -516,6 +516,7 @@ def _open_cache(cache_path: Path):
     import spatialdata
 
     from palms.utils import cache_repair
+    from palms.utils.arrow_points_read import arrow_points_reader
 
     report = cache_repair.verify(cache_path)
     if not report.ok:
@@ -523,19 +524,25 @@ def _open_cache(cache_path: Path):
         for action in result.actions:
             print(f"  Cache: {action}")
 
-    try:
-        return spatialdata.read_zarr(str(cache_path))
-    except Exception as first_error:
-        # Still broken. If a previous version of a missing element is sitting in
-        # the trash, putting it back is strictly better than discarding 30 GB.
-        report = cache_repair.verify(cache_path)
-        if report.missing_on_disk and report.repairable:
-            print("  Cache: attempting to restore missing elements from backups...")
-            result = cache_repair.repair(cache_path, report, level=cache_repair.FULL)
-            for action in result.actions:
-                print(f"  Cache: {action}")
+    # The points elements are built here, once, and keep whichever reader they
+    # were built with for the life of the object — so this is the only place the
+    # choice can be made. See utils/arrow_points_read.py for why it is scoped to
+    # this call rather than applied process-wide.
+    with arrow_points_reader():
+        try:
             return spatialdata.read_zarr(str(cache_path))
-        raise first_error
+        except Exception as first_error:
+            # Still broken. If a previous version of a missing element is sitting
+            # in the trash, putting it back is strictly better than discarding
+            # 30 GB.
+            report = cache_repair.verify(cache_path)
+            if report.missing_on_disk and report.repairable:
+                print("  Cache: attempting to restore missing elements from backups...")
+                result = cache_repair.repair(cache_path, report, level=cache_repair.FULL)
+                for action in result.actions:
+                    print(f"  Cache: {action}")
+                return spatialdata.read_zarr(str(cache_path))
+            raise first_error
 
 
 def _restore_user_elements(old_sdata, sdata, user_data: dict) -> list[str]:
