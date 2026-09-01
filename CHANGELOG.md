@@ -13,7 +13,9 @@ entries under **Development log** are the closed pre-1.0.0 record.
   concept DOI, which is what GitHub's "Cite this repository" button reads, and the README
   gains a badge and says which of the two to cite — a reader following the concept DOI
   reaches whatever superseded it, which is right for citing the software and wrong for
-  citing a result.
+  citing a result. `docs/Home.md` carries the same "Citing PALMS" section, since the wiki
+  and the Read the Docs site are the front page for everyone who never opens the repo, and
+  neither renders `CITATION.cff` or the README's badge.
 
 ## [1.0.1] — 2026-09-01
 
