@@ -1,0 +1,44 @@
+# palms template
+# id: transcripts.gene
+# schema-version: 1
+# doc: One gene's transcripts, in the morphology image's coordinate frame.
+# requires: sd, sdata
+# outputs: transcript_points
+# params: gene:str, min_qv:int
+
+#--- block main
+# Transcripts for $gene.
+#
+# Filter first, then transform. sd.transform maps every row it is handed, so
+# transforming the whole table and filtering afterwards does the same work for
+# every gene in the panel: measured on a 1.4 GB transcripts.parquet, 95 s that
+# way against 5 s this way, for an identical answer.
+from spatialdata.transformations import get_transformation
+
+_transcripts = sdata.points['transcripts']
+# The same two filters the viewer's transcript preprocessing bakes into its
+# per-gene feather files, stated here instead of inherited: qv is the
+# call-quality floor, and is_gene drops the control probes, which are not
+# transcripts of anything.
+transcript_points = (
+    _transcripts[
+        (_transcripts['feature_name'] == $gene)
+        & (_transcripts['qv'] >= $min_qv)
+        & _transcripts['is_gene']
+    ][['x', 'y', 'cell_id']]
+    .compute()
+    # A filtered frame keeps the original row labels, and PointsModel.parse
+    # cannot reindex an axis with duplicates.
+    .reset_index(drop=True)
+)
+# The transcripts are stored in microns and the morphology image defines the
+# global frame in pixels. The scale between them is *declared* — it is already
+# on the element — so spatialdata applies it rather than the arithmetic
+# appearing here, where the direction is easy to get backwards.
+transcript_points = sd.transform(
+    sd.models.PointsModel.parse(
+        transcript_points,
+        transformations=get_transformation(_transcripts, get_all=True),
+    ),
+    to_coordinate_system='global',
+).compute()

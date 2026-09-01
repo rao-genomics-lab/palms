@@ -61,6 +61,8 @@ substituted string for the settings currently in the owning tab.
 - [`annot.nhood_plot`](#annotnhood_plot) — Heatmap of the annotation neighbourhood enrichment.
 - [`annot.polygons`](#annotpolygons) — The annotation polygons drawn in the viewer, inlined as literals.
 - [`annot.virtual_cells`](#annotvirtual_cells) — Virtual cells on a regular grid inside the annotated regions.
+- [`transcripts.density`](#transcriptsdensity) — 2-D histogram of one gene's transcripts over the morphology image.
+- [`transcripts.gene`](#transcriptsgene) — One gene's transcripts, in the morphology image's coordinate frame.
 
 ## Setup
 
@@ -1327,4 +1329,147 @@ _grid = gpd.GeoDataFrame(geometry=gpd.points_from_xy(_gx.ravel(), _gy.ravel()))
 annot_virtual_cells = _grid.sjoin(_regions, predicate='within')
 annot_virtual_cells['x_um'] = annot_virtual_cells.geometry.x
 annot_virtual_cells['y_um'] = annot_virtual_cells.geometry.y
+```
+
+## Transcripts
+
+### `transcripts.density`
+
+**Run by:** [Transcripts](Tab-Transcripts)
+
+A 2-D histogram of one gene's transcripts over the morphology image: counts per bin, optionally per cell, optionally restricted to the selected clusters.
+
+This was the **last node in the app recording prose** — a terminal whose cell was a comment, which replays as a silent no-op, so a notebook from a session that used it passed with the analysis missing. What held it back was that the viewer binned its own per-gene feather index, a viewer artifact a notebook replaying from raw output does not have. Reading the points element instead costs a few seconds on the first bin of a gene and buys a step that anyone can re-run. `get_extent` asks the image where it ends rather than reaching into a pyramid level's shape, so the grid is stated in the image's own frame and the histogram lines up with the picture.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `gene` | `str` | yes |
+| `bin_size_um` | `float` | yes |
+| `pixel_size` | `float` | yes |
+| `clustering` | `str` | no |
+| `selected` | `list` | no |
+
+- **Requires:** `adata`, `np`, `pd`, `sd`, `sdata`, `transcript_points`
+- **Outputs:** `transcript_density`
+- **Blocks:** `head`, `filter`, `main`, `normalise`
+
+**Variants** — 4 assemblies:
+
+Four assemblies: the cluster filter and the per-cell normalisation are each a block as well as a parameter. The filter is **per cell** — a transcript counts when the cell it was assigned to is selected. The viewer used to approximate that per *bin* whenever its cache had been built without cell ids; the points element always carries them.
+
+- `head + main`
+- `head + filter + main`
+- `head + main + normalise`
+- `head + filter + main + normalise`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
+
+```python
+#--- block head
+# Transcript density for $gene, in $bin_size_um um bins.
+_hits = transcript_points
+_cell_xy = adata.obsm['spatial']
+
+#--- block filter
+# Cluster filter, per cell rather than per bin: a transcript counts when the
+# cell it was assigned to is in the selected clusters. The viewer used to fall
+# back to a bin-level approximation — every transcript in a bin containing a
+# selected cell — whenever its transcript cache had been built without cell ids.
+# Reading the points element directly, the assignment is always there.
+_keep = adata.obs[$clustering].astype(str).isin($selected).to_numpy()
+_hits = _hits[_hits['cell_id'].isin(adata.obs['cell_id'][_keep])]
+_cell_xy = _cell_xy[_keep]
+
+#--- block main
+# The grid spans the morphology image and is stated in its frame, so the
+# histogram lines up with the picture. get_extent asks the image where it ends
+# rather than reaching into a pyramid level's shape.
+_extent = sd.get_extent(sdata['morphology_focus'], coordinate_system='global')
+_height, _width = _extent['y'][1], _extent['x'][1]
+_bin_px = $bin_size_um / $pixel_size
+_bins = [max(1, int(_height / _bin_px)), max(1, int(_width / _bin_px))]
+transcript_density, _, _ = np.histogram2d(
+    _hits['y'].to_numpy(), _hits['x'].to_numpy(),
+    bins=_bins, range=[[0, _height], [0, _width]],
+)
+
+#--- block normalise
+# Transcripts per cell rather than per bin, so a dense region does not simply
+# read as more cells. The centroids are in microns; the same scale that placed
+# the transcripts places them, declared the same way.
+_centroids = sd.transform(
+    sd.models.PointsModel.parse(
+        pd.DataFrame({'x': _cell_xy[:, 0], 'y': _cell_xy[:, 1]}),
+        transformations={'global': sd.transformations.Scale(
+            [1 / $pixel_size, 1 / $pixel_size], axes=('x', 'y'))},
+    ),
+    to_coordinate_system='global',
+).compute()
+_cells_per_bin, _, _ = np.histogram2d(
+    _centroids['y'].to_numpy(), _centroids['x'].to_numpy(),
+    bins=_bins, range=[[0, _height], [0, _width]],
+)
+transcript_density = np.where(
+    _cells_per_bin > 0, transcript_density / _cells_per_bin, 0)
+```
+
+### `transcripts.gene`
+
+**Run by:** [Transcripts](Tab-Transcripts)
+
+One gene's transcripts, read from `sdata.points['transcripts']` and placed in the morphology image's coordinate frame.
+
+Two things this template exists to get right. **Filter, then transform**: `sd.transform` maps every row it is handed, so transforming the whole table and filtering afterwards does the work for every gene in the panel — measured on a 1.4 GB `transcripts.parquet`, 95 s that way against 5 s this way, for an identical answer. And the pixel scale is **declared**, not applied: it is already on the element, so `sd.transform` uses it rather than a division whose direction is easy to get backwards. It is also a separate step from the histogram because it is the slow half — the bin-size slider re-runs only the binning.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `gene` | `str` | yes |
+| `min_qv` | `int` | yes |
+
+- **Requires:** `sd`, `sdata`
+- **Outputs:** `transcript_points`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Transcripts for $gene.
+#
+# Filter first, then transform. sd.transform maps every row it is handed, so
+# transforming the whole table and filtering afterwards does the same work for
+# every gene in the panel: measured on a 1.4 GB transcripts.parquet, 95 s that
+# way against 5 s this way, for an identical answer.
+from spatialdata.transformations import get_transformation
+
+_transcripts = sdata.points['transcripts']
+# The same two filters the viewer's transcript preprocessing bakes into its
+# per-gene feather files, stated here instead of inherited: qv is the
+# call-quality floor, and is_gene drops the control probes, which are not
+# transcripts of anything.
+transcript_points = (
+    _transcripts[
+        (_transcripts['feature_name'] == $gene)
+        & (_transcripts['qv'] >= $min_qv)
+        & _transcripts['is_gene']
+    ][['x', 'y', 'cell_id']]
+    .compute()
+    # A filtered frame keeps the original row labels, and PointsModel.parse
+    # cannot reindex an axis with duplicates.
+    .reset_index(drop=True)
+)
+# The transcripts are stored in microns and the morphology image defines the
+# global frame in pixels. The scale between them is *declared* — it is already
+# on the element — so spatialdata applies it rather than the arithmetic
+# appearing here, where the direction is easy to get backwards.
+transcript_points = sd.transform(
+    sd.models.PointsModel.parse(
+        transcript_points,
+        transformations=get_transformation(_transcripts, get_all=True),
+    ),
+    to_coordinate_system='global',
+).compute()
 ```

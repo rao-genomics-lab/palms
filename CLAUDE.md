@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1535 tests** across 64 files, measured 2026-09-01 —
+There is a `pytest` suite in `tests/` (**1570 tests** across 65 files, measured 2026-09-01 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -362,7 +362,10 @@ its comment in `analysis.py`, is labelled in the Notebook tab, and
 it only for state with no notebook equivalent (canvas background, overlays,
 crop-export). A comment-only node of any other kind is a defect, and
 `tests/test_recorded_code_is_code.py` parses every `record_node` call site and
-fails on one — `viewer:transcript_density` is the single listed exception.
+fails on one. **`KNOWN_PROSE` is empty as of 2026-09-01** — every recorder in the app now
+emits either code or a declared `NOTE`. Its last entry was `viewer:transcript_density`,
+held back because the density heatmap binned the viewer's per-gene feather index, which a
+replayed notebook does not have; it reads `sdata.points['transcripts']` now.
 
 - **Preferred: `ctx.run_step(Step(...))`** (`utils/steps.py`). A `Step` is a node id, a
   `string.Template` of plain scverse source, and a dict of literal `params`. `run_step`
@@ -386,7 +389,7 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   `builtin_text`/`builtin_assemble`, which read only shipped files via `importlib.resources`
   and cannot see an override path — that is what keeps the six template-pinning test modules
   passing unchanged. `tests/test_template_registry.py` runs the `check_step` lint over every
-  template × every declared assembly (60 renderings), which is where the five hand-written
+  template × every declared assembly (65 renderings), which is where the five hand-written
   `check_step` calls became a registry-wide gate.
 
   **Users can override a template**, per user, in `~/.config/palms/templates/*.tmpl`
@@ -434,7 +437,7 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   the header says so), and a provider must stay **read-only** — no `makedirs`, no
   `record_clustering` — since drawing a pane must not have side effects.
 
-  Nineteen of twenty-one templates have a provider. The two exemptions are declared in
+  Twenty-one of twenty-three templates have a provider. The two exemptions are declared in
   `tests/test_tab_templates.py::_NO_PROVIDER` with their reasons: `normalize` takes no params,
   and `spatial_neighbors` takes `k` from whichever tab called `ensure_spatial_neighbors`, so
   it uses the `# sample-params:` header field instead. Four gates, each verified against the
@@ -507,6 +510,20 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   the code that ran, so its cell says in-line that it is a reconstruction. `run_cnv_pipeline`
   is now the CopyKAT path only; the inferCNV template must stay in sync with it
   (`tests/test_cnv_step.py` pins both).
+  Also migrated, 2026-09-01: the **transcript density heatmap** (`transcripts.gene`,
+  `transcripts.density`, in `tab_transcripts.py`) — the last prose node in the app. It is
+  two steps because the halves have very different costs: fetching a gene from
+  `sdata.points['transcripts']` takes seconds and re-runs only when the gene or the QV
+  threshold changes, while the histogram is milliseconds and is what the bin-size slider
+  moves. Two facts worth not re-deriving. **Filter, then transform**: `sd.transform` maps
+  every row it is handed, so transforming the table and filtering afterwards costs 95 s
+  against 5 s on a 1.4 GB `transcripts.parquet`, for an identical answer. And **the fetch
+  applies `qv >= min_qv` and `is_gene`** — the two filters `palms-preprocess` bakes into
+  its feather files; without them the density silently counts low-quality calls and
+  control probes. Verified against a real dataset: the recorded step reproduces
+  `TranscriptLoader.load_gene` row for row and the histogram bin for bin (max abs diff 0),
+  and is 3.4× faster than the loader's own parquet fallback (6.5 s against 22 s). The
+  *point overlay* stays on the feather index — it is display, not analysis.
   Also migrated, 2026-09-01: the **annotation-neighbourhood** and **annotation-distance**
   tabs, in six templates — `annot.polygons` (`annotations`), `annot.virtual_cells`,
   `annot.nhood`, `annot.nhood_plot`, `annot.distance`, `annot.distance_plot`. They were
