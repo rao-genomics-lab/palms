@@ -19,6 +19,49 @@ def get_annotation_types(annotation_layer) -> list[str]:
     return sorted({t for t in types if t and str(t).strip()})
 
 
+def _merged_polygon_of_type(annotation_layer, annotation_type: str, pixel_size: float):
+    """Union of the polygons of one annotation type, in xy-micron coordinates.
+
+    Returns ``None`` if the layer holds no polygon of that type.
+
+    ``make_valid``, not ``buffer(0)``: on a self-intersecting polygon — a bowtie
+    is easy to draw by hand in napari — ``buffer(0)`` silently *deletes* a lobe
+    rather than repairing it, so the caller would sample virtual cells from, or
+    measure distances to, half the region the user drew. Measured on shapely
+    2.1.2: a 10x10 bowtie comes back as one 25 µm² triangle from ``buffer(0)``
+    and as the full 50 µm² MultiPolygon from ``make_valid``. Same rule, and the
+    same reason, as ``roi.polygons.tmpl``.
+
+    Only the *polygonal* parts of the repair are kept. ``make_valid`` answers a
+    degenerate ring — a shape whose vertices are collinear, i.e. a line the user
+    drew with the polygon tool — with a LineString, which has bounds and a
+    boundary and would therefore sail on through both callers as if it enclosed
+    a region. ``buffer(0)`` returned an empty polygon there, and that shape being
+    ignored is the behaviour worth keeping.
+    """
+    from shapely import make_valid
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    shapes = annotation_layer.data
+    types = list(annotation_layer.properties.get("annotation_type", []))
+    while len(types) < len(shapes):
+        types.append("")
+
+    polys = []
+    for arr, t in zip(shapes, types):
+        if str(t) != annotation_type:
+            continue
+        xy_um = np.asarray(arr)[:, ::-1] * pixel_size  # yx-px → xy-µm
+        poly = Polygon(xy_um)
+        if not poly.is_valid:
+            poly = make_valid(poly)
+        parts = getattr(poly, "geoms", [poly]) if poly.geom_type == "GeometryCollection" else [poly]
+        polys += [g for g in parts if g.geom_type in ("Polygon", "MultiPolygon") and not g.is_empty]
+
+    return unary_union(polys) if polys else None
+
+
 def sample_annotation_centroids(
     annotation_layer,
     annotation_type: str,
@@ -43,31 +86,12 @@ def sample_annotation_centroids(
     np.ndarray, shape (N, 2), columns = (x, y) in microns.
         Empty array if no polygons of the requested type exist.
     """
-    from shapely.geometry import Polygon
-    from shapely.ops import unary_union
     from shapely import contains_xy
 
-    shapes = annotation_layer.data
-    types = list(annotation_layer.properties.get("annotation_type", []))
-    while len(types) < len(shapes):
-        types.append("")
-
-    # Collect polygons of this type, converting yx-pixels → xy-microns
-    polys = []
-    for arr, t in zip(shapes, types):
-        if str(t) != annotation_type:
-            continue
-        xy_um = arr[:, ::-1] * pixel_size  # yx-px → xy-µm
-        poly = Polygon(xy_um)
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-        if not poly.is_empty:
-            polys.append(poly)
-
-    if not polys:
+    merged = _merged_polygon_of_type(annotation_layer, annotation_type, pixel_size)
+    if merged is None:
         return np.empty((0, 2), dtype=np.float64)
 
-    merged = unary_union(polys)
     minx, miny, maxx, maxy = merged.bounds
 
     # Spacing between grid points (µm) such that grid density ≈ 1 cell per density_um2
@@ -112,30 +136,12 @@ def compute_distance_to_annotation(
         NaN for any cell if no polygons of the given type exist.
     """
     import shapely
-    from shapely.geometry import Polygon
-    from shapely.ops import unary_union
-
-    shapes = annotation_layer.data
-    types = list(annotation_layer.properties.get("annotation_type", []))
-    while len(types) < len(shapes):
-        types.append("")
-
-    polys = []
-    for arr, t in zip(shapes, types):
-        if str(t) != annotation_type:
-            continue
-        xy_um = arr[:, ::-1] * pixel_size
-        poly = Polygon(xy_um)
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-        if not poly.is_empty:
-            polys.append(poly)
 
     n = len(centroids_um_xy)
-    if not polys:
+    merged = _merged_polygon_of_type(annotation_layer, annotation_type, pixel_size)
+    if merged is None:
         return np.full(n, np.nan, dtype=np.float64)
 
-    merged = unary_union(polys)
     boundary = merged.boundary  # MultiLineString / LineString
 
     # Vectorised shapely distance (shapely >= 2.0)
