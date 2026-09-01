@@ -216,7 +216,7 @@ Full documentation with screenshots is available on the [GitHub Wiki](https://gi
 
 If PALMS contributes to work you publish, please cite it. `CITATION.cff` in the repo root
 holds the machine-readable metadata; GitHub's "Cite this repository" button reads it
-directly. A Zenodo DOI for v1.0.0 is being minted and will be added to that file.
+directly. A Zenodo DOI for v1.0.1 is being minted and will be added to that file.
 
 ## License
 

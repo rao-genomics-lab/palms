@@ -8,7 +8,7 @@ action as replayable code.
 import os
 from importlib.util import find_spec
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 # ── Qt backend selection ─────────────────────────────────────────────────────
 # qtpy picks a binding in the order PyQt5, PySide2, PyQt6, PySide6, so *any*
