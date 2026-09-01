@@ -17,6 +17,41 @@ entries under **Development log** are the closed pre-1.0.0 record.
   and the Read the Docs site are the front page for everyone who never opens the repo, and
   neither renders `CITATION.cff` or the README's badge.
 
+- **The two annotation tabs record real code.** Annotation neighbourhood enrichment and
+  annotation distance produced results and recorded a `NOTE` — a comment cell that
+  replays as a silent no-op — so a notebook exported from a session that used them was
+  missing the analysis entirely. Both now run through `ctx.run_step`, in six new
+  templates: `annot.polygons`, `annot.virtual_cells`, `annot.nhood`, `annot.nhood_plot`,
+  `annot.distance` and `annot.distance_plot`. Each has a live preview in Tools →
+  Templates, under a new **Annotations** group, and can be customised per user like any
+  other. The distances also land in `adata.obs['dist_to_<type>_um']`, one column per
+  annotation type, so they are a value the rest of an analysis can group by rather than a
+  number the viewer kept to itself.
+
+  The blocker recorded against this work — that the notebook cannot reach the napari
+  shapes layer the virtual cells are sampled from, so it needs the spatialdata-shapes
+  migration first — was stale twice over. `roi.polygons` has solved the same problem the
+  other way since the ROI migration, by inlining the drawn polygons as literal
+  coordinates: the geometry never has to be *reachable*. And it is on disk regardless —
+  `save_annotations_to_sdata` writes a real `ShapesModel` GeoDataFrame to
+  `sdata.shapes['annotations']`. A third assumption, that the sampling would need a seed
+  to replay, was also wrong: the grid is a deterministic lattice over the annotated
+  region's bounds.
+
+  Two behaviour changes fall out of it. Virtual cells are now sampled on **one lattice
+  spanning every selected annotation type**, rather than one lattice per type starting at
+  that type's own bounding box, so two annotations sampled side by side sit on the same
+  grid and their densities are comparable. And the nhood heatmap's title is a template
+  parameter, so the file on disk and the figure on screen are the same picture — the
+  title used to be added after the figure had already been saved.
+
+### Removed
+- **`annotation_utils.sample_annotation_centroids` and `compute_distance_to_annotation`.**
+  Their geometry *is* `annot.virtual_cells` and `annot.distance` now. Keeping a second
+  python implementation beside the templates would have been the drift the Step system
+  exists to remove: nothing would have called it, and nothing would have noticed it
+  disagreeing. `get_annotation_types` stays — both tabs still use it.
+
 ### Fixed
 - **A self-intersecting annotation lost half of itself, silently.** Both annotation
   helpers repaired an invalid polygon with `poly.buffer(0)`, which does not repair a

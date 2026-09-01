@@ -56,7 +56,8 @@ def test_templates_are_grouped_by_owner(tab):
     widget, _ = tab
     tree = _tree(widget)
     groups = {tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())}
-    assert {"Clustering", "Genes", "Spatial", "ROI", "Setup"} == groups
+    assert {"Clustering", "Genes", "Spatial", "ROI", "Annotations",
+            "Setup"} == groups
 
 
 def test_the_preview_is_the_real_rendered_source(ctx):
@@ -342,7 +343,7 @@ def _enclosing_function(module, target) -> str:
 _PROVIDER_TABS = (
     "tab_clustering", "tab_gene_analysis", "tab_nhood", "tab_co_occurrence",
     "tab_ligrec", "tab_gene_correlation", "tab_marker_genes", "tab_roi",
-    "tab_cnv", "tab_umap",
+    "tab_cnv", "tab_umap", "tab_annot_nhood", "tab_annot_distance",
 )
 
 
@@ -373,6 +374,10 @@ def stub_ctx():
         gene_names=list(adata.var_names), data_path="/tmp/xv-not-written",
         pixel_size=0.2125, color_manager=SimpleNamespace(adata=adata),
         roi_layer=None, dataset_generation=0, no_cache=False,
+        # The annotation tabs read the shapes layer while building their
+        # previews. None is the honest stand-in: it is what ViewerContext holds
+        # before anything has been drawn, and a provider must answer then too.
+        annotation_layer=None, ensure_annotations=lambda preview: None,
         segmentation_source="xenium",
         gene_widget=SimpleNamespace(value="Gene0"),
         filter_check=SimpleNamespace(value=False),

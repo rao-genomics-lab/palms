@@ -18,7 +18,10 @@ from palms.utils.plot_output import (
     plot_formats, recorded_paths, save_figure, save_paths,
 )
 from palms.utils.reporting import get_logger, report_recording_failure
-from palms.utils.step_templates import builtin_spec, builtin_text, check_base_namespace, step_template as _resolved
+from palms.utils.step_templates import (
+    Preview, builtin_spec, builtin_text, check_base_namespace,
+    step_template as _resolved,
+)
 from palms.utils.steps import Step, StepExecutor, coerce
 
 if TYPE_CHECKING:
@@ -52,6 +55,36 @@ _NORMALIZE_TEMPLATE = builtin_text("normalize")
 # The old recorded cell built it on ``adata`` — so the notebook's consumers read
 # a graph that did not exist on the object they were passed.
 _SPATIAL_NEIGHBORS_TEMPLATE = builtin_text("spatial_neighbors")
+
+
+_ANNOT_POLYGONS_TEMPLATE = builtin_text("annot.polygons")
+
+
+def annotation_polygons_preview(ctx) -> Preview:
+    """The ``annot.polygons`` step as the annotation layer stands right now.
+
+    Shared rather than per-tab: the annotation-neighbourhood and
+    annotation-distance tabs both depend on the same drawn shapes, and two
+    expressions of "what has been drawn" would drift the moment one of them
+    learned something the other did not.
+
+    Shapes with no type assigned are left out. They are not annotations of type
+    ``""`` — the Annotations tab has simply not been told what they are yet, and
+    inlining them would put an unnamed group in the notebook's results.
+    """
+    layer = getattr(ctx, "annotation_layer", None)
+    shapes = list(layer.data) if layer is not None else []
+    raw = list(layer.properties.get("annotation_type", [])) if layer is not None else []
+    raw += [""] * (len(shapes) - len(raw))
+    typed = [(s, str(t)) for s, t in zip(shapes, raw) if str(t).strip()]
+    return Preview(
+        list(builtin_spec("annot.polygons").blocks),
+        {
+            "polygons": [np.round(np.asarray(s), 2).tolist() for s, _ in typed],
+            "types": [t for _, t in typed],
+            "pixel_size": float(ctx.pixel_size),
+        },
+    )
 
 
 # ── magicgui ComboBox default helper ─────────────────────────────────────────
@@ -756,6 +789,39 @@ def create_shared_helpers(ctx: ViewerContext):
         state["_spatial_neighbors_key"] = cache_key
 
     ctx.ensure_spatial_neighbors = _ensure_spatial_neighbors
+
+    # ── ensure_annotations ───────────────────────────────────────────────
+    def _ensure_annotations(preview):
+        """Bind and record ``annotations`` from the shapes drawn in the viewer.
+
+        The counterpart of ``tab_roi._record_rois``, and the answer to what was
+        recorded here for months as a blocker: the drawn geometry does not have
+        to be *reachable* from the notebook, because it is inlined into the
+        recorded cell as literals. Both annotation analyses declare this node as
+        a dependency, so one drawing produces one node they share.
+
+        Not memoised. Re-running upserts the node with whatever is on the canvas
+        now and flags its dependents stale, which is exactly right: an analysis
+        run against a different set of shapes is a different analysis.
+
+        Returns ``None`` when nothing typed has been drawn, so a caller can
+        report that rather than run an analysis over an empty region.
+        """
+        blocks, params, _ = preview
+        if not params["polygons"]:
+            return None
+        _record_preamble()
+        return _run_step(Step(
+            id="annotations",
+            **_resolved("annot.polygons", blocks),
+            params=params,
+            deps=["preamble"],
+            kind=SETUP,
+            label=f"Annotation polygons ({len(params['polygons'])})",
+            outputs=["annotations"],
+        ))["annotations"]
+
+    ctx.ensure_annotations = _ensure_annotations
 
     # ── show_plot ────────────────────────────────────────────────────────
     @ensure_main_thread

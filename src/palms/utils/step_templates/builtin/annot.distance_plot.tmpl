@@ -1,0 +1,66 @@
+# palms template
+# id: annot.distance_plot
+# schema-version: 1
+# assemblies: head+plot.violin+save | head+relabel+plot.violin+save |
+#          head+clip+plot.violin+save | head+relabel+clip+plot.violin+save |
+#          head+plot.box+save | head+relabel+plot.box+save |
+#          head+clip+plot.box+save | head+relabel+clip+plot.box+save |
+#          head+plot.strip+save | head+relabel+plot.strip+save |
+#          head+clip+plot.strip+save | head+relabel+clip+plot.strip+save
+# doc: Distance-to-annotation distribution per cluster; one plot.* block per type.
+# requires: sc, pd, plt, Path, adata
+# outputs: fig
+# params: obs_key:str, cluster_key:str, annotation_type:str, paths:list,
+#         categories:dict?, max_dist:float?
+
+#--- block head
+# Distance to '$annotation_type' by $cluster_key
+import seaborn as sns
+
+_dist = sc.get.obs_df(adata, keys=[$obs_key, $cluster_key]).dropna()
+
+#--- block relabel
+# .map() rather than .cat.rename_categories(): naming two clusters the same
+# thing is a request to merge them, and rename_categories refuses it outright
+# ("Categorical categories must be unique"). dict.fromkeys dedupes the names
+# while keeping cluster order.
+_display = $categories
+_dist[$cluster_key] = pd.Categorical(
+    _dist[$cluster_key].astype(str).map(_display),
+    categories=list(dict.fromkeys(_display.values())),
+)
+
+#--- block clip
+# "Max distance to show" hides the far tail; it drops cells rather than
+# clipping them, so the quartiles drawn are the quartiles of what is shown.
+_dist = _dist[_dist[$obs_key] <= $max_dist]
+
+#--- block plot.violin
+fig, _ax = plt.subplots(figsize=(max(8, _dist[$cluster_key].nunique() * 0.6), 5))
+sns.violinplot(data=_dist, x=$cluster_key, y=$obs_key, ax=_ax,
+               cut=0, inner='quartile', palette='tab20', hue=$cluster_key,
+               legend=False)
+
+#--- block plot.box
+fig, _ax = plt.subplots(figsize=(max(8, _dist[$cluster_key].nunique() * 0.6), 5))
+sns.boxplot(data=_dist, x=$cluster_key, y=$obs_key, ax=_ax,
+            palette='tab20', hue=$cluster_key, legend=False,
+            flierprops={'markersize': 2})
+
+#--- block plot.strip
+fig, _ax = plt.subplots(figsize=(max(8, _dist[$cluster_key].nunique() * 0.6), 5))
+sns.stripplot(data=_dist, x=$cluster_key, y=$obs_key, ax=_ax,
+              size=2, alpha=0.5, palette='tab20', hue=$cluster_key,
+              legend=False)
+
+#--- block save
+_ax.set_xlabel($cluster_key)
+_ax.set_ylabel("Distance to annotation boundary (um)")
+_ax.set_title("Distance to '$annotation_type' boundary by $cluster_key")
+_ax.tick_params(axis='x', labelrotation=45)
+for _tick in _ax.get_xticklabels():
+    _tick.set_horizontalalignment('right')
+fig.tight_layout()
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, bbox_inches='tight', dpi=300)

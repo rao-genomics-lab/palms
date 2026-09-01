@@ -1,122 +1,108 @@
-"""Annotation geometry: the polygon repair must keep the whole shape.
+"""Reading the annotation layer: what becomes an annotation, and what does not.
 
-Both annotation helpers used ``poly.buffer(0)`` to repair a self-intersecting
-polygon. That does not repair it — on a bowtie it *deletes* a lobe, so virtual
-cells were sampled from, and distances measured to, half the region the user
-drew, with no warning. ``roi.polygons.tmpl`` already carried the rule and the
-reason; these tests are what stops the idiom coming back on the python side.
+The geometry these tests used to cover moved into the ``annot.*`` templates
+(see ``tests/test_annotation_steps.py``, which asserts the bowtie repair on the
+code that now runs). What is left on the python side is the boundary between
+the napari layer and the recorded step: which shapes are inlined, with which
+type, at what precision. Every one of those choices ends up as a literal in the
+notebook, so it is worth pinning here rather than only through a rendered
+template.
 """
 
 import numpy as np
 import pytest
 
-from palms.utils.annotation_utils import (
-    compute_distance_to_annotation,
-    get_annotation_types,
-    sample_annotation_centroids,
-)
+from palms.tabs._helpers import annotation_polygons_preview
+from palms.utils.annotation_utils import get_annotation_types
 
 
 class FakeShapesLayer:
-    """The two attributes the annotation helpers read off a napari Shapes layer."""
+    """The two attributes the annotation readers touch on a napari Shapes layer."""
 
     def __init__(self, shapes, types):
         self.data = [np.asarray(s, dtype=np.float64) for s in shapes]
         self.properties = {"annotation_type": list(types)}
 
 
-# A bowtie in napari yx-pixel coordinates: two 50 µm² lobes meeting at (5, 5).
-# buffer(0) keeps one of them; make_valid keeps both.
-BOWTIE = [(0, 0), (10, 10), (10, 0), (0, 10)]
-LOWER_LOBE_CENTRE = (5.0, 2.0)   # xy-µm, inside the lobe buffer(0) drops
-UPPER_LOBE_CENTRE = (5.0, 8.0)   # xy-µm, inside the lobe buffer(0) keeps
+class FakeCtx:
+    def __init__(self, layer, pixel_size=0.2125):
+        self.annotation_layer = layer
+        self.pixel_size = pixel_size
 
 
-@pytest.fixture
-def bowtie_layer():
-    return FakeShapesLayer([BOWTIE], ["tumour"])
+SQUARE = [(0, 0), (0, 10), (10, 10), (10, 0)]
+OTHER = [(20, 20), (20, 30), (30, 30), (30, 20)]
 
 
-def _contains(points, xy, tol=1.5):
-    """Is any sampled point within `tol` µm of `xy`?"""
-    if len(points) == 0:
-        return False
-    return bool((np.abs(points - np.asarray(xy)).max(axis=1) <= tol).any())
+def test_an_untyped_shape_is_not_an_annotation():
+    """A shape drawn but not yet labelled is not an annotation of type "" — the
+    Annotations tab has simply not been told what it is. Inlining it would put
+    an unnamed group in the notebook's results."""
+    ctx = FakeCtx(FakeShapesLayer([SQUARE, OTHER], ["tumour", "  "]))
+
+    _blocks, params, _ = annotation_polygons_preview(ctx)
+
+    assert params["types"] == ["tumour"]
+    assert len(params["polygons"]) == 1
 
 
-def test_sampling_covers_both_lobes_of_a_self_intersecting_polygon(bowtie_layer):
-    pts = sample_annotation_centroids(bowtie_layer, "tumour", pixel_size=1.0, density_um2=1.0)
+def test_types_shorter_than_shapes_does_not_shift_the_labels():
+    """layer.properties can lag layer.data by an entry. Zipping them short would
+    silently give the second shape the third one's label."""
+    ctx = FakeCtx(FakeShapesLayer([SQUARE, OTHER], ["tumour"]))
 
-    assert _contains(pts, UPPER_LOBE_CENTRE)
-    # The regression: buffer(0) returns a single 25 µm² triangle, so nothing was
-    # ever sampled from this half of the annotation.
-    assert _contains(pts, LOWER_LOBE_CENTRE)
+    _blocks, params, _ = annotation_polygons_preview(ctx)
 
-
-def test_sampled_area_is_the_whole_bowtie_not_half_of_it(bowtie_layer):
-    """One virtual cell per µm², so the count estimates the area: 50, not 25."""
-    pts = sample_annotation_centroids(bowtie_layer, "tumour", pixel_size=1.0, density_um2=1.0)
-
-    assert 40 <= len(pts) <= 60, f"sampled {len(pts)} points; a half-bowtie gives ~25"
+    assert params["types"] == ["tumour"]
+    assert params["polygons"][0][0] == [0.0, 0.0]     # the square, not the other
 
 
-def test_distance_is_measured_to_both_lobes(bowtie_layer):
-    """A cell in the dropped lobe is *inside* the annotation, so it sits within a
-    few µm of a boundary — not the ~5 µm+ it would read if that lobe were gone."""
-    centroids = np.array([LOWER_LOBE_CENTRE, UPPER_LOBE_CENTRE], dtype=np.float64)
+def test_the_params_are_plain_literals():
+    """They are rendered into the recorded cell, and Step validates them with
+    ast.literal_eval(repr(v)) == v — a numpy array would not survive it."""
+    ctx = FakeCtx(FakeShapesLayer([SQUARE], ["tumour"]))
 
-    d = compute_distance_to_annotation(centroids, bowtie_layer, "tumour", pixel_size=1.0)
+    _blocks, params, _ = annotation_polygons_preview(ctx)
 
-    assert d[1] == pytest.approx(2.0, abs=0.5)   # the kept lobe, unchanged
-    assert d[0] == pytest.approx(2.0, abs=0.5)   # the dropped lobe
-
-
-def test_a_line_drawn_with_the_polygon_tool_is_ignored():
-    """make_valid answers a collinear ring with a LineString, which has bounds and
-    a boundary and would otherwise pass for a region. buffer(0) returned an empty
-    polygon here, and being ignored is the behaviour worth keeping."""
-    layer = FakeShapesLayer([[(0, 0), (5, 5), (10, 10)]], ["scratch"])
-
-    assert len(sample_annotation_centroids(layer, "scratch", pixel_size=1.0)) == 0
-    d = compute_distance_to_annotation(
-        np.array([[1.0, 1.0]]), layer, "scratch", pixel_size=1.0)
-    assert np.isnan(d).all()
+    import ast
+    assert ast.literal_eval(repr(params)) == params
+    assert isinstance(params["polygons"], list)
+    assert isinstance(params["polygons"][0][0][0], float)
+    assert isinstance(params["pixel_size"], float)
 
 
-def test_pixel_size_scales_the_geometry():
-    """The helpers take yx-pixels and work in xy-microns."""
-    layer = FakeShapesLayer([[(0, 0), (0, 10), (10, 10), (10, 0)]], ["a"])
+def test_coordinates_are_rounded_so_the_recorded_cell_stays_readable():
+    ctx = FakeCtx(FakeShapesLayer([[(0.123456, 1.987654)] * 3], ["tumour"]))
 
-    at_1 = sample_annotation_centroids(layer, "a", pixel_size=1.0, density_um2=1.0)
-    at_2 = sample_annotation_centroids(layer, "a", pixel_size=2.0, density_um2=1.0)
+    _blocks, params, _ = annotation_polygons_preview(ctx)
 
-    assert len(at_2) == pytest.approx(4 * len(at_1), rel=0.15)  # 2x linear → 4x area
+    assert params["polygons"][0][0] == [0.12, 1.99]
 
 
-def test_missing_type_returns_empty_and_nan():
-    layer = FakeShapesLayer([[(0, 0), (0, 10), (10, 10), (10, 0)]], ["a"])
+def test_the_pixel_size_travels_with_the_shapes():
+    """The template scales the drawn pixels to microns, so the conversion is
+    recorded with the coordinates it applies to rather than assumed."""
+    ctx = FakeCtx(FakeShapesLayer([SQUARE], ["tumour"]), pixel_size=0.5)
 
-    assert len(sample_annotation_centroids(layer, "absent", pixel_size=1.0)) == 0
-    d = compute_distance_to_annotation(
-        np.array([[1.0, 1.0], [2.0, 2.0]]), layer, "absent", pixel_size=1.0)
-    assert d.shape == (2,) and np.isnan(d).all()
+    _blocks, params, _ = annotation_polygons_preview(ctx)
+
+    assert params["pixel_size"] == 0.5
 
 
-def test_types_shorter_than_shapes_is_padded_not_zipped_short():
-    """A shape drawn but not yet assigned a type must not silently take the next
-    shape's label — layer.properties can lag layer.data by one entry."""
-    layer = FakeShapesLayer(
-        [[(0, 0), (0, 10), (10, 10), (10, 0)], [(20, 20), (20, 30), (30, 30), (30, 20)]],
-        ["a"],  # the second shape has no type yet
-    )
-
-    pts = sample_annotation_centroids(layer, "a", pixel_size=1.0, density_um2=4.0)
-
-    assert len(pts) > 0
-    assert pts[:, 0].max() < 15, "the untyped second shape was sampled as type 'a'"
+def test_nothing_drawn_yields_no_polygons():
+    """What ``ctx.ensure_annotations`` checks before running an analysis over an
+    empty region — and what a preview must answer for a tab built before the
+    user has drawn anything."""
+    for layer in (None, FakeShapesLayer([], [])):
+        _blocks, params, _ = annotation_polygons_preview(FakeCtx(layer))
+        assert params["polygons"] == []
 
 
 def test_get_annotation_types_ignores_blanks():
     layer = FakeShapesLayer([[(0, 0)]] * 4, ["b", "", "a", "  "])
 
     assert get_annotation_types(layer) == ["a", "b"]
+
+
+def test_get_annotation_types_of_no_layer():
+    assert get_annotation_types(None) == []

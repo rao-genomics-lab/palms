@@ -1,0 +1,24 @@
+# palms template
+# id: annot.distance
+# schema-version: 1
+# doc: Distance from every cell to the nearest annotation boundary.
+# requires: sc, adata, annotations
+# outputs: annot_distances
+# params: annotation_type:str, obs_key:str
+
+#--- block main
+# Distance from each cell to the '$annotation_type' boundary, in microns.
+#
+# Both frames are already microns — annot.polygons converted the drawn shapes
+# once — so the distance shapely returns is the distance in microns, with no
+# conversion here to get wrong. Cells inside the annotation measure their
+# distance to the boundary too, not zero.
+import shapely
+
+_boundary = annotations.loc[$annotation_type, 'geometry'].boundary
+_xy = sc.get.obs_df(adata, obsm_keys=[('spatial', 0), ('spatial', 1)])
+annot_distances = shapely.distance(
+    shapely.points(_xy['spatial-0'].to_numpy(), _xy['spatial-1'].to_numpy()),
+    _boundary,
+)
+adata.obs[$obs_key] = annot_distances

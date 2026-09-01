@@ -4,6 +4,12 @@ Runs squidpy neighbourhood enrichment on real Xenium cells combined with
 virtual "cells" sampled from user-drawn annotation polygons.  Annotation
 types appear as additional rows/columns in the Z-score heatmap alongside
 real cell-type clusters.
+
+Every button here runs a ``Step``, so the recorded code is the executed code.
+This tab recorded nothing but a ``NOTE`` until 2026-09-01, on the stated
+grounds that the notebook cannot reach a napari shapes layer. It does not have
+to: ``annot.polygons`` inlines the drawn shapes as literals, exactly as
+``roi.polygons`` has done for ROIs since the ROI migration.
 """
 
 from __future__ import annotations
@@ -17,9 +23,23 @@ from qtpy.QtWidgets import (
     QCheckBox, QGroupBox,
 )
 from napari.qt.threading import thread_worker
-from palms.tabs._helpers import StatusProxy, attach_tqdm_progress, qt_tqdm_context, make_progress_bar, combo_value_kwargs, make_tab
+from palms.tabs._helpers import (
+    StatusProxy, annotation_polygons_preview, attach_tqdm_progress,
+    qt_tqdm_context, make_progress_bar, combo_value_kwargs, make_tab,
+)
 from palms.utils.plot_output import safe_stem
-from palms.utils.prov_graph import NOTE
+from palms.utils.prov_graph import ARTIFACT, TERMINAL
+from palms.utils.steps import Step, StepError, coerce
+from palms.utils.step_templates import (
+    Preview, builtin_spec, step_template as _resolved,
+)
+
+#: This tab runs four steps: the drawn shapes, the virtual cells sampled inside
+#: them, the enrichment over both, and the heatmap.
+POLYGONS_TEMPLATE_ID = "annot.polygons"
+VIRTUAL_CELLS_TEMPLATE_ID = "annot.virtual_cells"
+TEMPLATE_ID = "annot.nhood"
+PLOT_TEMPLATE_ID = "annot.nhood_plot"
 
 if TYPE_CHECKING:
     from palms.utils.viewer_context import ViewerContext
@@ -84,10 +104,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     status = StatusProxy(ctx.viewer)
     annot_nhood_progress = make_progress_bar()
 
-    from palms.utils.gene_analysis import get_normalized_adata, add_clustering_to_obs
-    from palms.utils.spatial_analysis import (
-        compute_spatial_neighbors, run_nhood_enrichment, make_nhood_enrichment_plot,
-    )
+    from palms.utils.gene_analysis import add_clustering_to_obs
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -100,12 +117,61 @@ def build_tab(ctx: ViewerContext) -> tuple:
             if isinstance(cb, QCheckBox) and cb.isChecked()
         ]
 
-    def _on_run():
-        from palms.utils.annotation_utils import sample_annotation_centroids
-        import anndata
-        import scipy.sparse as sp
-        import pandas as pd
+    # ── Preview providers ─────────────────────────────────────────────────────
+    # One expression per step of what this tab would run as the widgets stand,
+    # called by the run below *and* by the Templates tab's preview pane.
 
+    def _annot_polygons_preview() -> Preview:
+        """The drawn shapes. Delegates, because the distance tab needs the same
+        expression and two copies of "what has been drawn" would drift."""
+        return annotation_polygons_preview(ctx)
+
+    def _virtual_cells_preview() -> Preview:
+        return Preview(
+            list(builtin_spec(VIRTUAL_CELLS_TEMPLATE_ID).blocks),
+            {
+                "types": _get_selected_annot_types(),
+                "density_um2": float(coerce(density_spin.value)),
+            },
+        )
+
+    def _nhood_preview() -> Preview:
+        clustering_key = clustering_widget.value
+        return Preview(
+            list(builtin_spec(TEMPLATE_ID).blocks),
+            {
+                "cluster_key": clustering_key,
+                "uns_key": f"{clustering_key}_nhood_enrichment",
+                "n_neighs": coerce(neighs_slider.value),
+                "n_perms": coerce(perms_slider.value),
+                "seed": 42,
+            },
+        )
+
+    def _nhood_plot_preview() -> Preview:
+        result = state.get("annot_nhood_result") or {}
+        clustering_key = result.get("_cluster_key") or clustering_widget.value
+        annot_types = result.get("_annot_types") or _get_selected_annot_types()
+        return Preview(
+            list(builtin_spec(PLOT_TEMPLATE_ID).blocks),
+            {
+                "cluster_key": clustering_key,
+                "mode": mode_widget.value,
+                "title": ("Annotation Nhood Enrichment\n"
+                          f"(annotation types: {', '.join(annot_types)})"),
+                "paths": ctx.plot_paths(_plot_stem(clustering_key)),
+            },
+        )
+
+    def _plot_stem(clustering_key) -> str:
+        return f"annot_nhood_enrichment_{safe_stem(clustering_key)}"
+
+    ctx.state.setdefault("template_preview", {})[POLYGONS_TEMPLATE_ID] = _annot_polygons_preview
+    ctx.state.setdefault("template_preview", {})[VIRTUAL_CELLS_TEMPLATE_ID] = _virtual_cells_preview
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _nhood_preview
+    ctx.state.setdefault("template_preview", {})[PLOT_TEMPLATE_ID] = _nhood_plot_preview
+
+    def _on_run():
         clustering_key = clustering_widget.value
         if clustering_key is None or clustering_key not in ctx.clusterings:
             results_text.setPlainText("No clustering selected.")
@@ -116,72 +182,76 @@ def build_tab(ctx: ViewerContext) -> tuple:
             results_text.setPlainText("No annotation types selected.")
             return
 
-        n_perms = perms_slider.value
-        n_neighs = neighs_slider.value
-        density = density_spin.value
+        # The shapes, first: the two analysis steps declare this node as a
+        # dependency, and a run with nothing drawn has no region to sample.
+        if ctx.ensure_annotations(_annot_polygons_preview()) is None:
+            results_text.setPlainText(
+                "No typed annotations have been drawn — use the Annotations tab."
+            )
+            return
+
+        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+        # The clustering must exist as a node, and in adata.obs, before a step
+        # can declare it as a dependency and read it. Both on the GUI thread.
+        ctx.record_clustering(clustering_key)
+        add_clustering_to_obs(_adata, _adata, ctx.clusterings[clustering_key],
+                              clustering_key)
+
+        virtual_blocks, virtual_params, _ = _virtual_cells_preview()
+        nhood_blocks, nhood_params, _ = _nhood_preview()
+
+        virtual_step = Step(
+            id="annot_virtual_cells",
+            **_resolved(VIRTUAL_CELLS_TEMPLATE_ID, virtual_blocks),
+            params=virtual_params,
+            deps=["annotations"],
+            kind=ARTIFACT,
+            label=f"Annotation virtual cells ({', '.join(annot_types)})",
+            outputs=["annot_virtual_cells"],
+        )
+        nhood_step = Step(
+            id=f"annot_nhood:{clustering_key}",
+            **_resolved(TEMPLATE_ID, nhood_blocks),
+            params=nhood_params,
+            deps=["normalize", f"clustering:{clustering_key}",
+                  "annot_virtual_cells"],
+            kind=ARTIFACT,
+            label=f"Annotation nhood enrichment: {clustering_key}",
+            outputs=["adata_annot"],
+        )
 
         run_btn.enabled = False
         status.value = "Building augmented dataset with annotation virtual cells..."
-
-        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
         _progress = [None]
 
         @thread_worker
         def _run():
-            adata_norm = get_normalized_adata(_adata)
-            add_clustering_to_obs(
-                adata_norm, _adata, ctx.clusterings[clustering_key], clustering_key
-            )
-            adata_norm.obsm['spatial'] = _adata.obsm['spatial'].copy()
+            ctx.ensure_normalized()
+            try:
+                virtual = ctx.run_step(virtual_step)["annot_virtual_cells"]
+                if len(virtual) == 0:
+                    return {"warning": "No virtual cells fell inside the selected "
+                                       "annotations — try a finer grid density.",
+                            "zscore": np.array([]), "count": np.array([]),
+                            "clusters": []}
+                with qt_tqdm_context(_progress[0], "Enrichment permutations: "):
+                    adata_annot = ctx.run_step(nhood_step)["adata_annot"]
+            except StepError as e:
+                return {"warning": str(e), "zscore": np.array([]),
+                        "count": np.array([]), "clusters": []}
 
-            # Sample virtual cells for each annotation type
-            virtual_blocks = []
-            for atype in annot_types:
-                centroids = sample_annotation_centroids(
-                    ctx.annotation_layer, atype, ctx.pixel_size, density_um2=density
-                )
-                if len(centroids) == 0:
-                    continue
-                virtual_blocks.append((atype, centroids))
-
-            if not virtual_blocks:
-                return {"warning": "No virtual cells could be sampled (no annotation polygons?)",
-                        "zscore": np.array([]), "count": np.array([]), "clusters": []}
-
-            # Build augmented AnnData
-            n_real = adata_norm.n_obs
-            n_genes = adata_norm.n_vars
-            all_spatial = [adata_norm.obsm['spatial']]
-            all_labels = list(adata_norm.obs[clustering_key].astype(str))
-
-            for atype, centroids in virtual_blocks:
-                all_spatial.append(centroids)
-                all_labels += [atype] * len(centroids)
-
-            spatial_aug = np.vstack(all_spatial)
-            n_virtual = len(spatial_aug) - n_real
-
-            X_real = adata_norm.X
-            X_virtual = sp.csr_matrix((n_virtual, n_genes))
-
-            adata_aug = anndata.AnnData(
-                X=sp.vstack([X_real, X_virtual]),
-                var=adata_norm.var.copy(),
-            )
-            adata_aug.obsm['spatial'] = spatial_aug
-
-            # All categories including annotation types
-            all_cats = sorted(set(all_labels))
-            adata_aug.obs[clustering_key] = pd.Categorical(all_labels, categories=all_cats)
-
-            compute_spatial_neighbors(adata_aug, n_neighs=n_neighs)
-            with qt_tqdm_context(_progress[0], "Enrichment permutations: "):
-                result = run_nhood_enrichment(adata_aug, clustering_key, n_perms=n_perms)
-
-            result['_adata_norm'] = adata_aug
-            result['_cluster_key'] = clustering_key
-            result['_annot_types'] = annot_types
-            return result
+            uns = adata_annot.uns[nhood_params["uns_key"]]
+            return {
+                "zscore": np.array(uns["zscore"]),
+                "count": np.array(uns["count"]),
+                "clusters": list(
+                    adata_annot.obs[clustering_key].cat.categories.astype(str)),
+                "warning": None,
+                "_adata_annot": adata_annot,
+                "_cluster_key": clustering_key,
+                "_annot_types": annot_types,
+                "_n_virtual": len(virtual),
+            }
 
         worker = _run()
         _progress[0], state['_annot_nhood_progress_timer'] = attach_tqdm_progress(
@@ -243,38 +313,34 @@ def build_tab(ctx: ViewerContext) -> tuple:
         result = state.get("annot_nhood_result")
         if result is None:
             return
+        clustering_key = result.get("_cluster_key", "")
         ctx.apply_plot_font_size()
-        fig = make_nhood_enrichment_plot(result, mode=mode_widget.value)
-        annot_types = result.get('_annot_types', [])
-        fig.suptitle(f"Annotation Nhood Enrichment\n(annotation types: {', '.join(annot_types)})",
-                     fontsize=10)
-        fig.tight_layout()
-        # ``plt.show()`` here was *blocking* — the only plot in the app that
-        # froze the viewer until its window was closed.
-        cluster_key = result.get('_cluster_key', '')
-        paths = ctx.show_plot(
-            fig, f"annot_nhood_enrichment_{safe_stem(cluster_key)}",
-            title=f"Annotation nhood enrichment: {cluster_key}")
-        status.value = f"Heatmap displayed — saved to {', '.join(paths)}"
-        # This tab recorded nothing at all before, so the figure existed with no
-        # trace in the notebook. It is a NOTE rather than a TERMINAL because the
-        # enrichment is computed over virtual cells sampled from a napari shapes
-        # layer the notebook has no access to: there is no code to record yet,
-        # and a cell that ran `plt.gcf().savefig(...)` with no preceding plot
-        # would replay as a silent no-op writing an empty figure. NOTE says
-        # "not code, and not meant to be", renders as markdown, and is counted
-        # apart from the comment-only punch list.
-        ctx.record_node(
-            "viewer:annot_nhood_plot",
-            f"\n# Annotation neighbourhood enrichment heatmap "
-            f"(mode={mode_widget.value}, annotation types: {', '.join(annot_types)})\n"
-            f"# Computed over virtual cells sampled from annotation shapes drawn\n"
-            f"# in the viewer, which this notebook cannot reach. Figure written to:\n"
-            + "".join(f"#   {p}\n" for p in ctx.recorded_plot_paths(paths)),
-            deps=["preamble"],
-            kind=NOTE,
-            label="Annotation nhood heatmap",
+
+        blocks, params, _ = _nhood_plot_preview()
+        step = Step(
+            id=f"plot:annot_nhood:{clustering_key}",
+            **_resolved(PLOT_TEMPLATE_ID, blocks),
+            params=params,
+            deps=[f"annot_nhood:{clustering_key}"],
+            kind=TERMINAL,
+            label=f"Annotation nhood heatmap: {clustering_key}",
+            outputs=["fig"],
         )
+        # A TERMINAL now, not a NOTE. The NOTE was right while the figure came
+        # from a viewer-only computation the notebook could not express — a
+        # terminal that saved a figure nothing had drawn would have replayed as
+        # an empty file. The enrichment is a recorded step now, so the heatmap
+        # is drawable from it, and the cell that draws it is the cell that ran.
+        try:
+            fig = ctx.run_step(step)["fig"]
+        except StepError as e:
+            status.value = f"Plot error: {e}"
+            return
+        paths = ctx.show_plot(
+            fig, _plot_stem(clustering_key),
+            title=f"Annotation nhood enrichment: {clustering_key}",
+            save=False, paths=params["paths"])
+        status.value = f"Heatmap displayed — saved to {', '.join(paths)}"
 
     def _on_export():
         result = state.get("annot_nhood_result")

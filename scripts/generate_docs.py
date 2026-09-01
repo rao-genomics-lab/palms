@@ -327,9 +327,129 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "that cannot come from a widget is named rather than faked."
         ),
     ),
+    "annot.polygons": TemplateNote(
+        group="Annotations",
+        tab="[Annot Nhood](Tab-Annot-Nhood) and [Annot Distance](Tab-Annot-Distance)",
+        what=(
+            "Inlines the annotations you drew as literal coordinates and unions "
+            "them into one geometry per annotation type — the shared starting "
+            "point for both annotation analyses. Untyped shapes are left out: "
+            "they are not annotations of type `\"\"`, the Annotations tab has "
+            "simply not been told what they are yet."
+        ),
+        reading=(
+            "The same move as [roi.polygons](Analysis-Templates#roipolygons), and "
+            "the answer to a blocker this project carried for months. The "
+            "annotation tabs were held back on the grounds that a notebook cannot "
+            "reach a napari shapes layer — but it never needed to, because the "
+            "shapes are recorded as literals. (They are also on disk, at "
+            "`sdata.shapes['annotations']`, which was the *other* reason the "
+            "blocker was stale.) The flip from napari's `(y, x)` pixels to "
+            "`(x, y)` microns happens **once**, here, so everything downstream "
+            "compares like with like against `adata.obsm['spatial']`. "
+            "`explode` then `dissolve` is what keeps a repaired bowtie whole: "
+            "`make_valid` returns its two lobes as one multi-part geometry, and "
+            "only the polygonal parts are a region — a ring whose points are "
+            "collinear comes back as a LineString, which has bounds and a "
+            "boundary and would otherwise pass for one."
+        ),
+    ),
+    "annot.virtual_cells": TemplateNote(
+        group="Annotations",
+        tab="[Annot Nhood](Tab-Annot-Nhood)",
+        what=(
+            "Fills the annotated regions with virtual cells on a regular grid — "
+            "one per *grid density* µm² — so an annotation can take part in a "
+            "spatial statistic that is defined over cells."
+        ),
+        reading=(
+            "A spatial join does the point-in-polygon test and labels each "
+            "surviving point with the type it landed in, rather than a loop per "
+            "type. One lattice spans every selected type, so two annotations "
+            "sampled side by side sit on the same grid and their densities are "
+            "comparable; sampling each type from its own bounding box put them on "
+            "grids offset from one another. The lattice is deterministic, which "
+            "is why nothing here takes a seed — the tracker carried \"plus a seed "
+            "so the sampling replays\" as outstanding work, and there was never "
+            "anything to seed."
+        ),
+    ),
+    "annot.nhood": TemplateNote(
+        group="Annotations",
+        tab="[Annot Nhood](Tab-Annot-Nhood)",
+        what=(
+            "Neighbourhood enrichment over the real cells *and* the virtual ones, "
+            "so annotation types appear as extra rows and columns in the z-score "
+            "matrix: which cell types sit next to this annotation, in the same "
+            "units as which cell types sit next to each other."
+        ),
+        reading=(
+            "Virtual cells carry an all-zero expression row — they are places, "
+            "not cells — which is why these z-scores say nothing about "
+            "expression similarity. The neighbour graph is built here, on the "
+            "augmented object, rather than reused from "
+            "[spatial_neighbors](Analysis-Templates#spatial_neighbors): adding "
+            "the virtual cells changes who every real cell's neighbours are, "
+            "which is the entire analysis."
+        ),
+    ),
+    "annot.nhood_plot": TemplateNote(
+        group="Annotations",
+        tab="[Annot Nhood](Tab-Annot-Nhood)",
+        what="The z-score heatmap for the annotation neighbourhood enrichment.",
+        reading=(
+            "A terminal, and it used to be a `NOTE` — a comment cell that replays "
+            "as a silent no-op. That was the right call while the enrichment "
+            "itself was unrecorded, since a cell calling `savefig` with nothing "
+            "drawn writes an empty figure. Now that `annot.nhood` is a step, the "
+            "figure is drawable from it. The title is a parameter rather than "
+            "something the tab adds afterwards, so the file on disk and the "
+            "figure on screen are the same picture."
+        ),
+    ),
+    "annot.distance": TemplateNote(
+        group="Annotations",
+        tab="[Annot Distance](Tab-Annot-Distance)",
+        what=(
+            "Distance from every cell to the nearest boundary of one annotation "
+            "type, in microns, written to `adata.obs['dist_to_<type>_um']` — one "
+            "column per type, so measuring against a second does not erase the "
+            "first."
+        ),
+        reading=(
+            "Both frames are already microns, because "
+            "[annot.polygons](Analysis-Templates#annotpolygons) converted the "
+            "drawn shapes once, so what shapely returns *is* the distance in "
+            "microns with no conversion here to get wrong. Cells inside the "
+            "annotation measure to the boundary too, not to zero. Landing the "
+            "result in `obs` is what makes it a value the rest of the notebook "
+            "can group by, rather than a number the viewer kept to itself."
+        ),
+    ),
+    "annot.distance_plot": TemplateNote(
+        group="Annotations",
+        tab="[Annot Distance](Tab-Annot-Distance)",
+        what=(
+            "The distance distribution per cluster, as a violin, box or strip "
+            "plot."
+        ),
+        reading=(
+            "seaborn rather than `sc.pl.violin`, because the tab offers box and "
+            "strip too and the recorded cell has to be the cell that ran. The "
+            "frame it plots comes out of `sc.get.obs_df`, not from indexing "
+            "`.obs` by hand. Like the heatmap, this was a `NOTE` until the "
+            "distances became a recorded step."
+        ),
+        variants=(
+            "Twelve assemblies: three plot types × whether cluster display names "
+            "have been set (`relabel`) × whether *max distance to show* is in use "
+            "(`clip`). `clip` drops the far tail rather than clipping values onto "
+            "the limit, so the quartiles drawn are the quartiles of what is shown."
+        ),
+    ),
 }
 
-GROUP_ORDER = ["Setup", "Clustering", "Genes", "Spatial", "ROI"]
+GROUP_ORDER = ["Setup", "Clustering", "Genes", "Spatial", "ROI", "Annotations"]
 
 TEMPLATES_INTRO = """\
 # Analysis Templates

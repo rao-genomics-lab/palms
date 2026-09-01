@@ -52,6 +52,7 @@ _GROUPS = {
     "genes": "Genes",
     "spatial": "Spatial",
     "roi": "ROI",
+    "annot": "Annotations",
 }
 _SETUP_GROUP = "Setup"
 
