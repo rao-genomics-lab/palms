@@ -4,6 +4,10 @@ For each Xenium cell, computes the minimum Euclidean distance (µm) to the
 boundary of a selected annotation type, then visualises the distribution per
 cell-type cluster as violin / box plots.  Optionally colours cells on the
 napari canvas by their distance value.
+
+The distances land in ``adata.obs`` under ``dist_to_<type>_um``, which is what
+makes them a result the notebook can go on to use rather than a number the
+viewer kept to itself. The napari colouring below reads the same column.
 """
 
 from __future__ import annotations
@@ -17,9 +21,18 @@ from qtpy.QtWidgets import (
     QTextEdit, QFileDialog,
 )
 from napari.qt.threading import thread_worker
-from palms.tabs._helpers import StatusProxy, combo_value_kwargs, make_tab
+from palms.tabs._helpers import (
+    StatusProxy, annotation_polygons_preview, combo_value_kwargs, make_tab,
+)
 from palms.utils.plot_output import safe_stem
-from palms.utils.prov_graph import NOTE
+from palms.utils.prov_graph import ARTIFACT, TERMINAL
+from palms.utils.steps import Step, StepError, coerce
+from palms.utils.step_templates import (
+    Preview, builtin_spec, step_template as _resolved,
+)
+
+TEMPLATE_ID = "annot.distance"
+PLOT_TEMPLATE_ID = "annot.distance_plot"
 
 if TYPE_CHECKING:
     from palms.utils.viewer_context import ViewerContext
@@ -72,33 +85,106 @@ def build_tab(ctx: ViewerContext) -> tuple:
     def _refresh_annot():
         annot_widget.choices = _annot_choices()
 
-    def _on_run():
-        from palms.utils.annotation_utils import compute_distance_to_annotation
+    def _obs_key(annot_type) -> str:
+        """Where the distances land in ``adata.obs``. One column per annotation
+        type, so measuring against a second type does not erase the first."""
+        return f"dist_to_{safe_stem(annot_type)}_um"
 
+    def _plot_stem(annot_type, clustering_key) -> str:
+        return f"annot_distance_{safe_stem(annot_type)}_{safe_stem(clustering_key)}"
+
+    # ── Preview providers ─────────────────────────────────────────────────────
+
+    def _distance_preview() -> Preview:
+        annot_type = annot_widget.value
+        if annot_type in (None, "(none)"):
+            annot_type = ""
+        return Preview(
+            list(builtin_spec(TEMPLATE_ID).blocks),
+            {"annotation_type": annot_type, "obs_key": _obs_key(annot_type)},
+        )
+
+    def _distance_plot_blocks(relabel: bool, clip: bool) -> list[str]:
+        """The plot type *is* a block, and so are the two optional steps before
+        it — which is why block selection lives here and not in the registry."""
+        blocks = ["head"]
+        if relabel:
+            blocks.append("relabel")
+        if clip:
+            blocks.append("clip")
+        return blocks + [f"plot.{plot_type_widget.value}", "save"]
+
+    def _distance_plot_preview() -> Preview:
+        annot_type = state.get("annot_dist_annot_type") or annot_widget.value
+        if annot_type in (None, "(none)"):
+            annot_type = ""
+        clustering_key = (state.get("annot_dist_clustering_key")
+                          or clustering_widget.value or "")
+        categories = ctx.get_labels_for(clustering_key) or None
+        max_dist = max_dist_spin.value
+
+        params = {
+            "obs_key": _obs_key(annot_type),
+            "cluster_key": clustering_key,
+            "annotation_type": annot_type,
+            "paths": ctx.plot_paths(_plot_stem(annot_type, clustering_key)),
+        }
+        if categories is not None:
+            params["categories"] = {str(k): str(v) for k, v in categories.items()}
+        if max_dist > 0:
+            params["max_dist"] = float(coerce(max_dist))
+        return Preview(
+            _distance_plot_blocks(categories is not None, max_dist > 0), params)
+
+    ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _distance_preview
+    ctx.state.setdefault("template_preview", {})[PLOT_TEMPLATE_ID] = _distance_plot_preview
+
+    def _on_run():
         clustering_key = clustering_widget.value
         annot_type = annot_widget.value
         if not clustering_key or annot_type in (None, "(none)"):
             results_text.setPlainText("Select a clustering and annotation type.")
             return
-        if ctx.annotation_layer is None or not ctx.annotation_layer.data:
-            results_text.setPlainText("No annotations defined.")
+        if ctx.ensure_annotations(annotation_polygons_preview(ctx)) is None:
+            results_text.setPlainText(
+                "No typed annotations have been drawn — use the Annotations tab."
+            )
             return
+
+        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
+        # The clustering is a dependency of the *plot*, which groups by it, so
+        # it has to be a node and an obs column before either step runs.
+        from palms.utils.gene_analysis import add_clustering_to_obs
+        ctx.record_clustering(clustering_key)
+        add_clustering_to_obs(_adata, _adata, ctx.clusterings[clustering_key],
+                              clustering_key)
+
+        blocks, params, _ = _distance_preview()
+        step = Step(
+            id=f"annot_distance:{annot_type}",
+            **_resolved(TEMPLATE_ID, blocks),
+            params=params,
+            deps=["annotations"],
+            kind=ARTIFACT,
+            label=f"Distance to '{annot_type}'",
+            outputs=["annot_distances"],
+        )
 
         run_btn.enabled = False
         status.value = f"Computing distances to '{annot_type}'..."
 
-        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
-        centroids_um = np.asarray(_adata.obsm['spatial'], dtype=np.float64)  # (N,2) xy µm
-
         @thread_worker
         def _run():
-            distances = compute_distance_to_annotation(
-                centroids_um, ctx.annotation_layer, annot_type, ctx.pixel_size
-            )
-            return distances
+            return ctx.run_step(step)["annot_distances"]
+
+        def _failed(exc):
+            run_btn.enabled = True
+            results_text.setPlainText(f"Distance analysis failed: {exc}")
+            status.value = f"Distance analysis failed: {exc}"
 
         def _on_done(distances):
             run_btn.enabled = True
+            distances = np.asarray(distances, dtype=np.float64)
             state["annot_dist_distances"] = distances
             state["annot_dist_annot_type"] = annot_type
             state["annot_dist_clustering_key"] = clustering_key
@@ -146,6 +232,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         worker = _run()
         worker.returned.connect(_on_done)
+        worker.errored.connect(_failed)
         worker.start()
 
     def _on_show_plot():
@@ -155,99 +242,33 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if distances is None or clustering_key is None:
             return
 
-        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
-        cluster_series = ctx.clusterings.get(clustering_key)
-        if cluster_series is None:
-            return
-
-        if 'cell_id' in _adata.obs.columns:
-            cell_ids = _adata.obs['cell_id'].values
-            aligned = cluster_series.reindex(cell_ids).values
-        else:
-            aligned = cluster_series.reindex(_adata.obs_names).values
-
-        labels = ctx.get_labels_for(clustering_key)
-        unique_clusters = sorted(set(str(c) for c in aligned if str(c) != 'nan'))
-
-        max_d = max_dist_spin.value
-        plot_type = plot_type_widget.value
-
         ctx.apply_plot_font_size()
-
-        import matplotlib.pyplot as plt
-        import pandas as pd
-
-        # Build DataFrame for plotting
-        rows = []
-        for i, (c, d) in enumerate(zip(aligned, distances)):
-            if np.isnan(d):
-                continue
-            if max_d > 0 and d > max_d:
-                continue
-            c_str = str(c)
-            display = labels.get(c_str, labels.get(c, c_str)) if labels else c_str
-            rows.append({"cluster": str(display), "distance_um": d})
-
-        if not rows:
-            status.value = "No data to plot."
+        blocks, params, _ = _distance_plot_preview()
+        step = Step(
+            id=f"plot:annot_distance:{annot_type}:{clustering_key}",
+            **_resolved(PLOT_TEMPLATE_ID, blocks),
+            params=params,
+            deps=[f"annot_distance:{annot_type}",
+                  f"clustering:{clustering_key}"],
+            kind=TERMINAL,
+            label=f"Distance to '{annot_type}': {clustering_key}",
+            outputs=["fig"],
+        )
+        # A TERMINAL now, not a NOTE — the distances are a recorded step, so the
+        # figure is drawable from them. Seaborn rather than sc.pl.violin because
+        # the tab offers box and strip too, and the recorded cell has to be the
+        # cell that ran; the DataFrame it plots comes out of sc.get.obs_df.
+        try:
+            fig = ctx.run_step(step)["fig"]
+        except StepError as e:
+            status.value = f"Plot error: {e}"
             return
 
-        df = pd.DataFrame(rows)
-        cluster_order = [
-            str(labels.get(c, labels.get(str(c), c))) if labels else str(c)
-            for c in unique_clusters
-        ]
-        cluster_order = [c for c in cluster_order if c in df['cluster'].values]
-
-        fig, ax = plt.subplots(figsize=(max(8, len(cluster_order) * 0.6), 5))
-
-        if plot_type == "violin":
-            import seaborn as sns
-            sns.violinplot(
-                data=df, x="cluster", y="distance_um", order=cluster_order,
-                ax=ax, cut=0, inner="quartile", palette="tab20",
-            )
-        elif plot_type == "box":
-            import seaborn as sns
-            sns.boxplot(
-                data=df, x="cluster", y="distance_um", order=cluster_order,
-                ax=ax, palette="tab20", flierprops={"markersize": 2},
-            )
-        else:  # strip
-            import seaborn as sns
-            sns.stripplot(
-                data=df, x="cluster", y="distance_um", order=cluster_order,
-                ax=ax, size=2, alpha=0.5, palette="tab20",
-            )
-
-        ax.set_xlabel(clustering_key)
-        ax.set_ylabel("Distance to annotation boundary (µm)")
-        ax.set_title(f"Distance to '{annot_type}' boundary by {clustering_key}")
-        ax.tick_params(axis="x", labelrotation=45)
-        for tick in ax.get_xticklabels():
-            tick.set_horizontalalignment("right")
-        fig.tight_layout()
-        # ``plt.show()`` here was *blocking*, and this figure was never recorded.
-        stem = f"annot_distance_{safe_stem(annot_type)}_{safe_stem(clustering_key)}"
         paths = ctx.show_plot(
-            fig, stem,
-            title=f"Distance to '{annot_type}' by {clustering_key}")
+            fig, _plot_stem(annot_type, clustering_key),
+            title=f"Distance to '{annot_type}' by {clustering_key}",
+            save=False, paths=params["paths"])
         status.value = f"Distance plot displayed — saved to {', '.join(paths)}"
-        # NOTE for the same reason as the annotation-nhood plot: the distances
-        # are measured against shapes drawn in the viewer, which the notebook
-        # cannot reach, so there is no code to record — only the fact that this
-        # figure exists and where it went.
-        ctx.record_node(
-            "viewer:annot_distance_plot",
-            f"\n# Distance to '{annot_type}' boundary by {clustering_key} "
-            f"({plot_type} plot)\n"
-            f"# Measured against annotation shapes drawn in the viewer, which\n"
-            f"# this notebook cannot reach. Figure written to:\n"
-            + "".join(f"#   {p}\n" for p in ctx.recorded_plot_paths(paths)),
-            deps=["preamble"],
-            kind=NOTE,
-            label="Annotation distance plot",
-        )
 
     def _on_export():
         distances = state.get("annot_dist_distances")

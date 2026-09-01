@@ -1,0 +1,22 @@
+# palms template
+# id: annot.nhood_plot
+# schema-version: 1
+# doc: Heatmap of the annotation neighbourhood enrichment.
+# requires: sq, plt, Path, adata_annot
+# outputs: fig
+# params: cluster_key:str, mode:str, title:str, paths:list
+
+#--- block main
+# Annotation nhood enrichment heatmap (mode=$mode)
+sq.pl.nhood_enrichment(adata_annot, cluster_key=$cluster_key, mode=$mode)
+fig = plt.gcf()
+# The title names the annotation types, which the axes cannot: they are
+# categories of the clustering by the time squidpy sees them.
+fig.suptitle($title, fontsize=10)
+
+#--- block save
+# One figure, every configured format — the viewer writes a PNG to look at and
+# a PDF to publish, and the notebook writes the same files to the same places.
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, bbox_inches='tight', dpi=300)

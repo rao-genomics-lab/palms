@@ -1,0 +1,46 @@
+# palms template
+# id: annot.nhood
+# schema-version: 1
+# doc: Neighbourhood enrichment over real cells plus annotation virtual cells.
+# requires: sq, pd, adata, adata_norm, annot_virtual_cells
+# outputs: adata_annot
+# params: cluster_key:str, uns_key:str, n_neighs:int, n_perms:int, seed:int
+
+#--- block main
+# Annotation neighbourhood enrichment: $cluster_key (n_perms=$n_perms)
+#
+# The annotation types join the clustering as extra categories, so they appear
+# as extra rows and columns in the z-score matrix and the enrichment answers
+# "which cell types sit next to this annotation?" in the same units as
+# "which cell types sit next to each other".
+import anndata as ad
+from scipy import sparse
+
+adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
+
+# Virtual cells carry no transcripts: an all-zero row each. The enrichment is
+# over positions, so this is the honest encoding of "a place, not a cell" —
+# and it is why the z-scores here say nothing about expression similarity.
+_virtual = ad.AnnData(
+    X=sparse.csr_matrix((len(annot_virtual_cells), adata_norm.n_vars),
+                        dtype=adata_norm.X.dtype),
+    var=adata_norm.var[[]],
+    obs=pd.DataFrame(
+        {$cluster_key: annot_virtual_cells['annotation_type'].to_numpy()},
+        index=[f'annot-{_i}' for _i in range(len(annot_virtual_cells))],
+    ),
+)
+_virtual.obsm['spatial'] = annot_virtual_cells[['x_um', 'y_um']].to_numpy()
+
+adata_annot = ad.concat([adata_norm, _virtual], join='outer')
+adata_annot.obs[$cluster_key] = (
+    adata_annot.obs[$cluster_key].astype(str).astype('category'))
+
+# The graph is built on the augmented object, not reused from the
+# spatial_neighbors step: adding the virtual cells changes who every real
+# cell's neighbours are, which is the whole point of the analysis.
+sq.gr.spatial_neighbors_knn(adata_annot, n_neighs=$n_neighs)
+sq.gr.nhood_enrichment(
+    adata_annot, cluster_key=$cluster_key, n_perms=$n_perms, seed=$seed,
+)
+annot_nhood_zscore = adata_annot.uns[$uns_key]['zscore']

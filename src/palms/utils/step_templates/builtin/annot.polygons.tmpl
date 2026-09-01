@@ -1,0 +1,37 @@
+# palms template
+# id: annot.polygons
+# schema-version: 1
+# doc: The annotation polygons drawn in the viewer, inlined as literals.
+# requires: np
+# outputs: annotations
+# params: polygons:list, types:list, pixel_size:float
+
+#--- block main
+# Annotations drawn in the viewer, inlined as literals — the same shapes
+# save_annotations_to_sdata writes to sdata.shapes['annotations'].
+#
+# napari stores a shape as an Nx2 array of (y, x) *pixels*. The flip to (x, y)
+# and the scale to microns both happen once, here, so everything downstream
+# compares like with like against adata.obsm['spatial'], which is already in
+# microns, and no second conversion appears anywhere below.
+#
+# make_valid, not buffer(0): on a self-intersecting annotation — a bowtie is
+# easy to draw by hand — buffer(0) silently *deletes* a lobe instead of
+# repairing it.
+import geopandas as gpd
+from shapely import make_valid
+from shapely.geometry import Polygon
+
+annotations = gpd.GeoDataFrame(
+    {'annotation_type': $types},
+    geometry=[make_valid(Polygon(np.asarray(_p)[:, ::-1] * $pixel_size))
+              for _p in $polygons],
+)
+# A repaired bowtie is two lobes, so explode them apart; then keep only the
+# polygonal parts, because make_valid answers a ring whose points are collinear
+# — a line drawn with the polygon tool — with a LineString, which has bounds
+# and a boundary and would otherwise pass for a region.
+annotations = annotations.explode(index_parts=False)
+annotations = annotations[annotations.geom_type == 'Polygon']
+# One geometry per type: both analyses ask about a type, not about a shape.
+annotations = annotations.dissolve(by='annotation_type')

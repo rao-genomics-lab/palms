@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1425 tests** across 62 files, measured 2026-09-01 —
+There is a `pytest` suite in `tests/` (**1535 tests** across 64 files, measured 2026-09-01 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -386,7 +386,7 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   `builtin_text`/`builtin_assemble`, which read only shipped files via `importlib.resources`
   and cannot see an override path — that is what keeps the six template-pinning test modules
   passing unchanged. `tests/test_template_registry.py` runs the `check_step` lint over every
-  template × every declared assembly (40 renderings), which is where the five hand-written
+  template × every declared assembly (60 renderings), which is where the five hand-written
   `check_step` calls became a registry-wide gate.
 
   **Users can override a template**, per user, in `~/.config/palms/templates/*.tmpl`
@@ -434,7 +434,7 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   the header says so), and a provider must stay **read-only** — no `makedirs`, no
   `record_clustering` — since drawing a pane must not have side effects.
 
-  Twelve of fourteen templates have a provider. The two exemptions are declared in
+  Nineteen of twenty-one templates have a provider. The two exemptions are declared in
   `tests/test_tab_templates.py::_NO_PROVIDER` with their reasons: `normalize` takes no params,
   and `spatial_neighbors` takes `k` from whichever tab called `ensure_spatial_neighbors`, so
   it uses the `# sample-params:` header field instead. Four gates, each verified against the
@@ -507,24 +507,28 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   the code that ran, so its cell says in-line that it is a reconstruction. `run_cnv_pipeline`
   is now the CopyKAT path only; the inferCNV template must stay in sync with it
   (`tests/test_cnv_step.py` pins both).
-  Still unmigrated: the **annotation-neighbourhood** and **annotation-distance** tabs.
-  **They are not blocked** — the reason recorded here until 2026-09-01, that their virtual
-  cells come from a napari shapes layer the notebook cannot reach and so need E3's
-  spatialdata shapes, was stale twice over. `roi.polygons` already solves the same problem
-  the other way, by **inlining the drawn polygons as literal params** in a `SETUP` node, so
-  the geometry never has to be reachable from disk at all; and it *is* on disk anyway,
-  since `save_annotations_to_sdata` writes a real `ShapesModel` GeoDataFrame to
-  `sdata.shapes['annotations']`. The sampling is a deterministic grid
-  (`annotation_utils.sample_annotation_centroids` steps `sqrt(density_um2)` µm over the
-  merged polygon's bounds), so it needs no seed to replay either. What is actually left is
-  ordinary migration work: a template each, a `Preview` provider each, and converting the
-  two `NOTE` figure nodes to real terminals. One defect to fix in passing — both annotation
-  helpers repair an invalid polygon with `buffer(0)`, which rule (e) above exists to forbid.
-  Their *figures* are now
-  recorded, as `viewer:annot_nhood_plot` / `viewer:annot_distance_plot`, and deliberately
-  as **`NOTE`**: a `TERMINAL` calling `plt.gcf().savefig(...)` with no preceding plot call
-  replays as a silent no-op writing an empty figure, which is worse than recording
-  nothing. **Plot/export terminals** across the migrated tabs are still on `record_node` —
+  Also migrated, 2026-09-01: the **annotation-neighbourhood** and **annotation-distance**
+  tabs, in six templates — `annot.polygons` (`annotations`), `annot.virtual_cells`,
+  `annot.nhood`, `annot.nhood_plot`, `annot.distance`, `annot.distance_plot`. They were
+  held back for months on a blocker that was stale twice over: their virtual cells come
+  from a napari shapes layer the notebook cannot reach, so they were said to need E3's
+  spatialdata shapes. But `roi.polygons` already solved the same problem the other way, by
+  **inlining the drawn polygons as literal params** in a `SETUP` node — the geometry never
+  has to be *reachable*; and it is on disk regardless, since `save_annotations_to_sdata`
+  writes a real `ShapesModel` GeoDataFrame to `sdata.shapes['annotations']`. The sampling
+  was also thought to need a seed; it is a deterministic grid, so there was nothing to seed.
+  `ctx.ensure_annotations(preview)` is the shared entry point, beside `ensure_normalized` /
+  `ensure_spatial_neighbors`, and `_helpers.annotation_polygons_preview(ctx)` is the single
+  expression of "what has been drawn" both tabs use — two copies of that would drift the
+  moment one of them learned something the other did not. `annotation_utils` kept only
+  `get_annotation_types`: its two geometry functions **are** the templates now, and a second
+  python implementation nothing called would drift unnoticed.
+  Their two figure nodes were `NOTE`s — `viewer:annot_nhood_plot` /
+  `viewer:annot_distance_plot` — which was right while the analysis behind them was
+  unrecorded, since a `TERMINAL` calling `savefig` with no preceding plot call replays as a
+  silent no-op writing an empty figure. They are real terminals now
+  (`plot:annot_nhood:<key>`, `plot:annot_distance:<type>:<key>`), because the step that
+  draws them exists. **Plot/export terminals** across the migrated tabs are still on `record_node` —
   that is fine where the cell is real code (`sc.pl.*`, `to_csv`); what is not fine is a
   terminal whose cell is prose, which the source guard above now catches.
   Also migrated: **UMAP plots** (`umap.plot`, both by gene and by cluster).

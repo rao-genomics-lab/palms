@@ -1,0 +1,30 @@
+# palms template
+# id: annot.virtual_cells
+# schema-version: 1
+# doc: Virtual cells on a regular grid inside the annotated regions.
+# requires: np, annotations
+# outputs: annot_virtual_cells
+# params: types:list, density_um2:float
+
+#--- block main
+# Virtual cells: one grid point per $density_um2 um^2, kept where it falls
+# inside an annotation of a selected type. A spatial join does the
+# point-in-polygon test and labels each survivor with the type it landed in.
+#
+# One lattice spans every selected type, rather than one per type starting at
+# its own bounding box, so two types sampled side by side sit on the same grid
+# and their virtual-cell densities are directly comparable.
+import geopandas as gpd
+
+_regions = annotations.loc[annotations.index.intersection($types)].reset_index()
+_minx, _miny, _maxx, _maxy = _regions.total_bounds
+_step = np.sqrt($density_um2)
+_gx, _gy = np.meshgrid(
+    np.arange(_minx + _step / 2, _maxx, _step),
+    np.arange(_miny + _step / 2, _maxy, _step),
+)
+_grid = gpd.GeoDataFrame(geometry=gpd.points_from_xy(_gx.ravel(), _gy.ravel()))
+
+annot_virtual_cells = _grid.sjoin(_regions, predicate='within')
+annot_virtual_cells['x_um'] = annot_virtual_cells.geometry.x
+annot_virtual_cells['y_um'] = annot_virtual_cells.geometry.y

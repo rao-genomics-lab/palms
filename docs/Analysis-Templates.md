@@ -55,6 +55,12 @@ substituted string for the settings currently in the owning tab.
 - [`roi.export_expression`](#roiexport_expression) — Write the per-cell ROI expression table to CSV.
 - [`roi.expression`](#roiexpression) — Per-region expression of one gene, with pairwise Welch tests.
 - [`roi.polygons`](#roipolygons) — The ROI polygons drawn in the viewer, inlined as literals.
+- [`annot.distance`](#annotdistance) — Distance from every cell to the nearest annotation boundary.
+- [`annot.distance_plot`](#annotdistance_plot) — Distance-to-annotation distribution per cluster; one plot.* block per type.
+- [`annot.nhood`](#annotnhood) — Neighbourhood enrichment over real cells plus annotation virtual cells.
+- [`annot.nhood_plot`](#annotnhood_plot) — Heatmap of the annotation neighbourhood enrichment.
+- [`annot.polygons`](#annotpolygons) — The annotation polygons drawn in the viewer, inlined as literals.
+- [`annot.virtual_cells`](#annotvirtual_cells) — Virtual cells on a regular grid inside the annotated regions.
 
 ## Setup
 
@@ -982,4 +988,343 @@ from shapely import make_valid
 from shapely.geometry import Polygon
 
 roi_polygons = [make_valid(Polygon(np.asarray(_p)[:, ::-1])) for _p in $polygons]
+```
+
+## Annotations
+
+### `annot.distance`
+
+**Run by:** [Annot Distance](Tab-Annot-Distance)
+
+Distance from every cell to the nearest boundary of one annotation type, in microns, written to `adata.obs['dist_to_<type>_um']` — one column per type, so measuring against a second does not erase the first.
+
+Both frames are already microns, because [annot.polygons](Analysis-Templates#annotpolygons) converted the drawn shapes once, so what shapely returns *is* the distance in microns with no conversion here to get wrong. Cells inside the annotation measure to the boundary too, not to zero. Landing the result in `obs` is what makes it a value the rest of the notebook can group by, rather than a number the viewer kept to itself.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `annotation_type` | `str` | yes |
+| `obs_key` | `str` | yes |
+
+- **Requires:** `adata`, `annotations`, `sc`
+- **Outputs:** `annot_distances`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Distance from each cell to the '$annotation_type' boundary, in microns.
+#
+# Both frames are already microns — annot.polygons converted the drawn shapes
+# once — so the distance shapely returns is the distance in microns, with no
+# conversion here to get wrong. Cells inside the annotation measure their
+# distance to the boundary too, not zero.
+import shapely
+
+_boundary = annotations.loc[$annotation_type, 'geometry'].boundary
+_xy = sc.get.obs_df(adata, obsm_keys=[('spatial', 0), ('spatial', 1)])
+annot_distances = shapely.distance(
+    shapely.points(_xy['spatial-0'].to_numpy(), _xy['spatial-1'].to_numpy()),
+    _boundary,
+)
+adata.obs[$obs_key] = annot_distances
+```
+
+### `annot.distance_plot`
+
+**Run by:** [Annot Distance](Tab-Annot-Distance)
+
+The distance distribution per cluster, as a violin, box or strip plot.
+
+seaborn rather than `sc.pl.violin`, because the tab offers box and strip too and the recorded cell has to be the cell that ran. The frame it plots comes out of `sc.get.obs_df`, not from indexing `.obs` by hand. Like the heatmap, this was a `NOTE` until the distances became a recorded step.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `obs_key` | `str` | yes |
+| `cluster_key` | `str` | yes |
+| `annotation_type` | `str` | yes |
+| `paths` | `list` | yes |
+| `categories` | `dict` | no |
+| `max_dist` | `float` | no |
+
+- **Requires:** `Path`, `adata`, `pd`, `plt`, `sc`
+- **Outputs:** `fig`
+- **Blocks:** `head`, `relabel`, `clip`, `plot.violin`, `plot.box`, `plot.strip`, `save`
+
+**Variants** — 12 assemblies:
+
+Twelve assemblies: three plot types × whether cluster display names have been set (`relabel`) × whether *max distance to show* is in use (`clip`). `clip` drops the far tail rather than clipping values onto the limit, so the quartiles drawn are the quartiles of what is shown.
+
+- `head + plot.violin + save`
+- `head + relabel + plot.violin + save`
+- `head + clip + plot.violin + save`
+- `head + relabel + clip + plot.violin + save`
+- `head + plot.box + save`
+- `head + relabel + plot.box + save`
+- `head + clip + plot.box + save`
+- `head + relabel + clip + plot.box + save`
+- `head + plot.strip + save`
+- `head + relabel + plot.strip + save`
+- `head + clip + plot.strip + save`
+- `head + relabel + clip + plot.strip + save`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
+
+```python
+#--- block head
+# Distance to '$annotation_type' by $cluster_key
+import seaborn as sns
+
+_dist = sc.get.obs_df(adata, keys=[$obs_key, $cluster_key]).dropna()
+
+#--- block relabel
+# .map() rather than .cat.rename_categories(): naming two clusters the same
+# thing is a request to merge them, and rename_categories refuses it outright
+# ("Categorical categories must be unique"). dict.fromkeys dedupes the names
+# while keeping cluster order.
+_display = $categories
+_dist[$cluster_key] = pd.Categorical(
+    _dist[$cluster_key].astype(str).map(_display),
+    categories=list(dict.fromkeys(_display.values())),
+)
+
+#--- block clip
+# "Max distance to show" hides the far tail; it drops cells rather than
+# clipping them, so the quartiles drawn are the quartiles of what is shown.
+_dist = _dist[_dist[$obs_key] <= $max_dist]
+
+#--- block plot.violin
+fig, _ax = plt.subplots(figsize=(max(8, _dist[$cluster_key].nunique() * 0.6), 5))
+sns.violinplot(data=_dist, x=$cluster_key, y=$obs_key, ax=_ax,
+               cut=0, inner='quartile', palette='tab20', hue=$cluster_key,
+               legend=False)
+
+#--- block plot.box
+fig, _ax = plt.subplots(figsize=(max(8, _dist[$cluster_key].nunique() * 0.6), 5))
+sns.boxplot(data=_dist, x=$cluster_key, y=$obs_key, ax=_ax,
+            palette='tab20', hue=$cluster_key, legend=False,
+            flierprops={'markersize': 2})
+
+#--- block plot.strip
+fig, _ax = plt.subplots(figsize=(max(8, _dist[$cluster_key].nunique() * 0.6), 5))
+sns.stripplot(data=_dist, x=$cluster_key, y=$obs_key, ax=_ax,
+              size=2, alpha=0.5, palette='tab20', hue=$cluster_key,
+              legend=False)
+
+#--- block save
+_ax.set_xlabel($cluster_key)
+_ax.set_ylabel("Distance to annotation boundary (um)")
+_ax.set_title("Distance to '$annotation_type' boundary by $cluster_key")
+_ax.tick_params(axis='x', labelrotation=45)
+for _tick in _ax.get_xticklabels():
+    _tick.set_horizontalalignment('right')
+fig.tight_layout()
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, bbox_inches='tight', dpi=300)
+```
+
+### `annot.nhood`
+
+**Run by:** [Annot Nhood](Tab-Annot-Nhood)
+
+Neighbourhood enrichment over the real cells *and* the virtual ones, so annotation types appear as extra rows and columns in the z-score matrix: which cell types sit next to this annotation, in the same units as which cell types sit next to each other.
+
+Virtual cells carry an all-zero expression row — they are places, not cells — which is why these z-scores say nothing about expression similarity. The neighbour graph is built here, on the augmented object, rather than reused from [spatial_neighbors](Analysis-Templates#spatial_neighbors): adding the virtual cells changes who every real cell's neighbours are, which is the entire analysis.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `cluster_key` | `str` | yes |
+| `uns_key` | `str` | yes |
+| `n_neighs` | `int` | yes |
+| `n_perms` | `int` | yes |
+| `seed` | `int` | yes |
+
+- **Requires:** `adata`, `adata_norm`, `annot_virtual_cells`, `pd`, `sq`
+- **Outputs:** `adata_annot`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Annotation neighbourhood enrichment: $cluster_key (n_perms=$n_perms)
+#
+# The annotation types join the clustering as extra categories, so they appear
+# as extra rows and columns in the z-score matrix and the enrichment answers
+# "which cell types sit next to this annotation?" in the same units as
+# "which cell types sit next to each other".
+import anndata as ad
+from scipy import sparse
+
+adata_norm.obs[$cluster_key] = adata.obs[$cluster_key].values
+
+# Virtual cells carry no transcripts: an all-zero row each. The enrichment is
+# over positions, so this is the honest encoding of "a place, not a cell" —
+# and it is why the z-scores here say nothing about expression similarity.
+_virtual = ad.AnnData(
+    X=sparse.csr_matrix((len(annot_virtual_cells), adata_norm.n_vars),
+                        dtype=adata_norm.X.dtype),
+    var=adata_norm.var[[]],
+    obs=pd.DataFrame(
+        {$cluster_key: annot_virtual_cells['annotation_type'].to_numpy()},
+        index=[f'annot-{_i}' for _i in range(len(annot_virtual_cells))],
+    ),
+)
+_virtual.obsm['spatial'] = annot_virtual_cells[['x_um', 'y_um']].to_numpy()
+
+adata_annot = ad.concat([adata_norm, _virtual], join='outer')
+adata_annot.obs[$cluster_key] = (
+    adata_annot.obs[$cluster_key].astype(str).astype('category'))
+
+# The graph is built on the augmented object, not reused from the
+# spatial_neighbors step: adding the virtual cells changes who every real
+# cell's neighbours are, which is the whole point of the analysis.
+sq.gr.spatial_neighbors_knn(adata_annot, n_neighs=$n_neighs)
+sq.gr.nhood_enrichment(
+    adata_annot, cluster_key=$cluster_key, n_perms=$n_perms, seed=$seed,
+)
+annot_nhood_zscore = adata_annot.uns[$uns_key]['zscore']
+```
+
+### `annot.nhood_plot`
+
+**Run by:** [Annot Nhood](Tab-Annot-Nhood)
+
+The z-score heatmap for the annotation neighbourhood enrichment.
+
+A terminal, and it used to be a `NOTE` — a comment cell that replays as a silent no-op. That was the right call while the enrichment itself was unrecorded, since a cell calling `savefig` with nothing drawn writes an empty figure. Now that `annot.nhood` is a step, the figure is drawable from it. The title is a parameter rather than something the tab adds afterwards, so the file on disk and the figure on screen are the same picture.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `cluster_key` | `str` | yes |
+| `mode` | `str` | yes |
+| `title` | `str` | yes |
+| `paths` | `list` | yes |
+
+- **Requires:** `Path`, `adata_annot`, `plt`, `sq`
+- **Outputs:** `fig`
+- **Blocks:** `main`, `save`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
+
+```python
+#--- block main
+# Annotation nhood enrichment heatmap (mode=$mode)
+sq.pl.nhood_enrichment(adata_annot, cluster_key=$cluster_key, mode=$mode)
+fig = plt.gcf()
+# The title names the annotation types, which the axes cannot: they are
+# categories of the clustering by the time squidpy sees them.
+fig.suptitle($title, fontsize=10)
+
+#--- block save
+# One figure, every configured format — the viewer writes a PNG to look at and
+# a PDF to publish, and the notebook writes the same files to the same places.
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, bbox_inches='tight', dpi=300)
+```
+
+### `annot.polygons`
+
+**Run by:** [Annot Nhood](Tab-Annot-Nhood) and [Annot Distance](Tab-Annot-Distance)
+
+Inlines the annotations you drew as literal coordinates and unions them into one geometry per annotation type — the shared starting point for both annotation analyses. Untyped shapes are left out: they are not annotations of type `""`, the Annotations tab has simply not been told what they are yet.
+
+The same move as [roi.polygons](Analysis-Templates#roipolygons), and the answer to a blocker this project carried for months. The annotation tabs were held back on the grounds that a notebook cannot reach a napari shapes layer — but it never needed to, because the shapes are recorded as literals. (They are also on disk, at `sdata.shapes['annotations']`, which was the *other* reason the blocker was stale.) The flip from napari's `(y, x)` pixels to `(x, y)` microns happens **once**, here, so everything downstream compares like with like against `adata.obsm['spatial']`. `explode` then `dissolve` is what keeps a repaired bowtie whole: `make_valid` returns its two lobes as one multi-part geometry, and only the polygonal parts are a region — a ring whose points are collinear comes back as a LineString, which has bounds and a boundary and would otherwise pass for one.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `polygons` | `list` | yes |
+| `types` | `list` | yes |
+| `pixel_size` | `float` | yes |
+
+- **Requires:** `np`
+- **Outputs:** `annotations`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Annotations drawn in the viewer, inlined as literals — the same shapes
+# save_annotations_to_sdata writes to sdata.shapes['annotations'].
+#
+# napari stores a shape as an Nx2 array of (y, x) *pixels*. The flip to (x, y)
+# and the scale to microns both happen once, here, so everything downstream
+# compares like with like against adata.obsm['spatial'], which is already in
+# microns, and no second conversion appears anywhere below.
+#
+# make_valid, not buffer(0): on a self-intersecting annotation — a bowtie is
+# easy to draw by hand — buffer(0) silently *deletes* a lobe instead of
+# repairing it.
+import geopandas as gpd
+from shapely import make_valid
+from shapely.geometry import Polygon
+
+annotations = gpd.GeoDataFrame(
+    {'annotation_type': $types},
+    geometry=[make_valid(Polygon(np.asarray(_p)[:, ::-1] * $pixel_size))
+              for _p in $polygons],
+)
+# A repaired bowtie is two lobes, so explode them apart; then keep only the
+# polygonal parts, because make_valid answers a ring whose points are collinear
+# — a line drawn with the polygon tool — with a LineString, which has bounds
+# and a boundary and would otherwise pass for a region.
+annotations = annotations.explode(index_parts=False)
+annotations = annotations[annotations.geom_type == 'Polygon']
+# One geometry per type: both analyses ask about a type, not about a shape.
+annotations = annotations.dissolve(by='annotation_type')
+```
+
+### `annot.virtual_cells`
+
+**Run by:** [Annot Nhood](Tab-Annot-Nhood)
+
+Fills the annotated regions with virtual cells on a regular grid — one per *grid density* µm² — so an annotation can take part in a spatial statistic that is defined over cells.
+
+A spatial join does the point-in-polygon test and labels each surviving point with the type it landed in, rather than a loop per type. One lattice spans every selected type, so two annotations sampled side by side sit on the same grid and their densities are comparable; sampling each type from its own bounding box put them on grids offset from one another. The lattice is deterministic, which is why nothing here takes a seed — the tracker carried "plus a seed so the sampling replays" as outstanding work, and there was never anything to seed.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `types` | `list` | yes |
+| `density_um2` | `float` | yes |
+
+- **Requires:** `annotations`, `np`
+- **Outputs:** `annot_virtual_cells`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Virtual cells: one grid point per $density_um2 um^2, kept where it falls
+# inside an annotation of a selected type. A spatial join does the
+# point-in-polygon test and labels each survivor with the type it landed in.
+#
+# One lattice spans every selected type, rather than one per type starting at
+# its own bounding box, so two types sampled side by side sit on the same grid
+# and their virtual-cell densities are directly comparable.
+import geopandas as gpd
+
+_regions = annotations.loc[annotations.index.intersection($types)].reset_index()
+_minx, _miny, _maxx, _maxy = _regions.total_bounds
+_step = np.sqrt($density_um2)
+_gx, _gy = np.meshgrid(
+    np.arange(_minx + _step / 2, _maxx, _step),
+    np.arange(_miny + _step / 2, _maxy, _step),
+)
+_grid = gpd.GeoDataFrame(geometry=gpd.points_from_xy(_gx.ravel(), _gy.ravel()))
+
+annot_virtual_cells = _grid.sjoin(_regions, predicate='within')
+annot_virtual_cells['x_um'] = annot_virtual_cells.geometry.x
+annot_virtual_cells['y_um'] = annot_virtual_cells.geometry.y
 ```
