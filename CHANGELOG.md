@@ -17,6 +17,21 @@ entries under **Development log** are the closed pre-1.0.0 record.
   and the Read the Docs site are the front page for everyone who never opens the repo, and
   neither renders `CITATION.cff` or the README's badge.
 
+### Fixed
+- **A self-intersecting annotation lost half of itself, silently.** Both annotation
+  helpers repaired an invalid polygon with `poly.buffer(0)`, which does not repair a
+  bowtie — it *deletes* a lobe. A bowtie is easy to draw by hand with napari's polygon
+  tool, and nothing reported the loss: `sample_annotation_centroids` placed virtual cells
+  in half the region the user drew, and `compute_distance_to_annotation` measured to the
+  wrong boundary. Measured on shapely 2.1.2: a 10×10 bowtie is one 25 µm² triangle after
+  `buffer(0)` and the full 50 µm² MultiPolygon after `make_valid`. `roi.polygons.tmpl`
+  already carried this rule and its reason, and CLAUDE.md rule (e) states it — only the
+  python helpers had missed it. The two functions held ~15 identical lines each, so the
+  repair could regress in one copy and not the other; they now share
+  `_merged_polygon_of_type`, which keeps only the *polygonal* parts of the repair, since
+  `make_valid` answers a line drawn with the polygon tool with a LineString that has
+  bounds and a boundary and would otherwise pass for a region.
+
 ## [1.0.1] — 2026-09-01
 
 ### Added
