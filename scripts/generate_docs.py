@@ -447,9 +447,58 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "the limit, so the quartiles drawn are the quartiles of what is shown."
         ),
     ),
+    "transcripts.gene": TemplateNote(
+        group="Transcripts",
+        tab="[Transcripts](Tab-Transcripts)",
+        what=(
+            "One gene's transcripts, read from `sdata.points['transcripts']` and "
+            "placed in the morphology image's coordinate frame."
+        ),
+        reading=(
+            "Two things this template exists to get right. **Filter, then "
+            "transform**: `sd.transform` maps every row it is handed, so "
+            "transforming the whole table and filtering afterwards does the work "
+            "for every gene in the panel — measured on a 1.4 GB "
+            "`transcripts.parquet`, 95 s that way against 5 s this way, for an "
+            "identical answer. And the pixel scale is **declared**, not applied: "
+            "it is already on the element, so `sd.transform` uses it rather than "
+            "a division whose direction is easy to get backwards. It is also a "
+            "separate step from the histogram because it is the slow half — the "
+            "bin-size slider re-runs only the binning."
+        ),
+    ),
+    "transcripts.density": TemplateNote(
+        group="Transcripts",
+        tab="[Transcripts](Tab-Transcripts)",
+        what=(
+            "A 2-D histogram of one gene's transcripts over the morphology "
+            "image: counts per bin, optionally per cell, optionally restricted to "
+            "the selected clusters."
+        ),
+        reading=(
+            "This was the **last node in the app recording prose** — a terminal "
+            "whose cell was a comment, which replays as a silent no-op, so a "
+            "notebook from a session that used it passed with the analysis "
+            "missing. What held it back was that the viewer binned its own "
+            "per-gene feather index, a viewer artifact a notebook replaying from "
+            "raw output does not have. Reading the points element instead costs a "
+            "few seconds on the first bin of a gene and buys a step that anyone "
+            "can re-run. `get_extent` asks the image where it ends rather than "
+            "reaching into a pyramid level's shape, so the grid is stated in the "
+            "image's own frame and the histogram lines up with the picture."
+        ),
+        variants=(
+            "Four assemblies: the cluster filter and the per-cell normalisation "
+            "are each a block as well as a parameter. The filter is **per cell** — "
+            "a transcript counts when the cell it was assigned to is selected. The "
+            "viewer used to approximate that per *bin* whenever its cache had been "
+            "built without cell ids; the points element always carries them."
+        ),
+    ),
 }
 
-GROUP_ORDER = ["Setup", "Clustering", "Genes", "Spatial", "ROI", "Annotations"]
+GROUP_ORDER = ["Setup", "Clustering", "Genes", "Spatial", "ROI", "Annotations",
+               "Transcripts"]
 
 TEMPLATES_INTRO = """\
 # Analysis Templates

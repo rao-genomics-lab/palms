@@ -30,12 +30,14 @@ import pytest
 TABS = Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
 
 # Nodes still recording prose, each with the reason it has not been migrated.
-# Shrinking this list is the remaining Phase 0.3 work; growing it needs a reason.
-KNOWN_PROSE = {
-    # Computes a 2-D transcript histogram from the parquet — real analysis, and
-    # a real gap. Needs the transcript loader expressed as plain pyarrow first.
-    "viewer:transcript_density",
-}
+# **Empty since 2026-09-01**, which is the point: every recorder in the app now
+# emits either code or a declared NOTE. The last entry was
+# ``viewer:transcript_density``, held back because the density heatmap read the
+# viewer's per-gene feather index, which a replayed notebook does not have; it
+# reads ``sdata.points['transcripts']`` now (``transcripts.gene`` /
+# ``transcripts.density``). Growing this list again needs a reason written here,
+# and the test below fails if an entry stops being prose.
+KNOWN_PROSE: set[str] = set()
 
 
 def _approximate(node: ast.AST) -> str | None:

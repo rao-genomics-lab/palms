@@ -1,0 +1,57 @@
+# palms template
+# id: transcripts.density
+# schema-version: 1
+# assemblies: head+main | head+filter+main | head+main+normalise |
+#          head+filter+main+normalise
+# doc: 2-D histogram of one gene's transcripts over the morphology image.
+# requires: np, pd, sd, sdata, adata, transcript_points
+# outputs: transcript_density
+# params: gene:str, bin_size_um:float, pixel_size:float, clustering:str?,
+#         selected:list?
+
+#--- block head
+# Transcript density for $gene, in $bin_size_um um bins.
+_hits = transcript_points
+_cell_xy = adata.obsm['spatial']
+
+#--- block filter
+# Cluster filter, per cell rather than per bin: a transcript counts when the
+# cell it was assigned to is in the selected clusters. The viewer used to fall
+# back to a bin-level approximation — every transcript in a bin containing a
+# selected cell — whenever its transcript cache had been built without cell ids.
+# Reading the points element directly, the assignment is always there.
+_keep = adata.obs[$clustering].astype(str).isin($selected).to_numpy()
+_hits = _hits[_hits['cell_id'].isin(adata.obs['cell_id'][_keep])]
+_cell_xy = _cell_xy[_keep]
+
+#--- block main
+# The grid spans the morphology image and is stated in its frame, so the
+# histogram lines up with the picture. get_extent asks the image where it ends
+# rather than reaching into a pyramid level's shape.
+_extent = sd.get_extent(sdata['morphology_focus'], coordinate_system='global')
+_height, _width = _extent['y'][1], _extent['x'][1]
+_bin_px = $bin_size_um / $pixel_size
+_bins = [max(1, int(_height / _bin_px)), max(1, int(_width / _bin_px))]
+transcript_density, _, _ = np.histogram2d(
+    _hits['y'].to_numpy(), _hits['x'].to_numpy(),
+    bins=_bins, range=[[0, _height], [0, _width]],
+)
+
+#--- block normalise
+# Transcripts per cell rather than per bin, so a dense region does not simply
+# read as more cells. The centroids are in microns; the same scale that placed
+# the transcripts places them, declared the same way.
+_centroids = sd.transform(
+    sd.models.PointsModel.parse(
+        pd.DataFrame({'x': _cell_xy[:, 0], 'y': _cell_xy[:, 1]}),
+        transformations={'global': sd.transformations.Scale(
+            [1 / $pixel_size, 1 / $pixel_size], axes=('x', 'y'))},
+    ),
+    to_coordinate_system='global',
+).compute()
+_cells_per_bin, _, _ = np.histogram2d(
+    _centroids['y'].to_numpy(), _centroids['x'].to_numpy(),
+    bins=_bins, range=[[0, _height], [0, _width]],
+)
+transcript_density = np.where(
+    _cells_per_bin > 0, transcript_density / _cells_per_bin, 0)

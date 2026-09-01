@@ -53,6 +53,7 @@ _GROUPS = {
     "spatial": "Spatial",
     "roi": "ROI",
     "annot": "Annotations",
+    "transcripts": "Transcripts",
 }
 _SETUP_GROUP = "Setup"
 

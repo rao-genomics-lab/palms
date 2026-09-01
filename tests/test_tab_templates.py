@@ -57,7 +57,7 @@ def test_templates_are_grouped_by_owner(tab):
     tree = _tree(widget)
     groups = {tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())}
     assert {"Clustering", "Genes", "Spatial", "ROI", "Annotations",
-            "Setup"} == groups
+            "Transcripts", "Setup"} == groups
 
 
 def test_the_preview_is_the_real_rendered_source(ctx):
@@ -344,6 +344,7 @@ _PROVIDER_TABS = (
     "tab_clustering", "tab_gene_analysis", "tab_nhood", "tab_co_occurrence",
     "tab_ligrec", "tab_gene_correlation", "tab_marker_genes", "tab_roi",
     "tab_cnv", "tab_umap", "tab_annot_nhood", "tab_annot_distance",
+    "tab_transcripts",
 )
 
 

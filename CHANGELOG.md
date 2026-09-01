@@ -17,6 +17,34 @@ entries under **Development log** are the closed pre-1.0.0 record.
   and the Read the Docs site are the front page for everyone who never opens the repo, and
   neither renders `CITATION.cff` or the README's badge.
 
+- **The transcript density heatmap is recorded — and it was the last prose node in the
+  app.** Pressing "Compute Density" wrote a comment into the provenance graph, which
+  replays as a silent no-op: a notebook exported from that session ran clean with the
+  analysis simply missing. It now runs two steps, `transcripts.gene` and
+  `transcripts.density`, under a new **Transcripts** group in Tools → Templates.
+  `tests/test_recorded_code_is_code.py`'s `KNOWN_PROSE` list is empty as of this release:
+  every recorder in the app emits either code or a declared `NOTE`.
+
+  What held it back was that the viewer binned its own per-gene feather index
+  (`palms-preprocess`), a viewer artifact a notebook replaying from raw output does not
+  have. The steps read `sdata.points['transcripts']` instead. Verified against a real
+  dataset: the recorded code reproduces `TranscriptLoader.load_gene` row for row
+  (211,154) and the histogram bin for bin (max absolute difference 0), and is **3.4×
+  faster than the loader's own parquet fallback** — 6.5 s against 22 s. On a
+  *preprocessed* dataset the first density for a gene now takes a few seconds rather than
+  ~100 ms; moving the bin-size slider afterwards is still instant, since fetching and
+  binning are separate steps and only the histogram re-runs. The point overlay is
+  untouched — it is display, not analysis, and still uses the fast index.
+
+  Two consequences worth knowing. **The cluster filter is now always per cell**: it keeps
+  transcripts whose assigned cell is in the selected clusters, reading that assignment
+  from the points element. The bin-level fallback — every transcript in a bin containing
+  a selected cell — and its `[WARNING: rebuild transcript cache for cell-level filtering]`
+  message are gone, because the assignment is always available. And **the Min QV slider
+  now affects the density**, where it is applied as the transcripts are read; it remains
+  provenance-only for the point overlay, whose feather files were filtered when
+  `palms-preprocess` built them.
+
 - **The two annotation tabs record real code.** Annotation neighbourhood enrichment and
   annotation distance produced results and recorded a `NOTE` — a comment cell that
   replays as a silent no-op — so a notebook exported from a session that used them was
