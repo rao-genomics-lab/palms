@@ -1,0 +1,18 @@
+# palms template
+# id: annot.export_nhood
+# schema-version: 1
+# doc: Write the annotation neighbourhood enrichment z-scores to CSV.
+# requires: pd, adata_annot
+# params: cluster_key:str, uns_key:str, path:str
+
+#--- block main
+# Export annotation nhood enrichment z-scores for $cluster_key
+#
+# squidpy returns the z-scores as a bare array; the axis labels are the
+# clustering's categories on the augmented object, in category order, which is
+# the same order sq.pl.nhood_enrichment draws. Reading them off adata_annot
+# rather than passing a list keeps the labels and the matrix from disagreeing.
+_labels = adata_annot.obs[$cluster_key].cat.categories.astype(str)
+pd.DataFrame(
+    adata_annot.uns[$uns_key]['zscore'], index=_labels, columns=_labels,
+).to_csv($path)

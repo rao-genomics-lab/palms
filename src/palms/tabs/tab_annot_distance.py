@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import os
+
 import numpy as np
 from magicgui.widgets import ComboBox, PushButton, SpinBox
 from palms.utils.coloring import AVAILABLE_COLORMAPS
@@ -31,8 +33,13 @@ from palms.utils.step_templates import (
     Preview, builtin_spec, step_template as _resolved,
 )
 
+# The filename the save dialog proposes, and what the Templates pane shows as
+# the sample path before a dialog has returned one.
+_EXPORT_FILENAME = "annotation_distances.csv"
+
 TEMPLATE_ID = "annot.distance"
 PLOT_TEMPLATE_ID = "annot.distance_plot"
+EXPORT_TEMPLATE_ID = "annot.export_distance"
 
 if TYPE_CHECKING:
     from palms.utils.viewer_context import ViewerContext
@@ -136,8 +143,29 @@ def build_tab(ctx: ViewerContext) -> tuple:
         return Preview(
             _distance_plot_blocks(categories is not None, max_dist > 0), params)
 
+    def _distance_export_preview(path: str = None) -> Preview:
+        """What "Export CSV" would run: the last measured type, and where to.
+
+        ``path`` only exists once the save dialog has returned, so the Templates
+        pane is shown the filename that dialog would propose and told, in the
+        header, that it is the one value not yet settled.
+        """
+        annot_type = state.get("annot_dist_annot_type") or annot_widget.value
+        if annot_type in (None, "(none)"):
+            annot_type = ""
+        cluster_key = (state.get("annot_dist_clustering_key")
+                       or clustering_widget.value or "")
+        return Preview(
+            list(builtin_spec(EXPORT_TEMPLATE_ID).blocks),
+            {"annotation_type": annot_type, "obs_key": _obs_key(annot_type),
+             "cluster_key": cluster_key,
+             "path": os.fspath(path) if path else _EXPORT_FILENAME},
+            note="" if path else "path chosen on save",
+        )
+
     ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _distance_preview
     ctx.state.setdefault("template_preview", {})[PLOT_TEMPLATE_ID] = _distance_plot_preview
+    ctx.state.setdefault("template_preview", {})[EXPORT_TEMPLATE_ID] = _distance_export_preview
 
     def _on_run():
         clustering_key = clustering_widget.value
@@ -274,33 +302,34 @@ def build_tab(ctx: ViewerContext) -> tuple:
         distances = state.get("annot_dist_distances")
         clustering_key = state.get("annot_dist_clustering_key")
         annot_type = state.get("annot_dist_annot_type")
-        if distances is None:
+        if distances is None or clustering_key is None or annot_type is None:
             return
 
         path, _ = QFileDialog.getSaveFileName(
-            None, "Export Distance CSV", "annotation_distances.csv", "CSV Files (*.csv)"
+            None, "Export Distance CSV", _EXPORT_FILENAME, "CSV Files (*.csv)"
         )
         if not path:
             return
 
-        import pandas as pd
-        _adata = ctx.adata if ctx.adata is not None else ctx.color_manager.adata
-        cluster_series = ctx.clusterings.get(clustering_key)
-        if 'cell_id' in _adata.obs.columns:
-            cell_ids = _adata.obs['cell_id'].values
-            aligned = cluster_series.reindex(cell_ids).values if cluster_series is not None else [None] * len(distances)
-        else:
-            aligned = cluster_series.reindex(_adata.obs_names).values if cluster_series is not None else [None] * len(distances)
-
-        centroids_um = np.asarray(_adata.obsm['spatial'], dtype=np.float64)
-        df = pd.DataFrame({
-            "x_um": centroids_um[:, 0],
-            "y_um": centroids_um[:, 1],
-            "cluster": [str(c) for c in aligned],
-            f"dist_to_{annot_type}_um": distances,
-        })
-        df.to_csv(path, index=False)
-        status.value = f"Exported {len(df):,} rows to {path}"
+        # Written *by* the recorded code rather than beside it: the notebook's
+        # cell is the statement that produced the file the user has. The full
+        # path is recorded, not the basename — a cell that writes somewhere
+        # other than where the export went would be a lie about what ran.
+        blocks, params, _ = _distance_export_preview(path)
+        try:
+            ctx.run_step(Step(
+                id=f"export:annot_distance:{annot_type}:{clustering_key}",
+                **_resolved(EXPORT_TEMPLATE_ID, blocks),
+                params=params,
+                deps=[f"annot_distance:{annot_type}",
+                      f"clustering:{clustering_key}"],
+                kind=TERMINAL,
+                label=f"Export distance to '{annot_type}'",
+            ))
+        except StepError as e:
+            status.value = f"Export failed: {e}"
+            return
+        status.value = f"Exported {len(distances):,} rows to {path}"
 
     def _on_colour_cells():
         distances = state.get("annot_dist_distances")

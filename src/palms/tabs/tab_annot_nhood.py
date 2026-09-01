@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import os
+
 import numpy as np
 from magicgui.widgets import ComboBox, PushButton, Slider, SpinBox
 from qtpy.QtWidgets import (
@@ -40,6 +42,11 @@ POLYGONS_TEMPLATE_ID = "annot.polygons"
 VIRTUAL_CELLS_TEMPLATE_ID = "annot.virtual_cells"
 TEMPLATE_ID = "annot.nhood"
 PLOT_TEMPLATE_ID = "annot.nhood_plot"
+EXPORT_TEMPLATE_ID = "annot.export_nhood"
+
+# The filename the save dialog proposes, and what the Templates pane shows as
+# the sample path before a dialog has returned one.
+_EXPORT_FILENAME = "annot_nhood_zscore.csv"
 
 if TYPE_CHECKING:
     from palms.utils.viewer_context import ViewerContext
@@ -163,6 +170,25 @@ def build_tab(ctx: ViewerContext) -> tuple:
             },
         )
 
+    def _nhood_export_preview(path: str = None) -> Preview:
+        """What "Export Z-scores CSV" would run, and where to.
+
+        ``path`` only exists once the save dialog has returned, so the Templates
+        pane is shown the filename that dialog would propose and told, in the
+        header, that it is the one value not yet settled.
+        """
+        result = state.get("annot_nhood_result") or {}
+        clustering_key = result.get("_cluster_key") or clustering_widget.value
+        return Preview(
+            list(builtin_spec(EXPORT_TEMPLATE_ID).blocks),
+            {
+                "cluster_key": clustering_key,
+                "uns_key": f"{clustering_key}_nhood_enrichment",
+                "path": os.fspath(path) if path else _EXPORT_FILENAME,
+            },
+            note="" if path else "path chosen on save",
+        )
+
     def _plot_stem(clustering_key) -> str:
         return f"annot_nhood_enrichment_{safe_stem(clustering_key)}"
 
@@ -170,6 +196,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ctx.state.setdefault("template_preview", {})[VIRTUAL_CELLS_TEMPLATE_ID] = _virtual_cells_preview
     ctx.state.setdefault("template_preview", {})[TEMPLATE_ID] = _nhood_preview
     ctx.state.setdefault("template_preview", {})[PLOT_TEMPLATE_ID] = _nhood_plot_preview
+    ctx.state.setdefault("template_preview", {})[EXPORT_TEMPLATE_ID] = _nhood_export_preview
 
     def _on_run():
         clustering_key = clustering_widget.value
@@ -347,17 +374,31 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if result is None:
             return
         zscore = result.get('zscore')
-        clusters = result.get('clusters', [])
-        if zscore is None or zscore.size == 0:
+        clustering_key = result.get('_cluster_key')
+        if zscore is None or zscore.size == 0 or clustering_key is None:
             return
         path, _ = QFileDialog.getSaveFileName(
-            None, "Export Z-scores CSV", "annot_nhood_zscore.csv", "CSV Files (*.csv)"
+            None, "Export Z-scores CSV", _EXPORT_FILENAME, "CSV Files (*.csv)"
         )
         if not path:
             return
-        import pandas as pd
-        df = pd.DataFrame(zscore, index=clusters, columns=clusters)
-        df.to_csv(path)
+        # Written *by* the recorded code rather than beside it: the notebook's
+        # cell is the statement that produced the file the user has. The full
+        # path is recorded, not the basename — a cell that writes somewhere
+        # other than where the export went would be a lie about what ran.
+        blocks, params, _ = _nhood_export_preview(path)
+        try:
+            ctx.run_step(Step(
+                id=f"export:annot_nhood:{clustering_key}",
+                **_resolved(EXPORT_TEMPLATE_ID, blocks),
+                params=params,
+                deps=[f"annot_nhood:{clustering_key}"],
+                kind=TERMINAL,
+                label=f"Export annotation nhood z-scores: {clustering_key}",
+            ))
+        except StepError as e:
+            status.value = f"Export failed: {e}"
+            return
         status.value = f"Exported Z-scores to {path}"
 
     # ── Connect ───────────────────────────────────────────────────────────────

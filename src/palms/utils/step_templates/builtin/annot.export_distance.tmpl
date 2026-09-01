@@ -1,0 +1,20 @@
+# palms template
+# id: annot.export_distance
+# schema-version: 1
+# doc: Write the per-cell distance-to-annotation table to CSV.
+# requires: sc, adata
+# params: annotation_type:str, obs_key:str, cluster_key:str, path:str
+
+#--- block main
+# Export distance to '$annotation_type' by $cluster_key
+#
+# The distance column is already in obs — annot.distance put it there — so the
+# export is a read of adata rather than a second computation that could drift
+# from the one the plot above draws. Cells the clustering does not name keep
+# their row with an empty cluster, matching what the viewer wrote.
+_export = sc.get.obs_df(
+    adata, keys=[$cluster_key, $obs_key],
+    obsm_keys=[('spatial', 0), ('spatial', 1)],
+).rename(columns={'spatial-0': 'x_um', 'spatial-1': 'y_um',
+                  $cluster_key: 'cluster'})
+_export[['x_um', 'y_um', 'cluster', $obs_key]].to_csv($path, index=False)

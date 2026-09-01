@@ -447,6 +447,40 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "the limit, so the quartiles drawn are the quartiles of what is shown."
         ),
     ),
+    "annot.export_nhood": TemplateNote(
+        group="Annotations",
+        tab="[Annot Nhood](Tab-Annot-Nhood)",
+        what=(
+            "Writes the annotation neighbourhood-enrichment z-score matrix to "
+            "CSV, labelled by cluster on both axes."
+        ),
+        reading=(
+            "squidpy returns the z-scores as a bare array, so the labels have to "
+            "come from somewhere; they are read off `adata_annot` in category "
+            "order — the order `sq.pl.nhood_enrichment` draws — rather than "
+            "passed in alongside, which is how a matrix and its axis labels come "
+            "to disagree. A terminal step, like "
+            "[roi.export_expression](Analysis-Templates#roiexport_expression): "
+            "its preview renders the filename the save dialog would propose and "
+            "says in its header that the path is a sample."
+        ),
+    ),
+    "annot.export_distance": TemplateNote(
+        group="Annotations",
+        tab="[Annot Distance](Tab-Annot-Distance)",
+        what=(
+            "Writes the per-cell distance table — position, cluster and distance "
+            "to the annotation boundary — to CSV."
+        ),
+        reading=(
+            "A read of `adata`, not a second computation: `annot.distance` "
+            "already put the distances in `obs`, so the exported numbers are the "
+            "same ones the plot draws and cannot drift from them. `sc.get.obs_df` "
+            "pulls the coordinates out of `obsm['spatial']` rather than indexing "
+            "the array by hand. A terminal step, with the same sample-path "
+            "preview as the z-score export above."
+        ),
+    ),
     "transcripts.gene": TemplateNote(
         group="Transcripts",
         tab="[Transcripts](Tab-Transcripts)",

@@ -7,6 +7,35 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **Both annotation CSV exports are recorded.** Annot Distance's "Export CSV…" and Annot
+  Nhood's "Export Z-scores CSV…" wrote a file and recorded nothing, so a notebook exported
+  from that session did not contain the export. They now run `annot.export_distance` and
+  `annot.export_nhood` through `run_step`, as `roi.export_expression` already did, and the
+  recorded cell names the full path the file actually went to rather than a basename that
+  matches nothing on disk. Both appear in Tools → Templates with a preview that renders the
+  filename the save dialog would propose and says in its header that the path is the one
+  value not yet settled.
+
+  The distance export is now a read of `adata` rather than a second computation:
+  `annot.distance` already put the distances in `obs`, so the numbers in the CSV are the
+  numbers the violin plot draws and cannot drift from them, and the coordinates come out of
+  `sc.get.obs_df` instead of indexing `obsm['spatial']` by hand. One behaviour change falls
+  out of that: a cell the clustering does not name now has an empty `cluster` field rather
+  than the string `nan`. The z-score export reads its axis labels off `adata_annot` in
+  category order — the order `sq.pl.nhood_enrichment` draws — instead of carrying a
+  separate label list that could disagree with the matrix.
+
+- **`docs/transcript-read-pushdown.md`** records why the cached transcripts are *not*
+  sorted by gene, so the idea does not get re-derived. Sorting cannot help: `feature_name`
+  is dictionary-encoded and pyarrow does not prune row groups on such a column's
+  statistics at all — a gene excluded by *every* row group's min/max still costs full price
+  (1.21 s), and per-part sorting the real 41-part cache moved surviving row groups
+  123/123 → 41/123 for zero wall-clock change. The available win is 4.1× (5.44 s → 1.32 s)
+  and lives entirely in the reader: `spatialdata` reads points through dask's fsspec
+  reader, which never pushes a filter down, and the template's bare `& is_gene` term
+  collapses the whole conjunction even on the pyarrow reader. Both need fixing together,
+  and the first belongs upstream.
+
 - **PALMS has a DOI.** Zenodo archived the `v1.0.1` release and minted
   **10.5281/zenodo.22218654** (concept, always the newest version) alongside
   10.5281/zenodo.22218655 for that release specifically. `CITATION.cff` carries the
