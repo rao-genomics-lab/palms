@@ -5,7 +5,7 @@ type: software
 authors:
   - given-names: "Srinivasa Rao"
     family-names: "Rao"
-    email: "go2rsr@gmail.com"
+    email: "srinivasa.rao@nds.ox.ac.uk"
 repository-code: "https://github.com/rao-genomics-lab/palms"
 url: "https://palms.readthedocs.io"
 abstract: >-
@@ -26,8 +26,8 @@ keywords:
   - single-cell
   - Xenium
 license: MIT
-version: 1.0.0
-date-released: "2026-08-29"
+version: 1.0.1
+date-released: "2026-09-01"
 
 # Add once the Zenodo DOI is minted:
 #   doi: "10.5281/zenodo.XXXXXXX"
