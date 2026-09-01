@@ -4,6 +4,17 @@ Dates are ISO. Versions follow [Semantic Versioning](https://semver.org). New wo
 under an `## [Unreleased]` heading above the newest release; the dated per-session
 entries under **Development log** are the closed pre-1.0.0 record.
 
+## [Unreleased]
+
+### Added
+- **PALMS has a DOI.** Zenodo archived the `v1.0.1` release and minted
+  **10.5281/zenodo.22218654** (concept, always the newest version) alongside
+  10.5281/zenodo.22218655 for that release specifically. `CITATION.cff` carries the
+  concept DOI, which is what GitHub's "Cite this repository" button reads, and the README
+  gains a badge and says which of the two to cite — a reader following the concept DOI
+  reaches whatever superseded it, which is right for citing the software and wrong for
+  citing a result.
+
 ## [1.0.1] — 2026-09-01
 
 ### Added

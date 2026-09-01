@@ -29,8 +29,11 @@ license: MIT
 version: 1.0.1
 date-released: "2026-09-01"
 
-# Add once the Zenodo DOI is minted:
-#   doi: "10.5281/zenodo.XXXXXXX"
+# The *concept* DOI, which always resolves to the newest version. The DOI for this
+# release specifically is 10.5281/zenodo.22218655; cite that one only when the exact
+# version matters, since a reader following the concept DOI reaches whatever superseded
+# it. Minted 2026-09-01 from the v1.0.1 GitHub Release.
+doi: "10.5281/zenodo.22218654"
 # Add once the paper is out, so `cff` prefers it over the software entry:
 #   preferred-citation:
 #     type: article
