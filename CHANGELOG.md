@@ -7,6 +7,56 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **Both annotation CSV exports are recorded.** Annot Distance's "Export CSV…" and Annot
+  Nhood's "Export Z-scores CSV…" wrote a file and recorded nothing, so a notebook exported
+  from that session did not contain the export. They now run `annot.export_distance` and
+  `annot.export_nhood` through `run_step`, as `roi.export_expression` already did, and the
+  recorded cell names the full path the file actually went to rather than a basename that
+  matches nothing on disk. Both appear in Tools → Templates with a preview that renders the
+  filename the save dialog would propose and says in its header that the path is the one
+  value not yet settled.
+
+  The distance export is now a read of `adata` rather than a second computation:
+  `annot.distance` already put the distances in `obs`, so the numbers in the CSV are the
+  numbers the violin plot draws and cannot drift from them, and the coordinates come out of
+  `sc.get.obs_df` instead of indexing `obsm['spatial']` by hand. One behaviour change falls
+  out of that: a cell the clustering does not name now has an empty `cluster` field rather
+  than the string `nan`. The z-score export reads its axis labels off `adata_annot` in
+  category order — the order `sq.pl.nhood_enrichment` draws — instead of carrying a
+  separate label list that could disagree with the matrix.
+
+- **Transcript queries are 2.4× faster, and the density tab is usable again.** Switching
+  genes in the density tab cost ~2.3 s per gene on a warm cache (worse cold), because
+  `spatialdata` reads points through dask's fsspec reader, which never pushes a filter into
+  the parquet scan — so a one-gene question read all 128.7 M rows. Two changes, which only
+  work together: `utils/arrow_points_read.py` makes the cache read use pyarrow's filesystem
+  (the one dask reader that supports predicate pushdown), and `transcripts.gene.tmpl` states
+  `is_gene` as a comparison, since dask drops the whole conjunction if any term is a bare
+  boolean. Measured over a six-gene sequence: **13.45 s → 5.65 s** warm, 5.62 s → 1.49 s on
+  a cold first gene, with identical row counts. The cost also changes shape — a rare gene
+  used to cost the same as an abundant one, and now tracks what actually matches.
+
+  This does *not* restore the ~100 ms the per-gene feather index gave; the floor is decoding
+  `feature_name`. `palms-preprocess` stays, and the point overlay still uses it.
+
+  **The spatialdata half is a monkeypatch of a private module path** — the only one in the
+  codebase — so it is written to fail quiet (if the path moves, reads stay stock and merely
+  slower), scoped to `loader._open_cache` rather than applied process-wide, and covered by
+  `tests/test_arrow_points_read.py`, which **fails as soon as upstream passes a `filesystem`
+  itself**. That is the signal to delete it. The wrapper also stands aside when a filesystem
+  is already supplied, so an upstream fix takes effect before anyone gets to the deletion.
+
+- **`docs/transcript-read-pushdown.md`** records why the cached transcripts are *not*
+  sorted by gene, so the idea does not get re-derived. Sorting cannot help: `feature_name`
+  is dictionary-encoded and pyarrow does not prune row groups on such a column's
+  statistics at all — a gene excluded by *every* row group's min/max still costs full price
+  (1.21 s), and per-part sorting the real 41-part cache moved surviving row groups
+  123/123 → 41/123 for zero wall-clock change. The available win is 4.1× (5.44 s → 1.32 s)
+  and lives entirely in the reader: `spatialdata` reads points through dask's fsspec
+  reader, which never pushes a filter down, and the template's bare `& is_gene` term
+  collapses the whole conjunction even on the pyarrow reader. Both need fixing together,
+  and the first belongs upstream.
+
 - **PALMS has a DOI.** Zenodo archived the `v1.0.1` release and minted
   **10.5281/zenodo.22218654** (concept, always the newest version) alongside
   10.5281/zenodo.22218655 for that release specifically. `CITATION.cff` carries the

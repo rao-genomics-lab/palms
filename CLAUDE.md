@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1570 tests** across 65 files, measured 2026-09-01 —
+There is a `pytest` suite in `tests/` (**1600 tests** across 67 files, measured 2026-09-01 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -389,7 +389,7 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   `builtin_text`/`builtin_assemble`, which read only shipped files via `importlib.resources`
   and cannot see an override path — that is what keeps the six template-pinning test modules
   passing unchanged. `tests/test_template_registry.py` runs the `check_step` lint over every
-  template × every declared assembly (65 renderings), which is where the five hand-written
+  template × every declared assembly (67 renderings), which is where the five hand-written
   `check_step` calls became a registry-wide gate.
 
   **Users can override a template**, per user, in `~/.config/palms/templates/*.tmpl`
@@ -437,7 +437,7 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   the header says so), and a provider must stay **read-only** — no `makedirs`, no
   `record_clustering` — since drawing a pane must not have side effects.
 
-  Twenty-one of twenty-three templates have a provider. The two exemptions are declared in
+  Twenty-three of twenty-five templates have a provider. The two exemptions are declared in
   `tests/test_tab_templates.py::_NO_PROVIDER` with their reasons: `normalize` takes no params,
   and `spatial_neighbors` takes `k` from whichever tab called `ensure_spatial_neighbors`, so
   it uses the `# sample-params:` header field instead. Four gates, each verified against the
@@ -524,6 +524,13 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   `TranscriptLoader.load_gene` row for row and the histogram bin for bin (max abs diff 0),
   and is 3.4× faster than the loader's own parquet fallback (6.5 s against 22 s). The
   *point overlay* stays on the feather index — it is display, not analysis.
+  The obvious follow-up — sort the cache by gene so the reader can skip row groups —
+  was measured and **rejected**: `feature_name` is dictionary-encoded and pyarrow does
+  not prune on such a column's statistics at all, so sorting buys nothing (123/123 →
+  41/123 surviving row groups, zero wall-clock change). `docs/transcript-read-pushdown.md`
+  records that, where the real 4.1× is (the fsspec-vs-pyarrow reader, plus writing
+  `& (is_gene == True)` rather than a bare boolean term, which otherwise collapses the
+  whole conjunction), and why the template cannot reach it without an upstream change.
   Also migrated, 2026-09-01: the **annotation-neighbourhood** and **annotation-distance**
   tabs, in six templates — `annot.polygons` (`annotations`), `annot.virtual_cells`,
   `annot.nhood`, `annot.nhood_plot`, `annot.distance`, `annot.distance_plot`. They were
@@ -545,7 +552,13 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   unrecorded, since a `TERMINAL` calling `savefig` with no preceding plot call replays as a
   silent no-op writing an empty figure. They are real terminals now
   (`plot:annot_nhood:<key>`, `plot:annot_distance:<type>:<key>`), because the step that
-  draws them exists. **Plot/export terminals** across the migrated tabs are still on `record_node` —
+  draws them exists. Their **CSV exports** followed on 2026-09-01, in two more templates —
+  `annot.export_distance` and `annot.export_nhood`, in `roi.export_expression`'s shape: a
+  `TERMINAL` whose recorded cell names the full path the file actually went to, and whose
+  preview renders the filename the save dialog would propose with a header saying the path
+  is the one value not yet settled. The distance export is a *read* of the `obs` column
+  `annot.distance` wrote, not a second computation that could drift from the figure.
+  **Other plot/export terminals** across the migrated tabs are still on `record_node` —
   that is fine where the cell is real code (`sc.pl.*`, `to_csv`); what is not fine is a
   terminal whose cell is prose, which the source guard above now catches.
   Also migrated: **UMAP plots** (`umap.plot`, both by gene and by cluster).
@@ -717,6 +730,25 @@ reproducibility defect rather than a kernel-discovery one.
   cannot answer this question — hence the globbed path list. The remedy text is derived from
   `sys.prefix` rather than spelled: it named `-n palms` and `./scripts/install.sh` to every
   reader, including ones whose env is called something else and ones with no checkout at all.
+- **spatialdata reads points through fsspec, which never pushes a filter down** —
+  `utils/arrow_points_read.py`, applied as a context manager around the `read_zarr` in
+  `loader._open_cache`. **This is the one patch that reaches into a private module path**
+  (`spatialdata._io.io_points.read_parquet`), so it fails quiet: if that path moves, reads
+  stay stock and merely slower. Predicate pushdown is `_filter_passthrough`, which is
+  `True` only on `ReadParquetPyarrowFS`; `_read_points` passes no `filesystem=`, so a mask
+  over `sdata.points['transcripts']` scanned all 128.7 M rows to answer a one-gene
+  question. Measured 2.26 s → 0.94 s per gene on a warm cache, 5.62 s → 1.49 s cold.
+  **It is half a fix**: dask drops the whole conjunction if any term is a bare boolean, so
+  `transcripts.gene.tmpl` says `(_transcripts['is_gene'] == True)` and must keep saying it.
+  Scoped rather than process-wide because the pyarrow reader returns identical data in a
+  different partition *order* (and keeps `__null_dask_index__` as the index name); nothing
+  in PALMS depends on points row order, but a caller's own spatialdata objects should not
+  inherit ours. **`tests/test_arrow_points_read.py` fails as soon as upstream passes a
+  `filesystem` itself** — that is the signal to delete the module, the call site, the
+  template comment and the test. The wrapper also declines when a `filesystem` is already
+  given, so an upstream fix takes effect before anyone does the deletion.
+  `docs/transcript-read-pushdown.md` holds the measurement and why sorting the cache — the
+  obvious alternative — does nothing at all.
 - **pandas 3.0 PyArrow strings** — `_convert_arrow_strings()` in `src/palms/loader.py`
 - **NumPy 2.0** — `np.NAN` fallback for omnipath compatibility
 - **matplotlib 3.9 `cm.get_cmap` removal** — `_patch_matplotlib_cm_compat()` in

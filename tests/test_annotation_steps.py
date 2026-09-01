@@ -105,6 +105,31 @@ def _distance_step(annotation_type="tumour"):
     )
 
 
+def _nhood_export_step(path):
+    return Step(
+        id=f"export:annot_nhood:{CLUSTER_KEY}",
+        template=builtin_text("annot.export_nhood"),
+        params={"cluster_key": CLUSTER_KEY,
+                "uns_key": f"{CLUSTER_KEY}_nhood_enrichment",
+                "path": str(path)},
+        deps=[f"annot_nhood:{CLUSTER_KEY}"], kind="terminal",
+    )
+
+
+def _distance_export_step(path, annotation_type="tumour"):
+    return Step(
+        id=f"export:annot_distance:{annotation_type}:{CLUSTER_KEY}",
+        template=builtin_text("annot.export_distance"),
+        params={"annotation_type": annotation_type,
+                "obs_key": f"dist_to_{annotation_type}_um",
+                "cluster_key": CLUSTER_KEY, "path": str(path)},
+        # As with the plot step above, the clustering node the tab also
+        # declares is the tab's wiring, not the template's: this fixture has
+        # no clustering node to depend on.
+        deps=[f"annot_distance:{annotation_type}"], kind="terminal",
+    )
+
+
 def _normalize_step():
     return Step(id="normalize", template=_NORMALIZE_TEMPLATE, kind="setup",
                 outputs=["adata_norm"])
@@ -141,6 +166,8 @@ def test_every_annotation_template_is_self_contained():
         (_virtual_cells_step(), {"annotations"}),
         (_nhood_step(), {"adata_norm", "annot_virtual_cells"}),
         (_distance_step(), {"annotations"}),
+        (_nhood_export_step("out.csv"), {"adata_annot"}),
+        (_distance_export_step("out.csv"), set()),
     ):
         assert check_step(step, base | bound) == set(), step.id
 
@@ -323,6 +350,52 @@ def test_the_clip_block_drops_the_far_tail_rather_than_flattening_it():
 
     assert (ns["_dist"]["dist_to_tumour_um"] <= 20.0).all()
     assert len(ns["_dist"]) < adata.n_obs
+
+
+# ── CSV exports ──────────────────────────────────────────────────────────────
+
+def test_the_distance_export_writes_what_the_plot_drew(tmp_path):
+    """The export reads the obs column ``annot.distance`` wrote, so the numbers
+    in the file are the numbers in the figure rather than a second computation
+    that can drift from it."""
+    adata = _adata()
+    out = tmp_path / "annotation_distances.csv"
+    ex = _run([_polygons_step(), _distance_step(), _distance_export_step(out)],
+              adata)
+
+    written = pd.read_csv(out)
+    assert list(written.columns) == ["x_um", "y_um", "cluster",
+                                     "dist_to_tumour_um"]
+    assert len(written) == adata.n_obs
+    np.testing.assert_allclose(written["dist_to_tumour_um"].to_numpy(),
+                               ex.ns["annot_distances"])
+    # The coordinates come out of obsm['spatial'], in that order.
+    np.testing.assert_allclose(written[["x_um", "y_um"]].to_numpy(),
+                               adata.obsm["spatial"])
+    assert set(written["cluster"].astype(str)) == {"0", "1"}
+
+
+def test_the_nhood_export_labels_both_axes_in_category_order(tmp_path):
+    """squidpy hands back a bare array. The labels are read off the augmented
+    object in category order — the order the heatmap draws — so a matrix and
+    its axis labels cannot disagree."""
+    out = tmp_path / "annot_nhood_zscore.csv"
+    ex = _run([_normalize_step(), _polygons_step(), _virtual_cells_step(),
+               _nhood_step(), _nhood_export_step(out)], _adata())
+
+    adata_annot = ex.ns["adata_annot"]
+    expected = list(adata_annot.obs[CLUSTER_KEY].cat.categories.astype(str))
+    written = pd.read_csv(out, index_col=0)
+
+    assert list(written.columns) == expected
+    assert [str(i) for i in written.index] == expected
+    # The annotation types are among them: that is what the analysis is for.
+    assert {"tumour", "stroma"} <= set(expected)
+    np.testing.assert_allclose(
+        written.to_numpy(),
+        np.asarray(adata_annot.uns[f"{CLUSTER_KEY}_nhood_enrichment"]["zscore"],
+                   dtype=float),
+    )
 
 
 # ── replay ───────────────────────────────────────────────────────────────────

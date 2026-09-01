@@ -57,6 +57,8 @@ substituted string for the settings currently in the owning tab.
 - [`roi.polygons`](#roipolygons) — The ROI polygons drawn in the viewer, inlined as literals.
 - [`annot.distance`](#annotdistance) — Distance from every cell to the nearest annotation boundary.
 - [`annot.distance_plot`](#annotdistance_plot) — Distance-to-annotation distribution per cluster; one plot.* block per type.
+- [`annot.export_distance`](#annotexport_distance) — Write the per-cell distance-to-annotation table to CSV.
+- [`annot.export_nhood`](#annotexport_nhood) — Write the annotation neighbourhood enrichment z-scores to CSV.
 - [`annot.nhood`](#annotnhood) — Neighbourhood enrichment over real cells plus annotation virtual cells.
 - [`annot.nhood_plot`](#annotnhood_plot) — Heatmap of the annotation neighbourhood enrichment.
 - [`annot.polygons`](#annotpolygons) — The annotation polygons drawn in the viewer, inlined as literals.
@@ -1129,6 +1131,79 @@ for _path in $paths:
     fig.savefig(_path, bbox_inches='tight', dpi=300)
 ```
 
+### `annot.export_distance`
+
+**Run by:** [Annot Distance](Tab-Annot-Distance)
+
+Writes the per-cell distance table — position, cluster and distance to the annotation boundary — to CSV.
+
+A read of `adata`, not a second computation: `annot.distance` already put the distances in `obs`, so the exported numbers are the same ones the plot draws and cannot drift from them. `sc.get.obs_df` pulls the coordinates out of `obsm['spatial']` rather than indexing the array by hand. A terminal step, with the same sample-path preview as the z-score export above.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `annotation_type` | `str` | yes |
+| `obs_key` | `str` | yes |
+| `cluster_key` | `str` | yes |
+| `path` | `str` | yes |
+
+- **Requires:** `adata`, `sc`
+- **Outputs:** _nothing (terminal step)_
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Export distance to '$annotation_type' by $cluster_key
+#
+# The distance column is already in obs — annot.distance put it there — so the
+# export is a read of adata rather than a second computation that could drift
+# from the one the plot above draws. Cells the clustering does not name keep
+# their row with an empty cluster, matching what the viewer wrote.
+_export = sc.get.obs_df(
+    adata, keys=[$cluster_key, $obs_key],
+    obsm_keys=[('spatial', 0), ('spatial', 1)],
+).rename(columns={'spatial-0': 'x_um', 'spatial-1': 'y_um',
+                  $cluster_key: 'cluster'})
+_export[['x_um', 'y_um', 'cluster', $obs_key]].to_csv($path, index=False)
+```
+
+### `annot.export_nhood`
+
+**Run by:** [Annot Nhood](Tab-Annot-Nhood)
+
+Writes the annotation neighbourhood-enrichment z-score matrix to CSV, labelled by cluster on both axes.
+
+squidpy returns the z-scores as a bare array, so the labels have to come from somewhere; they are read off `adata_annot` in category order — the order `sq.pl.nhood_enrichment` draws — rather than passed in alongside, which is how a matrix and its axis labels come to disagree. A terminal step, like [roi.export_expression](Analysis-Templates#roiexport_expression): its preview renders the filename the save dialog would propose and says in its header that the path is a sample.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `cluster_key` | `str` | yes |
+| `uns_key` | `str` | yes |
+| `path` | `str` | yes |
+
+- **Requires:** `adata_annot`, `pd`
+- **Outputs:** _nothing (terminal step)_
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Export annotation nhood enrichment z-scores for $cluster_key
+#
+# squidpy returns the z-scores as a bare array; the axis labels are the
+# clustering's categories on the augmented object, in category order, which is
+# the same order sq.pl.nhood_enrichment draws. Reading them off adata_annot
+# rather than passing a list keeps the labels and the matrix from disagreeing.
+_labels = adata_annot.obs[$cluster_key].cat.categories.astype(str)
+pd.DataFrame(
+    adata_annot.uns[$uns_key]['zscore'], index=_labels, columns=_labels,
+).to_csv($path)
+```
+
 ### `annot.nhood`
 
 **Run by:** [Annot Nhood](Tab-Annot-Nhood)
@@ -1450,11 +1525,20 @@ _transcripts = sdata.points['transcripts']
 # per-gene feather files, stated here instead of inherited: qv is the
 # call-quality floor, and is_gene drops the control probes, which are not
 # transcripts of anything.
+#
+# `is_gene == True` rather than a bare `is_gene`, which reads more naturally and
+# is what a linter would ask for. dask turns this mask into a parquet filter
+# only if every term is a comparison: a bare boolean column makes the whole
+# conjunction unpushable, so the reader scans all 128.7 M rows instead of the
+# row groups that can hold the gene. Measured 4.1x on a real cache. The
+# comparison form is worth nothing on its own — see
+# docs/transcript-read-pushdown.md and utils/arrow_points_read.py, which is the
+# other half — but it costs nothing either, and the two together are the win.
 transcript_points = (
     _transcripts[
         (_transcripts['feature_name'] == $gene)
         & (_transcripts['qv'] >= $min_qv)
-        & _transcripts['is_gene']
+        & (_transcripts['is_gene'] == True)
     ][['x', 'y', 'cell_id']]
     .compute()
     # A filtered frame keeps the original row labels, and PointsModel.parse
