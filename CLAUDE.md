@@ -508,8 +508,19 @@ fails on one — `viewer:transcript_density` is the single listed exception.
   is now the CopyKAT path only; the inferCNV template must stay in sync with it
   (`tests/test_cnv_step.py` pins both).
   Still unmigrated: the **annotation-neighbourhood** and **annotation-distance** tabs.
-  Their synthetic virtual cells are sampled from a napari shapes layer the notebook has no
-  access to — resolving that needs E3's spatialdata shapes. Their *figures* are now
+  **They are not blocked** — the reason recorded here until 2026-09-01, that their virtual
+  cells come from a napari shapes layer the notebook cannot reach and so need E3's
+  spatialdata shapes, was stale twice over. `roi.polygons` already solves the same problem
+  the other way, by **inlining the drawn polygons as literal params** in a `SETUP` node, so
+  the geometry never has to be reachable from disk at all; and it *is* on disk anyway,
+  since `save_annotations_to_sdata` writes a real `ShapesModel` GeoDataFrame to
+  `sdata.shapes['annotations']`. The sampling is a deterministic grid
+  (`annotation_utils.sample_annotation_centroids` steps `sqrt(density_um2)` µm over the
+  merged polygon's bounds), so it needs no seed to replay either. What is actually left is
+  ordinary migration work: a template each, a `Preview` provider each, and converting the
+  two `NOTE` figure nodes to real terminals. One defect to fix in passing — both annotation
+  helpers repair an invalid polygon with `buffer(0)`, which rule (e) above exists to forbid.
+  Their *figures* are now
   recorded, as `viewer:annot_nhood_plot` / `viewer:annot_distance_plot`, and deliberately
   as **`NOTE`**: a `TERMINAL` calling `plt.gcf().savefig(...)` with no preceding plot call
   replays as a silent no-op writing an empty figure, which is worse than recording
