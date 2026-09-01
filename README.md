@@ -4,6 +4,7 @@
 
 ![CI](https://github.com/rao-genomics-lab/palms/actions/workflows/ci.yml/badge.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22218654.svg)](https://doi.org/10.5281/zenodo.22218654)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 
 A napari-based viewer that brings spatial transcriptomics, histology and genomic
@@ -216,7 +217,14 @@ Full documentation with screenshots is available on the [GitHub Wiki](https://gi
 
 If PALMS contributes to work you publish, please cite it. `CITATION.cff` in the repo root
 holds the machine-readable metadata; GitHub's "Cite this repository" button reads it
-directly. A Zenodo DOI for v1.0.1 is being minted and will be added to that file.
+directly.
+
+The archived releases carry a DOI:
+
+- **[10.5281/zenodo.22218654](https://doi.org/10.5281/zenodo.22218654)** — cite this one.
+  It is the *concept* DOI and always resolves to the newest version.
+- [10.5281/zenodo.22218655](https://doi.org/10.5281/zenodo.22218655) — v1.0.1
+  specifically, for when the exact version is what matters.
 
 ## License
 
