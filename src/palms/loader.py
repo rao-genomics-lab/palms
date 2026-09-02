@@ -516,7 +516,6 @@ def _open_cache(cache_path: Path):
     import spatialdata
 
     from palms.utils import cache_repair
-    from palms.utils.arrow_points_read import arrow_points_reader
 
     report = cache_repair.verify(cache_path)
     if not report.ok:
@@ -524,25 +523,20 @@ def _open_cache(cache_path: Path):
         for action in result.actions:
             print(f"  Cache: {action}")
 
-    # The points elements are built here, once, and keep whichever reader they
-    # were built with for the life of the object — so this is the only place the
-    # choice can be made. See utils/arrow_points_read.py for why it is scoped to
-    # this call rather than applied process-wide.
-    with arrow_points_reader():
-        try:
+    try:
+        return spatialdata.read_zarr(str(cache_path))
+    except Exception as first_error:
+        # Still broken. If a previous version of a missing element is sitting
+        # in the trash, putting it back is strictly better than discarding
+        # 30 GB.
+        report = cache_repair.verify(cache_path)
+        if report.missing_on_disk and report.repairable:
+            print("  Cache: attempting to restore missing elements from backups...")
+            result = cache_repair.repair(cache_path, report, level=cache_repair.FULL)
+            for action in result.actions:
+                print(f"  Cache: {action}")
             return spatialdata.read_zarr(str(cache_path))
-        except Exception as first_error:
-            # Still broken. If a previous version of a missing element is sitting
-            # in the trash, putting it back is strictly better than discarding
-            # 30 GB.
-            report = cache_repair.verify(cache_path)
-            if report.missing_on_disk and report.repairable:
-                print("  Cache: attempting to restore missing elements from backups...")
-                result = cache_repair.repair(cache_path, report, level=cache_repair.FULL)
-                for action in result.actions:
-                    print(f"  Cache: {action}")
-                return spatialdata.read_zarr(str(cache_path))
-            raise first_error
+        raise first_error
 
 
 def _restore_user_elements(old_sdata, sdata, user_data: dict) -> list[str]:
@@ -895,8 +889,6 @@ def load_sdata(
                     # gets the fact from the manifest rather than re-deriving it.
                     write_manifest(cache_path, experiment_path,
                                    extra={"cache_only": True})
-                print(sdata)
-                return sdata
             except Exception as e:
                 from palms.utils import cache_repair
                 report = cache_repair.verify(cache_path)
@@ -914,6 +906,24 @@ def load_sdata(
                         "Cancelled at the user's request; the cache was left untouched."
                     ) from e
                 preference = choice
+            else:
+                # The summary is diagnostics, and it stays *outside* the block
+                # above on purpose: a repr that cannot render is not a cache
+                # that cannot be opened. It used to be inside, and when
+                # spatialdata's ``__repr__`` raised — it walks each points
+                # element's dask graph for its backing files, which a
+                # non-default parquet reader can make unparseable — a healthy
+                # store was routed to _ask_corrupt_cache and the user was
+                # offered a rebuild, with verify printing "✓ Cache is healthy"
+                # two lines later.
+                try:
+                    print(sdata)
+                except Exception as exc:
+                    from palms.utils import reporting
+                    reporting.get_logger().warning(
+                        "The SpatialData summary could not be rendered (%s); "
+                        "the cache itself opened fine.", exc)
+                return sdata
 
         if preference == "restore":
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1335,7 +1345,14 @@ def main():
 
     adata = sdata["table"]
     print(f"\nAnnData: {adata.shape[0]} cells x {adata.shape[1]} genes")
-    print(f"UMAP:    {umap_df.shape[0]} cells")
+    # load_umap returns None when there is no 'analysis/' folder — a 10x bundle
+    # whose analysis.tar.gz was never extracted, or a Crop Dataset export. The
+    # cache is already written by this point, so the summary must not turn that
+    # into a traceback. load_clusterings returns {} in the same situation.
+    if umap_df is not None:
+        print(f"UMAP:    {umap_df.shape[0]} cells")
+    else:
+        print("UMAP:    not present (no 'analysis/' folder)")
     print(f"Clusterings: {list(clusterings.keys())}")
 
 

@@ -1529,11 +1529,10 @@ _transcripts = sdata.points['transcripts']
 # `is_gene == True` rather than a bare `is_gene`, which reads more naturally and
 # is what a linter would ask for. dask turns this mask into a parquet filter
 # only if every term is a comparison: a bare boolean column makes the whole
-# conjunction unpushable, so the reader scans all 128.7 M rows instead of the
-# row groups that can hold the gene. Measured 4.1x on a real cache. The
-# comparison form is worth nothing on its own — see
-# docs/transcript-read-pushdown.md and utils/arrow_points_read.py, which is the
-# other half — but it costs nothing either, and the two together are the win.
+# conjunction unpushable. It buys nothing with the reader spatialdata actually
+# uses, which never pushes a filter down at all — see
+# docs/transcript-read-pushdown.md — but it costs nothing, and it is the form
+# that would benefit if that ever changes.
 transcript_points = (
     _transcripts[
         (_transcripts['feature_name'] == $gene)
