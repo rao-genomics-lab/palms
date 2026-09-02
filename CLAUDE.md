@@ -518,9 +518,19 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   moves. Two facts worth not re-deriving. **Filter, then transform**: `sd.transform` maps
   every row it is handed, so transforming the table and filtering afterwards costs 95 s
   against 5 s on a 1.4 GB `transcripts.parquet`, for an identical answer. And **the fetch
-  applies `qv >= min_qv` and `is_gene`** — the two filters `palms-preprocess` bakes into
-  its feather files; without them the density silently counts low-quality calls and
-  control probes. Verified against a real dataset: the recorded step reproduces
+  applies `qv >= min_qv` and refuses a name that is not in `adata.var_names`** — the two
+  filters `palms-preprocess` bakes into its feather files; without them the density
+  silently counts low-quality calls and control probes. **The second one used to be a
+  row-wise `is_gene` test and must never go back to being one**: XOA 2.0.0 dropped that
+  column from `transcripts.parquet` and `spatialdata_io` does not synthesise it, so the
+  template raised `KeyError` on every modern bundle while `palms-preprocess`'s
+  `if "is_gene" in df.columns` guard turned the same absence into a silent pass (514
+  feather files for a 377-gene panel, 137 of them control codewords). The table is the
+  portable statement of the panel — `spatialdata_io` builds it from the `Gene Expression`
+  features alone — and `gene_panel.json`'s per-target `descriptor` is the same set for
+  `palms-preprocess`, which has no `adata`. Fixing one without the other re-opens the
+  preview/run drift, since the preview reads the feather files and the run reads the
+  points element. Verified against a real dataset: the recorded step reproduces
   `TranscriptLoader.load_gene` row for row and the histogram bin for bin (max abs diff 0),
   and is 3.4× faster than the loader's own parquet fallback (6.5 s against 22 s). The
   *point overlay* stays on the feather index — it is display, not analysis.
@@ -564,8 +574,10 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   template, so the open question is whether the layout can deliver it through a stock call.
   The 4.1× the fsspec-vs-pyarrow reader measured is **not** in the tree: it shipped in
   PR #68 and was reverted the next day (see "Known Compatibility Patches" below for why).
-  What is left is `& (is_gene == True)` rather than a bare boolean term, which otherwise
-  collapses the whole conjunction — free, and currently worth nothing.
+  Nothing of it is left in the template: the `& (is_gene == True)` term that survived as a
+  free half is gone with the column it read (see the density paragraph above). Should a
+  pushable boolean term ever be wanted back, it has to be written as a comparison — dask
+  collapses the whole conjunction on a bare boolean column.
   Also migrated, 2026-09-01: the **annotation-neighbourhood** and **annotation-distance**
   tabs, in six templates — `annot.polygons` (`annotations`), `annot.virtual_cells`,
   `annot.nhood`, `annot.nhood_plot`, `annot.distance`, `annot.distance_plot`. They were
@@ -781,9 +793,10 @@ reproducibility defect rather than a kernel-discovery one.
   Tripwires that check whether upstream's *source* moved cannot see this class of defect,
   and the patch had two of them. `docs/transcript-read-pushdown.md` §6 is the write-up, and
   the rest of that doc holds the measurements plus why sorting the cache — the obvious
-  alternative — does nothing on its own. What remains in the tree is one free half:
-  `transcripts.gene.tmpl` says `(_transcripts['is_gene'] == True)` rather than a bare
-  boolean, because dask drops the whole conjunction otherwise.
+  alternative — does nothing on its own. The one free half that used to remain in the tree
+  is gone: `transcripts.gene.tmpl` no longer reads `is_gene` at all, because XOA 2.0.0 does
+  not write that column. The dask rule it illustrated still holds for any future term —
+  a bare boolean column makes the whole conjunction unpushable, so write a comparison.
 - **pandas 3.0 PyArrow strings** — `_convert_arrow_strings()` in `src/palms/loader.py`
 - **NumPy 2.0** — `np.NAN` fallback for omnipath compatibility
 - **matplotlib 3.9 `cm.get_cmap` removal** — `_patch_matplotlib_cm_compat()` in

@@ -111,6 +111,11 @@ class TranscriptLoader:
             mask = df[GENE_COL] == gene_name
             if QV_COL in df.columns:
                 mask &= df[QV_COL] >= self.min_qv
+            # Guarded because XOA 2.0.0 dropped the column. Redundant either
+            # way here — the gene is already pinned by name, and the caller
+            # picks it from adata.var_names, which holds no control codewords —
+            # so unlike the recorded step (transcripts.gene.tmpl), this does not
+            # need the panel plumbed in to be correct.
             if "is_gene" in df.columns:
                 mask &= df["is_gene"].astype(bool)
             sub = df[mask]
