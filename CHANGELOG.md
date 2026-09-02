@@ -7,6 +7,43 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **The density heatmap previews while you browse, and the preview is never recorded.**
+  Choosing a gene cost 2.3–6.5 s, because `Compute Density` fetches that gene out of
+  `sdata.points['transcripts']` before it can bin it — the right thing for a notebook and the
+  wrong thing for finding a gene. Ticking **Preview the density as I change settings** now
+  redraws in about a tenth of a second from the per-gene index `palms-preprocess` built, and
+  the gene, bin size, quality floor and both filters become live controls where they were
+  button-only. The preview draws into its own layer, `transcript_density (PREVIEW - not
+  recorded)`, and says so in the status line; **Compute Density** is unchanged and is still
+  the only thing that runs and records the analysis, and its result replaces the preview.
+
+  It is not a second implementation of the histogram. It executes the same
+  `transcripts.density` template text, resolved through the same user overrides, with
+  `transcript_points` bound from the index instead of from the points element — through a new
+  `ctx.preview_step`, which executes into a *copy* of the executor's namespace and has no
+  route to the provenance graph. The copy is a correctness requirement rather than tidiness:
+  a preview that bound `transcript_points` in the shared namespace could let the next recorded
+  step consume feather-derived points while recording source that says it read the points
+  element, which is exactly the executed-versus-recorded drift the Step system exists to rule
+  out. Recording is deliberately not a flag on `run` — recording is not a mode of `run`, it is
+  what `run` is — and `tests/test_preview_never_records.py` is the source guard, with a
+  two-entry allow-list of call sites that is compared in both directions so a stale entry
+  cannot rot.
+
+  Safe because the two routes were measured to agree exactly, and that measurement is now a
+  test rather than a memory: `test_the_feather_preview_bins_identically_to_the_recorded_step`
+  asserts the preview and the recorded step produce identical arrays for all four density
+  assemblies. Four things make it refuse rather than draw a wrong picture, each saying why in
+  the status line: a Min QV below 20 (the index is pre-filtered at 20, so the slider cannot be
+  honoured below it — above it, it is applied to the index's own `qv` column), a gene the
+  index does not hold (the fallback is a ~22 s parquet scan, which is not a preview and also
+  drops `cell_id`), an index built before cell ids were kept *when the cluster filter is on*
+  (only the filter reads them, so only the filter is refused), and a cluster filter whose
+  clustering is not in `obs` — applying it is the run's job, and drawing a picture must not
+  change the analysis. The micron-to-pixel step is not arithmetic: the frame is parsed as a
+  `PointsModel` carrying the transcripts element's own declared transformation, the way
+  `transcripts.gene` does it.
+
 - **Both annotation CSV exports are recorded.** Annot Distance's "Export CSV…" and Annot
   Nhood's "Export Z-scores CSV…" wrote a file and recorded nothing, so a notebook exported
   from that session did not contain the export. They now run `annot.export_distance` and

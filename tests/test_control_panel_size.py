@@ -69,6 +69,34 @@ def umap_tab(qapp):
     return widget
 
 
+@pytest.fixture(scope="module")
+def transcripts_tab(qapp):
+    """The Transcripts page, after the density preview landed.
+
+    Worth measuring: it gained a checkbox and a *word-wrapped* caption QLabel,
+    and a label that wraps reports whatever minimum its longest unbreakable run
+    demands — the shape that pinned the dock twice before.
+    """
+    from palms.tabs.tab_transcripts import build_tab
+    ctx = SimpleNamespace(
+        state={}, viewer=None, adata=None, sdata=None, data_path=None,
+        gene_names=[f"Gene{i}" for i in range(20)],
+        clusterings={}, clustering_widget=None, transcript_loader=None,
+        transcript_layer=None, transcript_bins_layer=None,
+        transcript_bins_preview_layer=None,
+        pixel_size=0.2125, dataset_generation=0,
+        get_selected_cluster_ids=lambda: [],
+        record_node=lambda *a, **k: None,
+        record_clustering=lambda *a, **k: None,
+        record_preamble=lambda *a, **k: None,
+        run_step=lambda *a, **k: {},
+        preview_step=lambda *a, **k: {},
+        set_status=lambda *a, **k: None,
+    )
+    widget, _ = build_tab(ctx)
+    return widget
+
+
 def _hint(widget):
     hint = widget.minimumSizeHint()
     return hint.width(), hint.height()
@@ -107,6 +135,12 @@ def test_the_umap_page_does_not_pin_the_dock(umap_tab):
     width, height = _hint(umap_tab)
     assert width <= MAX_MINIMUM, f"UMAP page minimum width {width}px"
     assert height <= MAX_MINIMUM, f"UMAP page minimum height {height}px"
+
+
+def test_the_transcripts_page_does_not_pin_the_dock(transcripts_tab):
+    width, height = _hint(transcripts_tab)
+    assert width <= MAX_MINIMUM, f"Transcripts page minimum width {width}px"
+    assert height <= MAX_MINIMUM, f"Transcripts page minimum height {height}px"
 
 
 def test_the_assembled_panel_can_shrink(qapp, notebook_tab, templates_tab, umap_tab):

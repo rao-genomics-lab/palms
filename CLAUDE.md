@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1588 tests** across 65 files, measured 2026-09-02 —
+There is a `pytest` suite in `tests/` (**1609 tests** across 66 files, measured 2026-09-02 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -524,6 +524,27 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   `TranscriptLoader.load_gene` row for row and the histogram bin for bin (max abs diff 0),
   and is 3.4× faster than the loader's own parquet fallback (6.5 s against 22 s). The
   *point overlay* stays on the feather index — it is display, not analysis.
+  The **density preview** (2026-09-02) is why that cost is now bearable: ticking it in the
+  Transcripts tab bins the feather index and redraws in ~0.1 s while the user hunts for a
+  gene, and `Compute Density` still runs and records the canonical steps. Three rules hold it
+  in place. It **executes the same `transcripts.density` template text** rather than a second
+  histogram — a hand-rolled copy would be the unwatched half of a drift pair, the rule the
+  annotation migration established. It goes through **`ctx.preview_step` /
+  `StepExecutor.preview`**, which executes into a *copy* of the namespace and has no route to
+  the graph; the copy is a **correctness requirement, not tidiness**, because a preview that
+  bound `transcript_points` in the shared namespace would let the next recorded step consume
+  feather-derived points while recording source that says it read the points element.
+  Recording is deliberately **not a flag on `run`** — recording is not a mode of `run`, it is
+  what `run` is. And it **refuses rather than approximating**: below the cache's baked
+  `MIN_QV` of 20, for a gene the index lacks (the fallback is a 22 s scan that also drops
+  `cell_id`), for a pre-`cell_id` cache *when the filter is on*, and when the clustering is
+  not yet in `obs` — mirroring it there is the run's job, and drawing a picture must not
+  change the analysis. `tests/test_preview_never_records.py` is the source guard (a call-site
+  allow-list compared in both directions, plus "the upsert is not inside a branch"), and
+  `test_the_feather_preview_bins_identically_to_the_recorded_step` turns the one-off
+  row-for-row measurement into a gate over all four assemblies. The transform helper in
+  `transcript_index.py` is display-side but still declares the frame through `spatialdata`
+  rather than dividing by `pixel_size`, so rule (e) is honoured, not excused.
   The obvious follow-up — sort the cache by gene so the reader can skip row groups —
   was measured and rejected, and that rejection was then **half retracted the same day**;
   `docs/transcript-read-pushdown.md` carries both, and its Correction section is the part
