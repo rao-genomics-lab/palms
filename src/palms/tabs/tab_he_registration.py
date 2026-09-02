@@ -1,4 +1,16 @@
-"""Tab 5: H&E Registration — load, flip, coarse align, landmarks, register."""
+"""Tab 5: H&E Registration — load, flip, coarse align, landmarks, register.
+
+**The frame rule.** ``coarse`` and ``fine`` are both maps from the *flipped* H&E
+frame to Xenium pixels. That is what ``_apply_he_affine`` composes (``X @ flip``)
+and what docs/Tab-HE-Registration.md describes — but neither fit site honoured it
+until 2026-09-02: the coarse mask came off the unflipped pyramid and the landmark
+points came off ``he_lm_layer.data``, which is unflipped layer-data coordinates.
+Any registration made with a Flip ticked was therefore flipped twice. It matters
+beyond that latent bug, because automatic mirror detection routes *through* the
+flip: ``compute_landmark_affine`` fits a similarity, which has no reflection, so
+a mirror baked into ``coarse`` would be silently discarded the moment the user
+pressed Compute Registration.
+"""
 
 from __future__ import annotations
 import json
@@ -20,7 +32,8 @@ if TYPE_CHECKING:
 from palms.utils.registration import (
     load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
     extract_tissue_mask_fluorescence, extract_tissue_mask_he, compute_coarse_affine,
-    describe_pyramid, parse_rgb_image_for_store,
+    describe_pyramid, parse_rgb_image_for_store, pick_level, mask_area_scale,
+    build_alignment_fields, he_pixel_size_um, SCALE_BAND_FOR,
 )
 from palms.utils.reporting import report_write_failure
 
@@ -92,16 +105,38 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if he_state["he_lm_layer"] is not None:
             he_state["he_lm_layer"].affine = world
 
+    def _flip_points(pts_yx):
+        """H&E landmark data (unflipped layer coordinates) in the flipped frame.
+
+        See the frame rule in the module docstring: the fit has to happen in the
+        frame the affine is composed with, or the flip is applied twice.
+        """
+        pts = np.asarray(pts_yx, dtype=np.float64)
+        if len(pts) == 0:
+            return pts
+        flip = _build_flip_affine()
+        homo = np.hstack([pts, np.ones((len(pts), 1))])
+        return (flip @ homo.T).T[:, :2]
+
     def on_flip_changed(_value=None):
-        _apply_he_affine()
         he_state["flip_v"] = he_flip_v.value
         he_state["flip_h"] = he_flip_h.value
+        # A coarse affine was fitted for the orientation that has just changed,
+        # so it no longer describes this image. Cleared *before* the layer is
+        # re-placed, or the overlay jumps to a transform that is already void.
+        dropped_coarse = he_state.get("coarse_affine") is not None
+        if dropped_coarse:
+            he_state["coarse_affine"] = None
+        _apply_he_affine()
         _save_he_affine_to_sdata()
         flips = []
         if he_flip_v.value: flips.append("V")
         if he_flip_h.value: flips.append("H")
-        if flips:
-            he_status_label.value = f"Flip applied: {'+'.join(flips)}"
+        parts = ([f"Flip applied: {'+'.join(flips)}"] if flips else [])
+        if dropped_coarse:
+            parts.append("coarse alignment cleared — run Coarse Align again")
+        if parts:
+            he_status_label.value = " — ".join(parts)
         ctx.record_node(
             "he:flip",
             f"\n# H&E image flip, applied before registration\n"
@@ -198,6 +233,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
             sess = store["viewer_session"]
             sess.attrs["flip_v"] = bool(he_state.get("flip_v", False))
             sess.attrs["flip_h"] = bool(he_state.get("flip_h", False))
+            if he_state.get("he_pixel_size_um"):
+                sess.attrs["he_pixel_size_um"] = float(he_state["he_pixel_size_um"])
             if fine is not None:
                 sess.attrs["affine_3x3"] = fine.tolist()
             if coarse is not None:
@@ -217,6 +254,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_state["he_path"] = str(path)
         base = pyramid[0]
         he_state["he_shape_yx"] = (base.shape[0], base.shape[1])
+        # The best scale prior coarse alignment can get, and free: the pancreas
+        # reference declares 0.27377 um, which is 0.06% off the fitted scale.
+        # Stored in the session because a cache-restored H&E has no TiffFile.
+        he_state["he_pixel_size_um"] = he_pixel_size_um(tif)
         he_layer = viewer.add_image(
             pyramid, name=f"H&E ({Path(path).name})",
             rgb=True, blending="translucent",
@@ -266,27 +307,63 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if he_state["he_layer"] is not None:
             he_state["he_layer"].opacity = value / 100.0
 
-    def _on_coarse_done(coarse_affine):
-        he_state["coarse_affine"] = coarse_affine
+    def _on_coarse_done(result):
+        coarse_align_button.enabled = True
+        if result is None:
+            return
+        if result.mirrored:
+            # The reflection is carried as an explicit flip, not inside the
+            # matrix, so that the landmark refinement inherits it — a similarity
+            # fit cannot reproduce a reflection.
+            #
+            # *Toggling* rather than setting: the search ran on the image as
+            # already flipped, so what it found is one further reflection on top
+            # of that. Composed with the flips in force it is exactly this — H on
+            # nothing is H, H on H is nothing, H on V is both, H on both is V.
+            #
+            # Blocked because this is the tool choosing the orientation, not the
+            # user: on_flip_changed would clear the very coarse affine that is
+            # about to be applied.
+            with he_flip_v.changed.blocked(), he_flip_h.changed.blocked():
+                he_flip_h.value = not he_flip_h.value
+            he_state["flip_h"] = he_flip_h.value
+            ctx.record_node(
+                "he:flip",
+                f"\n# H&E image flip, applied before registration\n"
+                f"he_flip_vertical = {he_flip_v.value}\n"
+                f"he_flip_horizontal = {he_flip_h.value}",
+                deps=["preamble"], kind=TERMINAL, label="H&E flip",
+            )
+        he_state["coarse_affine"] = result.affine_3x3_yx
         he_state["affine_3x3"] = None
         _apply_he_affine()
         _save_he_affine_to_sdata()
-        coarse_align_button.enabled = True
-        scale = np.sqrt(coarse_affine[0, 0]**2 + coarse_affine[0, 1]**2)
-        reg_status_label.value = f"Coarse aligned (scale={scale:.4f}). Place landmarks to refine."
+        confidence = "" if result.confident else " — LOW CONFIDENCE, check the overlay"
+        reg_status_label.value = (
+            f"Coarse aligned (scale={result.scale:.4f}, "
+            f"{result.rotation_deg:.1f} deg{', mirrored' if result.mirrored else ''}, "
+            f"match {result.score:.2f}){confidence}. Place landmarks to refine."
+        )
         ctx.record_node(
             "he:coarse_align",
-            f"\n# Coarse H&E alignment to tissue outlines (scale={scale:.4f}).\n"
-            f"# Computed from the morphology thumbnail; the matrix it produced:\n"
-            f"he_coarse_affine = np.array({np.asarray(coarse_affine).tolist()})",
+            f"\n# Coarse H&E alignment: nuclear-density cross-correlation over a\n"
+            f"# global search in rotation{' and reflection' if result.mirrored else ''}"
+            f" (match {result.score:.3f}, scale from {result.scale_source}).\n"
+            f"# The matrix it produced, for the flipped H&E frame:\n"
+            f"he_coarse_affine = np.array({np.asarray(result.affine_3x3_yx).tolist()})",
             deps=["preamble"], kind=TERMINAL, label="H&E coarse align",
         )
         reg_residuals_qt.setPlainText(
-            f"Coarse tissue-outline alignment applied.\n"
-            f"Scale: {scale:.4f}\n"
-            f"Place >= 3 matching landmarks, then click 'Compute Registration'\n"
-            f"to refine alignment."
+            "Coarse alignment applied.\n"
+            + result.summary()
+            + "\n\nPlace >= 3 matching landmarks, then click 'Compute Registration'\n"
+              "to refine alignment."
         )
+
+    def _on_coarse_failed(message):
+        coarse_align_button.enabled = True
+        reg_status_label.value = f"Coarse align failed: {message}"
+        reg_residuals_qt.setPlainText(f"Coarse alignment could not run.\n{message}")
 
     def on_coarse_align():
         if he_state["he_layer"] is None:
@@ -295,27 +372,50 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if morph_thumb is None:
             reg_status_label.value = "No morphology data available"
             return
-        reg_status_label.value = "Computing coarse alignment..."
+        reg_status_label.value = "Computing coarse alignment (global rotation search)..."
         coarse_align_button.enabled = False
         gen = ctx.dataset_generation
+        flip_v, flip_h = he_flip_v.value, he_flip_h.value
 
         @thread_worker
         def _compute_coarse():
-            he_pyramid = he_state["he_layer"].data
-            he_low = np.asarray(he_pyramid[-1])
-            morph_mask = extract_tissue_mask_fluorescence(morph_thumb)
-            he_mask = extract_tissue_mask_he(he_low)
+            # pick_level, not pyramid[-1]: the bottom level is however many the
+            # file happens to carry, which for one and the same H&E is 860x466
+            # from the OME-TIFF and 1718x931 read back from the zarr cache.
+            he_low = np.asarray(pick_level(he_state["he_layer"].data))
+            # The fit must happen in the frame the affine is composed with.
+            if flip_v:
+                he_low = he_low[::-1]
+            if flip_h:
+                he_low = he_low[:, ::-1]
+            he_low = np.ascontiguousarray(he_low)
+
             target_ds = morph_full_shape_yx[0] / morph_thumb.shape[1]
             he_full_shape = he_state["he_shape_yx"]
             source_ds = he_full_shape[0] / he_low.shape[0]
-            coarse_affine_yx = compute_coarse_affine(
-                target_mask=morph_mask, source_mask=he_mask,
+
+            he_px_um = he_state.get("he_pixel_size_um")
+            if he_px_um:
+                scale_prior, scale_source = he_px_um / ctx.pixel_size, "metadata"
+            else:
+                scale_prior = mask_area_scale(
+                    extract_tissue_mask_fluorescence(morph_thumb),
+                    extract_tissue_mask_he(he_low), target_ds, source_ds)
+                scale_source = "tissue-area"
+
+            target_field, source_field = build_alignment_fields(morph_thumb, he_low)
+            return compute_coarse_affine(
+                target_field, source_field,
                 target_downsample=target_ds, source_downsample=source_ds,
+                scale_prior=scale_prior, scale_band=SCALE_BAND_FOR[scale_source],
+                scale_source=scale_source, source_shape_yx=he_full_shape,
             )
-            return coarse_affine_yx
 
         worker = _compute_coarse()
-        worker.returned.connect(lambda result: _on_coarse_done(result) if ctx.dataset_generation == gen else None)
+        worker.returned.connect(
+            lambda result: _on_coarse_done(result) if ctx.dataset_generation == gen else None)
+        worker.errored.connect(
+            lambda exc: _on_coarse_failed(str(exc)) if ctx.dataset_generation == gen else None)
         worker.start()
 
     def on_add_xenium_lm():
@@ -357,7 +457,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
             reg_status_label.value = "Need at least 3 paired landmarks"
             return
         xen_pts = np.asarray(xen_pts[:n], dtype=np.float64)
-        he_pts = np.asarray(he_pts[:n], dtype=np.float64)
+        # Landmarks are read in unflipped layer-data coordinates but the affine
+        # is composed as `fine @ flip`, so the fit has to be done in the flipped
+        # frame. See the frame rule in the module docstring.
+        he_pts = _flip_points(np.asarray(he_pts[:n], dtype=np.float64))
         affine, residuals = compute_landmark_affine(xen_pts, he_pts)
         he_state["affine_3x3"] = affine
         _apply_he_affine()
@@ -382,8 +485,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         )
         _save_he_affine_to_sdata()
         from palms.utils.adata_persistence import save_landmarks_to_sdata
+        # Persist the points as *clicked* — the layer's own data coordinates —
+        # so restoring them puts each marker back where the user put it. The
+        # flip is applied at fit time, not baked into the stored geometry.
         save_landmarks_to_sdata(ctx, 'he_xenium_landmarks', np.asarray(xen_pts))
-        save_landmarks_to_sdata(ctx, 'he_he_landmarks', np.asarray(he_pts))
+        save_landmarks_to_sdata(ctx, 'he_he_landmarks',
+                                np.asarray(he_state["he_lm_layer"].data[:n], dtype=np.float64))
 
     def on_save_landmarks():
         default_dir = str(data_path) if data_path else ""
@@ -393,10 +500,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if not path:
             return
         xen_pts = np.asarray(he_state["xenium_lm_layer"].data, dtype=np.float64)
-        he_pts = np.asarray(he_state["he_lm_layer"].data, dtype=np.float64)
+        # Saved in the frame the affine was fitted in, so the file is
+        # self-consistent: `affine @ he_pts == xen_pts`, which is what
+        # scripts/compare_he_registration.py and any other reader assume.
+        he_pts = _flip_points(np.asarray(he_state["he_lm_layer"].data, dtype=np.float64))
         save_landmarks(
             path, xen_pts, he_pts,
             affine=he_state["affine_3x3"], he_filename=he_state["he_filename"],
+            flip_v=he_flip_v.value, flip_h=he_flip_h.value,
         )
         reg_status_label.value = f"Landmarks saved to {Path(path).name}"
         # The points are inlined rather than referenced: landmarks can be saved
@@ -412,6 +523,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"    np.array({he_pts.tolist()}),\n"
             f"    affine={None if affine is None else f'np.array({np.asarray(affine).tolist()})'},\n"
             f"    he_filename={he_state['he_filename']!r},\n"
+            f"    flip_v={he_flip_v.value}, flip_h={he_flip_h.value},\n"
             f")",
             deps=["preamble"], kind=TERMINAL, label="Save H&E landmarks",
         )
@@ -425,8 +537,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         data = load_landmarks(path)
         _create_landmark_layers()
+        # The file stores the H&E points in the orientation they were fitted in;
+        # the layer wants its own (unflipped) data coordinates. Adopt the file's
+        # flips first, then undo them — both flips are involutions, so the same
+        # transform converts each way.
+        with he_flip_v.changed.blocked(), he_flip_h.changed.blocked():
+            he_flip_v.value = bool(data.get("flip_v", False))
+            he_flip_h.value = bool(data.get("flip_h", False))
+        he_state["flip_v"] = he_flip_v.value
+        he_state["flip_h"] = he_flip_h.value
         he_state["xenium_lm_layer"].data = data["xenium_landmarks_yx"]
-        he_state["he_lm_layer"].data = data["he_landmarks_yx"]
+        he_state["he_lm_layer"].data = _flip_points(data["he_landmarks_yx"])
         if "affine_3x3_yx" in data:
             affine = data["affine_3x3_yx"]
             he_state["affine_3x3"] = affine
@@ -518,6 +639,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             element_shape_yx=(base.shape[0], base.shape[1]),
         )
         he_state["he_shape_yx"] = reg.shape_yx or (base.shape[0], base.shape[1])
+        he_state["he_pixel_size_um"] = session_he_data.get("he_pixel_size_um")
         # Blocked: on_flip_changed writes the element transform and records a
         # `he:flip` provenance node. Restoring a value the user chose earlier is
         # not the user choosing it again.

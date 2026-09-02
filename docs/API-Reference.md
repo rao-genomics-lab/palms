@@ -397,7 +397,7 @@ The same for a multi-channel fluorescence image.
 
 ```python
 from palms.utils.registration import save_landmarks
-save_landmarks(path, xenium_yx, he_yx, affine=None, he_filename=None)
+save_landmarks(path, xenium_yx, he_yx, affine=None, he_filename=None, flip_v=None, flip_h=None)
 ```
 
 Persist landmark pairs beside the dataset.
@@ -419,12 +419,12 @@ Read them back.
 
 ```python
 from palms.utils.registration import extract_tissue_mask
-extract_tissue_mask(image_gray, blur_ksize=5, open_ksize=5, close_ksize=5, min_area_ratio=0.01)
+extract_tissue_mask(image_gray, blur_ksize=5, open_ksize=5, close_ksize=5, min_area_ratio=0.01, method='otsu', outline=False, outline_sigma=6)
 ```
 
 Segment tissue from background, for a coarse initial alignment.
 
-> Extract a binary tissue mask via Otsu thresholding + morphological cleanup.
+> Extract a binary tissue mask via thresholding + morphological cleanup.
 
 ## Cache, storage and persistence
 

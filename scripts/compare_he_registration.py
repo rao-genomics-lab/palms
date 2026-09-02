@@ -37,38 +37,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 
-P = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=float)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-
-def to_yx(m_xy: np.ndarray) -> np.ndarray:
-    """A 3x3 affine in (x, y) expressed in napari's (y, x)."""
-    return P @ m_xy @ P
-
-
-def decompose(m_yx: np.ndarray) -> dict:
-    """Scale, rotation and translation of a similarity, read in (y, x).
-
-    The swap turns an (x, y) rotation by theta into
-    ``[[s cos, s sin], [-s sin, s cos]]`` in (y, x), so theta comes off the
-    *top* row. Reading it off the bottom row instead returns ``-theta``: the
-    magnitudes and every pairwise difference survive that, which is why it
-    looked right against real data, and only a transform built from a known
-    angle exposes it.
-    """
-    return {
-        "scale": float(np.hypot(m_yx[0, 0], m_yx[0, 1])),
-        "rotation_deg": float(np.degrees(np.arctan2(m_yx[0, 1], m_yx[0, 0]))),
-        "translation_yx": m_yx[:2, 2].tolist(),
-    }
-
-
-def apply(m_yx: np.ndarray, pts_yx: np.ndarray) -> np.ndarray:
-    homo = np.hstack([pts_yx, np.ones((len(pts_yx), 1))])
-    return (m_yx @ homo.T).T[:, :2]
+# One definition of the convention arithmetic, shared with
+# scripts/score_coarse_align.py so the coarse and landmark numbers are the same
+# quantity and can be put side by side.
+from palms.utils.affine_compare import (  # noqa: E402
+    to_yx, decompose, apply, disagreement_um,
+)
 
 
 def main() -> None:
@@ -89,14 +70,9 @@ def main() -> None:
     ours = np.array(lm["affine_3x3_yx"], dtype=float)
     theirs = to_yx(np.loadtxt(args.alignment, delimiter=","))
 
-    # A grid over the H&E, in its own pixels, (y, x).
-    h, w = args.he_shape
-    gy, gx = np.meshgrid(np.linspace(0, h, args.grid),
-                         np.linspace(0, w, args.grid), indexing="ij")
-    grid = np.column_stack([gy.ravel(), gx.ravel()])
-
-    d_px = np.linalg.norm(apply(ours, grid) - apply(theirs, grid), axis=1)
-    d_um = d_px * args.pixel_size
+    # The disagreement in image space, over a grid across the whole H&E.
+    disagreement = disagreement_um(ours, theirs, args.he_shape,
+                                   pixel_size=args.pixel_size, grid=args.grid)
 
     # The self-referential number, for contrast.
     xen = np.array(lm["xenium_landmarks_yx"], dtype=float)
@@ -111,11 +87,7 @@ def main() -> None:
             "mean": float(own.mean()), "max": float(own.max()),
             "per_landmark": own.tolist(),
         },
-        "disagreement_with_10x_um": {
-            "mean": float(d_um.mean()), "median": float(np.median(d_um)),
-            "p95": float(np.percentile(d_um, 95)), "max": float(d_um.max()),
-            "grid_points": int(d_um.size),
-        },
+        "disagreement_with_10x_um": disagreement,
     }
 
     print(f"Landmarks: {report['n_landmarks']}")

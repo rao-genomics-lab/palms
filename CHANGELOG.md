@@ -6,7 +6,78 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Fixed
+- **Coarse Align rarely produced a usable starting transform** (issue `xv-asc`). On the
+  pancreas reference dataset it returned scale 0.5515 where the truth is 1.2891, and
+  −55.0° where the truth is −89.88°; on a crop export, scale 1.1702 against 2.3532. It now
+  lands within **0.7% of the correct scale and 0.04° of the correct rotation on both** —
+  15 µm and 17 µm of mean disagreement across the whole slide, measured against 10x's own
+  `he_imagealignment.csv` and against a landmark fit respectively.
+
+  Two separate defects, and the search was the smaller one.
+
+  **The tissue mask was wrong, so the objective was maximised in the wrong place.**
+  `extract_tissue_mask_fluorescence` ran Otsu on the morphology max-projection, and Otsu
+  splits a histogram at the valley between its two largest modes — which on a fluorescence
+  image are *both tissue*. It cut between the bright acinar region and the dim fibrotic one
+  and kept 17.4% of the frame, discarding two thirds of the section. The consequence is
+  worse than a bad estimate: the **true** transform scored IoU 0.216 while the wrong answer
+  scored 0.493, so no amount of better searching could have helped. A triangle threshold,
+  which anchors on the single background peak, keeps 88.0% and is the actual section; the
+  true transform then scores 0.989.
+
+  **Tissue outlines say nothing about a crop.** On `demo_data/crop_6` the corrected masks
+  cover 100.0% and 99.6% of their images, and an outline search scores a perfect 1.0 at a
+  scale 36% wrong. The match is now made on **blurred nuclear density** — DAPI against a
+  haematoxylin proxy — which carries internal structure, over a global search in rotation,
+  scale and reflection with the translation for each hypothesis from phase correlation.
+  Outlines are still used, for the scale prior.
+
+  Three things that had to be right, each measured rather than assumed. The **scale prior**
+  comes from the H&E's declared pixel size when it has one (0.06% on the pancreas) and from
+  the tissue-area ratio otherwise (1.0% on a crop, 3.5% on a section) — but it is still
+  searched, because the errors trade off: pinning the pancreas scale at its declared value
+  leaves the rotation 0.87° out. The **smoothing is fixed in working pixels**, not thumbnail
+  pixels, or the amount of blur becomes an accident of which pyramid level a file happens to
+  carry. And the refinement is a **coordinate descent that halves its own window**, because
+  a fixed window narrower than the scale grid's spacing cannot reach the truth even when the
+  grid straddles it — that alone was the difference between 132 µm and 15 µm.
+
+  Coarse Align now reports its match score and refuses to sound certain: a result that does
+  not clearly beat the next distinct orientation is labelled **LOW CONFIDENCE**. Images with
+  nothing to match score 0.24–0.34 with margins of 0.04–0.08, against 0.49–0.78 and
+  0.12–0.20 for the two real datasets.
+
+- **A mirrored H&E could not be registered at all.** Reflection was in neither the coarse
+  search nor `compute_landmark_affine`, which fits a `similarity`; the flip checkboxes were
+  the only route and nothing said so. Coarse Align now detects a reflection and **ticks
+  "Flip horizontally" itself**, rather than baking it into the matrix — where the next press
+  of Compute Registration would silently have discarded it.
+
+- **A registration made with a Flip ticked was flipped twice.** `coarse` was fitted on the
+  unflipped pyramid and `fine` on unflipped landmark coordinates, but both are composed as
+  `X @ flip`. Both fit sites now work in the flipped frame, which is what
+  `_apply_he_affine` and the tab documentation always claimed. Latent until now — both
+  reference datasets have their flips off — but automatic mirror detection routes through
+  the flip, so it had to be right. Toggling a flip now also clears a coarse alignment
+  fitted for the previous orientation, and "Save Landmarks…" records the orientation its
+  points and affine are expressed in, so the file stays self-consistent.
+
+- **Coarse Align used `pyramid[-1]`, which is not a size.** It is however many levels the
+  file happens to carry: the same pancreas H&E bottoms out at 860×466 read from its
+  OME-TIFF and at 1718×931 read back from the zarr cache, so the identical dataset was
+  aligned at two different resolutions depending on whether the session had been restored.
+  `pick_level` chooses by size.
+
 ### Added
+- **`scripts/score_coarse_align.py`** — runs Coarse Align exactly as the GUI does, headless
+  from the zarr store alone, and reports how far its transform places the H&E from an
+  independently known one: 10x's `<sample>_he_imagealignment.csv` where a dataset ships one,
+  otherwise the landmark fit in the session. Reports the same quantity
+  `compare_he_registration.py` does — the distance distribution in microns over a grid
+  across the whole H&E — so a coarse figure and a landmark figure can be read side by side.
+  That shared arithmetic now lives once, in `palms/utils/affine_compare.py`.
+
 - **`scripts/compare_he_registration.py`** — scores a landmark H&E registration against
   10x's shipped `<sample>_he_imagealignment.csv`. The residual PALMS reports is
   *self-referential*: it measures how well a similarity fits the very points that were

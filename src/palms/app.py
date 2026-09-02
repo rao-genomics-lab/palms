@@ -1070,6 +1070,7 @@ def _make_initial_he_state() -> dict:
         "he_filename": None,
         "he_path": None,
         "he_shape_yx": None,
+        "he_pixel_size_um": None,
         "xenium_lm_layer": None,
         "he_lm_layer": None,
         "affine_3x3": None,

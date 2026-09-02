@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1612 tests** across 66 files, measured 2026-09-02 —
+There is a `pytest` suite in `tests/` (**1656 tests** across 70 files, measured 2026-09-02 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -177,7 +177,8 @@ honour the format setting.
 | `coloring.py` | `CellColorManager` with `DirectLabelColormap` for O(nonzero) raster colorization |
 | `gene_analysis.py` | Rank genes, normalization, Leiden clustering |
 | `spatial_analysis.py` | Squidpy-based spatial analysis (neighborhood enrichment, co-occurrence, L-R) |
-| `registration.py` | Landmark-based similarity affine registration for H&E/ARMS |
+| `registration.py` | H&E/ARMS registration: landmark similarity fit, and `Coarse Align` — a global search in rotation, scale and reflection over the normalised cross-correlation of blurred nuclear density |
+| `affine_compare.py` | The (y,x)/(x,y) convention arithmetic and the microns-of-disagreement metric, shared by `scripts/compare_he_registration.py` and `scripts/score_coarse_align.py` |
 | `transcript_index.py` | Per-gene feather loader |
 | `session.py` | Zarr-based session persistence (ROIs, H&E/ARMS registration, clusterings, DEG results, provenance graph) |
 | `prov_graph.py` | Provenance DAG for reproducible code — nodes/deps, upsert+staleness, topo-sort, cells/script/mermaid/dot rendering |

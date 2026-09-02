@@ -115,6 +115,13 @@ def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
     )
     attrs["flip_v"] = bool(he_state.get("flip_v", False))
     attrs["flip_h"] = bool(he_state.get("flip_h", False))
+    # The H&E's own declared pixel size, kept because a cache-restored H&E has
+    # no TiffFile to read it from and it is the best scale prior coarse
+    # alignment can get.
+    attrs["he_pixel_size_um"] = (
+        float(he_state["he_pixel_size_um"]) if he_state.get("he_pixel_size_um")
+        else prev_attrs.get("he_pixel_size_um")
+    )
 
     # ── ARMS overlay ─────────────────────────────────────────────────────
     # These are also written in real time by tab_arms, so an absent value in
@@ -328,6 +335,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "he_filename": attrs.get("he_filename"),
         "he_path": attrs.get("he_path"),
         "he_shape_yx": tuple(attrs["he_shape_yx"]) if attrs.get("he_shape_yx") else None,
+        "he_pixel_size_um": attrs.get("he_pixel_size_um"),
         "affine_3x3": None,
         "coarse_affine": None,
         "xenium_landmarks": None,
