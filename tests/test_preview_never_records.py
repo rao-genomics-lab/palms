@@ -131,13 +131,20 @@ def test_a_preview_cannot_touch_the_shared_namespace():
     assert "out" not in ex.names()
 
 
-def test_a_preview_may_not_shadow_a_bound_name():
-    ex = _executor(adata=object())
-    step = Step(id="t", template="out = 1\n", outputs=["out"])
+def test_a_preview_may_substitute_a_result_but_not_the_data_behind_it():
+    """Substituting `transcript_points` is the whole point, and it is normally
+    already bound by the last recorded run — an earlier version refused that
+    and so stopped previewing after the first Compute Density. Swapping `adata`
+    is the real hazard: a picture drawn from data the recorded step never uses."""
+    ex = _executor(adata=object(), transcript_points="from the points element")
+    step = Step(id="t", template="out = transcript_points\n", outputs=["out"])
 
     with pytest.raises(StepError, match="shadow"):
         ex.preview(step, bindings={"adata": object()})
-    ex.preview(step, bindings={"transcript_points": object()})   # not bound: fine
+
+    assert ex.preview(step, bindings={"transcript_points": "from the index"}) == {
+        "out": "from the index"}
+    assert ex.ns["transcript_points"] == "from the points element"
 
 
 def test_a_preview_that_does_not_bind_its_output_is_an_error():

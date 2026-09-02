@@ -33,14 +33,24 @@ entries under **Development log** are the closed pre-1.0.0 record.
   Safe because the two routes were measured to agree exactly, and that measurement is now a
   test rather than a memory: `test_the_feather_preview_bins_identically_to_the_recorded_step`
   asserts the preview and the recorded step produce identical arrays for all four density
-  assemblies. Four things make it refuse rather than draw a wrong picture, each saying why in
+  assemblies. Re-measured on a real 5,100-gene dataset with a real index: identical
+  histograms (max absolute difference 0) for genes from 20 to 5,418 transcripts, **8–14×
+  faster** unfiltered (1.6 s → 0.12 s) and 3–5× with the cluster filter, with the provenance
+  graph holding only the two recorded nodes per gene. That run is also what caught the one
+  real bug in this work — `transcript_points` is already bound by the recorded fetch, and an
+  earlier version of `preview` refused to shadow any bound name, so the preview would have
+  stopped working from the first Compute Density onwards. Substituting a *result* is the
+  whole mechanism; it is the *base* names (`adata`, `sdata`, …) a preview may not swap, since
+  those would draw a picture from data the recorded step never uses. Five things make it refuse rather than draw a wrong picture, each saying why in
   the status line: a Min QV below 20 (the index is pre-filtered at 20, so the slider cannot be
   honoured below it — above it, it is applied to the index's own `qv` column), a gene the
   index does not hold (the fallback is a ~22 s parquet scan, which is not a preview and also
   drops `cell_id`), an index built before cell ids were kept *when the cluster filter is on*
-  (only the filter reads them, so only the filter is refused), and a cluster filter whose
+  (only the filter reads them, so only the filter is refused), a cluster filter whose
   clustering is not in `obs` — applying it is the run's job, and drawing a picture must not
-  change the analysis. The micron-to-pixel step is not arithmetic: the frame is parsed as a
+  change the analysis — and an index whose `.complete` stamp does not match the dataset's
+  current `transcripts.parquet`, which is the one way a preview could be a lie about the
+  result rather than merely unavailable (`preprocess.cache_is_valid` is public for this). The micron-to-pixel step is not arithmetic: the frame is parsed as a
   `PointsModel` carrying the transcripts element's own declared transformation, the way
   `transcripts.gene` does it.
 

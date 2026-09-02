@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1609 tests** across 66 files, measured 2026-09-02 —
+There is a `pytest` suite in `tests/` (**1612 tests** across 66 files, measured 2026-09-02 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and

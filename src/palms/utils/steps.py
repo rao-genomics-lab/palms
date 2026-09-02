@@ -338,11 +338,14 @@ class StepExecutor:
            template that *mutates* them would mutate them for real; that is why
            only read-only templates should be previewed.
 
-        *bindings* supplies names the template needs that the shared namespace
-        does not hold — the point of the whole exercise, since the preview's
-        input is fetched by a different route than the recorded step's. It may
-        not shadow a name already bound, or the preview would silently describe
-        different data than the one it is standing in for.
+        *bindings* supplies the template's input by a different route than the
+        recorded step's — that is the whole exercise, so it may freely shadow a
+        result name the shared namespace already holds (``transcript_points``
+        is normally bound there by the last recorded run, and substituting it
+        is exactly the point). What it may **not** shadow is a base name:
+        swapping ``adata`` or ``sdata`` would draw a picture from data the
+        recorded step would never use, which is a preview that lies rather than
+        a preview that is merely fast.
 
         Note the absence of a ``progress`` parameter. If a preview is slow
         enough to need progress reporting it is not a preview, and leaving the
@@ -350,12 +353,14 @@ class StepExecutor:
 
         Guarded by ``tests/test_preview_never_records.py``.
         """
+        from palms.utils.step_templates.namespace import EXECUTOR_BASE_NAMES
+
         scratch = dict(self.ns)
-        shadowed = sorted(set(bindings or {}) & set(self.ns))
+        shadowed = sorted(set(bindings or {}) & set(EXECUTOR_BASE_NAMES))
         if shadowed:
             raise StepError(
-                f"preview {step.id!r} would shadow namespace name(s) {shadowed}; "
-                f"a preview may only bind names the shared namespace does not hold"
+                f"preview {step.id!r} would shadow base name(s) {shadowed}; a "
+                f"preview may substitute a result, never the data it is drawn from"
             )
         scratch.update(bindings or {})
 

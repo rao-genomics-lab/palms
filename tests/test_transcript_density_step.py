@@ -273,7 +273,7 @@ def _write_feather_cache(tmp_path, sdata):
     per gene — including a `cell_id`, which caches built before it was kept do
     not have. `test_a_cache_without_cell_ids_...` writes the other shape.
     """
-    from palms.preprocess import MIN_QV
+    from palms.preprocess import MIN_QV, _write_sentinel
 
     cache = tmp_path / "transcript_cache"
     cache.mkdir()
@@ -283,6 +283,14 @@ def _write_feather_cache(tmp_path, sdata):
         sub.rename(columns={"x": "x_location", "y": "y_location"})[
             ["x_location", "y_location", "qv", "feature_name", "cell_id"]
         ].reset_index(drop=True).to_feather(cache / f"{gene}.feather")
+    # The parquet the cache claims to have come from, and the stamp that says
+    # so — written with the real function, so the test cannot drift from what
+    # `palms-preprocess` actually leaves behind.
+    parquet = tmp_path / "transcripts.parquet"
+    plain = df.reset_index(drop=True)
+    plain.attrs = {}          # the element's Scale rides along and is not JSON
+    plain.to_parquet(parquet)
+    _write_sentinel(cache, parquet)
     return cache
 
 
@@ -290,7 +298,7 @@ def _loader(cache_dir):
     from palms.utils.transcript_index import TranscriptLoader
 
     return TranscriptLoader(cache_dir=cache_dir,
-                            parquet_path=cache_dir / "does-not-exist.parquet",
+                            parquet_path=cache_dir.parent / "transcripts.parquet",
                             min_qv=20, pixel_size=PIXEL_SIZE)
 
 
@@ -344,6 +352,34 @@ def test_a_preview_of_the_density_records_nothing(tmp_path):
     assert "transcript_density" not in ex.names()
 
 
+def test_a_preview_still_works_after_a_recorded_run(tmp_path):
+    """The regression a real dataset caught and the synthetic tests did not.
+
+    `transcript_points` is bound in the shared namespace by the recorded fetch,
+    and an earlier version of `preview` refused to shadow any bound name — so
+    the preview raised, and stopped working, from the first Compute Density
+    onwards. Substituting that result is the entire mechanism; it is the *base*
+    names a preview may not swap.
+    """
+    sdata = _sdata()
+    cache = _write_feather_cache(tmp_path, sdata)
+    from palms.utils.transcript_index import points_for_preview
+
+    ex = _run([_gene_step(), _density_step(("head", "main"))], sdata)
+    assert "transcript_points" in ex.names()          # the recorded run bound it
+
+    points, reason = points_for_preview(_loader(cache), sdata, GENE, 20,
+                                        need_cell_id=False)
+    assert points is not None, reason
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        preview = ex.preview(_density_step(("head", "main")),
+                             bindings={"transcript_points": points})
+
+    np.testing.assert_array_equal(ex.ns["transcript_density"],
+                                  preview["transcript_density"])
+
+
 def test_the_preview_takes_its_frame_from_the_element_not_the_pixel_size(tmp_path):
     """The scale comes off the transcripts element, the way the template asks
     spatialdata to apply it — not from dividing by a pixel size passed in."""
@@ -394,6 +430,27 @@ def test_a_cache_without_cell_ids_refuses_only_the_filtered_preview(tmp_path):
 
     points, reason = points_for_preview(loader, sdata, GENE, 20, need_cell_id=False)
     assert points is not None, reason
+
+
+def test_an_index_built_from_another_parquet_is_refused(tmp_path):
+    """The loader globs `*.feather` and never checks the sentinel — fine for the
+    overlay, not here. A cache built from a different transcripts.parquet would
+    preview rows the recorded step would not reproduce, which is the one way a
+    preview could be a lie about the result rather than merely unavailable."""
+    from palms.utils.transcript_index import points_for_preview
+
+    sdata = _sdata()
+    loader = _loader(_write_feather_cache(tmp_path, sdata))
+
+    # The parquet changed after the index was built.
+    (tmp_path / "transcripts.parquet").write_bytes(b"different bytes entirely")
+    points, reason = points_for_preview(loader, sdata, GENE, 20, need_cell_id=False)
+    assert points is None and "transcripts.parquet" in reason
+
+    # And an index with no stamp at all is refused the same way.
+    (loader.cache_dir / ".complete").unlink()
+    points, reason = points_for_preview(loader, sdata, GENE, 20, need_cell_id=False)
+    assert points is None
 
 
 def test_a_gene_outside_the_cache_is_not_a_parquet_scan(tmp_path):

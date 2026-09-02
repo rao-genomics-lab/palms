@@ -226,8 +226,15 @@ def points_for_preview(loader: "TranscriptLoader", sdata, gene: str,
     import spatialdata as sd
     from spatialdata.transformations import get_transformation
 
-    from palms.preprocess import MIN_QV as CACHE_MIN_QV
+    from palms.preprocess import MIN_QV as CACHE_MIN_QV, cache_is_valid
 
+    if not cache_is_valid(loader.cache_dir, loader.parquet_path):
+        # The loader itself globs *.feather and never checks this, which is
+        # fine for the overlay but not here: a cache built from an older
+        # parquet would preview rows the recorded step would not reproduce,
+        # and that is the one way a preview could be a lie about the result.
+        return None, ("no preview — the transcript index was not built from "
+                      "this dataset's transcripts.parquet")
     if min_qv < CACHE_MIN_QV:
         return None, (f"no preview below Min QV {CACHE_MIN_QV} — the transcript "
                       f"index is filtered at {CACHE_MIN_QV}")
