@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1600 tests** across 67 files, measured 2026-09-01 —
+There is a `pytest` suite in `tests/` (**1588 tests** across 65 files, measured 2026-09-02 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -525,12 +525,26 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   and is 3.4× faster than the loader's own parquet fallback (6.5 s against 22 s). The
   *point overlay* stays on the feather index — it is display, not analysis.
   The obvious follow-up — sort the cache by gene so the reader can skip row groups —
-  was measured and **rejected**: `feature_name` is dictionary-encoded and pyarrow does
-  not prune on such a column's statistics at all, so sorting buys nothing (123/123 →
-  41/123 surviving row groups, zero wall-clock change). `docs/transcript-read-pushdown.md`
-  records that, where the real 4.1× is (the fsspec-vs-pyarrow reader, plus writing
-  `& (is_gene == True)` rather than a bare boolean term, which otherwise collapses the
-  whole conjunction), and why the template cannot reach it without an upstream change.
+  was measured and rejected, and that rejection was then **half retracted the same day**;
+  `docs/transcript-read-pushdown.md` carries both, and its Correction section is the part
+  to read. In short: `feature_name` is dictionary-encoded and **pyarrow never prunes row
+  groups on such a column by itself**, which is what makes sorting alone a no-op (123/123 →
+  41/123 surviving row groups, zero wall-clock change). The statistics are nonetheless
+  present and correct, so a *caller* can prune — pick row groups from the footer and pass
+  `row_groups=` to `ParquetFileFormat.make_fragment`. Sorted, re-chunked to 100 k-row row
+  groups and read that way, a median gene goes **0.944 s → 0.164 s (5.8×)** on the real
+  128.7 M-row cache. All three changes are needed: sorting at the cache's existing
+  granularity is 1.3×, fine row groups without pruning are 1.1×, pruning without sorting is
+  a regression. Two claims elsewhere in that doc are wrong and are marked as such — the
+  floor is decoding the **payload** columns of every scanned row group, not `feature_name`
+  (0.349 s for `feature_name` alone against 1.190 s with `x, y, cell_id`), and the payload
+  cost tracks rows *scanned*, not rows matched. **Nothing has been changed on the strength
+  of this**: the pruning reader is hand-rolled, which rule (e) below exists to keep out of a
+  template, so the open question is whether the layout can deliver it through a stock call.
+  The 4.1× the fsspec-vs-pyarrow reader measured is **not** in the tree: it shipped in
+  PR #68 and was reverted the next day (see "Known Compatibility Patches" below for why).
+  What is left is `& (is_gene == True)` rather than a bare boolean term, which otherwise
+  collapses the whole conjunction — free, and currently worth nothing.
   Also migrated, 2026-09-01: the **annotation-neighbourhood** and **annotation-distance**
   tabs, in six templates — `annot.polygons` (`annotations`), `annot.virtual_cells`,
   `annot.nhood`, `annot.nhood_plot`, `annot.distance`, `annot.distance_plot`. They were
@@ -730,25 +744,25 @@ reproducibility defect rather than a kernel-discovery one.
   cannot answer this question — hence the globbed path list. The remedy text is derived from
   `sys.prefix` rather than spelled: it named `-n palms` and `./scripts/install.sh` to every
   reader, including ones whose env is called something else and ones with no checkout at all.
-- **spatialdata reads points through fsspec, which never pushes a filter down** —
-  `utils/arrow_points_read.py`, applied as a context manager around the `read_zarr` in
-  `loader._open_cache`. **This is the one patch that reaches into a private module path**
-  (`spatialdata._io.io_points.read_parquet`), so it fails quiet: if that path moves, reads
-  stay stock and merely slower. Predicate pushdown is `_filter_passthrough`, which is
+- **spatialdata reads points through fsspec, which never pushes a filter down** — known,
+  measured, and **deliberately not patched**. Predicate pushdown is `_filter_passthrough`,
   `True` only on `ReadParquetPyarrowFS`; `_read_points` passes no `filesystem=`, so a mask
-  over `sdata.points['transcripts']` scanned all 128.7 M rows to answer a one-gene
-  question. Measured 2.26 s → 0.94 s per gene on a warm cache, 5.62 s → 1.49 s cold.
-  **It is half a fix**: dask drops the whole conjunction if any term is a bare boolean, so
-  `transcripts.gene.tmpl` says `(_transcripts['is_gene'] == True)` and must keep saying it.
-  Scoped rather than process-wide because the pyarrow reader returns identical data in a
-  different partition *order* (and keeps `__null_dask_index__` as the index name); nothing
-  in PALMS depends on points row order, but a caller's own spatialdata objects should not
-  inherit ours. **`tests/test_arrow_points_read.py` fails as soon as upstream passes a
-  `filesystem` itself** — that is the signal to delete the module, the call site, the
-  template comment and the test. The wrapper also declines when a `filesystem` is already
-  given, so an upstream fix takes effect before anyone does the deletion.
-  `docs/transcript-read-pushdown.md` holds the measurement and why sorting the cache — the
-  obvious alternative — does nothing at all.
+  over `sdata.points['transcripts']` scans all 128.7 M rows to answer a one-gene question.
+  A patch that rebound `spatialdata._io.io_points.read_parquet` to pass
+  `filesystem="arrow"` shipped in PR #68 and was **reverted the next day** (`xv-wuk`): it
+  was 4.1×, and it left an object stock spatialdata could not introspect. That reader
+  builds its dask graph from `Task` objects, and spatialdata's backing-file walk tests
+  `if "piece" in v.args[0]`, so `repr`, `is_self_contained` and
+  `_backed_elements_contained_in_path` all raised — and the last of those is what
+  `zarr_safe._assert_not_dask_backed` calls on **every** `safe_write_element`, so every
+  session write on a cached launch failed. **The transferable rule: a monkeypatch that
+  changes a returned object needs a round-trip test through the library's own public APIs.**
+  Tripwires that check whether upstream's *source* moved cannot see this class of defect,
+  and the patch had two of them. `docs/transcript-read-pushdown.md` §6 is the write-up, and
+  the rest of that doc holds the measurements plus why sorting the cache — the obvious
+  alternative — does nothing on its own. What remains in the tree is one free half:
+  `transcripts.gene.tmpl` says `(_transcripts['is_gene'] == True)` rather than a bare
+  boolean, because dask drops the whole conjunction otherwise.
 - **pandas 3.0 PyArrow strings** — `_convert_arrow_strings()` in `src/palms/loader.py`
 - **NumPy 2.0** — `np.NAN` fallback for omnipath compatibility
 - **matplotlib 3.9 `cm.get_cmap` removal** — `_patch_matplotlib_cm_compat()` in

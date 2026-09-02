@@ -655,5 +655,72 @@ def test_the_loader_never_deletes_a_cache_directory():
     )
 
 
+def test_a_repr_that_raises_does_not_condemn_the_cache(monkeypatch, crop_export_dir):
+    """An unrenderable summary is not an unopenable store.
+
+    ``load_sdata`` printed the SpatialData summary inside the ``try`` whose
+    ``except`` means "the cache could not be opened", so anything raising in
+    ``__repr__`` routed a perfectly good cache to ``_ask_corrupt_cache`` and
+    offered to rebuild it — while ``cache_repair.verify`` printed
+    "✓ Cache is healthy" in the next breath. It was found when a non-default
+    parquet reader made spatialdata's repr raise — it walks each points
+    element's dask graph for its backing files — on every launch after the one
+    that built the cache. That reader is gone, but the policy is the point: the
+    summary is diagnostics, and diagnostics must never condemn a store.
+    """
+    class _UnrenderableSData:
+        def __repr__(self):
+            raise TypeError("argument of type 'Task' is not iterable")
+
+    sdata = _UnrenderableSData()
+    monkeypatch.setattr(loader, "_open_cache", lambda p: sdata)
+    monkeypatch.setattr(loader, "_ask_corrupt_cache",
+                        lambda *a, **k: pytest.fail("a good cache was condemned"))
+    monkeypatch.setattr(loader.shutil, "move",
+                        lambda src, dst: pytest.fail("the cache was moved aside"))
+
+    assert loader.load_sdata(crop_export_dir) is sdata
+
+
+
+def test_build_cache_summary_survives_a_dataset_with_no_analysis_folder(
+    monkeypatch, tmp_path, capsys,
+):
+    """The summary print must not turn a missing UMAP into a traceback.
+
+    ``load_umap`` returns ``None`` when there is no ``analysis/`` folder — a 10x
+    output bundle whose ``analysis.tar.gz`` was never extracted, or a Crop
+    Dataset export. The cache is written *before* the summary runs, so a
+    dereference here reports a completed build as a failure. Found on the 10x
+    public ``Xenium_V1_human_Pancreas_FFPE`` bundle, which ships secondary
+    analysis only as a tarball.
+    """
+    class _FakeSData(dict):
+        images = {"morphology_focus": None}
+        labels = {"cell_labels": None, "nucleus_labels": None}
+        points = {"transcripts": None}
+        shapes: dict = {}
+
+        @property
+        def tables(self):
+            return {"table": self["table"]}
+
+    class _FakeAData:
+        shape = (140702, 377)
+
+    sdata = _FakeSData(table=_FakeAData())
+    monkeypatch.setattr(loader, "load_sdata", lambda *a, **k: sdata)
+    monkeypatch.setattr(loader, "load_umap", lambda p: None)
+    monkeypatch.setattr(loader, "load_clusterings", lambda p: {})
+    monkeypatch.setattr(sys, "argv", ["palms-build-cache", str(tmp_path)])
+
+    loader.main()
+
+    out = capsys.readouterr().out
+    assert "140702 cells x 377 genes" in out
+    assert "UMAP:" in out and "analysis/" in out
+    assert "Clusterings: []" in out
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

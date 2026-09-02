@@ -25,26 +25,11 @@ entries under **Development log** are the closed pre-1.0.0 record.
   category order — the order `sq.pl.nhood_enrichment` draws — instead of carrying a
   separate label list that could disagree with the matrix.
 
-- **Transcript queries are 2.4× faster, and the density tab is usable again.** Switching
-  genes in the density tab cost ~2.3 s per gene on a warm cache (worse cold), because
-  `spatialdata` reads points through dask's fsspec reader, which never pushes a filter into
-  the parquet scan — so a one-gene question read all 128.7 M rows. Two changes, which only
-  work together: `utils/arrow_points_read.py` makes the cache read use pyarrow's filesystem
-  (the one dask reader that supports predicate pushdown), and `transcripts.gene.tmpl` states
-  `is_gene` as a comparison, since dask drops the whole conjunction if any term is a bare
-  boolean. Measured over a six-gene sequence: **13.45 s → 5.65 s** warm, 5.62 s → 1.49 s on
-  a cold first gene, with identical row counts. The cost also changes shape — a rare gene
-  used to cost the same as an abundant one, and now tracks what actually matches.
-
-  This does *not* restore the ~100 ms the per-gene feather index gave; the floor is decoding
-  `feature_name`. `palms-preprocess` stays, and the point overlay still uses it.
-
-  **The spatialdata half is a monkeypatch of a private module path** — the only one in the
-  codebase — so it is written to fail quiet (if the path moves, reads stay stock and merely
-  slower), scoped to `loader._open_cache` rather than applied process-wide, and covered by
-  `tests/test_arrow_points_read.py`, which **fails as soon as upstream passes a `filesystem`
-  itself**. That is the signal to delete it. The wrapper also stands aside when a filesystem
-  is already supplied, so an upstream fix takes effect before anyone gets to the deletion.
+- **`transcripts.gene.tmpl` states `is_gene` as a comparison** (`(_transcripts['is_gene']
+  == True)`) rather than as a bare boolean column. dask drops an entire conjunction if any
+  term is a bare boolean, so the comparison form is the only one a parquet reader could ever
+  push down. It buys nothing with the reader `spatialdata` actually uses — see the *Removed*
+  note below — but it costs nothing and it is the form that benefits if that changes.
 
 - **`docs/transcript-read-pushdown.md`** records why the cached transcripts are *not*
   sorted by gene, so the idea does not get re-derived. Sorting cannot help: `feature_name`
@@ -124,6 +109,28 @@ entries under **Development log** are the closed pre-1.0.0 record.
   title used to be added after the figure had already been saved.
 
 ### Removed
+- **`utils/arrow_points_read.py`, before it ever reached a release.** The patch made
+  `spatialdata` read points through pyarrow's filesystem, the one dask reader that pushes a
+  filter into the parquet scan; it was measured at 13.45 s → 5.65 s over a six-gene sequence
+  and shipped with tripwires against upstream moving the private path it rebinds. It also
+  changed the *object*: `ReadParquetPyarrowFS` builds its graph from dask `Task` objects,
+  and spatialdata's backing-file walk tests `if "piece" in v.args[0]`, so `repr`,
+  `is_self_contained` and `_backed_elements_contained_in_path` all raised `TypeError:
+  argument of type 'Task' is not iterable` on a patched read. The last of those is called by
+  `zarr_safe._assert_not_dask_backed` on every `safe_write_element`, so **every session
+  write on a cached launch failed** — ROIs, annotations, table persistence, H&E and ARMS
+  registration. Data access itself was never affected.
+
+  It could have been kept: the true backing paths are recoverable from the pyarrow graph, so
+  a second patch could have made the walk answer correctly. That was rejected as too much
+  private-API surface for a read that has a supported route (`spatialdata` passing a
+  `filesystem` itself). The transcript read is back on stock `spatialdata`, at stock speed.
+
+  The lesson is written up in `docs/transcript-read-pushdown.md` §6: a tripwire that asks
+  whether *upstream's source moved* cannot answer whether *the patched object still works
+  with upstream's own APIs*. A monkeypatch that changes a returned object needs a round-trip
+  test through the library's public introspection, or its blast radius is unmeasured.
+
 - **`annotation_utils.sample_annotation_centroids` and `compute_distance_to_annotation`.**
   Their geometry *is* `annot.virtual_cells` and `annot.distance` now. Keeping a second
   python implementation beside the templates would have been the drift the Step system
@@ -131,6 +138,28 @@ entries under **Development log** are the closed pre-1.0.0 record.
   disagreeing. `get_annotation_types` stays — both tabs still use it.
 
 ### Fixed
+- **A cache that opened fine was reported as corrupt on every launch after the first.**
+  `loader.load_sdata` printed the SpatialData summary *inside* the `try` whose `except`
+  means "the cache could not be opened", so anything raising in `__repr__` routed a
+  perfectly good store to the corrupt-cache prompt — offering a rebuild while
+  `cache_repair.verify` printed `✓ Cache is healthy` two lines later. What made it fire was
+  the pyarrow points reader described under *Removed* — spatialdata's repr walks each points
+  element's dask graph for its backing files, and could not parse the graph that reader
+  produces. Isolated by reading one cache both ways in a single process: stock reader
+  renders, pyarrow reader raises (spatialdata 0.8.0 / dask 2026.7.1). That reader is gone,
+  but this fix stands on its own and stays: the summary now lives outside the block and logs
+  a warning if it cannot render, because *an unrenderable summary is not an unopenable
+  store*. Guarded by
+  `tests/test_loader_policy.py::test_a_repr_that_raises_does_not_condemn_the_cache`.
+
+- **`palms-build-cache` crashed after writing the cache, on any dataset with no
+  `analysis/` folder.** `load_umap` returns `None` there — and logs that it does — but the
+  summary dereferenced it anyway, so the command died with `AttributeError: 'NoneType'
+  object has no attribute 'shape'` and exited non-zero after a build that had in fact
+  succeeded. It fires on a stock 10x public bundle, which ships secondary analysis only as
+  an unextracted `analysis.tar.gz`; that is the documented headless path a reader
+  reproducing a result would take. `app.py`'s GUI path already guarded correctly.
+
 - **A self-intersecting annotation lost half of itself, silently.** Both annotation
   helpers repaired an invalid polygon with `poly.buffer(0)`, which does not repair a
   bowtie — it *deletes* a lobe. A bowtie is easy to draw by hand with napari's polygon
