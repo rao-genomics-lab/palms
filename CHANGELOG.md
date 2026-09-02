@@ -6,6 +6,24 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Added
+- **`scripts/compare_he_registration.py`** — scores a landmark H&E registration against
+  10x's shipped `<sample>_he_imagealignment.csv`. The residual PALMS reports is
+  *self-referential*: it measures how well a similarity fits the very points that were
+  clicked, so systematically mis-clicked pairs still produce a small one. 10x's matrix is an
+  independent estimate of the same transform, so the disagreement between the two is an
+  external check — reported as a distance distribution in microns over a grid across the
+  whole H&E, rather than as a difference of matrix entries, which is not interpretable.
+
+  On `Xenium_V1_human_Pancreas_FFPE` with 3 landmarks: scale differed by 0.0173%, rotation
+  by 0.0083°, the self-referential residual was 0.97 µm mean and the independent
+  disagreement 0.93 µm mean / 1.81 µm max. **The two agreeing is the point** — it is what
+  says nothing systematic is hiding in the residual.
+
+  The two conventions it encodes are tested against transforms built from a known scale and
+  angle, not against remembered numbers: PALMS's affine is napari `(y, x)` and 10x's CSV is
+  `(x, y)`, and a 5 µm shift must read back as 5 µm of disagreement.
+
 ### Fixed
 - **Naming clusters did not update the Coloring tab.** After annotating with the LLM,
   CellTypist or label transfer, the new names appeared only once you selected a different
