@@ -281,11 +281,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
         return nonzero
 
     def _hide_preview(reason: str = ""):
-        """Take the preview off screen. A refusal must never leave a stale one."""
+        """Take the preview off screen. A refusal must never leave a stale one.
+
+        Only the *preview's own* status line is replaced: a recorded run's
+        "Done — …" is the answer to a question the user actually asked, and
+        turning the preview off is not a reason to take it away.
+        """
         if ctx.transcript_bins_preview_layer is not None:
             ctx.transcript_bins_preview_layer.visible = False
-        density_status.setStyleSheet("")
-        density_status.setText(reason)
+        if reason or density_status.text().startswith(PREVIEW_LABEL):
+            density_status.setStyleSheet("")
+            density_status.setText(reason)
 
     def _preview_bindings():
         """The rendered step and its feather-derived points, or (None, reason).
