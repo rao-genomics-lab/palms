@@ -7,6 +7,21 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Fixed
+- **The transcript density heatmap was drawn 4.7× too large.** Both density layers — the
+  recorded `transcript_density` and the preview — set `layer.scale` to the bin size in
+  *image pixels* (`bin_size_um / pixel_size`). Every layer lives in **microns**: `app.py`
+  stamps each one on insertion with `units.apply_to_layer`, which sets
+  `layer.scale = pixel_size`, because napari 0.8 removed `ScaleBarOverlay.unit` and the
+  magnitude has to live in the scale. The heatmap overwrote that with a pixel-space number,
+  putting it `1/pixel_size` too large and misplacing it against the morphology image and the
+  cells: at 10 µm bins on a 0.2125 µm/px dataset the grid spanned 34,120 µm across a
+  7,258 µm image.
+
+  The scale is now the bin size in microns, which the step already carries as a param. This
+  was **not** introduced by the density preview — the same line predates it — but the
+  preview is what made it visible, since drawing a preview hides the recorded layer and the
+  two were never on screen together.
+
 - **The transcript density could not run at all on a Xenium 2.0.0 dataset.** `Compute
   Density` raised `KeyError: 'is_gene'`. The `transcripts.gene` template filtered the
   points element on an `is_gene` column that XOA 2.0.0 no longer writes to
