@@ -105,6 +105,32 @@ except ImportError:
     _HAS_CELLTYPIST = False
 
 
+def refresh_cluster_labels_in_coloring_tab(ctx, clustering_key: str) -> None:
+    """Tell the Coloring tab that ``clustering_key``'s names have changed.
+
+    All three annotation paths — CellTypist, the LLM, and label transfer — write
+    ``state['cluster_labels']`` and persist it, which leaves the data correct
+    everywhere and the *widget* stale. The checkbox captions are built once, in
+    ``ctx.repopulate_cluster_checkboxes`` (``_helpers.py``), and nothing here
+    called it: the new names appeared only after selecting another clustering
+    and coming back, or after the label editor opened and closed. Those are the
+    three existing call sites, which is exactly the set of workarounds users
+    found — and why this read as a cosmetic lag rather than a bug for so long.
+
+    Only refreshes when the annotated clustering is the one on screen.
+    Rebuilding sets every checkbox back to checked, so doing it for a clustering
+    the user is not looking at would silently clear their cluster filter;
+    switching to that clustering later goes through ``on_clustering_change``,
+    which rebuilds anyway.
+    """
+    repopulate = getattr(ctx, "repopulate_cluster_checkboxes", None)
+    widget = getattr(ctx, "clustering_widget", None)
+    if repopulate is None or widget is None:
+        return                      # ctx not fully wired (a half-built tab, tests)
+    if widget.value == clustering_key:
+        repopulate()
+
+
 def build_tab(ctx: ViewerContext) -> tuple:
     state = ctx.state
 
@@ -542,6 +568,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             state["cluster_labels"][clust_key] = labels
             from palms.utils.adata_persistence import save_cluster_labels_to_sdata
             save_cluster_labels_to_sdata(ctx, clust_key, labels)
+            refresh_cluster_labels_in_coloring_tab(ctx, clust_key)
 
             # Summary
             label_counts = {}
@@ -623,6 +650,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             state["cluster_labels"][clustering_key] = labels
             from palms.utils.adata_persistence import save_cluster_labels_to_sdata
             save_cluster_labels_to_sdata(ctx, clustering_key, labels)
+            refresh_cluster_labels_in_coloring_tab(ctx, clustering_key)
 
             label_counts = {}
             for lbl in labels.values():
@@ -809,6 +837,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             state["cluster_labels"][clust_key] = labels
             from palms.utils.adata_persistence import save_cluster_labels_to_sdata
             save_cluster_labels_to_sdata(ctx, clust_key, labels)
+            refresh_cluster_labels_in_coloring_tab(ctx, clust_key)
 
             # Summary
             label_counts = {}
