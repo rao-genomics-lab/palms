@@ -500,3 +500,75 @@ def test_a_gene_outside_the_cache_is_not_a_parquet_scan(tmp_path):
     points, reason = transcript_index.points_for_preview(
         loader, sdata, GENE, 20, need_cell_id=False)
     assert points is None and "not in the transcript index" in reason
+
+
+# ── the layer scale ──────────────────────────────────────────────────────────
+# napari draws the heatmap at `layer.scale`, and the world is in MICRONS:
+# `app.py` stamps every layer on insertion with `units.apply_to_layer`, which
+# sets `layer.scale = pixel_size`, because napari 0.8 removed
+# `ScaleBarOverlay.unit` and the magnitude has to live in the scale. So the
+# density layer's scale is the bin size in microns.
+#
+# It used to be the bin size in image *pixels* (`bin_size_um / pixel_size`),
+# which overwrote that micron scale with a number 1/pixel_size too large — 4.7x
+# on a 0.2125 um/px dataset, reported from the GUI 2026-09-02. Both the recorded
+# layer and the preview had it, since they share the painting helper; the
+# preview only made it visible, by being the one left on screen.
+
+def test_the_density_grid_covers_the_image_when_scaled_by_the_bin_size():
+    """Why microns is the right scale, stated as a property rather than a constant.
+
+    The template bins over the morphology image's own extent, so a grid drawn at
+    `bin_size_um` per bin must cover that image and no more.
+    """
+    density = _run([_gene_step(), _density_step(bin_size_um=10.0)]).ns[
+        "transcript_density"]
+    image_um = np.array(IMAGE_HW) * PIXEL_SIZE
+    drawn_um = np.array(density.shape) * 10.0
+    assert np.all(drawn_um <= image_um)
+    # The template's int() truncation can lose at most one bin per axis.
+    assert np.all(drawn_um > image_um - 2 * 10.0)
+
+
+def test_scaling_by_the_pixel_bin_size_would_overshoot_the_image():
+    """The bug the test above rules out, so the guard cannot pass vacuously."""
+    density = _run([_gene_step(), _density_step(bin_size_um=10.0)]).ns[
+        "transcript_density"]
+    image_um = np.array(IMAGE_HW) * PIXEL_SIZE
+    overshoot = np.array(density.shape) * (10.0 / PIXEL_SIZE)
+    assert np.all(overshoot > image_um * 1.5)
+
+
+def test_the_tab_never_converts_a_bin_size_to_pixels_for_display():
+    """Source guard: the tab assigns a layer scale in microns, and only that.
+
+    The defect was one assignment, so a behavioural test of the template cannot
+    catch its return — the template was always right. This parses the module the
+    way `test_preview_never_records.py` does.
+    """
+    import ast
+
+    src = (Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
+           / "tab_transcripts.py")
+    tree = ast.parse(src.read_text())
+
+    scale_assignments = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute) and target.attr == "scale"
+    ]
+    assert scale_assignments, "no layer.scale assignment found — did it move?"
+
+    for node in scale_assignments:
+        names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+        assert "bin_size_um" in names, (
+            f"line {node.lineno}: a density layer scale must be the bin size in "
+            f"microns, got names {sorted(names)}")
+        assert "pixel_size" not in names, (
+            f"line {node.lineno}: dividing the bin size by pixel_size puts the "
+            f"layer in image pixels, 1/pixel_size too large — see units.py")
+        divisions = [n for n in ast.walk(node.value)
+                     if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)]
+        assert not divisions, f"line {node.lineno}: unexpected division in a layer scale"
+

@@ -270,10 +270,22 @@ def build_tab(ctx: ViewerContext) -> tuple:
     # appears here. The Step it builds carries a "preview:" id so that even a
     # bug that handed it to run_step could not overwrite a recorded node.
 
-    def _paint_bins(layer, density, bin_px):
-        """Shared layer plumbing for both the preview and the recorded result."""
+    def _paint_bins(layer, density, bin_size_um):
+        """Shared layer plumbing for both the preview and the recorded result.
+
+        The scale is the bin's size **in microns**, because that is the world
+        every other layer lives in: `app.py` stamps each layer on insertion with
+        `units.apply_to_layer`, which sets `layer.scale = pixel_size` — napari
+        0.8 removed `ScaleBarOverlay.unit`, so the magnitude has to live in the
+        scale (see utils/units.py). This used to assign the bin size in *image
+        pixels* (`bin_size_um / pixel_size`), which overwrote that micron scale
+        with a number 1/pixel_size too large: at 10 um bins on a 0.2125 um/px
+        dataset the grid drew 4.7x oversized, spanning 34,120 um against a
+        7,258 um image. Both layers had it; the preview only made it visible,
+        by being the one on screen.
+        """
         layer.data = density.astype(np.float32)
-        layer.scale = [bin_px, bin_px]
+        layer.scale = [bin_size_um, bin_size_um]
         nonzero = density[density > 0]
         layer.contrast_limits = (
             [0, float(np.percentile(nonzero, 99))] if nonzero.size else [0, 1])
@@ -337,10 +349,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return None, None, reason
         return step, points, ""
 
-    def _on_preview_ready(density, token, generation, bin_px, normalised):
+    def _on_preview_ready(density, token, generation, bin_size_um, normalised):
         if token != state.get("_preview_token") or generation != ctx.dataset_generation:
             return                      # superseded while it was in flight
-        nonzero = _paint_bins(ctx.transcript_bins_preview_layer, density, bin_px)
+        nonzero = _paint_bins(ctx.transcript_bins_preview_layer, density, bin_size_um)
         ctx.transcript_bins_layer.visible = False
         what = (f"{int(nonzero.size):,} non-zero bins, normalised by cells"
                 if normalised else f"{int(density.sum()):,} transcripts binned")
@@ -358,7 +370,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         state["_preview_token"] = token = state.get("_preview_token", 0) + 1
         generation = ctx.dataset_generation
-        bin_px = step.params["bin_size_um"] / step.params["pixel_size"]
+        bin_size_um = step.params["bin_size_um"]
         normalised = normalise_cells_check.value
 
         @thread_worker
@@ -369,7 +381,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         worker = _work()
         worker.returned.connect(
-            lambda d: _on_preview_ready(d, token, generation, bin_px, normalised))
+            lambda d: _on_preview_ready(d, token, generation, bin_size_um, normalised))
         worker.errored.connect(lambda e: _hide_preview(f"no preview ({e})"))
         worker.start()
 
@@ -389,7 +401,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _preview_timer.start()          # restart, so a drag fires once at the end
 
     def _on_density_ready(result):
-        density, bin_px, normalised, needs_clustering = result
+        density, bin_size_um, normalised, needs_clustering = result
         compute_density_button.enabled = True
         state["_density_running"] = False
         # The recorded result supersedes the preview, and says so by taking the
@@ -399,7 +411,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         density_status.setStyleSheet("")
         if density is None:
             return
-        nonzero = _paint_bins(ctx.transcript_bins_layer, density, bin_px)
+        nonzero = _paint_bins(ctx.transcript_bins_layer, density, bin_size_um)
         if normalised:
             density_status.setText(
                 f"Done — {int(nonzero.size):,} non-zero bins, normalised by cells")
@@ -469,7 +481,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"Fetching transcripts for {gene}..." if need_fetch
             else f"Computing density for {gene}...")
         normalised = normalise_cells_check.value
-        bin_px = params["bin_size_um"] / params["pixel_size"]
+        bin_size_um = params["bin_size_um"]
 
         @thread_worker
         def _run():
@@ -478,7 +490,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 ctx.run_step(gene_step)
                 state["_transcript_points_key"] = fetch_key
             density = ctx.run_step(density_step)["transcript_density"]
-            return density, bin_px, normalised, clustering_key
+            return density, bin_size_um, normalised, clustering_key
 
         def _failed(exc):
             compute_density_button.enabled = True
