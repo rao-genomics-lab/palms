@@ -37,6 +37,9 @@ class ViewerContext:
     cell_labels_layer: Any = None
     transcript_layer: Any = None
     transcript_bins_layer: Any = None   # Image layer for transcript density heatmap
+    # Display-only twin of the layer above, filled by the Transcripts tab's
+    # preview. Never written by the recorded path; see tab_transcripts.py.
+    transcript_bins_preview_layer: Any = None
     roi_layer: Any = None
     annotation_layer: Any = None        # Named tissue annotation shapes
     crop_layer: Any = None              # Crop Dataset polygons (not session-persisted)
@@ -74,6 +77,13 @@ class ViewerContext:
     # code — it is what makes the executed and recorded source identical.
     executor: Any = None
     run_step: Any = None
+    # ``preview_step`` is the display-only sibling: it executes a Step's source
+    # for a picture the user is only looking at, into a *copy* of the namespace,
+    # and records nothing. It is not an alternative to ``run_step`` — it exists
+    # so display code can reuse a template's text instead of keeping a second
+    # implementation of the same computation. Its call sites are an allow-list
+    # in ``tests/test_preview_never_records.py``; do not add one lightly.
+    preview_step: Any = None
 
     # Reloads the open dataset from disk, rebuilding layers, managers and every
     # tab widget. Attached by app.py. Needed when something changes the zarr

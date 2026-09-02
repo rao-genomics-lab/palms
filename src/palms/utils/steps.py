@@ -295,24 +295,8 @@ class StepExecutor:
         filename = f"<step:{step.id}>"
 
         with self._lock:
-            try:
-                tree = ast.parse(code, filename=filename)
-            except SyntaxError as exc:
-                raise StepError(f"step {step.id!r} is not valid Python: {exc}") from exc
-
-            statements = tree.body
-            total = len(statements)
-            for index, statement in enumerate(statements, start=1):
-                if progress is not None:
-                    progress(index, total, _statement_label(code, statement))
-                module = ast.Module(body=[statement], type_ignores=[])
-                try:
-                    exec(compile(module, filename, "exec"), self.ns)  # noqa: S102
-                except Exception as exc:
-                    raise StepError(
-                        f"step {step.id!r} failed at statement {index}/{total}: "
-                        f"{type(exc).__name__}: {exc}"
-                    ) from exc
+            _exec_statements(code, self.ns, filename, f"step {step.id!r}",
+                             progress=progress)
 
             self.graph.upsert(
                 step.id, code, deps=list(step.deps), kind=step.kind,
@@ -328,6 +312,99 @@ class StepExecutor:
                     f"step {step.id!r} declared outputs {missing} that it did not bind"
                 )
             return {name: self.ns[name] for name in step.outputs}
+
+    # -- display only: executes a Step's source, records nothing ---------------
+    def preview(self, step: Step, bindings: Optional[dict] = None) -> dict:
+        """Render and execute *step* for display, and record nothing.
+
+        This exists so display code can reuse a template's text instead of
+        keeping a second implementation of the same computation — the drift
+        risk that made CopyKAT's reconstruction cell a documented exception
+        rather than a pattern. It is **not** a second way to run analysis, and
+        recording is deliberately not a flag on :meth:`run`: recording is not a
+        mode of ``run``, it is what ``run`` is.
+
+        Two properties, both load-bearing:
+
+        1. The provenance graph is never reached from here. There is no
+           ``upsert`` in this method and nothing that turns one on.
+        2. Execution goes into a **copy** of the namespace, not the namespace.
+           That is a correctness requirement rather than tidiness: a preview
+           that bound ``transcript_points`` in the shared namespace would let a
+           later recorded step consume those values while recording source that
+           says it read them from somewhere else — exactly the executed-versus-
+           recorded drift this module exists to make impossible. The copy is
+           shallow, so ``adata`` and ``sdata`` are the same objects and a
+           template that *mutates* them would mutate them for real; that is why
+           only read-only templates should be previewed.
+
+        *bindings* supplies the template's input by a different route than the
+        recorded step's — that is the whole exercise, so it may freely shadow a
+        result name the shared namespace already holds (``transcript_points``
+        is normally bound there by the last recorded run, and substituting it
+        is exactly the point). What it may **not** shadow is a base name:
+        swapping ``adata`` or ``sdata`` would draw a picture from data the
+        recorded step would never use, which is a preview that lies rather than
+        a preview that is merely fast.
+
+        Note the absence of a ``progress`` parameter. If a preview is slow
+        enough to need progress reporting it is not a preview, and leaving the
+        parameter off keeps that pressure visible.
+
+        Guarded by ``tests/test_preview_never_records.py``.
+        """
+        from palms.utils.step_templates.namespace import EXECUTOR_BASE_NAMES
+
+        scratch = dict(self.ns)
+        shadowed = sorted(set(bindings or {}) & set(EXECUTOR_BASE_NAMES))
+        if shadowed:
+            raise StepError(
+                f"preview {step.id!r} would shadow base name(s) {shadowed}; a "
+                f"preview may substitute a result, never the data it is drawn from"
+            )
+        scratch.update(bindings or {})
+
+        code = step.render()
+        with self._lock:
+            _exec_statements(code, scratch, f"<preview:{step.id}>",
+                             f"preview {step.id!r}")
+
+        missing = [name for name in step.outputs if name not in scratch]
+        if missing:
+            raise StepError(
+                f"preview {step.id!r} declared outputs {missing} that it did not bind"
+            )
+        return {name: scratch[name] for name in step.outputs}
+
+
+def _exec_statements(code: str, namespace: dict, filename: str, what: str,
+                     progress: Optional[ProgressFn] = None) -> None:
+    """Execute *code* one top-level statement at a time into *namespace*.
+
+    The one exec loop, shared by :meth:`StepExecutor.run` and
+    :meth:`StepExecutor.preview` so the two cannot drift. Statement-by-statement
+    only so a long step can report progress: the source compiled is
+    byte-identical to the source passed in, and line numbers are preserved so a
+    traceback points into the cell.
+    """
+    try:
+        tree = ast.parse(code, filename=filename)
+    except SyntaxError as exc:
+        raise StepError(f"{what} is not valid Python: {exc}") from exc
+
+    statements = tree.body
+    total = len(statements)
+    for index, statement in enumerate(statements, start=1):
+        if progress is not None:
+            progress(index, total, _statement_label(code, statement))
+        module = ast.Module(body=[statement], type_ignores=[])
+        try:
+            exec(compile(module, filename, "exec"), namespace)  # noqa: S102
+        except Exception as exc:
+            raise StepError(
+                f"{what} failed at statement {index}/{total}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
 
 def _statement_label(code: str, statement: ast.stmt) -> str:

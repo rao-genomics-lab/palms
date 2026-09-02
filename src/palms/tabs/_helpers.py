@@ -549,6 +549,25 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.run_step = _run_step
 
+    # ── preview_step (display only, records nothing) ─────────────────────
+    def _preview_step(step: Step, bindings: dict = None) -> dict:
+        """Execute *step* for display only. Nothing is recorded, nothing persists.
+
+        Note what is deliberately missing relative to :func:`_run_step`: no
+        ``_emit_flat_main_thread``, no graph write, and no ``ctx.adata``
+        follow-up — a preview executes in a scratch namespace, so there is
+        nothing to follow. See :meth:`StepExecutor.preview` for why the scratch
+        namespace is a correctness requirement rather than tidiness.
+        """
+        executor = _get_executor()
+        if executor.ns.get("adata") is not ctx.adata:
+            executor.ns["adata"] = ctx.adata
+        if executor.ns.get("sdata") is not ctx.sdata:
+            executor.ns["sdata"] = ctx.sdata
+        return executor.preview(step, bindings=bindings)
+
+    ctx.preview_step = _preview_step
+
     # ── record_code (backward-compat shim) ───────────────────────────────
     def _record_code(code: str, tag: str = None):
         """Legacy string-append recorder, mapped onto the provenance graph.

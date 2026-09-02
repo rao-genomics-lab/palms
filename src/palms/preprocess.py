@@ -105,7 +105,15 @@ def _write_sentinel(cache_dir: Path, parquet_path: Path):
     }))
 
 
-def _cache_is_valid(cache_dir: Path, parquet_path: Path) -> bool:
+def cache_is_valid(cache_dir: Path, parquet_path: Path) -> bool:
+    """Was this feather cache built from *this* transcripts.parquet?
+
+    Public because the density preview needs it: ``TranscriptLoader`` globs
+    ``*.feather`` and never consults the sentinel, so a cache built from an
+    older parquet would preview data the recorded step would not reproduce.
+    Returns False when the parquet is absent, which is the right conservative
+    answer for a cache-only dataset.
+    """
     sentinel = cache_dir / SENTINEL_FILENAME
     if not sentinel.exists():
         return False
@@ -117,13 +125,17 @@ def _cache_is_valid(cache_dir: Path, parquet_path: Path) -> bool:
         return False
 
 
+#: Retained so an existing import keeps working.
+_cache_is_valid = cache_is_valid
+
+
 def preprocess(parquet_path: Path,
                cache_dir: Path,
                min_qv: int = MIN_QV,
                chunk_size: int = CHUNK_SIZE):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    if _cache_is_valid(cache_dir, parquet_path):
+    if cache_is_valid(cache_dir, parquet_path):
         print(f"Transcript cache is up to date ({cache_dir}). Nothing to do.")
         return
 

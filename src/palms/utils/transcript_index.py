@@ -29,6 +29,7 @@ X_COL = "x_location"
 Y_COL = "y_location"
 QV_COL = "qv"
 GENE_COL = "feature_name"  # Xenium 3.x column name
+CELL_COL = "cell_id"       # absent from caches built before it was kept
 
 # Default pixel size (µm/pixel) — overridden by experiment.xenium at runtime
 DEFAULT_PIXEL_SIZE = 0.2125
@@ -177,3 +178,94 @@ class TranscriptLoader:
         if all_points:
             return np.concatenate(all_points), np.concatenate(all_colors)
         return np.empty((0, 2), dtype=np.float32), np.empty((0, 4), dtype=np.float32)
+
+
+# ── Density preview ──────────────────────────────────────────────────────────
+# Display only. The recorded density step reads ``sdata.points['transcripts']``
+# through the ``transcripts.gene`` template, and must go on doing so — a
+# notebook replaying from raw Xenium output has no feather index. What follows
+# produces the *same rows* by the fast route, for a picture the user is only
+# looking at while they hunt for a gene. See tab_transcripts.py.
+
+
+def cached_columns(loader: "TranscriptLoader", gene: str) -> list[str]:
+    """Column names in *gene*'s feather file, without decoding any data.
+
+    The schema is the thing to check, not whether the directory exists: caches
+    built before cell ids were kept are still on disk and still load.
+    """
+    import pyarrow as pa
+
+    path = loader.cache_dir / f"{gene}.feather"
+    with pa.OSFile(str(path), "rb") as handle:
+        return list(pa.ipc.open_file(handle).schema.names)
+
+
+def points_for_preview(loader: "TranscriptLoader", sdata, gene: str,
+                       min_qv: int, need_cell_id: bool):
+    """The rows ``transcripts.gene`` would produce, from the feather index.
+
+    Returns ``(frame, "")`` on success or ``(None, reason)`` on refusal, where
+    *reason* is shown to the user in place of a picture. **It never falls back
+    to the parquet scan**: that path takes ~22 s and drops ``cell_id``
+    entirely, so it is neither a preview nor equivalent.
+
+    The micron-to-pixel step is deliberately not arithmetic. The frame is
+    parsed as a ``PointsModel`` carrying the transcripts element's *own
+    declared* transformation and handed to ``sd.transform`` — which is what
+    ``transcripts.gene`` does, so the scale comes off the element and
+    ``pixel_size`` never enters. ``get_points_array``'s ``/ pixel_size`` is not
+    reused for the same reason, and because it also swaps to napari's
+    ``(row, col)`` order, which is wrong for a points frame.
+
+    *need_cell_id* comes from the rendered source the caller is about to
+    execute, not from a guess about which blocks are selected: only the cluster
+    filter reads ``cell_id``, and refusing every preview on a cache that lacks
+    a column the code never touches would be a bad trade.
+    """
+    import spatialdata as sd
+    from spatialdata.transformations import get_transformation
+
+    from palms.preprocess import MIN_QV as CACHE_MIN_QV, cache_is_valid
+
+    if not cache_is_valid(loader.cache_dir, loader.parquet_path):
+        # The loader itself globs *.feather and never checks this, which is
+        # fine for the overlay but not here: a cache built from an older
+        # parquet would preview rows the recorded step would not reproduce,
+        # and that is the one way a preview could be a lie about the result.
+        return None, ("no preview — the transcript index was not built from "
+                      "this dataset's transcripts.parquet")
+    if min_qv < CACHE_MIN_QV:
+        return None, (f"no preview below Min QV {CACHE_MIN_QV} — the transcript "
+                      f"index is filtered at {CACHE_MIN_QV}")
+    if gene not in loader.cached_genes:
+        return None, f"no preview — {gene} is not in the transcript index"
+    element = getattr(sdata, "points", {}).get("transcripts")
+    if element is None:
+        return None, "no preview — no transcripts element to take the frame from"
+
+    wanted = {X_COL: "x", Y_COL: "y"}
+    if need_cell_id:
+        wanted[CELL_COL] = "cell_id"
+    try:
+        available = cached_columns(loader, gene)
+    except Exception as exc:                      # unreadable file, mid-rebuild
+        return None, f"no preview — the transcript index could not be read ({exc})"
+    missing = [c for c in wanted if c not in available]
+    if missing:
+        return None, (f"no preview — this transcript index has no {missing}; "
+                      f"rebuild it with palms-preprocess")
+
+    df = loader._load_from_feather(gene)
+    if min_qv > CACHE_MIN_QV:
+        if QV_COL not in df.columns:
+            return None, "no preview — this transcript index has no qv column"
+        df = df[df[QV_COL] >= min_qv]
+    frame = df[list(wanted)].rename(columns=wanted).reset_index(drop=True)
+
+    points = sd.transform(
+        sd.models.PointsModel.parse(
+            frame, transformations=get_transformation(element, get_all=True)),
+        to_coordinate_system="global",
+    ).compute()
+    return points, ""

@@ -10,6 +10,18 @@ The **density heatmap** is analysis, and is recorded. It reads
 artifact a replayed notebook would not have — which costs a few seconds the
 first time a gene is binned and nothing thereafter, since the fetch is its own
 step and the bin-size knob only re-runs the histogram.
+
+The **density preview** is display again, and is the reason both statements
+above can stay true. Hunting for a gene meant paying the recorded fetch for
+every candidate, so the preview bins the feather index instead and redraws in
+about a tenth of a second. It draws into its own layer, says so, and records
+nothing; `Compute Density` is still the only thing that runs and records the
+analysis. It is safe because the two routes were measured to agree exactly —
+row for row and bin for bin — and
+`tests/test_transcript_density_step.py::test_the_feather_preview_bins_identically_to_the_recorded_step`
+keeps them agreeing. It executes the same `transcripts.density` template text
+rather than a second histogram, which is the whole point: a hand-rolled copy
+would be the unwatched half of a drift pair.
 """
 
 from __future__ import annotations
@@ -17,6 +29,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from magicgui.widgets import ComboBox, CheckBox, PushButton, Slider
+from qtpy.QtCore import QTimer
 from qtpy.QtWidgets import QListWidget, QHBoxLayout, QWidget, QLabel
 from napari.qt.threading import thread_worker
 from palms.tabs._helpers import make_tab, StatusProxy
@@ -28,6 +41,15 @@ from palms.utils.step_templates import (
 
 GENE_TEMPLATE_ID = "transcripts.gene"
 DENSITY_TEMPLATE_ID = "transcripts.density"
+
+#: Said in the status line, and echoed in the preview layer's name. An
+#: unlabelled preview *is* the provenance hazard, so the labelling is asserted
+#: by tests/test_preview_never_records.py rather than left to care.
+PREVIEW_LABEL = "PREVIEW (not recorded)"
+PREVIEW_LAYER_NAME = "transcript_density (PREVIEW - not recorded)"
+#: Long enough that dragging the bin-size slider fires once when it stops, not
+#: on every tick; short enough to feel like the picture is following you.
+PREVIEW_DEBOUNCE_MS = 250
 
 if TYPE_CHECKING:
     from palms.utils.viewer_context import ViewerContext
@@ -160,6 +182,27 @@ def build_tab(ctx: ViewerContext) -> tuple:
     bin_size_slider = Slider(label="Bin size (µm)", min=10, max=500, value=50)
     cluster_filter_density_check = CheckBox(label="Filter by selected clusters", value=False)
     normalise_cells_check = CheckBox(label="Normalise by cells per bin", value=False)
+    preview_check = CheckBox(
+        label="Preview the density as I change settings",
+        value=True,
+        tooltip=(
+            "Ticked: changing the gene, bin size, quality floor or filters redraws "
+            "a density picture in about a tenth of a second, binned from the "
+            "per-gene transcript index palms-preprocess built. It is a preview. It "
+            "is not recorded, it is not in analysis.py, and it is not what the "
+            "notebook replays.\n"
+            "Unticked: nothing is drawn until you press Compute Density.\n"
+            "Either way, Compute Density is the button that runs and records the "
+            "analysis, and its result replaces the preview."
+        ),
+    )
+    preview_caption_qt = QLabel(
+        "The preview comes from the transcript index and is never recorded — it is "
+        "there so you can find the right gene and bin size quickly. Press Compute "
+        "Density for the real step: that is the one that lands in analysis.py and "
+        "in the exported notebook.")
+    preview_caption_qt.setWordWrap(True)
+    preview_caption_qt.setStyleSheet("color: gray;")
     compute_density_button = PushButton(label="Compute Density")
     density_status = QLabel("")
 
@@ -220,19 +263,143 @@ def build_tab(ctx: ViewerContext) -> tuple:
     ctx.state.setdefault("template_preview", {})[GENE_TEMPLATE_ID] = _transcripts_gene_preview
     ctx.state.setdefault("template_preview", {})[DENSITY_TEMPLATE_ID] = _density_preview
 
+    # ── Density preview: display only, never recorded ────────────────────────
+    # Everything below draws a picture and stops. It must not call run_step,
+    # record_*, or ensure_* — a preview with a side effect is a preview that
+    # changed the analysis, and tests/test_preview_never_records.py fails if one
+    # appears here. The Step it builds carries a "preview:" id so that even a
+    # bug that handed it to run_step could not overwrite a recorded node.
+
+    def _paint_bins(layer, density, bin_px):
+        """Shared layer plumbing for both the preview and the recorded result."""
+        layer.data = density.astype(np.float32)
+        layer.scale = [bin_px, bin_px]
+        nonzero = density[density > 0]
+        layer.contrast_limits = (
+            [0, float(np.percentile(nonzero, 99))] if nonzero.size else [0, 1])
+        layer.visible = True
+        return nonzero
+
+    def _hide_preview(reason: str = ""):
+        """Take the preview off screen. A refusal must never leave a stale one.
+
+        Only the *preview's own* status line is replaced: a recorded run's
+        "Done — …" is the answer to a question the user actually asked, and
+        turning the preview off is not a reason to take it away.
+        """
+        if ctx.transcript_bins_preview_layer is not None:
+            ctx.transcript_bins_preview_layer.visible = False
+        if reason or density_status.text().startswith(PREVIEW_LABEL):
+            density_status.setStyleSheet("")
+            density_status.setText(reason)
+
+    def _preview_bindings():
+        """The rendered step and its feather-derived points, or (None, reason).
+
+        ``need_cell_id`` is read off the *rendered source about to be executed*
+        rather than from which blocks are selected. Only the cluster filter
+        reads ``cell_id`` today, but a user override that starts using it
+        elsewhere is caught too, and the failure direction is a refused preview
+        rather than a wrong one.
+        """
+        from palms.utils.transcript_index import points_for_preview
+
+        loader = getattr(ctx, "transcript_loader", None)
+        if loader is None or ctx.sdata is None:
+            return None, None, ""
+        gene = density_gene_widget.value
+        if gene is None:
+            return None, None, ""
+        if "transcripts" not in getattr(ctx.sdata, "points", {}):
+            return None, None, ""
+        if "morphology_focus" not in getattr(ctx.sdata, "images", {}):
+            return None, None, ""
+
+        blocks, params, _ = _density_preview()
+        if cluster_filter_density_check.value and "clustering" not in params:
+            return None, None, "no preview — no clustering applied to filter by"
+        key = params.get("clustering")
+        if key and key not in getattr(ctx.adata, "obs", {}):
+            # Mirroring the clustering onto obs is the *run's* job; doing it
+            # here would make drawing a picture mutate the analysis.
+            return None, None, (
+                "no preview — press Compute Density once to apply the clustering")
+
+        step = Step(
+            id=f"preview:transcript_density:{gene}",
+            **_resolved(DENSITY_TEMPLATE_ID, blocks),
+            params=params, kind=ARTIFACT, outputs=["transcript_density"],
+        )
+        points, reason = points_for_preview(
+            loader, ctx.sdata, gene, int(coerce(qv_slider.value)),
+            need_cell_id="cell_id" in step.render())
+        if points is None:
+            return None, None, reason
+        return step, points, ""
+
+    def _on_preview_ready(density, token, generation, bin_px, normalised):
+        if token != state.get("_preview_token") or generation != ctx.dataset_generation:
+            return                      # superseded while it was in flight
+        nonzero = _paint_bins(ctx.transcript_bins_preview_layer, density, bin_px)
+        ctx.transcript_bins_layer.visible = False
+        what = (f"{int(nonzero.size):,} non-zero bins, normalised by cells"
+                if normalised else f"{int(density.sum()):,} transcripts binned")
+        density_status.setStyleSheet("color: #b8860b;")
+        density_status.setText(
+            f"{PREVIEW_LABEL} — {what}. Press Compute Density to run and record it.")
+
+    def _preview_start():
+        if not preview_check.value or state.get("_density_running"):
+            return
+        step, points_or_none, reason = _preview_bindings()
+        if step is None:
+            _hide_preview(reason)
+            return
+
+        state["_preview_token"] = token = state.get("_preview_token", 0) + 1
+        generation = ctx.dataset_generation
+        bin_px = step.params["bin_size_um"] / step.params["pixel_size"]
+        normalised = normalise_cells_check.value
+
+        @thread_worker
+        def _work():
+            return ctx.preview_step(
+                step, bindings={"transcript_points": points_or_none},
+            )["transcript_density"]
+
+        worker = _work()
+        worker.returned.connect(
+            lambda d: _on_preview_ready(d, token, generation, bin_px, normalised))
+        worker.errored.connect(lambda e: _hide_preview(f"no preview ({e})"))
+        worker.start()
+
+    _preview_timer = QTimer()
+    _preview_timer.setSingleShot(True)
+    _preview_timer.setInterval(PREVIEW_DEBOUNCE_MS)
+    _preview_timer.timeout.connect(_preview_start)
+
+    # Note the prefix naming above: tests/test_tab_templates.py treats every
+    # function whose name *ends* in ``_preview`` as a template-preview provider
+    # and requires a direct call to it, which a signal connection is not. Hence
+    # ``_preview_start`` rather than ``_start_preview``.
+    def _schedule_preview_refresh(*_args):
+        if not preview_check.value:
+            _hide_preview()
+            return
+        _preview_timer.start()          # restart, so a drag fires once at the end
+
     def _on_density_ready(result):
         density, bin_px, normalised, needs_clustering = result
         compute_density_button.enabled = True
+        state["_density_running"] = False
+        # The recorded result supersedes the preview, and says so by taking the
+        # screen back: the preview layer goes away rather than sitting under it.
+        if ctx.transcript_bins_preview_layer is not None:
+            ctx.transcript_bins_preview_layer.visible = False
+        density_status.setStyleSheet("")
         if density is None:
             return
-        ctx.transcript_bins_layer.data = density.astype(np.float32)
-        ctx.transcript_bins_layer.scale = [bin_px, bin_px]
-        nonzero = density[density > 0]
-        if nonzero.size > 0:
-            ctx.transcript_bins_layer.contrast_limits = [0, float(np.percentile(nonzero, 99))]
-        else:
-            ctx.transcript_bins_layer.contrast_limits = [0, 1]
-        ctx.transcript_bins_layer.visible = True
+        nonzero = _paint_bins(ctx.transcript_bins_layer, density, bin_px)
         if normalised:
             density_status.setText(
                 f"Done — {int(nonzero.size):,} non-zero bins, normalised by cells")
@@ -293,6 +460,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
         need_fetch = state.get("_transcript_points_key") != fetch_key
 
         compute_density_button.enabled = False
+        # Stops a queued preview from starting behind the real thing: they share
+        # the executor lock, and a preview is never worth making a user wait.
+        state["_density_running"] = True
+        _preview_timer.stop()
+        density_status.setStyleSheet("")
         density_status.setText(
             f"Fetching transcripts for {gene}..." if need_fetch
             else f"Computing density for {gene}...")
@@ -310,6 +482,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         def _failed(exc):
             compute_density_button.enabled = True
+            state["_density_running"] = False
             state.pop("_transcript_points_key", None)
             density_status.setText(f"Density failed: {exc}")
 
@@ -319,6 +492,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
         worker.start()
 
     compute_density_button.clicked.connect(on_compute_density)
+
+    # The density controls become live: until now nothing here redrew without
+    # the button. Min QV is included because it changes which rows are read.
+    for _live in (density_gene_widget, bin_size_slider, qv_slider,
+                  cluster_filter_density_check, normalise_cells_check,
+                  preview_check):
+        _live.changed.connect(_schedule_preview_refresh)
 
     widget = make_tab(
         transcript_gene_widget,
@@ -333,6 +513,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         bin_size_slider,
         cluster_filter_density_check,
         normalise_cells_check,
+        preview_check,
+        preview_caption_qt,
         compute_density_button,
         density_status,
     )

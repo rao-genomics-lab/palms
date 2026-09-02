@@ -830,10 +830,25 @@ def _populate_viewer(viewer, data: dict) -> dict:
         visible=False,
     )
 
+    # The preview draws into its *own* layer rather than borrowing the one
+    # above. Two layers make the two states mutually exclusive by construction:
+    # renaming a single layer to say "preview" races the worker that fills it,
+    # and a rename that lands late puts the wrong caption over the right data.
+    # The name is the label — a napari layer name is user-visible, and this one
+    # has to say what it is even when the Transcripts tab is not open.
+    transcript_bins_preview_layer = viewer.add_image(
+        np.zeros((1, 1), dtype=np.float32),
+        name="transcript_density (PREVIEW - not recorded)",
+        colormap="hot",
+        opacity=0.7,
+        visible=False,
+    )
+
     return {
         "cell_labels_layer": cell_labels_layer,
         "transcript_layer": transcript_layer,
         "transcript_bins_layer": transcript_bins_layer,
+        "transcript_bins_preview_layer": transcript_bins_preview_layer,
         "roi_layer": roi_layer,
         "annotation_layer": annotation_layer,
         "crop_layer": crop_layer,
@@ -1121,6 +1136,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         cell_labels_layer=layers["cell_labels_layer"],
         transcript_layer=layers["transcript_layer"],
         transcript_bins_layer=layers["transcript_bins_layer"],
+        transcript_bins_preview_layer=layers["transcript_bins_preview_layer"],
         roi_layer=layers["roi_layer"],
         annotation_layer=layers["annotation_layer"],
         crop_layer=layers["crop_layer"],
