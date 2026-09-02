@@ -7,6 +7,20 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Fixed
+- **Naming clusters did not update the Coloring tab.** After annotating with the LLM,
+  CellTypist or label transfer, the new names appeared only once you selected a different
+  clustering and came back, or opened and closed the label editor. All three paths wrote
+  `state['cluster_labels']` and persisted it — so the data was correct everywhere and only
+  the *widget* was stale. The checkbox captions are built once, in
+  `ctx.repopulate_cluster_checkboxes`, which `tab_gene_analysis` never called; the three
+  places that do call it are exactly the workarounds people had found, which is why this
+  read as a cosmetic lag rather than a bug.
+
+  All three handlers now announce the change. The refresh only fires when the annotated
+  clustering is the one on screen: rebuilding sets every checkbox back to checked, so
+  refreshing a clustering you are not looking at would silently clear your cluster filter,
+  and switching to it later rebuilds anyway.
+
 - **The transcript density heatmap was drawn 4.7× too large.** Both density layers — the
   recorded `transcript_density` and the preview — set `layer.scale` to the bin size in
   *image pixels* (`bin_size_um / pixel_size`). Every layer lives in **microns**: `app.py`
