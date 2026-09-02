@@ -27,7 +27,7 @@ from palms.utils.zarr_safe import safe_delete_element
 from palms.utils.units import layer_affine_px, px_affine_to_world
 from palms.tabs._helpers import make_tab
 from palms.utils.registration import (
-    load_multichannel_pyramid, compute_landmark_affine, describe_pyramid,
+    load_multichannel_pyramid, compute_landmark_affine, describe_pyramid, flip_matrix,
 )
 from palms.utils.composite import (
     build_composite_pyramid, default_channel_colors, auto_contrast,
@@ -301,13 +301,7 @@ def build_tab(ctx: "ViewerContext"):
         shape = entry.get("image_shape_yx")
         if shape is None:
             return np.eye(3)
-        h, w = shape
-        M = np.eye(3, dtype=np.float64)
-        if entry.get("flip_v", False):
-            M = np.array([[-1, 0, h - 1], [0, 1, 0], [0, 0, 1]], dtype=np.float64) @ M
-        if entry.get("flip_h", False):
-            M = np.array([[1, 0, 0], [0, -1, w - 1], [0, 0, 1]], dtype=np.float64) @ M
-        return M
+        return flip_matrix(shape, entry.get("flip_v", False), entry.get("flip_h", False))
 
     def _apply_entry_affine(entry):
         """Combine fine + flip and apply to layer + landmark layer."""

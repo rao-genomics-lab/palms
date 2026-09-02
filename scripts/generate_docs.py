@@ -1011,6 +1011,38 @@ API_SECTIONS: list[ApiSection] = [
                 "palms.utils.registration", "extract_tissue_mask",
                 "Segment tissue from background, for a coarse initial alignment.",
             ),
+            ApiEntry(
+                "palms.utils.registration", "compute_coarse_affine",
+                "Global search in rotation, scale and reflection over the "
+                "cross-correlation of blurred nuclear density — the starting "
+                "transform, with no landmarks.",
+            ),
+            ApiEntry(
+                "palms.utils.nuclei_registration", "register_he_nuclei",
+                "Automatic *fine* registration: haematoxylin nuclei in the H&E "
+                "matched to the centroids of Xenium's nuclear masks, seeded by "
+                "the coarse transform. Sub-micron on the reference datasets.",
+                snippet=(
+                    "from palms.utils.nuclei_registration import register_he_nuclei\n\n"
+                    "fit = register_he_nuclei(\n"
+                    "    sdata.labels['nucleus_labels'],\n"
+                    "    sdata.images['he_image'],\n"
+                    "    seed_3x3=coarse.affine_3x3_yx,   # from compute_coarse_affine\n"
+                    "    pixel_size_um=0.2125,\n"
+                    ")\n"
+                    "print(fit.summary())"
+                ),
+            ),
+            ApiEntry(
+                "palms.utils.nuclei_registration", "detect_he_nuclei",
+                "Sub-pixel nucleus positions in an H&E, from deconvolved "
+                "haematoxylin optical density.",
+            ),
+            ApiEntry(
+                "palms.utils.nuclei_registration", "nucleus_centroids",
+                "Area centroids of every label in a label raster, streamed in "
+                "row blocks.",
+            ),
         ],
     ),
     ApiSection(

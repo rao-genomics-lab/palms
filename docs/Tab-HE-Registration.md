@@ -36,13 +36,46 @@ fills both images — which is what a **crop export** looks like — the outline
 carry no information, so the match is made on internal structure instead. That
 case works, but scores lower than a whole section does.
 
+### Automatic fine alignment
+
+| Control | Description |
+|---|---|
+| Fine Align (nuclei) | Refines the coarse transform by matching every nucleus in the H&E to Xenium's own nuclear masks. Reports how many nuclei matched, the median residual, and how far it moved the image. Disabled until a coarse (or landmark) transform exists, and on a dataset with no `nucleus_labels`. |
+
+This is what the manual landmark step is doing, done over the whole section
+instead of the handful of points you can click: haematoxylin is deconvolved out
+of the H&E, its nuclei are found as sub-pixel peaks, and that point set is fitted
+onto the centroids of `labels/nucleus_labels` — Xenium's segmentation of the DAPI
+channel. On the two reference datasets it takes the coarse transform's 15–17 µm
+down to **0.7–0.8 µm**, with nothing placed by hand. That is better than the
+landmark fit reaches, and better than 10x's own shipped matrix: on nuclei held
+out of the fit entirely, the automatic transform places them closer to the
+nuclear masks than either.
+
+It needs a starting transform inside its basin, which is what Coarse Align is
+for, so run that first. It recovers from a seed about 20 µm out; much further and
+it reports **LOW CONFIDENCE** rather than a number. Confidence is an enrichment
+over chance — how many more H&E nuclei land within a micron of a nuclear mask
+than a random point set of the same density would. A real fit scores 17–22×; a
+transform a few degrees wrong, or an H&E of a different section, scores about 1×.
+
+It takes one to three minutes on a whole section, most of it finding nuclei in
+the full-resolution H&E. That resolution is the point: the same detector run one
+pyramid level down is three times less accurate, and no number of extra
+detections makes up for it, because a coarser pixel biases each peak rather than
+adding noise that averages away.
+
+You can still place landmarks afterwards — "Compute Registration" overwrites the
+automatic fit — but on a dataset where the nuclei fit reports high confidence
+there is usually nothing left to correct by hand.
+
 ### Landmark registration
 
 | Control | Description |
 |---|---|
 | Add Xenium Landmark | Activates the Xenium landmark layer in "add point" mode. Click a recognisable feature in the Xenium image to place a landmark. |
 | Add H&E Landmark | Activates the H&E landmark layer in "add point" mode. Click the corresponding feature in the H&E image. |
-| Clear All | Removes all landmarks and clears the fine registration affine. |
+| Clear All | Removes all landmarks and clears the fine registration affine, including an automatic one. |
 | Compute Registration | Computes a similarity affine from the placed landmark pairs. Enabled when 3 or more pairs are present. Displays per-landmark residuals (pixels and µm), mean and max residuals, and the computed scale factor. |
 | Residuals (read-only) | Text area showing registration quality metrics after the last computation. |
 | Save Landmarks... | Saves landmarks and the computed affine to a JSON file. Enabled when at least one landmark is present. |
@@ -63,12 +96,18 @@ afterwards clears a coarse alignment — it was fitted for the other orientation
 3. If the overlay is wrong, or Coarse Align reports low confidence, set "Flip
    vertically" / "Flip horizontally" yourself and run it again, or go straight
    to landmarks.
-4. Place at least 3 landmark pairs:
+4. Click "Fine Align (nuclei)". This is normally the last step — it refines the
+   coarse transform to well under a micron by matching the H&E's nuclei to the
+   nuclear masks, and takes one to three minutes. Check the reported enrichment;
+   if it says LOW CONFIDENCE, fall back to landmarks below.
+5. Only if the automatic fit was refused or looks wrong — place at least 3
+   landmark pairs:
    1. Click "Add Xenium Landmark", then click a recognisable feature (for example, a vessel or duct) in the Xenium morphology image.
    2. Click "Add H&E Landmark", then click the same feature in the H&E image.
    3. Repeat for at least 3 features spread across the tissue.
-5. Click "Compute Registration". Inspect the residuals — values under 10–20 µm are typically acceptable.
-6. (Optional) Click "Save Landmarks..." to save the result for sharing or future reuse.
+6. Click "Compute Registration". Inspect the residuals — values under 10–20 µm
+   are typically acceptable. This **replaces** an automatic fit.
+7. (Optional) Click "Save Landmarks..." to save the result for sharing or future reuse.
 
 ## Notes
 
@@ -77,6 +116,14 @@ afterwards clears a coarse alignment — it was fitted for the other orientation
   maps its own H&E points onto its own Xenium points. `scripts/compare_he_registration.py`
   scores such a file against 10x's shipped alignment matrix, and
   `scripts/score_coarse_align.py` scores Coarse Align against the same reference.
+- `scripts/score_nuclei_align.py` scores the whole automatic chain the same way,
+  and adds the check that agreement with another estimate cannot give: it fits on
+  one half of the section and scores every candidate transform on the nuclei of
+  the other half, which that fit has never seen. All three estimates — 10x's,
+  the landmark fit and the automatic one — agree with each other only to about a
+  micron, while the automatic fit reproduces itself to 0.02 µm, so at this
+  accuracy the reference is no longer a fine enough ruler and the held-out
+  residual is what to read.
 - Registration is persisted automatically to `sdata_cached.zarr` and restored on the next launch; you do not need to redo registration between sessions. The transform lives in `viewer_session/he/`, alongside the image path, its dimensions and the flip settings.
 - The H&E image itself is also stored in the zarr cache, so you do not need to re-load the original file on subsequent sessions.
-- The flips, the coarse alignment and the landmark registration are each recorded into the analysis provenance, with the landmark coordinates inlined, so the exported notebook reproduces the transform without needing the landmark files.
+- The flips, the coarse alignment, the automatic nuclei fit and the landmark registration are each recorded into the analysis provenance, with the landmark coordinates inlined, so the exported notebook reproduces the transform without needing the landmark files.

@@ -6,6 +6,78 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Added
+- **Automatic fine H&E registration, from nuclei** (issue `xv-bdi`) — a new
+  **Fine Align (nuclei)** button beside Coarse Align, and
+  `src/palms/utils/nuclei_registration.py` behind it. The manual landmark step is
+  really matching nuclei in the H&E against Xenium's nuclear masks; this does that
+  directly, over every nucleus in the section rather than the handful a user can
+  click. Haematoxylin is deconvolved out of the H&E and its nuclei found as
+  sub-pixel peaks; that point set is fitted onto the centroids of
+  `labels/nucleus_labels`, seeded by Coarse Align's transform.
+
+  Measured against the two datasets that carry an independent transform:
+
+  |  | coarse seed | automatic | landmarks, by hand |
+  |---|---|---|---|
+  | pancreas, vs 10x's `he_imagealignment.csv` | 15.5 µm | **0.70 µm** | 0.93 µm |
+  | `demo_data/crop_6`, vs a landmark fit | 17.4 µm | **0.85 µm** | — |
+
+  **It is not ICP, and that is not a stylistic choice.** Nuclei on the pancreas sit
+  a median 6.1 µm apart while Coarse Align lands 15 µm out, so the nearest target to
+  a source point is usually the *wrong* nucleus — and those wrong correspondences are
+  mutually consistent, being a whole-field shift of about one spacing. Trimmed ICP
+  from the coarse seed drives its own matched-pair RMSE from 5.10 µm to 1.06 µm while
+  moving the transform only from 15.5 µm to 13.1 µm: it converges, confidently, to the
+  wrong answer. The fit is annealed soft assignment instead (the similarity case of
+  coherent point drift, neighbour sum truncated), which has no such basin limit — at
+  large σ each point is drawn toward a weighted mean of many targets, which is the same
+  nuclear architecture Coarse Align correlates, and annealing σ from 20 µm to 1 µm walks
+  that down to per-nucleus correspondence. On the identical point sets that left ICP at
+  13.1 µm it reaches 1.02 µm.
+
+  **Resolution is the accuracy, not the point count.** Holding the detector's parameters
+  fixed *in microns* so only the sampling changes: at pyramid level s1 the fit disagrees
+  with 10x by 1.023 µm, and detecting 2.2× as many nuclei at s1 changes that by 0.002 µm.
+  Running the same detector at full resolution gives 0.878 µm, and taking the label
+  centroids at full resolution too gives 0.682 µm. A coarser pixel does not add noise
+  that 10⁵ points average away — it biases each peak, and a bias does not average away.
+  So the level is not tunable: both point sets are built at s0.
+
+  **The acceptance bar is not a ruler fine enough to measure this.** All three estimates
+  — 10x's, the landmark fit and the automatic one — agree with each other only to about
+  a micron in every pairing, while the automatic fit reproduces itself to **0.02 µm**
+  (eight independent random halves of the detections agree to 0.010–0.035 µm). So the
+  residual micron is not this estimator's noise. `scripts/score_nuclei_align.py` reports
+  the check that is evidence rather than agreement with another estimate: fit on one half
+  of the *section*, then score every candidate transform on the other half's nuclei,
+  which that fit has never seen. The automatic fit wins on both halves of both datasets,
+  including against the reference it is being compared to — pancreas 1.472/1.139 µm
+  against 10x's 1.479/1.240, crop_6 0.982/1.012 against the landmark fit's 1.299/1.217.
+
+  It says how much to believe itself, as Coarse Align does. Confidence is an **enrichment
+  over chance** — how many more H&E nuclei land within a micron of a nuclear mask than a
+  Poisson field of the same density would — so it is comparable across datasets where a
+  raw matched fraction is not (31% on the pancreas and 45% on crop_6 are the same quality
+  of fit). Measured: 17.2× and 22.0× when right, against 1.6×/1.8× at the coarse seed,
+  1.4× for the fitted transform rotated 5°, and 1.0×/0.8× for a fit seeded 640 µm out,
+  which does not converge. Nothing observed sits between 1.8 and 17.
+
+  One to three minutes on a whole section, most of it finding nuclei at full resolution.
+  It refuses rather than approximating on a dataset with no `nucleus_labels`: matching
+  haematoxylin peaks against *cell* centroids would return a confident transform wrong by
+  however far a nucleus sits from its cell's centre.
+
+### Changed
+- **`flip_matrix` is now the one definition of the H&E flip** (`utils/registration.py`).
+  Four hand-written copies of the same 3×3 had accumulated — in `tab_he_registration`,
+  `tab_arms`, `tab_external_images` and `scripts/score_coarse_align.py` — and the flip is
+  load-bearing: `coarse` and `fine` are both maps *from* the flipped frame, and Coarse
+  Align reports a detected reflection by asking the caller to tick a flip rather than
+  baking it into the matrix. A copy that composed the axes in the other order, or used the
+  wrong side's shape, would misplace a mirrored overlay with nothing to catch it.
+  `tests/test_nuclei_align.py` is the source guard.
+
 ### Fixed
 - **Coarse Align rarely produced a usable starting transform** (issue `xv-asc`). On the
   pancreas reference dataset it returned scale 0.5515 where the truth is 1.2891, and

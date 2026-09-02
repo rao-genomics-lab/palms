@@ -426,6 +426,62 @@ Segment tissue from background, for a coarse initial alignment.
 
 > Extract a binary tissue mask via thresholding + morphological cleanup.
 
+### `compute_coarse_affine`
+
+```python
+from palms.utils.registration import compute_coarse_affine
+compute_coarse_affine(target_field, source_field, target_downsample=1.0, source_downsample=1.0, scale_prior=None, scale_band=0.25, n_scales=7, rotation_step=2.0, mirror=True, refine=True, scale_source='search', source_shape_yx=None)
+```
+
+Global search in rotation, scale and reflection over the cross-correlation of blurred nuclear density — the starting transform, with no landmarks.
+
+> Find the similarity that best overlays an H&E on the Xenium morphology.
+
+### `register_he_nuclei`
+
+```python
+from palms.utils.nuclei_registration import register_he_nuclei
+register_he_nuclei(*args, **kwargs) -> 'NucleiAlignResult'
+```
+
+Automatic *fine* registration: haematoxylin nuclei in the H&E matched to the centroids of Xenium's nuclear masks, seeded by the coarse transform. Sub-micron on the reference datasets.
+
+> Blocking form of :func:`register_he_nuclei_steps`.
+
+```python
+from palms.utils.nuclei_registration import register_he_nuclei
+
+fit = register_he_nuclei(
+    sdata.labels['nucleus_labels'],
+    sdata.images['he_image'],
+    seed_3x3=coarse.affine_3x3_yx,   # from compute_coarse_affine
+    pixel_size_um=0.2125,
+)
+print(fit.summary())
+```
+
+### `detect_he_nuclei`
+
+```python
+from palms.utils.nuclei_registration import detect_he_nuclei
+detect_he_nuclei(image, pixel_size_um: 'float', downsample: 'float' = 1.0, od_floor: 'float' = 0.04, tile: 'int' = 2048) -> 'np.ndarray'
+```
+
+Sub-pixel nucleus positions in an H&E, from deconvolved haematoxylin optical density.
+
+> Sub-pixel nucleus positions in an H&E, as (N, 3): y, x, haematoxylin OD.
+
+### `nucleus_centroids`
+
+```python
+from palms.utils.nuclei_registration import nucleus_centroids
+nucleus_centroids(labels, downsample: 'float' = 1.0, block_rows: 'int' = 1024) -> 'np.ndarray'
+```
+
+Area centroids of every label in a label raster, streamed in row blocks.
+
+> Area centroids of every label in a 2-D label raster, as (N, 2) in (y, x).
+
 ## Cache, storage and persistence
 
 **Never write to the zarr store directly.** Every element write goes through the staging-and-rename path in `zarr_safe`, which journals the operation and moves the previous copy to `.xv_trash/` rather than deleting it. Writing straight to the store leaves it invalid if anything interrupts.

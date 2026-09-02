@@ -47,7 +47,8 @@ from palms.utils.affine_compare import (  # noqa: E402
 )
 from palms.utils.registration import (  # noqa: E402
     SCALE_BAND_FOR, build_alignment_fields, compute_coarse_affine,
-    extract_tissue_mask_fluorescence, extract_tissue_mask_he, mask_area_scale,
+    extract_tissue_mask_fluorescence, extract_tissue_mask_he, flip_matrix,
+    mask_area_scale,
 )
 
 
@@ -137,13 +138,9 @@ def main() -> None:
     # The reference includes whatever flip the session carries; the coarse result
     # is expressed in the flipped frame, so compose the same flip onto it before
     # comparing. Otherwise a mirrored dataset reads as a total failure.
-    coarse = result.affine_3x3_yx
-    flip = np.eye(3)
-    if session.get("flip_v"):
-        flip = np.array([[-1, 0, he_shape_yx[0] - 1], [0, 1, 0], [0, 0, 1]], float) @ flip
-    if session.get("flip_h") or result.mirrored:
-        flip = np.array([[1, 0, 0], [0, -1, he_shape_yx[1] - 1], [0, 0, 1]], float) @ flip
-    coarse = coarse @ flip
+    coarse = result.affine_3x3_yx @ flip_matrix(
+        he_shape_yx, bool(session.get("flip_v")),
+        bool(session.get("flip_h")) or result.mirrored)
 
     ours, theirs = decompose(coarse), decompose(reference)
     report = {

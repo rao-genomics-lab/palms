@@ -385,6 +385,26 @@ def load_landmarks(path):
     return result
 
 
+def flip_matrix(shape_yx, flip_v: bool, flip_h: bool) -> np.ndarray:
+    """The (y, x) affine taking unflipped H&E pixels into the flipped frame.
+
+    **The one definition of the flip**, because the flip is load-bearing and had
+    four hand-written copies. ``coarse`` and ``fine`` are both maps *from* the
+    flipped frame (see the frame rule in ``tab_he_registration``'s docstring),
+    and ``compute_coarse_affine`` reports a detected reflection by asking the
+    caller to tick a flip rather than baking it into the matrix — so a copy of
+    this that composed the two in the other order, or used the wrong side's
+    shape, would put a mirrored H&E somewhere wrong with nothing to catch it.
+    """
+    h, w = float(shape_yx[0]), float(shape_yx[1])
+    m = np.eye(3)
+    if flip_v:
+        m = np.array([[-1, 0, h - 1], [0, 1, 0], [0, 0, 1]], dtype=np.float64) @ m
+    if flip_h:
+        m = np.array([[1, 0, 0], [0, -1, w - 1], [0, 0, 1]], dtype=np.float64) @ m
+    return m
+
+
 # ─── Tissue masks ─────────────────────────────────────────────────────────────
 
 def pick_level(pyramid, min_long_side=384):

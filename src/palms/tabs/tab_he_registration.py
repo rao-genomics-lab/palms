@@ -33,8 +33,9 @@ from palms.utils.registration import (
     load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
     extract_tissue_mask_fluorescence, extract_tissue_mask_he, compute_coarse_affine,
     describe_pyramid, parse_rgb_image_for_store, pick_level, mask_area_scale,
-    build_alignment_fields, he_pixel_size_um, SCALE_BAND_FOR,
+    build_alignment_fields, he_pixel_size_um, flip_matrix, SCALE_BAND_FOR,
 )
+from palms.utils.nuclei_registration import register_he_nuclei_steps
 from palms.utils.reporting import report_write_failure
 
 
@@ -48,6 +49,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     he_opacity_slider.enabled = False
 
     coarse_align_button = PushButton(label="Coarse Align", enabled=False)
+    nuclei_align_button = PushButton(label="Fine Align (nuclei)", enabled=False)
 
     add_xenium_lm_button = PushButton(label="Add Xenium Landmark", enabled=False)
     add_he_lm_button = PushButton(label="Add H&E Landmark", enabled=False)
@@ -78,13 +80,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         shape = he_state.get("he_shape_yx")
         if shape is None:
             return np.eye(3)
-        h, w = shape
-        M = np.eye(3)
-        if he_flip_v.value:
-            M = np.array([[-1, 0, h - 1], [0, 1, 0], [0, 0, 1]], dtype=np.float64) @ M
-        if he_flip_h.value:
-            M = np.array([[1, 0, 0], [0, -1, w - 1], [0, 0, 1]], dtype=np.float64) @ M
-        return M
+        return flip_matrix(shape, he_flip_v.value, he_flip_h.value)
 
     def _apply_he_affine():
         flip = _build_flip_affine()
@@ -267,6 +263,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_state["affine_3x3"] = None
         he_state["coarse_affine"] = None
         _apply_he_affine()
+        _refresh_nuclei_button()
         _create_landmark_layers()
         _save_he_to_sdata(pyramid, Path(path).name)
         he_opacity_slider.enabled = True
@@ -338,6 +335,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_state["affine_3x3"] = None
         _apply_he_affine()
         _save_he_affine_to_sdata()
+        _refresh_nuclei_button()
         confidence = "" if result.confident else " — LOW CONFIDENCE, check the overlay"
         reg_status_label.value = (
             f"Coarse aligned (scale={result.scale:.4f}, "
@@ -418,6 +416,115 @@ def build_tab(ctx: ViewerContext) -> tuple:
             lambda exc: _on_coarse_failed(str(exc)) if ctx.dataset_generation == gen else None)
         worker.start()
 
+    def _nuclei_labels_element():
+        """The finest level of ``nucleus_labels``, or None if the store has none.
+
+        The nuclei fit is refused rather than approximated when it is missing: a
+        cell-boundary raster is not a nuclear one, and matching haematoxylin
+        peaks against cell centroids would return a confident transform that is
+        wrong by however far a nucleus sits from its cell's centre.
+        """
+        if sdata is None or "nucleus_labels" not in getattr(sdata, "labels", {}):
+            return None
+        element = sdata.labels["nucleus_labels"]
+        scales = _extract_dt_scales(element) if hasattr(element, "children") else None
+        return scales[0] if scales else getattr(element, "data", element)
+
+    def _refresh_nuclei_button():
+        seed = he_state["affine_3x3"] if he_state["affine_3x3"] is not None \
+            else he_state["coarse_affine"]
+        nuclei_align_button.enabled = bool(
+            he_state["he_layer"] is not None and seed is not None
+            and _nuclei_labels_element() is not None)
+
+    def _on_nuclei_done(result):
+        nuclei_align_button.enabled = True
+        if result is None:
+            return
+        he_state["affine_3x3"] = result.affine_3x3_yx
+        _apply_he_affine()
+        _save_he_affine_to_sdata()
+        confidence = "" if result.confident else " — LOW CONFIDENCE, check the overlay"
+        reg_status_label.value = (
+            f"Fine aligned on {result.n_matched:,} nuclei "
+            f"(median residual {result.median_residual_um:.2f} um, "
+            f"moved {result.seed_shift_um:.1f} um){confidence}"
+        )
+        reg_residuals_qt.setPlainText(
+            "Automatic fine registration from nuclei.\n" + result.summary()
+            + "\n\nPlace landmarks and press 'Compute Registration' only if this\n"
+              "needs overriding — it replaces this fit."
+        )
+        # Recorded as the matrix it produced, in the idiom of `he:coarse_align`
+        # and for the same reason: the inputs are two point clouds of ~10^5
+        # nuclei, which cannot be inlined, and are derived from an H&E that the
+        # notebook's `xenium(data_path)` preamble does not carry.
+        ctx.record_node(
+            "he:nuclei_register",
+            f"\n# Automatic fine H&E registration: haematoxylin nuclei in the H&E\n"
+            f"# matched to the centroids of sdata['nucleus_labels'], by annealed\n"
+            f"# soft assignment seeded by the coarse transform.\n"
+            f"# {result.n_matched:,} of {result.n_source:,} detections within 1 um of a\n"
+            f"# nuclear mask ({result.enrichment:.1f}x chance), median residual "
+            f"{result.median_residual_um:.2f} um.\n"
+            f"# The matrix it produced, for the flipped H&E frame:\n"
+            f"he_affine = np.array({np.asarray(result.affine_3x3_yx).tolist()})",
+            deps=["preamble"], kind=TERMINAL, label="H&E fine align (nuclei)",
+        )
+
+    def _on_nuclei_failed(message):
+        nuclei_align_button.enabled = True
+        reg_status_label.value = f"Fine align failed: {message}"
+        reg_residuals_qt.setPlainText(f"Automatic fine registration could not run.\n{message}")
+
+    def on_nuclei_align():
+        labels = _nuclei_labels_element()
+        if labels is None:
+            reg_status_label.value = "No nucleus_labels in this dataset"
+            return
+        seed = he_state["affine_3x3"] if he_state["affine_3x3"] is not None \
+            else he_state["coarse_affine"]
+        if seed is None:
+            reg_status_label.value = "Run Coarse Align first — the nuclei fit needs a starting transform"
+            return
+        # Read on the main thread: the worker must not touch a Qt widget.
+        flip_v, flip_h = he_flip_v.value, he_flip_h.value
+        he_full = he_state["he_shape_yx"]
+        # The pyramid goes over whole; nuclei_registration.finest_level picks the
+        # full-resolution level, which is where the accuracy is.
+        he_pyramid = he_state["he_layer"].data
+        he_px_um = he_state.get("he_pixel_size_um")
+        nuclei_align_button.enabled = False
+        reg_status_label.value = "Fine align: matching nuclei to nuclear masks..."
+        gen = ctx.dataset_generation
+
+        @thread_worker
+        def _compute_nuclei():
+            steps = register_he_nuclei_steps(
+                labels, he_pyramid, seed, pixel_size_um=ctx.pixel_size,
+                he_pixel_size_um=he_px_um, he_shape_yx=he_full,
+                flip_v=flip_v, flip_h=flip_h,
+            )
+            while True:
+                try:
+                    yield next(steps)
+                except StopIteration as done:
+                    return done.value
+
+        worker = _compute_nuclei()
+        worker.yielded.connect(
+            lambda stage: _on_nuclei_progress(stage) if ctx.dataset_generation == gen else None)
+        worker.returned.connect(
+            lambda result: _on_nuclei_done(result) if ctx.dataset_generation == gen else None)
+        worker.errored.connect(
+            lambda exc: _on_nuclei_failed(str(exc)) if ctx.dataset_generation == gen else None)
+        worker.start()
+
+    def _on_nuclei_progress(stage):
+        name, fraction = stage
+        if fraction < 1.0:
+            reg_status_label.value = f"Fine align ({fraction * 100:.0f}%): {name}"
+
     def on_add_xenium_lm():
         lm = he_state["xenium_lm_layer"]
         if lm is not None:
@@ -441,6 +548,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_state["affine_3x3"] = None
         he_state["coarse_affine"] = None
         _apply_he_affine()
+        _refresh_nuclei_button()
         reg_residuals_qt.clear()
         reg_status_label.value = "Landmarks cleared"
         register_button.enabled = False
@@ -464,6 +572,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         affine, residuals = compute_landmark_affine(xen_pts, he_pts)
         he_state["affine_3x3"] = affine
         _apply_he_affine()
+        _refresh_nuclei_button()
         lines = [f"Registration: {n} landmarks, similarity transform"]
         lines.append(f"Mean residual: {residuals.mean():.1f} px ({residuals.mean() * pixel_size:.1f} um)")
         lines.append(f"Max  residual: {residuals.max():.1f} px ({residuals.max() * pixel_size:.1f} um)")
@@ -552,6 +661,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             affine = data["affine_3x3_yx"]
             he_state["affine_3x3"] = affine
             _apply_he_affine()
+            _refresh_nuclei_button()
             scale = np.sqrt(affine[0, 0]**2 + affine[0, 1]**2)
             reg_residuals_qt.setPlainText(f"Loaded affine (scale={scale:.4f})")
         if "he_filename" in data:
@@ -570,6 +680,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     he_load_button.clicked.connect(on_load_he)
     he_opacity_slider.changed.connect(on_he_opacity)
     coarse_align_button.clicked.connect(on_coarse_align)
+    nuclei_align_button.clicked.connect(on_nuclei_align)
     add_xenium_lm_button.clicked.connect(on_add_xenium_lm)
     add_he_lm_button.clicked.connect(on_add_he_lm)
     clear_lm_button.clicked.connect(on_clear_lm)
@@ -605,6 +716,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         flip_row,
         he_opacity_slider,
         coarse_align_button,
+        nuclei_align_button,
         lm_btn_row,
         register_button,
         # Filled at :361 but never laid out. Tab-HE-Registration.md has always
@@ -667,6 +779,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_opacity_slider.enabled = True
         he_load_button.enabled = True
         coarse_align_button.enabled = morph_thumb is not None
+        _refresh_nuclei_button()
         has_affine = he_state["affine_3x3"] is not None or he_state["coarse_affine"] is not None
         how = ""
         if has_affine:
@@ -730,6 +843,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         "he_flip_h": he_flip_h,
         "he_opacity_slider": he_opacity_slider,
         "coarse_align_button": coarse_align_button,
+        "nuclei_align_button": nuclei_align_button,
         "create_landmark_layers": _create_landmark_layers,
         "apply_he_affine": _apply_he_affine,
     }
