@@ -1496,7 +1496,7 @@ transcript_density = np.where(
 
 One gene's transcripts, read from `sdata.points['transcripts']` and placed in the morphology image's coordinate frame.
 
-Two things this template exists to get right. **Filter, then transform**: `sd.transform` maps every row it is handed, so transforming the whole table and filtering afterwards does the work for every gene in the panel — measured on a 1.4 GB `transcripts.parquet`, 95 s that way against 5 s this way, for an identical answer. And the pixel scale is **declared**, not applied: it is already on the element, so `sd.transform` uses it rather than a division whose direction is easy to get backwards. It is also a separate step from the histogram because it is the slow half — the bin-size slider re-runs only the binning.
+Two things this template exists to get right. **Filter, then transform**: `sd.transform` maps every row it is handed, so transforming the whole table and filtering afterwards does the work for every gene in the panel — measured on a 1.4 GB `transcripts.parquet`, 95 s that way against 5 s this way, for an identical answer. And the pixel scale is **declared**, not applied: it is already on the element, so `sd.transform` uses it rather than a division whose direction is easy to get backwards. It is also a separate step from the histogram because it is the slow half — the bin-size slider re-runs only the binning. A third thing it gets right by *not* doing it: the control codewords are excluded by checking the requested name against `adata.var_names`, not by a row-wise test on the points element's `is_gene` column. XOA 2.0.0 dropped that column, so reading it raised `KeyError` on any modern bundle; the table carries the panel on every format version.
 
 **Contract**
 
@@ -1505,7 +1505,7 @@ Two things this template exists to get right. **Filter, then transform**: `sd.tr
 | `gene` | `str` | yes |
 | `min_qv` | `int` | yes |
 
-- **Requires:** `sd`, `sdata`
+- **Requires:** `adata`, `sd`, `sdata`
 - **Outputs:** `transcript_points`
 - **Blocks:** `main`
 
@@ -1521,23 +1521,23 @@ Two things this template exists to get right. **Filter, then transform**: `sd.tr
 from spatialdata.transformations import get_transformation
 
 _transcripts = sdata.points['transcripts']
-# The same two filters the viewer's transcript preprocessing bakes into its
-# per-gene feather files, stated here instead of inherited: qv is the
-# call-quality floor, and is_gene drops the control probes, which are not
-# transcripts of anything.
-#
-# `is_gene == True` rather than a bare `is_gene`, which reads more naturally and
-# is what a linter would ask for. dask turns this mask into a parquet filter
-# only if every term is a comparison: a bare boolean column makes the whole
-# conjunction unpushable. It buys nothing with the reader spatialdata actually
-# uses, which never pushes a filter down at all — see
-# docs/transcript-read-pushdown.md — but it costs nothing, and it is the form
-# that would benefit if that ever changes.
+# Control codewords are not transcripts of anything, so only panel genes are
+# binned. The gene set is the table's: spatialdata_io builds `adata` from the
+# 'Gene Expression' features alone, so a name that survives this check is a real
+# target. This used to be a row-wise `is_gene == True` on the points element,
+# which is not portable — XOA 2.0.0 dropped that column from
+# transcripts.parquet, and reading it there raises KeyError — whereas the table
+# is present by construction on every format version.
+if $gene not in adata.var_names:
+    raise ValueError("not a panel gene: " + $gene)
+
+# qv is the other filter the viewer's transcript preprocessing bakes into its
+# per-gene feather files, stated here instead of inherited: it is the
+# call-quality floor.
 transcript_points = (
     _transcripts[
         (_transcripts['feature_name'] == $gene)
         & (_transcripts['qv'] >= $min_qv)
-        & (_transcripts['is_gene'] == True)
     ][['x', 'y', 'cell_id']]
     .compute()
     # A filtered frame keeps the original row labels, and PointsModel.parse

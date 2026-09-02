@@ -498,7 +498,12 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "it is already on the element, so `sd.transform` uses it rather than "
             "a division whose direction is easy to get backwards. It is also a "
             "separate step from the histogram because it is the slow half — the "
-            "bin-size slider re-runs only the binning."
+            "bin-size slider re-runs only the binning. A third thing it gets "
+            "right by *not* doing it: the control codewords are excluded by "
+            "checking the requested name against `adata.var_names`, not by a "
+            "row-wise test on the points element's `is_gene` column. XOA 2.0.0 "
+            "dropped that column, so reading it raised `KeyError` on any modern "
+            "bundle; the table carries the panel on every format version."
         ),
     ),
     "transcripts.density": TemplateNote(

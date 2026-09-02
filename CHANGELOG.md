@@ -6,6 +6,41 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Fixed
+- **The transcript density could not run at all on a Xenium 2.0.0 dataset.** `Compute
+  Density` raised `KeyError: 'is_gene'`. The `transcripts.gene` template filtered the
+  points element on an `is_gene` column that XOA 2.0.0 no longer writes to
+  `transcripts.parquet`, and `spatialdata_io` does not synthesise one — so on any modern
+  bundle the recorded step died on its third statement while the preview, which reads the
+  feather index instead, drew a correct picture. The two halves disagreeing is exactly what
+  the preview design set out to prevent.
+
+  The control codewords are now excluded by the gene set rather than by a column: the
+  requested name is checked against `adata.var_names`, which `spatialdata_io` builds from
+  the `Gene Expression` features alone and which exists on every format version. A control
+  codeword is refused by name instead of filtered row by row. Verified against
+  `Xenium_V1_human_Pancreas_FFPE`: `INS` returns 50,150 transcripts, matching its feather
+  file row for row, and `NegControlCodeword_0500` is refused.
+
+- **`palms-preprocess` silently cached the control codewords as if they were genes.** Its
+  filter was `if "is_gene" in df.columns: …`, so the same missing column turned the filter
+  into a no-op — while the step printed `Filtering: is_gene=True, qv >= 20`, which was not
+  what it did. On the pancreas dataset that wrote 514 feather files for a 377-gene panel,
+  137 of them `NegControlCodeword_*`, `NegControlProbe_*` and `UnassignedCodeword_*`. The
+  gene set now comes from `gene_panel.json`, whose per-target `descriptor` does not depend
+  on the format version and which was verified to name exactly the 377 features
+  `cell_feature_matrix.h5` types as `Gene Expression`. A bundle with no usable panel file
+  says so and keeps everything, rather than claiming a filter it did not apply.
+
+  The corrected filter reproduces 10x's own count exactly: rebuilding the pancreas cache
+  keeps **7,170,423** transcripts, which is `total_high_quality_decoded_transcripts` in that
+  run's `metrics_summary.csv` to the row. The unfiltered run kept 7,171,453 — the extra
+  1,030 being control-codeword calls above the quality floor.
+
+  Existing caches do not need rebuilding: the extra files are wasted space, not a wrong
+  answer, because the viewer's gene list comes from `adata.var_names` and never offered
+  them.
+
 ### Added
 - **The density heatmap previews while you browse, and the preview is never recorded.**
   Choosing a gene cost 2.3–6.5 s, because `Compute Density` fetches that gene out of

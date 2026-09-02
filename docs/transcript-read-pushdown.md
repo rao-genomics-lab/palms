@@ -144,8 +144,8 @@ is filed as beads `xv-5n7`; §5 is what PALMS does until it lands.
 ## 5. What shipped, and what was then withdrawn
 
 Both halves shipped together in PR #68, because neither works alone. **The first half was
-reverted on 2026-09-02** — see §6. What remains is `transcripts.gene.tmpl` saying
-`(_transcripts['is_gene'] == True)`, which is correct either way and free.
+reverted on 2026-09-02** — see §6, and the second half was removed later the same day: see
+§7. Nothing of PR #68 remains in the tree.
 
 The withdrawn half was `utils/arrow_points_read.py`: a context manager applied around the
 `read_zarr` in `loader._open_cache`, rebinding `spatialdata._io.io_points.read_parquet` to
@@ -296,3 +296,26 @@ same win through a *stock* call is hive partitioning by `feature_name`, which is
 group counts; a gene name outside every min/max range (`ZZZZZZZ`) is the one-line test for
 whether a reader prunes at all. Per-part sorting of the full cache took 105 s at 1.4 GB peak
 RSS — bounded per part, as `sort_values` over ~128.7 M rows would not have been.
+
+## 7. The `is_gene` half is gone too, because the column is not universal
+
+Everything above reasons about a mask of the shape
+`points[(feature_name == g) & (qv >= q) & is_gene]`, and §5 kept the
+`(is_gene == True)` spelling on the grounds that it was "correct either way and free". The
+first of those was wrong. **`is_gene` is not a column every Xenium bundle has.** XOA 2.0.0
+(`experiment.xenium` format `major_version` 4) does not write it to `transcripts.parquet`,
+and `spatialdata_io.xenium` does not synthesise one, so the term raised `KeyError` on the
+whole conjunction — measured on `Xenium_V1_human_Pancreas_FFPE`, whose points element
+carries `x y z feature_name cell_id overlaps_nucleus codeword_index qv fov_name
+transcript_id nucleus_distance` and nothing else.
+
+`transcripts.gene.tmpl` now excludes the control codewords by checking the requested name
+against `adata.var_names` before the read, so the mask is two terms, not three. This does
+not change any measurement in §§1–4: those timed `feature_name` and `qv`, and the row
+counts they report are the same. It removes the pushdown observation's third row, which
+was worth nothing on the reader spatialdata actually uses in any case.
+
+**The dask rule the term illustrated still holds** and is worth keeping for whatever term
+comes next: a bare boolean column makes the entire conjunction unpushable, so a boolean
+term has to be written as a comparison (`col == True`) to survive into
+`ParquetFileFormat`'s filter list.

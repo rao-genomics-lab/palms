@@ -21,6 +21,7 @@ import argparse
 import resource
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Optional
 from collections import defaultdict
 
 import pandas as pd
@@ -129,10 +130,38 @@ def cache_is_valid(cache_dir: Path, parquet_path: Path) -> bool:
 _cache_is_valid = cache_is_valid
 
 
+def panel_genes(data_dir: Path) -> Optional[set[str]]:
+    """The panel's real targets, or None if this bundle does not say.
+
+    `transcripts.parquet` used to carry an `is_gene` column and this step
+    filtered on it. XOA 2.0.0 dropped that column, so on a modern bundle the
+    filter silently did nothing and every control codeword got its own feather
+    file — 514 files where the panel has 377 genes, on the pancreas dataset.
+
+    `gene_panel.json` says it instead, in a way that does not depend on the
+    format version: each target declares a `descriptor`, and only `gene` is a
+    real target. Verified against `cell_feature_matrix.h5` on that dataset —
+    the 377 `descriptor == "gene"` names are exactly its 377 "Gene Expression"
+    features, which is the set `spatialdata_io` builds `adata.var_names` from,
+    so the feather cache and the viewer's gene list agree by construction.
+    """
+    panel = data_dir / "gene_panel.json"
+    if not panel.exists():
+        return None
+    try:
+        targets = json.loads(panel.read_text())["payload"]["targets"]
+        names = {t["type"]["data"]["name"]
+                 for t in targets if t["type"]["descriptor"] == "gene"}
+    except Exception:
+        return None
+    return names or None
+
+
 def preprocess(parquet_path: Path,
                cache_dir: Path,
                min_qv: int = MIN_QV,
-               chunk_size: int = CHUNK_SIZE):
+               chunk_size: int = CHUNK_SIZE,
+               genes: Optional[set[str]] = None):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     if cache_is_valid(cache_dir, parquet_path):
@@ -152,7 +181,11 @@ def preprocess(parquet_path: Path,
     print("Rebuilding transcript cache...")
 
     print(f"Reading {parquet_path} in chunks of {chunk_size:,} rows ...")
-    print(f"Filtering: is_gene=True, qv >= {min_qv}")
+    if genes is not None:
+        print(f"Filtering: {len(genes):,} panel genes, qv >= {min_qv}")
+    else:
+        print(f"Filtering: qv >= {min_qv} "
+              "(no gene_panel.json — control codewords are kept)")
     print(f"Writing feather files to {cache_dir}")
     print()
 
@@ -169,9 +202,9 @@ def preprocess(parquet_path: Path,
     # columns; without this every one of them is decoded and converted to pandas on
     # every batch just to be dropped a few lines later. Intersected with the file's
     # real schema so a dataset missing a column still works (the guards below already
-    # handle absent 'is_gene'/'qv').
+    # handle an absent 'qv').
     present = set(parquet_file.schema_arrow.names)
-    read_cols = [c for c in [*KEEP_COLS, "is_gene"] if c in present]
+    read_cols = [c for c in KEEP_COLS if c in present]
 
     # One open Arrow IPC writer per gene, created on that gene's first flush. This is
     # what replaces the old read-modify-write flush: feather has no append, so the
@@ -213,9 +246,12 @@ def preprocess(parquet_path: Path,
                 df = batch.to_pandas()
                 processed += len(df)
 
-                # Filter: only gene transcripts with sufficient quality
-                if "is_gene" in df.columns:
-                    df = df[df["is_gene"].astype(bool)]
+                # Filter: only gene transcripts with sufficient quality.
+                # The gene set comes from gene_panel.json, not from an `is_gene`
+                # column: XOA 2.0.0 has no such column, and the guard that used
+                # to skip the filter when it was absent made that a silent pass.
+                if genes is not None:
+                    df = df[df[GENE_COL].astype(str).isin(genes)]
                 if "qv" in df.columns:
                     df = df[df["qv"] >= min_qv]
 
@@ -341,8 +377,13 @@ def main():
     if not parquet_path.exists():
         sys.exit(f"Error: {parquet_path} not found. Is this a Xenium output directory?")
 
+    genes = panel_genes(data_dir)
+    if genes is None:
+        print(f"Warning: no usable {data_dir / 'gene_panel.json'}; control "
+              "codewords cannot be told from genes and will be cached too.")
+
     preprocess(parquet_path=parquet_path, cache_dir=cache_dir,
-               min_qv=args.min_qv, chunk_size=args.chunk_size)
+               min_qv=args.min_qv, chunk_size=args.chunk_size, genes=genes)
 
 
 if __name__ == "__main__":

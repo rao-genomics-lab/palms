@@ -31,13 +31,15 @@ sd = pytest.importorskip("spatialdata")
 plt = pytest.importorskip("matplotlib.pyplot")
 
 from palms.utils.step_templates import builtin_assemble, builtin_text  # noqa: E402
-from palms.utils.steps import Step, StepExecutor, check_step  # noqa: E402
+from palms.utils.steps import Step, StepError, StepExecutor, check_step  # noqa: E402
 
 PIXEL_SIZE = 0.5
 #: 100 x 200 pixels, i.e. 50 x 100 microns.
 IMAGE_HW = (100, 200)
 CLUSTER_KEY = "leiden_r1.0"
 GENE = "GeneA"
+#: In the points element but not in the table, exactly like a real one.
+CONTROL = "NegControlCodeword_0500"
 
 
 def _sdata():
@@ -53,18 +55,20 @@ def _sdata():
 
     # Two genes. GeneA sits in the left half of the image, GeneB in the right,
     # so a wrong axis order or a missed filter shows up as a shifted picture.
+    # A control codeword sits across the whole width: it is in the points
+    # element but *not* in the table, which is how a real bundle distinguishes
+    # it — `is_gene` is absent here because XOA 2.0.0 does not write it.
     rows = []
-    for gene, x_range in ((GENE, (0.0, 20.0)), ("GeneB", (30.0, 50.0))):
+    for gene, x_range in ((GENE, (0.0, 20.0)), ("GeneB", (30.0, 50.0)),
+                          (CONTROL, (0.0, 50.0))):
         for i in range(200):
             rows.append({
                 "x": rng.uniform(*x_range),
                 "y": rng.uniform(0.0, 50.0),
                 "feature_name": gene,
                 "cell_id": f"cell{i % 20}",
-                # Every twentieth call is below the quality floor, and every
-                # twenty-fifth is a control probe rather than a gene.
+                # Every twentieth call is below the quality floor.
                 "qv": 10.0 if i % 20 == 0 else 40.0,
-                "is_gene": i % 25 != 0,
             })
     points = PointsModel.parse(
         pd.DataFrame(rows),
@@ -79,7 +83,11 @@ def _sdata():
     n = 20
     adata = anndata.AnnData(rng.poisson(3, size=(n, 4)).astype("float32"))
     adata.obs_names = [str(i) for i in range(n)]
-    adata.var_names = [f"Gene{i}" for i in range(4)]
+    # The panel is what the table carries, and it is what the template
+    # checks a requested gene against. The control codeword is absent by
+    # design — spatialdata_io builds the table from the "Gene Expression"
+    # features alone.
+    adata.var_names = [GENE, "GeneB", "GeneC", "GeneD"]
     adata.obs["cell_id"] = [f"cell{i}" for i in range(n)]
     adata.obs[CLUSTER_KEY] = pd.Categorical(["0"] * (n // 2) + ["1"] * (n - n // 2))
     adata.obs["region"] = pd.Categorical(["cells"] * n)
@@ -144,9 +152,10 @@ def test_both_templates_are_self_contained():
 
 
 #: Of the 200 rows per gene the fixture writes, i%20==0 is below the quality
-#: floor (10) and i%25==0 is a control probe (8); i=0 and i=100 are both, so 16
-#: rows are dropped and 184 survive.
-KEPT = 184
+#: floor, so 10 are dropped and 190 survive. The control codeword is a whole
+#: feature rather than a scattering of rows, which is how a bundle actually
+#: carries it — see `test_a_control_codeword_is_refused_by_name`.
+KEPT = 190
 
 
 def test_the_fetch_returns_one_gene_in_the_image_frame():
@@ -169,15 +178,34 @@ def test_the_histogram_matches_the_image_grid():
     assert density.sum() == KEPT
 
 
-def test_the_quality_floor_and_the_control_probes_are_filtered_out():
-    """The two filters palms-preprocess bakes into its feather files. The
-    density read those files before it read the points element, so dropping
-    either here would silently raise every count."""
+def test_the_quality_floor_is_applied():
+    """One of the two filters palms-preprocess bakes into its feather files.
+    The density read those files before it read the points element, so dropping
+    it here would silently raise every count."""
     assert len(_run([_gene_step()]).ns["transcript_points"]) == KEPT
-    # Below every qv in the fixture: only the control probes are left out.
-    assert len(_run([_gene_step(min_qv=0)]).ns["transcript_points"]) == 192
+    # Below every qv in the fixture: the whole gene survives.
+    assert len(_run([_gene_step(min_qv=0)]).ns["transcript_points"]) == 200
     # Above every qv: nothing survives.
     assert len(_run([_gene_step(min_qv=50)]).ns["transcript_points"]) == 0
+
+
+def test_a_control_codeword_is_refused_by_name():
+    """The other filter, and the reason it is no longer a column test.
+
+    `transcripts.parquet` carried an `is_gene` column until XOA 2.0.0 dropped
+    it; the template read it unconditionally and raised KeyError on any modern
+    bundle, while palms-preprocess's `if "is_gene" in df.columns` guard turned
+    the same absence into a silent pass. The table's var_names says it instead,
+    on every format version — and it says it about the *fixture's* points, which
+    carry no is_gene at all.
+    """
+    assert "is_gene" not in _sdata().points["transcripts"].columns
+    with pytest.raises(StepError):
+        _run([_gene_step(gene=CONTROL)])
+    # ... and it is refused for being absent from the panel, not for being
+    # absent from the points element: the control has 200 rows there.
+    rows = _sdata().points["transcripts"].compute()
+    assert (rows["feature_name"].astype(str) == CONTROL).sum() == 200
 
 
 def test_transcripts_land_where_they_were_drawn():
@@ -269,16 +297,18 @@ def test_the_recorded_cells_replay_to_the_same_histogram():
 def _write_feather_cache(tmp_path, sdata):
     """The fixture's transcripts, as `palms-preprocess` would leave them.
 
-    Same two filters (`is_gene`, `qv >= MIN_QV`), same column names, one file
-    per gene — including a `cell_id`, which caches built before it was kept do
-    not have. `test_a_cache_without_cell_ids_...` writes the other shape.
+    Same two filters (the panel gene set, `qv >= MIN_QV`), same column names,
+    one file per gene — including a `cell_id`, which caches built before it was
+    kept do not have. `test_a_cache_without_cell_ids_...` writes the other
+    shape.
     """
     from palms.preprocess import MIN_QV, _write_sentinel
 
     cache = tmp_path / "transcript_cache"
     cache.mkdir()
+    panel = set(sdata.tables["table"].var_names)
     df = sdata.points["transcripts"].compute()
-    df = df[df["is_gene"].astype(bool) & (df["qv"] >= MIN_QV)]
+    df = df[df["feature_name"].astype(str).isin(panel) & (df["qv"] >= MIN_QV)]
     for gene, sub in df.groupby("feature_name", observed=True):
         sub.rename(columns={"x": "x_location", "y": "y_location"})[
             ["x_location", "y_location", "qv", "feature_name", "cell_id"]
