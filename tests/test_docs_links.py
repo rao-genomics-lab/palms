@@ -224,6 +224,7 @@ TAB_PAGES = {
     "Annotations": "Tab-Annotations.md",
     "Segmentation": "Tab-Segmentation.md",
     "Crop Dataset": "Tab-Crop-Dataset.md",
+    "Publish": "Tab-Publish.md",
     "Notebook": "Tab-Notebook.md",
     "Dataset": "Tab-Dataset.md",
     "Cache": "Tab-Cache.md",

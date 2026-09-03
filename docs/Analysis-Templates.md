@@ -70,6 +70,7 @@ substituted string for the settings currently in the owning tab.
 - [`he.landmark_align`](#helandmark_align) — Fine H&E registration from hand-placed matching landmarks.
 - [`he.load`](#heload) — The H&E image the registration works on, as a pyramid, finest level first.
 - [`he.nuclei_align`](#henuclei_align) — Fine H&E registration: haematoxylin nuclei matched onto the nuclear masks.
+- [`export.degafiles`](#exportdegafiles) — Export the dataset as Celldega DegaFiles - a browser-viewable copy.
 
 ## Setup
 
@@ -1864,4 +1865,70 @@ he_nuclei_fit = fit_nuclei_similarity(
     pixel_size_um=$pixel_size, image_shape_yx=he_nuclei_shape_yx)
 # The fine transform now in force: flipped H&E pixels to Xenium pixels, (y, x).
 he_affine = he_nuclei_fit.affine_3x3_yx
+```
+
+## Publishing
+
+### `export.degafiles`
+
+**Run by:** [Publish](Tab-Publish)
+
+Writes the whole dataset out as a Celldega **DegaFile** set — WebP Deep Zoom image pyramids plus Parquet vector data, which Celldega's `Landscape` widget renders in a browser with no server and no install. The conversion is celldega's own `pre.main`; this is a wrapper over it, not a second implementation of their format.
+
+The one template whose computation is third-party, and the reason it still imports `palms` rather than calling `celldega.pre.main` directly: their entry point `os.chdir`s into the directory it is pointed at and decompresses roughly 200 MB in place. Pointed at raw 10x output that leaves duplicates beside the reader's own data, and fails outright on a read-only mount. `export_degafiles` runs it against a farm of symlinks under `viewer_cache/` instead, so the staging is not a convenience a replayed notebook may skip. `out_dir` is recorded relative to the dataset, so a replay writes beside whatever data it was pointed at. Needs the optional `dega` extra, installed with `--no-deps`.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `out_dir` | `str` | yes |
+| `tile_size` | `int` | yes |
+| `image_tile_layer` | `str` | yes |
+| `max_workers` | `int` | yes |
+
+- **Requires:** _nothing_
+- **Outputs:** `degafiles_path`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# A Celldega DegaFile set: WebP Deep Zoom image pyramids plus Parquet vector
+# data, which their `Landscape` widget renders in a browser with no server and
+# no install. The conversion itself is celldega's `pre.main` - this is a wrapper
+# over it, not a second implementation of their format.
+#
+# What the wrapper adds is *where it runs*, and that is the reason this cell
+# does not call `celldega.pre.main` directly. Their `_xenium_unzipper` os.chdirs
+# into the dataset directory and runs gzip/unzip/tar in place, so pointing it at
+# raw 10x output leaves ~200 MB of decompressed duplicates beside it and fails
+# outright on the read-only mount a shared dataset often sits on. Here the run
+# happens against a farm of symlinks under `viewer_cache/`, with the four
+# archives unpacked into the farm first - `gzip -dk` refuses to read through a
+# symlink, so the links alone are not enough. The raw output is left
+# byte-for-byte unchanged.
+#
+# celldega is an optional dependency, and its version caps are conservative
+# rather than real: a plain install downgrades anndata, spatialdata and pandas
+# underneath this environment, while the export runs fine against the versions
+# already here. So:
+#
+#     pip install --no-deps 'celldega[pre]==0.24.2'
+#
+# The `pre` extra is not optional - pyvips is declared only there, and celldega
+# imports it in a try/except that leaves the module None, so a bare install runs
+# for minutes and then dies in the image-tiling step.
+from palms.utils.dega_export import export_degafiles
+
+# Measured at 322 s and 220 MB for a 10.6 x 6.3 mm section, most of it in the
+# DAPI pyramid. `out_dir` is recorded relative to the dataset, the convention
+# every other written artifact follows here, so a replay writes beside whatever
+# data it was pointed at rather than at the exporting machine's copy of it.
+degafiles_path = export_degafiles(
+    data_path,
+    out_dir=data_path / $out_dir,
+    tile_size=$tile_size,
+    image_tile_layer=$image_tile_layer,
+    max_workers=$max_workers,
+)
 ```

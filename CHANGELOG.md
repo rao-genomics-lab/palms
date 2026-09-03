@@ -7,10 +7,59 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
-- **`utils/dega_export.py` — Celldega DegaFile export** (first half of Phase E;
-  the Tools action, the template and its provider are still to come). A wrapper
-  over `celldega.pre.main`, not a second implementation of their format, and
-  export only: reading DegaFiles stays out of scope.
+- **Tools → Publish — export the dataset as Celldega DegaFiles** (second half of
+  Phase E; the wrapper below is the first). A session already ends as a
+  replayable notebook; it now ends as a *viewable* artifact too — WebP Deep Zoom
+  pyramids plus Parquet vector data, which Celldega's `Landscape` widget renders
+  in a browser with no server and no install, so a collaborator with neither the
+  raw 10x output nor a Linux box can still look at the section.
+
+  Three pieces, each shaped by something measured rather than by taste:
+
+  - **`builtin/export.degafiles.tmpl`**, so the export is a recorded
+    `export:degafiles` TERMINAL like every other written artifact rather than a
+    button that leaves no trace. It is the **sixth** template allowed to import
+    `palms` (`# palms:` header, `_MAY_IMPORT_PALMS`) and the first whose
+    computation is third-party: the cell calls
+    `palms.utils.dega_export.export_degafiles`, *not* `celldega.pre.main`,
+    because the latter would decompress ~200 MB into the reader's own copy of
+    the raw 10x data. The staging is not a convenience a notebook may skip.
+    `out_dir` is recorded relative to the dataset — the convention
+    `plot_output.recorded_paths` sets — so a replay writes beside whatever data
+    it was pointed at rather than at the exporting machine's copy of it.
+  - **`tabs/tab_publish.py`**, the 27th tab. The export is 322 s, so it runs in
+    a `thread_worker` with an indeterminate bar and a per-second elapsed
+    readout; a blocking button would look like a hung viewer for five minutes.
+    celldega is imported **lazily** — at build time it would cost every launch a
+    spatialdata-sized import for a tab most users never open — with `Check
+    Celldega` and the publish pre-flight sharing the one `dega_available()`
+    answer, and `Clear Staging Files` for the farm under `viewer_cache/`. The
+    destination is fixed at `<data_path>/degafiles`, outside every
+    `deletable_roots()` directory like `plots/`: a chooser would put an absolute
+    path in the recorded cell.
+  - **`tests/test_dega_export.py`** (23 tests), and **none of them require
+    celldega**. The wrapper's own logic is stdlib and is tested for real — the
+    farm, the extraction that exists because `gzip -dk` refuses a symlink, a tar
+    member that tries to escape, and a before/after snapshot asserting the raw
+    output is byte-for-byte unchanged. `export_degafiles` is tested against a
+    stub `celldega.pre`, which is stronger than skipping: it pins the argument
+    list, which is the thing that silently changes meaning when the pin moves,
+    and it reproduces their `os.chdir` so the cwd restore is asserted rather
+    than assumed. Two tests skip when celldega *is* installed — they are the
+    ones about what its absence looks like. One more guards the drift a template
+    is uniquely exposed to: a renamed keyword is a syntax error nowhere, so
+    every argument the rendered template passes is checked against
+    `inspect.signature(export_degafiles)`, and a `**kwargs` there is refused.
+
+  Also: `degafiles` is registered in `store_inventory.DERIVED_IN_DATA_DIR`, and
+  the staging directory gets a detail line. Without the first, a 220 MB export
+  fell through to the unrecognised default and Tools → Dataset labelled it
+  "original 10x output, never modified by the viewer" — safe, since the default
+  is un-deletable, but false, and the size report stopped adding up.
+
+- **`utils/dega_export.py` — Celldega DegaFile export** (first half of Phase E).
+  A wrapper over `celldega.pre.main`, not a second implementation of their
+  format, and export only: reading DegaFiles stays out of scope.
 
   Measured end to end on `Xenium_V1_human_Pancreas_FFPE_outs` with
   celldega 0.24.2: **322 s** to a 220 MB DegaFile set — WebP Deep Zoom pyramid,

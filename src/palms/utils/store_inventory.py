@@ -75,6 +75,10 @@ DERIVED_IN_DATA_DIR = {
     "analysis.py": "exported analysis code",
     "analysis_notebook.ipynb": "exported analysis notebook",
     "plots": "figures the viewer exported, plus CopyKAT run sentinels",
+    # Without this key a 220 MB DegaFile export falls through to the raw section
+    # and is labelled "original 10x output, never modified by the viewer" —
+    # false, and the reason the size report would stop adding up.
+    "degafiles": "Celldega DegaFile export · re-runnable from Tools -> Publish",
     "palms.log": "the viewer's own log",
     # Datasets opened before the rename carry the old filename. Dropping the key
     # would not hide the file — it would fall through to the raw section and be
@@ -160,6 +164,8 @@ _SIDECAR_DETAIL = {
     "arms_tile_deg_cache.parquet": "ARMS tile DEG · recomputed on demand",
     "cnv_copykat_input.h5ad": "CopyKAT worker input · not needed once a run finishes",
     "cnv_copykat_params.json": "CopyKAT worker parameters",
+    "dega_staging": ("DegaFile export staging · symlinks to the raw output plus "
+                     "what celldega unpacked · only makes the next export slower"),
 }
 #: Sidecars that look ordinary but must not be offered. The provenance graph is
 #: the notebook's source of truth, and it *wins* over the copy in the session

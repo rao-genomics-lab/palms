@@ -110,6 +110,49 @@ force rebuild that moves the old cache aside rather than deleting it.
 whole-store report cannot give: a `QTreeWidget` of everything on disk with sizes, and
 checkbox deletion of the parts the viewer created. See "Deleting components" below.
 
+**Tools → Publish** (`tabs/tab_publish.py`) writes the dataset out as Celldega
+**DegaFiles** — WebP Deep Zoom pyramids plus Parquet, which their `Landscape` widget
+renders in a browser with no server and no install, so the session ends as a shareable
+artifact as well as a replayable notebook. Export only; reading DegaFiles is out of
+scope. The conversion is celldega's `pre.main` and `utils/dega_export.py` is a *wrapper*
+over it, for reasons that are all facts about their API rather than taste, and each of
+which was found by running it:
+
+- **It writes into the raw 10x output.** `_xenium_unzipper` `os.chdir`s into the dataset
+  directory and runs `gzip`/`unzip`/`tar` in place — ~200 MB of duplicates beside the
+  user's data, and an outright failure on a read-only mount. Nothing else in this package
+  writes there (`store_inventory` will not even let a user *delete* a file there), so the
+  export runs against a **symlink farm** under `viewer_cache/dega_staging/<dataset>/`.
+  The extra level is not cosmetic: celldega's contract is a sample *name* plus its parent
+  directory, and that name is what it stamps into `landscape_parameters.json`.
+- **`gzip -dk` refuses a symlink**, so the farm alone does not work — `extract_archives`
+  unpacks the four archives in Python, which also drops celldega's unstated dependency on
+  the `gzip`, `unzip` and `tar` binaries and leaves their unzipper a no-op (it skips any
+  target that already exists).
+- **The extra is `celldega[pre]`, installed `--no-deps`**, and is deliberately out of
+  `full`. pyvips is declared only under their `pre` extra and their import of it is a
+  try/except leaving the module `None`, so a bare install runs for minutes, reaches
+  "generating dapi image tiles" and dies with an `AttributeError`. And celldega caps
+  `anndata<0.13` / `spatialdata<0.8` while the viewer runs 0.13/0.8, so a plain resolve
+  *succeeds* and silently downgrades anndata, spatialdata, pandas and ome-zarr; those
+  caps are conservative rather than real — the export was measured against the viewer's
+  own versions. `dega_available()` is the one answer to "is it installed", used by the
+  Check button and the pre-flight alike, and it is called **lazily**: importing celldega
+  at build time would cost every launch a spatialdata-sized import for a tab most users
+  never open.
+
+Two decisions in the tab itself. The export is **322 s** on a 10.6 x 6.3 mm section
+(220 MB out), so it runs in a `thread_worker` with an indeterminate bar and an elapsed
+readout rather than blocking. And the **destination is fixed at `<data_path>/degafiles`**,
+outside every `deletable_roots()` directory like `plots/`: a chooser would put an absolute
+path in the recorded cell, and `export.degafiles` records `out_dir` *relative to the
+dataset* precisely so a replay writes beside whatever data it was pointed at. That
+template is the **sixth** allowed to import `palms` (`# palms:` header, listed in
+`tests/test_template_registry.py::_MAY_IMPORT_PALMS`) and the only one whose computation
+is third-party: calling `celldega.pre.main` directly from the notebook would decompress
+into the *reader's* copy of the raw 10x data, so the staging is not a convenience the
+notebook may skip.
+
 **Anything that changes the zarr behind the viewer's back must call
 `ctx.reload_dataset()`** (bound by `app.py`, rebuilt on every dataset load). The live
 `SpatialData`, the napari layers and every tab's widgets are built from disk once at load
@@ -391,7 +434,7 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   `builtin_text`/`builtin_assemble`, which read only shipped files via `importlib.resources`
   and cannot see an override path — that is what keeps the six template-pinning test modules
   passing unchanged. `tests/test_template_registry.py` runs the `check_step` lint over every
-  template × every declared assembly (67 renderings), which is where the five hand-written
+  template × every declared assembly (76 renderings), which is where the five hand-written
   `check_step` calls became a registry-wide gate.
 
   **Users can override a template**, per user, in `~/.config/palms/templates/*.tmpl`
@@ -439,7 +482,7 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   the header says so), and a provider must stay **read-only** — no `makedirs`, no
   `record_clustering` — since drawing a pane must not have side effects.
 
-  Twenty-three of twenty-five templates have a provider. The two exemptions are declared in
+  Twenty-nine of thirty-one templates have a provider. The two exemptions are declared in
   `tests/test_tab_templates.py::_NO_PROVIDER` with their reasons: `normalize` takes no params,
   and `spatial_neighbors` takes `k` from whichever tab called `ensure_spatial_neighbors`, so
   it uses the `# sample-params:` header field instead. Four gates, each verified against the
@@ -829,6 +872,6 @@ reproducibility defect rather than a kernel-discovery one.
 ## Version History
 
 See `CHANGELOG.md`. The codebase was refactored from a 4295-line monolith into modular tabs in
-March 2026; that refactor produced 11, and there are **26** now, in 5 groups. `app.py`'s
+March 2026; that refactor produced 11, and there are **27** now, in 5 groups. `app.py`'s
 `addTab` calls are the authoritative count — `src/palms/tabs/*.py` agrees, but neither
 the docs nor `tabs/__init__.py` did until 2026-08-26.
