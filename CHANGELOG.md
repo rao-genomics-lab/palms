@@ -6,6 +6,51 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Added
+- **`utils/dega_export.py` — Celldega DegaFile export** (first half of Phase E;
+  the Tools action, the template and its provider are still to come). A wrapper
+  over `celldega.pre.main`, not a second implementation of their format, and
+  export only: reading DegaFiles stays out of scope.
+
+  Measured end to end on `Xenium_V1_human_Pancreas_FFPE_outs` with
+  celldega 0.24.2: **322 s** to a 220 MB DegaFile set — WebP Deep Zoom pyramid,
+  transcript tiles, cell segmentation tiles, per-gene CBG parquet, clusters,
+  metadata and `landscape_parameters.json`.
+
+  Three things the bare API does not do, each found by running it:
+
+  - **It writes into the raw 10x output.** `celldega.pre._xenium_unzipper`
+    `os.chdir`s into the dataset directory and runs `gzip -dk cells.csv.gz`,
+    `unzip cells.zarr.zip` and two `tar -xvzf` in place, leaving ~200 MB of
+    decompressed duplicates beside the user's data — and failing outright on the
+    read-only NAS mount a shared dataset usually sits on. Nothing else in this
+    package writes there; `store_inventory` will not even let a user *delete* a
+    file there. So the export runs against a symlink farm under `viewer_cache/`,
+    and the verification asserts the dataset directory is unchanged afterwards.
+  - **`gzip -dk` refuses a symlink** ("not a regular file", exit 1), so the farm
+    alone does not work: `extract_archives` unpacks the four archives into the
+    staging directory with `gzip`/`zipfile`/`tarfile`, which also drops
+    celldega's unstated dependency on the `gzip`, `unzip` and `tar` binaries and
+    leaves `_xenium_unzipper` a no-op.
+  - **pyvips is declared only under celldega's own `pre` extra**, and their
+    import is a `try/except` that leaves the module bound to `None`. A bare
+    `pip install celldega` therefore runs for minutes, reaches "generating dapi
+    image tiles", and dies with `AttributeError: 'NoneType' object has no
+    attribute 'Image'`. The extra is `celldega[pre]`, and `dega_available()`
+    checks for pyvips so the failure arrives before the export starts rather
+    than in the middle of it.
+
+- **A `dega` extra in `pyproject.toml`**, pinned to `celldega[pre]==0.24.2` —
+  not floating, because the `insitucnv` git URL was a reproducibility hit once.
+  **Install it with `--no-deps`**, and it is deliberately out of `full`:
+  celldega caps `anndata<0.13` and `spatialdata<0.8` while the viewer runs 0.13
+  and 0.8, so a plain resolve *succeeds* and quietly downgrades the stack.
+  Measured with `pip install --dry-run celldega==0.24.2` against the live env:
+  anndata 0.12.19, spatialdata 0.7.3, pandas 2.3.3, ome-zarr 0.15.0, plus dask
+  and distributed. Those caps are conservative rather than real — the 322 s
+  export above ran against anndata 0.13.2, spatialdata 0.8.0 and pandas 3.0.5,
+  over every one of them.
+
 ### Changed
 - **H&E registration records the code that produced the alignment, not the
   matrix.** Coarse Align and Fine Align each recorded a literal

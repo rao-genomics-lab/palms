@@ -92,6 +92,29 @@ cnv = [
 # environment.yml: it pulls torch + torch-geometric + lightning, and requires
 # python >= 3.11, which `full` therefore inherits.
 novae = ["novae"]
+# Celldega DegaFile export (Tools -> Publish). Pinned, not floating: the
+# `insitucnv` git URL was a reproducibility hit once and shipping a second one
+# would be worse.
+#
+# **Install this extra with `--no-deps`**, and it is deliberately NOT in `full`
+# for that reason. celldega 0.24.2 caps `anndata<0.13` and `spatialdata<0.8`
+# while the viewer runs 0.13 and 0.8, so a plain resolve *succeeds* and quietly
+# downgrades the stack underneath it — measured 2026-09-03 with
+# `pip install --dry-run celldega==0.24.2` against the live env: anndata
+# 0.12.19, spatialdata 0.7.3, pandas 2.3.3, ome-zarr 0.15.0, plus dask and
+# distributed. Those caps are conservative rather than real; celldega imports
+# and runs against the versions already here. `utils/dega_export.dega_available`
+# says so in the message a user actually sees.
+# `[pre]` and not bare `celldega`: pyvips is what tiles the morphology image
+# into the WebP pyramid, and celldega declares it only under that extra — the
+# bare install gets all the way to "generating dapi image tiles" and then fails
+# with `AttributeError: 'NoneType' object has no attribute 'Image'`, because
+# their import is a try/except that leaves the module None.
+# pyvips is named here as well as reached through `[pre]`: dega_export imports
+# it directly to check for it, and a dependency this package imports has to be
+# one this package declares — tests/test_declared_dependencies.py enforces that,
+# and it is right to, since celldega could rename or drop that extra.
+dega = ["celldega[pre]==0.24.2", "pyvips~=2.2.2"]
 full = ["palms[celltypist,r,gpu,references,cnv,novae]"]
 # Dev only, and deliberately out of `full` and environment.yml: `--mcp` starts an
 # unauthenticated localhost server that executes arbitrary Python in the viewer
