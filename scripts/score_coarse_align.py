@@ -111,7 +111,9 @@ def main() -> None:
         reference_source = f"10x {args.alignment.name}"
     elif session.get("affine_3x3") is not None:
         reference = np.array(session["affine_3x3"], dtype=float)
-        reference_source = "session landmark fit"
+        reference_source = ("session nuclei fit"
+                            if session.get("affine_source") == "nuclei"
+                            else "session landmark fit")
     else:
         raise SystemExit("no reference: pass --alignment, or register landmarks first")
 

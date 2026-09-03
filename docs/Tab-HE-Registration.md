@@ -52,12 +52,20 @@ landmark fit reaches, and better than 10x's own shipped matrix: on nuclei held
 out of the fit entirely, the automatic transform places them closer to the
 nuclear masks than either.
 
-It needs a starting transform inside its basin, which is what Coarse Align is
-for, so run that first. It recovers from a seed about 20 µm out; much further and
-it reports **LOW CONFIDENCE** rather than a number. Confidence is an enrichment
-over chance — how many more H&E nuclei land within a micron of a nuclear mask
-than a random point set of the same density would. A real fit scores 17–22×; a
-transform a few degrees wrong, or an H&E of a different section, scores about 1×.
+It needs a starting transform, which is what Coarse Align is for, so run that
+first. It corrects the seed in two passes — a search over scale and rotation,
+then the per-nucleus fit — which between them recover from a coarse alignment
+60 µm out. Confidence is an **enrichment over chance**: how many more H&E nuclei
+land within a micron of a nuclear mask than a random point set of the same
+density would. A real fit scores 9–22×; a transform a few degrees wrong, or an
+H&E of a different section, scores about 1×.
+
+If it reports **LOW CONFIDENCE**, the usual cause is the starting transform, not
+the H&E and not the section. The message shows how much of the move came from the
+scale/rotation search; a large figure there means Coarse Align's scale was
+materially out, which happens most on big sections where its tissue-outline scale
+prior is weakest. Re-running Coarse Align, or placing three landmarks and
+pressing "Compute Registration" to give the nuclei fit a better start, both work.
 
 It takes one to three minutes on a whole section, most of it finding nuclei in
 the full-resolution H&E. That resolution is the point: the same detector run one
@@ -116,6 +124,10 @@ afterwards clears a coarse alignment — it was fitted for the other orientation
   maps its own H&E points onto its own Xenium points. `scripts/compare_he_registration.py`
   scores such a file against 10x's shipped alignment matrix, and
   `scripts/score_coarse_align.py` scores Coarse Align against the same reference.
+- **A saved `landmarks.json` is worth keeping.** The fine transform has one slot,
+  written by whichever method ran last, so an automatic fit replaces a landmark
+  fit in the session. "Save Landmarks..." writes a record that survives, and
+  `scripts/score_nuclei_align.py --landmarks` will score against it.
 - `scripts/score_nuclei_align.py` scores the whole automatic chain the same way,
   and adds the check that agreement with another estimate cannot give: it fits on
   one half of the section and scores every candidate transform on the nuclei of

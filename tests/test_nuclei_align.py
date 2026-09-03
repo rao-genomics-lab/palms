@@ -35,8 +35,9 @@ pytest.importorskip("skimage")
 pytest.importorskip("scipy")
 
 from palms.utils.nuclei_registration import (
-    MIN_ENRICHMENT, _weighted_similarity, detect_he_nuclei, finest_level,
-    fit_nuclei_similarity, haematoxylin_od, nucleus_centroids, register_he_nuclei,
+    MIN_ENRICHMENT, _weighted_similarity, bracket_seed, detect_he_nuclei,
+    finest_level, fit_nuclei_similarity, haematoxylin_od, nucleus_centroids,
+    register_he_nuclei,
 )
 from palms.utils.registration import flip_matrix
 
@@ -552,3 +553,162 @@ def test_a_pyramid_is_reduced_to_its_finest_level():
     rgb = _he_with_nuclei(shape=(200, 260), centres=centres)
     pyramid = _MultiScaleLike([rgb, np.ascontiguousarray(rgb[::2, ::2])])
     assert len(detect_he_nuclei(pyramid, pixel_size_um=0.2735)) == len(centres)
+
+
+# ── The bracket: the part of the seed's error the anneal cannot see ───────────
+
+def _realistic_scene(n=30000, seed=1, spacing_um=6.0,
+                     recall=0.4, spurious=0.6, jitter_um=0.9):
+    """Nuclear masks and H&E detections with the correspondence real data has.
+
+    Not a permutation of the same points: on the pancreas only about 40% of
+    detections have a mask within a micron, the rest are nuclei Xenium did not
+    segment, folds, or pigment. A fixture with exact correspondence is far easier
+    than the real thing — with it, the anneal alone recovers a 41 um edge
+    displacement that on real data defeats it.
+    """
+    rng = np.random.default_rng(seed)
+    spacing_px = spacing_um / PIXEL_SIZE
+    lam = np.log(2.0) / (np.pi * spacing_px ** 2)
+    side = np.sqrt(n / lam)
+    target = rng.uniform(0, side, (n, 2))
+    matched = rng.random(n) < recall
+    detections = target[matched] + rng.normal(0, jitter_um / PIXEL_SIZE,
+                                              (int(matched.sum()), 2))
+    noise = rng.uniform(0, side, (int(spurious * matched.sum()), 2))
+    return target, np.vstack([detections, noise])
+
+
+def _seed_wrong_by(source, d_scale, d_deg):
+    """A seed displaced from the truth by a scale and rotation about the centre."""
+    centre = (source.max(0) + source.min(0)) / 2
+    t = np.radians(d_deg)
+    a = np.eye(3)
+    a[:2, :2] = (1 + d_scale) * np.array([[np.cos(t), np.sin(t)],
+                                          [-np.sin(t), np.cos(t)]])
+    a[:2, 2] = centre - a[:2, :2] @ centre
+    return np.linalg.inv(a)
+
+
+def test_a_scale_error_defeats_the_anneal_and_the_bracket_fixes_it():
+    """The failure this whole pass exists for, reproduced.
+
+    A *scale* error is not a translation the anneal can follow: it displaces each
+    point in proportion to its distance from the centre, so it is invisible at
+    the middle and larger than the anneal's capture range at the edges. There is
+    no sigma that sees both — small enough to resolve nuclei in the middle and
+    the edges match at random; large enough to reach the edges and the density is
+    flat. Measured on a 10.6 x 6.3 mm prostate section whose coarse seed was 1.5%
+    of scale out: the anneal alone reached enrichment 1.4x and reported LOW
+    CONFIDENCE, and the bracket took it to 9.6x. Raising the starting sigma to
+    144 um instead did not help; it made it slightly worse.
+    """
+    target, source = _realistic_scene()
+    seed = _seed_wrong_by(source, 0.03, 0.5)
+    shape = tuple(source.max(0))
+
+    alone = fit_nuclei_similarity(target, source, seed, pixel_size_um=PIXEL_SIZE,
+                                  image_shape_yx=shape, bracket=False)
+    assert not alone.confident
+    assert alone.enrichment < MIN_ENRICHMENT
+
+    bracketed, peak = bracket_seed(cKDTree_of(target), source, seed, PIXEL_SIZE,
+                                   shape, _spacing_of(target), sample=500)
+    fixed = fit_nuclei_similarity(target, source, bracketed, pixel_size_um=PIXEL_SIZE,
+                                  image_shape_yx=shape, bracket=False)
+    assert fixed.confident
+    assert fixed.enrichment > 4 * alone.enrichment
+    residual = np.linalg.norm(_apply(fixed.affine_3x3_yx, source) - source, axis=1)
+    assert np.median(residual) * PIXEL_SIZE < 0.5
+
+
+def cKDTree_of(points):
+    from scipy.spatial import cKDTree
+    return cKDTree(points)
+
+
+def _spacing_of(points):
+    from scipy.spatial import cKDTree
+    tree = cKDTree(points)
+    return float(np.median(tree.query(points[::10], k=2, workers=-1)[0][:, 1]))
+
+
+def test_the_bracket_solves_translation_per_hypothesis():
+    """Holding the centre fixed and scoring matches does not work.
+
+    A hypothesis with the right scale but the wrong translation matches nothing,
+    so a match count is flat across the grid until the translation happens to be
+    right — the grid then reports whichever cell noise favours. Measured on the
+    prostate section: centre-fixed and match-scored, the grid chose +1.00% of
+    scale and stopped 28.4 um from the answer; with the translation read off the
+    offset-histogram peak it chose +1.50% and stopped 1.3 um away.
+    """
+    target, source = _realistic_scene(seed=2)
+    shape = tuple(source.max(0))
+    seed = _seed_wrong_by(source, 0.02, 0.3)
+    seed = seed.copy()
+    seed[:2, 2] += np.array([20.0, -25.0]) / PIXEL_SIZE     # and a translation
+
+    bracketed, peak = bracket_seed(cKDTree_of(target), source, seed, PIXEL_SIZE,
+                                   shape, _spacing_of(target), sample=500)
+
+    residual = np.linalg.norm(_apply(bracketed, source) - source, axis=1) * PIXEL_SIZE
+    assert peak > 3.0
+    # Inside the anneal's capture range is all it has to achieve.
+    assert np.median(residual) < 20.0
+
+
+def test_the_bracket_cannot_absorb_a_translation_beyond_its_radius():
+    """`_BRACKET_RADIUS_UM` bounds the translation error, and it is a real cap.
+
+    The offset histogram only spans that radius, so a seed whose translation is
+    further out has its peak outside the window and the search reports a weak
+    one. Stated here rather than left to be discovered: 60 um was enough on all
+    three datasets — the prostate section, the worst of them, needed 24.8 um —
+    and widening it costs the neighbour count as the square. A seed this far out
+    in translation is a Coarse Align failure, which phase correlation makes rare,
+    and it is reported as low confidence rather than answered wrongly.
+    """
+    from palms.utils.nuclei_registration import _BRACKET_RADIUS_UM
+
+    target, source = _realistic_scene(seed=2)
+    shape = tuple(source.max(0))
+    seed = np.eye(3)
+    seed[:2, 2] += np.array([1.4 * _BRACKET_RADIUS_UM, 0.0]) / PIXEL_SIZE
+
+    _, peak = bracket_seed(cKDTree_of(target), source, seed, PIXEL_SIZE,
+                           shape, _spacing_of(target), sample=500)
+    assert peak < 3.0
+
+
+def test_the_bracket_leaves_a_seed_that_is_already_right_alone():
+    target, source = _realistic_scene(seed=3)
+    shape = tuple(source.max(0))
+
+    bracketed, peak = bracket_seed(cKDTree_of(target), source, np.eye(3), PIXEL_SIZE,
+                                   shape, _spacing_of(target), sample=500)
+
+    residual = np.linalg.norm(_apply(bracketed, source) - source, axis=1) * PIXEL_SIZE
+    assert np.median(residual) < 2.0
+    assert peak > 3.0
+
+
+def test_the_bracket_is_reported_separately_from_the_whole_move():
+    """`bracket_shift_um` is how much of the move was the bracket's.
+
+    It is the diagnostic that says whether Coarse Align's scale or rotation was
+    materially out on this dataset — 61 um on the prostate section against 15 um
+    on the pancreas, where the anneal would have got there by itself.
+    """
+    target, source = _realistic_scene(seed=4)
+    seed = _seed_wrong_by(source, 0.02, 0.3)
+    shape = tuple(source.max(0))
+
+    with_bracket = fit_nuclei_similarity(target, source, seed, pixel_size_um=PIXEL_SIZE,
+                                         image_shape_yx=shape, bracket=True)
+    without = fit_nuclei_similarity(target, source, seed, pixel_size_um=PIXEL_SIZE,
+                                    image_shape_yx=shape, bracket=False)
+
+    assert with_bracket.bracket_shift_um > 5.0
+    assert without.bracket_shift_um == 0.0
+    assert "bracket" in with_bracket.summary()

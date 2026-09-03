@@ -6,6 +6,60 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Fixed
+- **The nuclei fit could not correct a scale error, and reported it honestly
+  rather than silently** — found by running Fine Align on a 10.6 × 6.3 mm
+  prostate section, where it returned enrichment 1.4× and LOW CONFIDENCE. The
+  H&E detections were fine (366k of them, at the same density as the 342k nuclear
+  masks, and locally coinciding with them as well as on any dataset); the section
+  was fine; a similarity fits it to 1.6 µm. **Coarse Align's scale was 1.49% low**,
+  which put its transform 60 µm mean / 127 µm max from the truth, and the fit
+  could not cross that.
+
+  Not for want of range — the first attempt, raising the annealing sigma from
+  20 µm to a size-derived 144 µm and thinning the target set so the neighbour
+  budget could not silently truncate it, made the result *worse* and cost twice
+  the time. **The blind spot is structural.** A scale error displaces each point
+  in proportion to its distance from the centre, so it is under a micron in the
+  middle of a section and 127 µm at the corners, and no single sigma sees both:
+  small enough to resolve nuclei in the middle and the corners match at random,
+  large enough to reach the corners and the nuclear density is flat, with no
+  gradient to follow.
+
+  The fix is a **bracketing search over scale and rotation before the anneal**
+  (`bracket_seed`), which has no such blind spot because it does not follow a
+  gradient at all. Two things make it work, each measured against the alternative:
+  the translation for each hypothesis is read off the peak of the offset histogram
+  rather than searched — holding the centre fixed and scoring a match count, the
+  grid chose +1.00% of scale and stopped 28.4 µm from the answer, against +1.50%
+  and 1.3 µm when translation is solved per hypothesis — and the histogram is
+  smoothed by exactly the displacement half a grid step produces, so the peak is
+  as wide as the grid is coarse *at any section size*. That last point is not
+  cosmetic: the peak falls to half height 0.15% of scale from the optimum on both
+  reference datasets, which is narrower than the 0.25% grid step, so the search
+  was finding it by luck and on a section twice as long would have been reading
+  noise.
+
+  Result on the prostate section: enrichment **1.4× → 9.6×**, confident, and
+  0.90 µm from an independently derived transform (a similarity fitted to local
+  displacements measured in 48 patches across the slide, which no part of the fit
+  saw). The pancreas and crop_6 are **bit-identical** to before — there the
+  bracket finds the same correction the anneal would have. `NucleiAlignResult`
+  now reports `bracket_shift_um` so a large Coarse Align error is visible rather
+  than inferred: 61 µm on the prostate section, 15–18 µm on the two references.
+
+- **`scripts/score_nuclei_align.py` scored the fit against a stored run of
+  itself.** The fine transform has one session slot, written by the landmark fit
+  *and* by the nuclei fit, and the script falls back to it as its reference when a
+  dataset ships no 10x matrix. On `demo_data/crop_6`, where the automatic fit had
+  been run and saved, it duly reported **0.000 µm** of disagreement — which reads
+  as a perfect result and means nothing. The session now records `affine_source`
+  ("landmarks" or "nuclei"), the script refuses a nuclei-derived reference
+  outright, and it says so plainly when a pre-existing session cannot tell it
+  which. `--landmarks landmarks.json` was added because a saved landmark file is a
+  record of a registration made another way and, unlike the session slot, it
+  survives — crop_6 scores 0.845 µm against its own.
+
 ### Added
 - **Automatic fine H&E registration, from nuclei** (issue `xv-bdi`) — a new
   **Fine Align (nuclei)** button beside Coarse Align, and

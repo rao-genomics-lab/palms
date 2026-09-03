@@ -20,7 +20,7 @@ same held-out nuclei, and the one that puts them on the nuclear masks best wins.
 
 Measured 2026-09-02:
 
-    Xenium_V1_human_Pancreas_FFPE   coarse 15.5 um -> nuclei 0.68 um vs 10x
+    Xenium_V1_human_Pancreas_FFPE   coarse 15.5 um -> nuclei 0.70 um vs 10x
                                     (landmark fit, by hand: 0.93 um)
                                     held-out residual  nuclei 1.06 um,
                                     10x 1.36 um, landmark 1.35 um
@@ -96,6 +96,12 @@ def main() -> None:
     ap.add_argument("--alignment", type=Path, default=None,
                     help="10x <sample>_he_imagealignment.csv to score against; "
                          "without it the session's landmark affine is the reference")
+    ap.add_argument("--landmarks", type=Path, default=None,
+                    help="a landmarks.json from Save Landmarks... to score against. "
+                         "Worth reaching for: the session's fine affine is "
+                         "overwritten by whichever method ran last, this one "
+                         "included, but a saved landmark file is a record of a "
+                         "registration made another way and it survives")
     ap.add_argument("--pixel-size", type=float, default=None,
                     help="um per morphology pixel (default: read from the store)")
     ap.add_argument("--grid", type=int, default=50, help="grid points per axis")
@@ -135,7 +141,33 @@ def main() -> None:
     if args.alignment is not None:
         reference = to_yx(np.loadtxt(args.alignment, delimiter=","))
         reference_source = f"10x {args.alignment.name}"
+    elif args.landmarks is not None:
+        from palms.utils.registration import load_landmarks
+        stored = load_landmarks(args.landmarks)
+        if "affine_3x3_yx" not in stored:
+            raise SystemExit(f"{args.landmarks} holds no affine — it was saved "
+                             "before Compute Registration was pressed")
+        reference = stored["affine_3x3_yx"]
+        reference_source = f"landmark fit from {args.landmarks.name}"
     elif session.get("affine_3x3") is not None:
+        # The session's fine affine is written by whichever method ran last, and
+        # this script's own method is one of them. Scoring against a stored run
+        # of itself is not a measurement: on demo_data/crop_6 it duly reported
+        # 0.000 um of disagreement, which reads as a perfect result and says
+        # nothing at all. `affine_source` exists to make that detectable.
+        if session.get("affine_source") == "nuclei":
+            raise SystemExit(
+                "the stored registration was made by this same nuclei fit, so "
+                "scoring against it would be circular.\n"
+                "Pass --alignment <sample>_he_imagealignment.csv or --landmarks "
+                "landmarks.json for an independent reference.\n"
+                "(--no-holdout off, the held-out check below needs no reference "
+                "at all — run with --seed coarse and read that section.)")
+        if session.get("affine_source") is None:
+            print("  NOTE: the stored affine does not say which method produced "
+                  "it (written before affine_source existed). If it came from "
+                  "this fit, the comparison below is circular — the held-out "
+                  "check is not.")
         reference = np.array(session["affine_3x3"], dtype=float)
         reference_source = "session landmark fit"
     else:

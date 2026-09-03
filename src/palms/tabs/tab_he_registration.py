@@ -233,6 +233,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 sess.attrs["he_pixel_size_um"] = float(he_state["he_pixel_size_um"])
             if fine is not None:
                 sess.attrs["affine_3x3"] = fine.tolist()
+                if he_state.get("affine_source"):
+                    sess.attrs["affine_source"] = he_state["affine_source"]
             if coarse is not None:
                 sess.attrs["coarse_affine"] = coarse.tolist()
         except Exception as e:
@@ -442,6 +444,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if result is None:
             return
         he_state["affine_3x3"] = result.affine_3x3_yx
+        he_state["affine_source"] = "nuclei"
         _apply_he_affine()
         _save_he_affine_to_sdata()
         confidence = "" if result.confident else " — LOW CONFIDENCE, check the overlay"
@@ -571,6 +574,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_pts = _flip_points(np.asarray(he_pts[:n], dtype=np.float64))
         affine, residuals = compute_landmark_affine(xen_pts, he_pts)
         he_state["affine_3x3"] = affine
+        he_state["affine_source"] = "landmarks"
         _apply_he_affine()
         _refresh_nuclei_button()
         lines = [f"Registration: {n} landmarks, similarity transform"]
@@ -660,6 +664,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if "affine_3x3_yx" in data:
             affine = data["affine_3x3_yx"]
             he_state["affine_3x3"] = affine
+            he_state["affine_source"] = "landmarks"
             _apply_he_affine()
             _refresh_nuclei_button()
             scale = np.sqrt(affine[0, 0]**2 + affine[0, 1]**2)
@@ -765,6 +770,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         )
         he_state["he_layer"] = he_layer
         he_state["affine_3x3"] = reg.fine
+        he_state["affine_source"] = session_he_data.get("affine_source")
         he_state["coarse_affine"] = reg.coarse
         he_state["flip_v"] = reg.flip_v
         he_state["flip_h"] = reg.flip_h
@@ -796,6 +802,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             # session flip with an element affine that already contains one.
             _session_he_data = {
                 "affine_3x3": session.get("affine_3x3"),
+                "affine_source": session.get("affine_source"),
                 "coarse_affine": session.get("coarse_affine"),
                 "xenium_landmarks": session.get("xenium_landmarks"),
                 "he_landmarks": session.get("he_landmarks"),

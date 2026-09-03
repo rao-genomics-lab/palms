@@ -11,11 +11,29 @@ directly, over every nucleus in the section rather than the six a user clicks:
 2. ``detect_he_nuclei`` — haematoxylin optical density from the H&E (a real
    colour deconvolution, ``skimage.color.rgb2hed``), smoothed to a nuclear scale
    and reduced to sub-pixel local maxima.
-3. ``fit_nuclei_similarity`` — the similarity that best puts one point set on the
-   other, seeded by ``compute_coarse_affine``'s transform.
+3. ``bracket_seed`` then ``fit_nuclei_similarity`` — the similarity that best
+   puts one point set on the other, starting from ``compute_coarse_affine``'s
+   transform.
 
-Why the fit is not ICP
-----------------------
+The fit is two passes, and both are load-bearing
+------------------------------------------------
+``bracket_seed`` searches a grid in *scale and rotation* with the translation for
+each hypothesis read off a coincidence peak; the anneal below then refines what
+is left. Neither does the other's job. A scale error displaces each point in
+proportion to its distance from the centre, so on a 10.6 x 6.3 mm section a 1.5%
+error is under a micron in the middle and 127 um at the corners — and no sigma
+sees both: small enough to resolve nuclei in the middle and the corners match at
+random, large enough to reach the corners and the density is flat with no
+gradient to follow. Conversely the grid is far too coarse to land on an answer.
+Measured on the prostate section that exposed this, whose coarse seed was 1.5% of
+scale out: the anneal alone reached enrichment 1.4x and said LOW CONFIDENCE; the
+bracket alone landed 1.3 um away; together, 9.6x and confident. Raising the
+anneal's starting sigma to 144 um instead — with the target set thinned so the
+neighbour budget could not silently truncate it — did not help, and cost twice
+the time. The blind spot is structural, not a matter of range.
+
+Why the anneal is not ICP
+-------------------------
 It is annealed soft assignment (the rigid/similarity case of coherent point
 drift, with the neighbour sum truncated), and plain ICP is not an option rather
 than a stylistic alternative. Nuclei in the pancreas reference sit a median
@@ -52,6 +70,15 @@ level finer bought 0.145 um, and the label centroids finer again bought 0.196 um
 A coarser pixel does not merely add noise that 10^5 points average away — it
 biases each peak, and a bias does not average away. So the level is not tunable
 here: use what the file has.
+
+Reading the confidence
+----------------------
+``enrichment`` is the number to look at, and roughly 1x means the fit found
+nothing. Measured on three datasets: 17.2x (pancreas), 22.0x (crop_6) and 9.6x
+(a 10.6 x 6.3 mm prostate section), against 1.0-1.8x for every deliberately wrong
+transform tried. When it comes back low the usual cause is the *seed*, not the
+detections and not the section — check ``bracket_shift_um``, which says how much
+of the move was correcting Coarse Align's scale and rotation.
 
 What the numbers mean
 ---------------------
@@ -107,10 +134,38 @@ _HAEM_OD_FLOOR = 0.04
 #: before the deconvolution — the expensive step — rather than after it.
 _BACKGROUND_U8 = 200
 
-#: Annealing schedule for the soft assignment, in microns. The first value is the
-#: seed error the fit can recover from: Coarse Align lands 15-17 um out on the two
-#: reference datasets, so 20 um covers it with room. The last is the scale at
-#: which a source point sees one nucleus.
+#: How far the bracket searches around the seed, in fractional scale and degrees,
+#: and how finely. The residual after Coarse Align is a *similarity* error, and
+#: its scale and rotation parts are what the anneal cannot see — see
+#: ``bracket_seed``. Measured seed errors: 0.05% and 0.24% of scale on the two
+#: reference datasets, 1.49% and 0.52 deg on the prostate section that made this
+#: necessary. The band is set to twice the worst of those.
+BRACKET_SCALE_BAND = 0.03
+BRACKET_ROTATION_BAND_DEG = 1.0
+_BRACKET_SCALE_STEP = 0.0025
+_BRACKET_ROTATION_STEP = 0.1
+#: Source points the bracket scores each hypothesis on. It is looking for a
+#: displacement field, not a per-nucleus match, so a few thousand is plenty and
+#: the cost is linear in this — 4,000 points took 147 s over the grid, 2,000 take
+#: a quarter of that at the same answer.
+_BRACKET_SAMPLE = 2000
+#: Radius the bracket's offset histogram covers, in microns. It must exceed the
+#: seed's translation error — 24.8 um on the prostate section — and the cost goes
+#: as its square.
+_BRACKET_RADIUS_UM = 60.0
+_BRACKET_BIN_UM = 1.5
+#: Fraction of the half-diagonal at which a scale or rotation error produces its
+#: *typical* displacement. Measured from the width of the peak itself: on both
+#: reference sections it falls to half its height 0.15% of scale from the optimum,
+#: and 6.4 um (one nuclear spacing) divided by 0.0015 puts the typical radius at
+#: 0.7 of the half-diagonal.
+_TYPICAL_RADIUS_FRACTION = 0.7
+
+#: Annealing schedule for the soft assignment, in microns. The first value is how
+#: far the *bracketed* seed may be wrong, not the raw one: the bracket is what
+#: crosses a large similarity error, and 20 um then covers what is left (1.3 um
+#: on the prostate section). The last is the scale at which a source point sees
+#: one nucleus.
 SIGMA_START_UM = 20.0
 SIGMA_END_UM = 1.0
 _SIGMA_STEPS = 10
@@ -158,6 +213,12 @@ class NucleiAlignResult:
     #: image. A fit that barely moved found nothing to improve; one that moved
     #: much further than the seed's own error found something else.
     seed_shift_um: float
+    #: How far the (scale, rotation) bracket moved the seed before the anneal ran,
+    #: and how strong the coincidence it settled on was. A large bracket shift
+    #: means Coarse Align's scale or rotation was materially out — 60 um on the
+    #: prostate section, against 0 to a few microns where it was already right.
+    bracket_shift_um: float
+    bracket_peak: float
     scale: float
     rotation_deg: float
     confident: bool = True
@@ -171,7 +232,8 @@ class NucleiAlignResult:
             f"{self.n_target:,} nucleus masks",
             f"Enrichment over chance: {self.enrichment:.1f}x",
             f"Median residual: {self.median_residual_um:.2f} um",
-            f"Moved from the seed by: {self.seed_shift_um:.1f} um",
+            f"Moved from the seed by: {self.seed_shift_um:.1f} um "
+            f"({self.bracket_shift_um:.1f} um of it by the scale/rotation bracket)",
             f"Scale: {self.scale:.4f}",
             f"Rotation: {self.rotation_deg:.2f} deg",
         ]
@@ -396,12 +458,127 @@ def _neighbours_for(sigma_px, spacing_px):
     return int(np.clip(k, 6, 64))
 
 
+def bracket_seed(tree, source_yx, seed_3x3, pixel_size_um: float, image_shape_yx,
+                 spacing_px: float = 1.0,
+                 scale_band: float = BRACKET_SCALE_BAND,
+                 rotation_band_deg: float = BRACKET_ROTATION_BAND_DEG,
+                 sample: int = _BRACKET_SAMPLE):
+    """Search (scale, rotation) around a seed, translation free per hypothesis.
+
+    Returns ``(matrix, peak)`` — the best seed found, and how many times more
+    nuclei coincide at its best translation than chance would put there.
+
+    **Why the anneal needs this.** Soft assignment pulls each point toward the
+    local nuclear density, which is a translation-like force: it fixes an error
+    that is roughly the same vector everywhere. A *scale* error is not — it
+    displaces each point in proportion to its distance from the centre, so on a
+    10.6 x 6.3 mm section a 1.5% error is under a micron at the middle and 127 um
+    at the corners. There is no sigma that sees both: small enough to resolve
+    nuclei in the middle and the corners are matched at random; large enough to
+    reach the corners and the density is flat, so there is no gradient to follow.
+    Measured on that section — the prostate dataset that exposed this — the anneal
+    moved 15.9 um out of the 60 um it needed and reported LOW CONFIDENCE, and
+    raising the starting sigma to 144 um (with the target set thinned so the
+    neighbour budget could not silently truncate it) did not help: it made it
+    worse. The blind spot is structural, not a matter of range.
+
+    A grid has no blind spot, and scale and rotation are only two dimensions.
+    Translation is not searched — it is read off the peak of the offset
+    histogram, exactly as ``compute_coarse_affine`` takes each hypothesis's
+    translation from phase correlation.
+
+    Scoring on the *peak* rather than on a match count is what makes the grid
+    work at all: a hypothesis with the right scale but the wrong translation
+    matches nothing, so a match count is flat across the grid until translation
+    happens to be right. Measured: holding the centre fixed and scoring matches,
+    the grid found +1.00% and stopped 28.4 um from the answer; solving the
+    translation per hypothesis it found +1.50% and stopped 1.3 um away.
+    """
+    import cv2
+
+    source = np.asarray(source_yx, dtype=np.float64)
+    if len(source) > sample:
+        step = max(1, len(source) // sample)
+        source = source[::step][:sample]
+    centre = np.array([image_shape_yx[0] / 2.0, image_shape_yx[1] / 2.0])
+    seed = np.asarray(seed_3x3, dtype=np.float64)
+    radius_px = _BRACKET_RADIUS_UM / pixel_size_um
+    bins = int(2 * _BRACKET_RADIUS_UM / _BRACKET_BIN_UM)
+    span = [[-_BRACKET_RADIUS_UM, _BRACKET_RADIUS_UM]] * 2
+
+    # How far the grid can miss by, and therefore how much the peak has to be
+    # smeared for a neighbouring grid point to still see it.
+    #
+    # This is the one thing that has to scale with the section, and it is why the
+    # grid step can stay fixed. The peak is *narrow*: measured on both reference
+    # datasets it falls to half height 0.15% of scale from the optimum, which is
+    # finer than the 0.25% step — the search found it by luck, and on a section
+    # twice as long the peak would be 0.07% wide and every grid point would sit in
+    # background with the argmax deciding on noise. Smoothing the offset histogram
+    # by exactly the displacement half a step produces makes the peak as wide as
+    # the grid is coarse, at any section size. It costs nothing in accuracy: the
+    # bracket only has to land inside the anneal's capture range, not on the
+    # answer.
+    half_diagonal = 0.5 * float(np.hypot(*image_shape_yx)) * pixel_size_um
+    miss_um = (0.5 * _BRACKET_SCALE_STEP * _TYPICAL_RADIUS_FRACTION * half_diagonal)
+    smooth_bins = float(np.clip(miss_um / _BRACKET_BIN_UM, 1.0, 12.0))
+
+    def candidate(d_scale, d_deg):
+        t = np.radians(d_deg)
+        a = np.eye(3)
+        a[:2, :2] = (1 + d_scale) * np.array([[np.cos(t), np.sin(t)],
+                                              [-np.sin(t), np.cos(t)]])
+        a[:2, 2] = centre - a[:2, :2] @ centre
+        return seed @ a
+
+    # A fixed-k query rather than query_ball_point: the latter returns a list of
+    # lists, and the Python loop to turn that into offsets is pure overhead. k is
+    # sized from the target density so it covers the radius, and anything beyond
+    # it is masked out, so the answer is unchanged — measured identical transforms
+    # on both reference datasets, at 30 s for the 525 hypotheses against 47 s.
+    neighbours = int(np.clip(2 * np.log(2.0) * (radius_px / max(spacing_px, 1e-6)) ** 2,
+                             16, 256))
+
+    def score(matrix):
+        moved = _apply(matrix, source)
+        dist, idx = tree.query(moved, k=neighbours, workers=-1)
+        inside = dist < radius_px
+        if not inside.any():
+            return -1.0, (0.0, 0.0)
+        offsets = (tree.data[idx] - moved[:, None, :])[inside] * pixel_size_um
+        hist, _, _ = np.histogram2d(offsets[:, 0], offsets[:, 1],
+                                    bins=bins, range=span)
+        hist = cv2.GaussianBlur(hist.astype(np.float32), (0, 0), smooth_bins)
+        chance = len(offsets) * _BRACKET_BIN_UM ** 2 / (np.pi * _BRACKET_RADIUS_UM ** 2)
+        peak = np.unravel_index(int(np.argmax(hist)), hist.shape)
+        shift = (-_BRACKET_RADIUS_UM + (peak[0] + 0.5) * _BRACKET_BIN_UM,
+                 -_BRACKET_RADIUS_UM + (peak[1] + 0.5) * _BRACKET_BIN_UM)
+        return float(hist[peak] / max(chance, 1e-12)), shift
+
+    scales = np.arange(-scale_band, scale_band + 1e-9, _BRACKET_SCALE_STEP)
+    degrees = np.arange(-rotation_band_deg, rotation_band_deg + 1e-9,
+                        _BRACKET_ROTATION_STEP)
+    best = (-1.0, 0.0, 0.0, (0.0, 0.0))
+    for d_scale in scales:
+        for d_deg in degrees:
+            peak, shift = score(candidate(d_scale, d_deg))
+            if peak > best[0]:
+                best = (peak, float(d_scale), float(d_deg), shift)
+
+    peak, d_scale, d_deg, shift = best
+    matrix = candidate(d_scale, d_deg)
+    matrix = matrix.copy()
+    matrix[:2, 2] += np.asarray(shift) / pixel_size_um
+    return matrix, peak
+
+
 def fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: float,
                           sigma_start_um: float = SIGMA_START_UM,
                           sigma_end_um: float = SIGMA_END_UM,
                           steps: int = _SIGMA_STEPS,
                           iters: int = _ITERS_PER_SIGMA,
-                          image_shape_yx=None) -> NucleiAlignResult:
+                          image_shape_yx=None,
+                          bracket: bool = True) -> NucleiAlignResult:
     """Fit the similarity that puts *source_yx* onto *target_yx*, from *seed_3x3*.
 
     Both point sets are in the pixel frame the seed maps between: *source_yx* in
@@ -409,7 +586,9 @@ def fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: float,
     pixels. ``pixel_size_um`` is the Xenium pixel size, which is the frame every
     reported distance is in.
 
-    Annealed soft assignment; see the module docstring for why not ICP.
+    The fit is a ``bracket_seed`` pass followed by annealed soft assignment; see
+    that function for why the bracket is needed and the module docstring for why
+    the anneal is not ICP. ``bracket=False`` runs the anneal alone.
     """
     from scipy.spatial import cKDTree
 
@@ -428,7 +607,19 @@ def fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: float,
         np.linspace(0, len(target) - 1, 20000).astype(int)]
     spacing_px = float(np.median(cKDTree(target).query(sample, k=2, workers=-1)[0][:, 1]))
 
-    affine = np.asarray(seed_3x3, dtype=np.float64).copy()
+    seed = np.asarray(seed_3x3, dtype=np.float64)
+    if image_shape_yx is None:
+        image_shape_yx = (float(source[:, 0].max()), float(source[:, 1].max()))
+    # Cross the part of the seed's error the anneal cannot see, before annealing.
+    bracket_peak = 0.0
+    bracket_shift = 0.0
+    if bracket:
+        bracketed, bracket_peak = bracket_seed(
+            tree, source, seed, pixel_size_um, image_shape_yx, spacing_px)
+        bracket_shift = _seed_shift_um(bracketed, seed, image_shape_yx, pixel_size_um)
+        seed = bracketed
+
+    affine = seed.copy()
     sigmas = np.geomspace(sigma_start_um / pixel_size_um,
                           sigma_end_um / pixel_size_um, steps)
     for sigma in sigmas:
@@ -474,10 +665,8 @@ def fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: float,
     chance = 1.0 - np.exp(-lam * np.pi * (MATCH_RADIUS_UM / pixel_size_um) ** 2)
     enrichment = float((n_matched / len(source)) / chance) if chance > 0 else float("inf")
 
-    seed = np.asarray(seed_3x3, dtype=np.float64)
-    if image_shape_yx is None:
-        image_shape_yx = (float(source[:, 0].max()), float(source[:, 1].max()))
-    shift = _seed_shift_um(affine, seed, image_shape_yx, pixel_size_um)
+    shift = _seed_shift_um(affine, np.asarray(seed_3x3, dtype=np.float64),
+                           image_shape_yx, pixel_size_um)
 
     scale = float(np.hypot(affine[0, 0], affine[0, 1]))
     rotation = float(np.degrees(np.arctan2(affine[0, 1], affine[0, 0])))
@@ -491,6 +680,7 @@ def fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: float,
         median_residual_um=float(np.median(dist_um[matched])) if n_matched else float("nan"),
         enrichment=enrichment,
         seed_shift_um=shift,
+        bracket_shift_um=bracket_shift, bracket_peak=bracket_peak,
         scale=scale, rotation_deg=rotation,
         confident=bool(enrichment >= MIN_ENRICHMENT and n_matched >= 200),
         notes=notes,

@@ -10,7 +10,7 @@ UMAP coordinates are now persisted in adata.obs/obsm/uns via
 utils/adata_persistence.py (Phase 1 SpatialData refactoring).
 
 Storage layout inside sdata_cached.zarr/viewer_session/:
-  he/affine_3x3               — zarr array 3x3
+  he/affine_3x3               — zarr array 3x3 (attrs: affine_source)
   he/coarse_affine             — zarr array 3x3
   arms/affine_3x3              — zarr array 3x3
   roi_deg.parquet              — DataFrame
@@ -121,6 +121,17 @@ def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
     attrs["he_pixel_size_um"] = (
         float(he_state["he_pixel_size_um"]) if he_state.get("he_pixel_size_um")
         else prev_attrs.get("he_pixel_size_um")
+    )
+    # Which method produced `affine_3x3`: "landmarks" or "nuclei". The two write
+    # the same slot on purpose — it is *the* fine transform — but nothing could
+    # tell them apart afterwards, and `scripts/score_nuclei_align.py` falls back
+    # to this affine as its reference when a dataset ships no 10x matrix. On
+    # demo_data/crop_6 it duly scored the automatic fit against an earlier run of
+    # itself and reported 0.000 um of disagreement, which reads as a perfect
+    # result and means nothing.
+    attrs["affine_source"] = (
+        he_state.get("affine_source") if he_state.get("affine_3x3") is not None
+        else prev_attrs.get("affine_source")
     )
 
     # ── ARMS overlay ─────────────────────────────────────────────────────
@@ -337,6 +348,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "he_shape_yx": tuple(attrs["he_shape_yx"]) if attrs.get("he_shape_yx") else None,
         "he_pixel_size_um": attrs.get("he_pixel_size_um"),
         "affine_3x3": None,
+        "affine_source": attrs.get("affine_source"),
         "coarse_affine": None,
         "xenium_landmarks": None,
         "he_landmarks": None,

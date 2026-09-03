@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1679 tests** across 71 files, measured 2026-09-02 —
+There is a `pytest` suite in `tests/` (**1690 tests** across 71 files, measured 2026-09-03 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -178,7 +178,7 @@ honour the format setting.
 | `gene_analysis.py` | Rank genes, normalization, Leiden clustering |
 | `spatial_analysis.py` | Squidpy-based spatial analysis (neighborhood enrichment, co-occurrence, L-R) |
 | `registration.py` | H&E/ARMS registration: landmark similarity fit, `flip_matrix` (**the** one definition of the flip — four copies had accumulated), and `Coarse Align` — a global search in rotation, scale and reflection over the normalised cross-correlation of blurred nuclear density |
-| `nuclei_registration.py` | Automatic *fine* H&E registration: haematoxylin nuclei matched to `nucleus_labels` centroids by annealed soft assignment, seeded by Coarse Align. 15 µm → 0.7 µm on the pancreas with no landmarks. Two rules carry it: **not ICP** (a seed one nucleus spacing out makes nearest-neighbour correspondences wrong *and* self-consistent — ICP converges confidently to 13.1 µm), and **full resolution on both sides** (a coarser pixel biases each peak; 2.2× as many detections at s1 bought 0.002 µm, one level finer bought 0.145 µm). Scored by `scripts/score_nuclei_align.py`, whose held-out check is the one that means something — see the memory `a-self-referential-metric-needs-an-independent-check` |
+| `nuclei_registration.py` | Automatic *fine* H&E registration: haematoxylin nuclei matched to `nucleus_labels` centroids by annealed soft assignment, seeded by Coarse Align. 15 µm → 0.7 µm on the pancreas with no landmarks. Two passes, both load-bearing: a `bracket_seed` grid over scale and rotation (translation per hypothesis from a coincidence peak) then the anneal — a scale error is invisible at the centre and larger than any usable sigma at the edges, so neither pass can do the other's job. Two further rules: **not ICP** (a seed one nucleus spacing out makes nearest-neighbour correspondences wrong *and* self-consistent — ICP converges confidently to 13.1 µm), and **full resolution on both sides** (a coarser pixel biases each peak; 2.2× as many detections at s1 bought 0.002 µm, one level finer bought 0.145 µm). Scored by `scripts/score_nuclei_align.py`, whose held-out check is the one that means something — see the memory `a-self-referential-metric-needs-an-independent-check` |
 | `affine_compare.py` | The (y,x)/(x,y) convention arithmetic and the microns-of-disagreement metric, shared by `scripts/compare_he_registration.py` and `scripts/score_coarse_align.py` |
 | `transcript_index.py` | Per-gene feather loader |
 | `session.py` | Zarr-based session persistence (ROIs, H&E/ARMS registration, clusterings, DEG results, provenance graph) |
