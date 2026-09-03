@@ -285,6 +285,112 @@ def test_clearing_staging_removes_the_farm_and_nothing_else(dataset):
                    if not k.startswith("viewer_cache/")}
 
 
+# ── a dataset with nothing to export ─────────────────────────────────────────
+
+@pytest.fixture
+def crop_export(tmp_path):
+    """A Crop Dataset export: experiment.xenium, a zarr cache, transcripts.
+
+    None of celldega's raw inputs, because a crop export does not have them —
+    its SpatialData zarr *is* the data. Shaped after the real ``crop_6`` demo
+    dataset, where this was measured.
+    """
+    data_path = tmp_path / "crop_6"
+    data_path.mkdir()
+    (data_path / "experiment.xenium").write_text('{"run_name": "crop_6"}')
+    (data_path / "transcripts.parquet").write_bytes(b"PAR1" * 32)
+    (data_path / "sdata_cached.zarr").mkdir()
+    (data_path / "transcript_cache").mkdir()
+    return data_path
+
+
+def test_a_crop_export_is_refused_before_anything_is_staged(crop_export):
+    """The failure without this guard is late, misleading, and leaves debris.
+
+    Measured on the real crop_6 demo dataset: celldega gets as far as its own
+    unzipper and dies with ``CalledProcessError: Command '['gzip', '-dk',
+    'cells.csv.gz']' returned non-zero exit status 1``, which reads as a broken
+    gzip rather than as "this dataset has no raw output and never will". Issue
+    #17's rule, applied to the one path that reads the raw output *instead of*
+    the cache.
+    """
+    assert de.is_cache_only(crop_export)
+
+    with pytest.raises(de.NotExportable) as excinfo:
+        de.require_exportable(crop_export)
+    message = str(excinfo.value)
+    assert "crop_6" in message and "Crop Dataset export" in message
+    # It has to say what to do instead, or it is only a better-worded dead end.
+    assert "cropped from" in message
+
+    # Nothing tried, nothing left behind.
+    assert not (crop_export / "viewer_cache").exists()
+    assert not de.degafiles_dir(crop_export).exists()
+
+
+def test_the_export_refuses_a_crop_before_it_even_looks_for_celldega(crop_export,
+                                                                    stub_celldega):
+    """Order matters: the unsatisfiable refusal comes first.
+
+    Asking "is celldega installed?" of a dataset that could never be published
+    either way sends the user to install a dependency that will not help.
+    """
+    with pytest.raises(de.NotExportable):
+        de.export_degafiles(crop_export)
+    assert stub_celldega == [], "celldega was called for a dataset with no raw output"
+    assert not de.degafiles_dir(crop_export).exists()
+
+
+def test_a_partial_bundle_is_a_different_message_from_a_crop(dataset):
+    """One missing archive is a broken copy, not a crop, and is said so.
+
+    Collapsing the two would tell someone whose download was truncated to go and
+    publish "the dataset this one was cropped from", which does not exist.
+    """
+    (dataset / "cells.csv.gz").unlink()
+    assert not de.is_cache_only(dataset)
+
+    with pytest.raises(de.NotExportable) as excinfo:
+        de.require_exportable(dataset)
+    message = str(excinfo.value)
+    assert "cells.csv.gz" in message and "incomplete copy" in message
+    # It names the crop case only to rule it out, and must not give the crop
+    # advice — there is no dataset this one was cropped from.
+    assert "cropped from" not in message
+    assert "has no raw 10x output" not in message
+
+
+def test_a_complete_bundle_is_allowed(dataset):
+    assert de.missing_raw_inputs(dataset) == []
+    de.require_exportable(dataset)  # must not raise
+
+
+def test_the_publish_tab_says_so_on_arrival_for_a_crop(qapp, crop_export):
+    """Stated when the tab is built, not discovered when the button fails.
+
+    Filesystem-only, so it costs nothing at build time — which is the whole
+    reason it can be answered this early.
+    """
+    from palms.tabs.tab_publish import build_tab
+    from qtpy.QtWidgets import QLabel
+
+    ctx = SimpleNamespace(state={}, viewer=None, data_path=crop_export)
+    widget, _exports = build_tab(ctx)
+    text = " ".join(lbl.text() for lbl in widget.findChildren(QLabel))
+    assert "no raw 10x output" in text
+    assert "Crop Dataset export" in text
+
+
+def test_the_publish_tab_is_silent_about_it_for_a_normal_dataset(qapp, dataset):
+    from palms.tabs.tab_publish import build_tab
+    from qtpy.QtWidgets import QLabel
+
+    ctx = SimpleNamespace(state={}, viewer=None, data_path=dataset)
+    widget, _exports = build_tab(ctx)
+    text = " ".join(lbl.text() for lbl in widget.findChildren(QLabel))
+    assert "no raw 10x output" not in text
+
+
 # ── the celldega call, against a stub ─────────────────────────────────────────
 
 @pytest.fixture
@@ -389,14 +495,80 @@ def test_the_export_refuses_before_it_stages_anything(dataset):
     assert not (dataset / "viewer_cache" / "dega_staging").exists()
 
 
-def test_the_pin_names_the_pre_extra():
-    """pyvips is declared only under celldega's ``pre`` extra.
+def test_dega_available_imports_celldega_before_pyvips():
+    """Source guard: the two imports in ``dega_available`` must not be sorted.
 
-    Their import of it is a try/except that leaves the module ``None``, so a
-    bare ``celldega`` runs for minutes, reaches "generating dapi image tiles"
-    and dies with ``AttributeError: 'NoneType' object has no attribute 'Image'``.
+    Order-dependent collision, measured both ways on a box with Ubuntu's
+    libvips. pyvips runs against the host ``libvips.so.42``, which drags in the
+    system HDF5 1.10 while this env's h5py is built for 1.14:
+
+    * pyvips then h5py -> ``ValueError: Not a datatype``; anndata is dead for
+      the rest of the process.
+    * h5py then pyvips -> fine; an h5ad round-trip afterwards succeeds.
+
+    ``import celldega.pre`` pulls in anndata and therefore h5py, so putting it
+    first is what keeps the *availability check* from breaking the session it
+    was only supposed to ask a question about. Nothing about the code says so —
+    alphabetising the imports would look like tidying and would reintroduce it
+    on any host with libvips installed. Hence a test.
     """
-    assert "[pre]" in de.CELLDEGA_PIN
+    import ast
+    import inspect
+
+    source = inspect.getsource(de.dega_available)
+    names = [alias.name for node in ast.walk(ast.parse(source.strip()))
+             if isinstance(node, ast.Import) for alias in node.names]
+    assert "celldega.pre" in names and "pyvips" in names
+    assert names.index("celldega.pre") < names.index("pyvips"), (
+        f"pyvips is imported before celldega in dega_available ({names}); that "
+        f"order makes an availability check break h5py on a host with libvips"
+    )
+
+
+def test_the_install_hint_is_two_commands_and_does_not_use_the_pre_extra():
+    """``--no-deps`` makes pip ignore extras, so ``celldega[pre]`` is a trap.
+
+    It reads as though it fetches pyvips and does not: measured with
+    ``pip install --dry-run --no-deps 'celldega[pre]==0.24.2'``, whose whole
+    output is "Would install celldega-0.24.2". The remedy therefore names every
+    dependency itself, on a second line without ``--no-deps``.
+    """
+    hint = de.install_hint()
+    lines = [line.strip() for line in hint.splitlines() if line.strip()]
+    assert len(lines) == 2, f"expected two commands, got {lines}"
+
+    no_deps, rest = lines
+    assert "--no-deps" in no_deps and de.CELLDEGA_PIN in no_deps
+    assert "[pre]" not in hint, "the extra does nothing under --no-deps"
+    assert "--no-deps" not in rest, (
+        "the second command must resolve normally, or it puts nothing back"
+    )
+    for package in de.PYVIPS_PINS + de.CELLDEGA_RUNTIME_DEPS:
+        assert package in rest, f"{package} is not in the install hint"
+
+
+def test_the_remedy_a_user_sees_is_the_install_hint():
+    """Whatever dega_available says, it must not disagree with install_hint."""
+    ok, message = de.dega_available()
+    if ok:
+        pytest.skip("celldega is installed here, so there is no remedy to show")
+    assert de.install_hint() in message
+
+
+def test_the_pin_does_not_carry_the_pre_extra():
+    """The ``[pre]`` spelling was removed because it did nothing.
+
+    pyvips is declared only under celldega's ``pre`` extra, and their import of
+    it is a try/except that leaves the module ``None`` -- so without pyvips the
+    export runs for minutes, reaches "generating dapi image tiles" and dies with
+    ``AttributeError: 'NoneType' object has no attribute 'Image'``. But pip
+    ignores extras under ``--no-deps``, so naming the extra never prevented any
+    of that. The dependency list does.
+    """
+    assert "[pre]" not in de.CELLDEGA_PIN, (
+        "pip ignores extras under --no-deps, so [pre] promises pyvips and "
+        "delivers nothing; the dependencies are named explicitly instead"
+    )
     assert "==" in de.CELLDEGA_PIN, "a floating pin here was the insitucnv mistake"
 
 

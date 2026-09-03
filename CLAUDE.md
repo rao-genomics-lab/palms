@@ -129,21 +129,48 @@ which was found by running it:
   unpacks the four archives in Python, which also drops celldega's unstated dependency on
   the `gzip`, `unzip` and `tar` binaries and leaves their unzipper a no-op (it skips any
   target that already exists).
-- **The extra is `celldega[pre]`, installed `--no-deps`**, and is deliberately out of
-  `full`. pyvips is declared only under their `pre` extra and their import of it is a
-  try/except leaving the module `None`, so a bare install runs for minutes, reaches
-  "generating dapi image tiles" and dies with an `AttributeError`. And celldega caps
-  `anndata<0.13` / `spatialdata<0.8` while the viewer runs 0.13/0.8, so a plain resolve
-  *succeeds* and silently downgrades anndata, spatialdata, pandas and ome-zarr; those
-  caps are conservative rather than real — the export was measured against the viewer's
-  own versions. `dega_available()` is the one answer to "is it installed", used by the
-  Check button and the pre-flight alike, and it is called **lazily**: importing celldega
-  at build time would cost every launch a spatialdata-sized import for a tab most users
-  never open.
+- **The install is two commands, and `celldega[pre]` is a trap.** `--no-deps` makes pip
+  ignore extras entirely — `pip install --dry-run --no-deps 'celldega[pre]==0.24.2'`
+  reports "Would install celldega-0.24.2" and nothing else — so the `[pre]` spelling
+  reads as though it fetches pyvips and delivers exactly the failure naming it was
+  supposed to prevent. `install_hint()` is the one definition of the remedy, pinned by a
+  test and shown by the Check button:
+  `pip install --no-deps celldega==0.24.2`, then
+  `pip install pyvips~=2.2.2 pyvips-binary mudata ipywidgets anywidget libpysal polars`.
+  The first is `--no-deps` because celldega caps `anndata<0.13` / `spatialdata<0.8`
+  while the viewer runs 0.13/0.8, so a plain resolve *succeeds* and silently downgrades
+  anndata, spatialdata, pandas and ome-zarr; those caps are conservative — both measured
+  exports ran against the viewer's own versions. The second puts back the runtime
+  imports `--no-deps` skipped. The extra stays out of `full`.
+- **`pyvips-binary`, and the import order in `dega_available`.** Plain pyvips runs
+  against the *host* `libvips.so.42`, which on an Ubuntu box drags in system HDF5 1.10
+  while the env's h5py is built for 1.14 — the `libglx` collision again, two builds of
+  one library in one process. It is **order-dependent**, measured both ways: pyvips then
+  h5py raises `ValueError: Not a datatype` and anndata is dead for the process; h5py then
+  pyvips is fine. The viewer is always safe (anndata at startup) and so is
+  `dega_available`, which imports `celldega.pre` — hence anndata, hence h5py — *before*
+  pyvips. **That ordering is load bearing, not stylistic**: alphabetising those two
+  imports would make an availability check break the session it was only asking about, so
+  a source guard pins it. `pyvips-binary` removes the hazard rather than sequencing
+  around it. conda-forge `libvips` would too and is **not** the route — it downgrades
+  napari 0.8→0.7, spatialdata 0.8→0.6.1 and squidpy 1.8.2→1.7 in the live env.
+- **`dega_available()` is called lazily.** Importing celldega at build time would cost
+  every launch a spatialdata-sized import for a tab most users never open.
+- **A cache-only dataset is refused up front.** A Crop Dataset export has none of
+  celldega's raw inputs — its zarr *is* the data — and without a guard the failure is
+  `CalledProcessError: Command '['gzip', '-dk', 'cells.csv.gz']' returned non-zero exit
+  status 1`, thrown from inside celldega after minutes of work, which reads as a broken
+  gzip. `require_exportable()` raises `NotExportable` before anything is staged, and the
+  tab says so when it is built. This is issue #17's rule applied to the one path that
+  reads the raw output *instead of* the cache; `missing_raw_inputs` distinguishes a crop
+  (all inputs absent, can never be published) from a truncated download (some absent),
+  because the advice differs.
 
-Two decisions in the tab itself. The export is **322 s** on a 10.6 x 6.3 mm section
-(220 MB out), so it runs in a `thread_worker` with an indeterminate bar and an elapsed
-readout rather than blocking. And the **destination is fixed at `<data_path>/degafiles`**,
+Two decisions in the tab itself. The export is **322 s and then 637 s** on the same
+10.6 x 6.3 mm section on the same machine (220 MB out) — quote the range, not either
+number — so it runs in a `thread_worker` with an indeterminate bar and an elapsed
+readout rather than blocking. celldega reports its tiling through tqdm, so the
+`qt_tqdm_context` relay gets real progress. And the **destination is fixed at `<data_path>/degafiles`**,
 outside every `deletable_roots()` directory like `plots/`: a chooser would put an absolute
 path in the recorded cell, and `export.degafiles` records `out_dir` *relative to the
 dataset* precisely so a replay writes beside whatever data it was pointed at. That

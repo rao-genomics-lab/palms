@@ -10,7 +10,7 @@ module is a *wrapper*, not a second implementation of their format.
 Export only. Reading DegaFiles is deliberately out of scope: that is a second
 format reader, and the viewer already reads the raw 10x output directly.
 
-Two things this wrapper exists to do, both of which the bare API does not:
+Three things this wrapper exists to do, none of which the bare API does:
 
 **The raw 10x output is never written to.** ``celldega.pre.main`` calls
 ``_xenium_unzipper``, which ``os.chdir``s into the dataset directory and runs
@@ -26,18 +26,33 @@ Dataset tab can clear. The archives are then unpacked into that directory by
 read through a symlink, so the staged run does not work without it.
 
 **It says which optional dependency is missing, and how to get it.** See
-``dega_available``; the constraint is sharper than "pip install celldega", and a
-bare ``ImportError`` in a napari worker would not say so.
+``dega_available`` and :func:`install_hint`; the constraint is sharper than
+"pip install celldega" — sharper, it turned out, than ``celldega[pre]`` too,
+since ``--no-deps`` makes pip ignore extras — and a bare ``ImportError`` in a
+napari worker would not say any of it.
+
+**It refuses a dataset that has nothing to convert.** A Crop Dataset export
+carries ``experiment.xenium``, a zarr cache and derived transcripts, and that is
+the whole dataset: its zarr *is* the data. celldega reads the raw 10x bundle, so
+the export cannot work, and without :func:`require_exportable` it fails minutes
+in with ``CalledProcessError: Command '['gzip', '-dk', 'cells.csv.gz']' returned
+non-zero exit status 1`` — measured on the ``crop_6`` demo dataset — which reads
+as a broken archive rather than as the real answer. This is the rule issue #17
+established for every *rebuild* path, applied to the one path that reads the raw
+output instead of the cache.
 
 Measured 2026-09-03 on ``Xenium_V1_human_Pancreas_FFPE_outs`` with
-celldega 0.24.2: a complete export in **322 s** to 220 MB
+celldega 0.24.2, twice on the same machine: a complete export in **322 s and
+then 637 s** — budget five to eleven minutes rather than a number — to 220 MB
 (``pyramid_images/`` as WebP Deep Zoom, ``transcript_tiles/``,
 ``cell_segmentation/``, ``cbg/``, ``cell_clusters/``, ``cell_metadata.parquet``,
 ``meta_gene.parquet``, ``df_sig.parquet``, ``micron_to_image_transform.csv``,
 ``landscape_parameters.json``), with the raw output directory byte-for-byte
-unchanged. That run was against anndata 0.13.2, spatialdata 0.8.0 and
-pandas 3.0.5 — over every upper cap celldega declares — which is the evidence
-for the ``--no-deps`` advice below.
+unchanged, verified on disk afterwards: ``cells.csv``, ``cells.zarr``,
+``analysis`` and ``cell_feature_matrix`` all appeared in the staging farm and
+none of them beside the data. Both runs were against anndata 0.13.2,
+spatialdata 0.8.0 and pandas 3.0.5 — over every upper cap celldega declares —
+which is the evidence for the ``--no-deps`` advice below.
 """
 
 from __future__ import annotations
@@ -57,11 +72,70 @@ IMAGE_TILE_LAYER = "dapi"
 
 #: The pin. A floating version here would be the ``insitucnv`` mistake twice —
 #: see the note in CLAUDE.md about why that git URL became a PyPI pin.
-CELLDEGA_PIN = "celldega[pre]==0.24.2"
+#:
+#: **Not** ``celldega[pre]``. ``--no-deps`` makes pip ignore extras entirely, so
+#: that spelling installs exactly the same thing while *reading* as though it
+#: brought pyvips along — measured with ``pip install --dry-run --no-deps
+#: 'celldega[pre]==0.24.2'``: "Would install celldega-0.24.2", and nothing else.
+#: The remedy below therefore names every dependency by hand.
+CELLDEGA_PIN = "celldega==0.24.2"
+
+#: celldega's runtime imports that ``--no-deps`` skips, found by importing
+#: ``celldega.pre`` and installing whatever it asked for until it stopped asking.
+#: None of them is version-capped by celldega, so they resolve normally — it is
+#: only anndata, spatialdata, pandas and ome-zarr that must be kept away from
+#: pip's resolver, which is what ``--no-deps`` on the celldega line is for.
+CELLDEGA_RUNTIME_DEPS = (
+    "mudata", "ipywidgets", "anywidget", "libpysal", "polars",
+)
+
+#: pyvips, and the wheel that carries its own libvips. The second is a
+#: safeguard against an **order-dependent** collision, and the ordering half of
+#: the story is what :func:`dega_available` has to keep honouring.
+#:
+#: Plain ``pyvips`` runs in API mode against whatever ``libvips.so.42`` the host
+#: provides. On a box with Ubuntu's libvips that build pulls the system HDF5
+#: 1.10 into the process, while the conda env's h5py is built for 1.14 — two
+#: builds of one library in one process, the ``libglx`` collision in
+#: ``utils/gl_check.py`` wearing a different hat. Measured here, without
+#: ``pyvips-binary``: pyvips loads ``/usr/lib/x86_64-linux-gnu/libvips.so.42``
+#: and ``/usr/lib/x86_64-linux-gnu/libhdf5_serial.so.103``.
+#:
+#: What it does depends entirely on **who got there first**, and this was
+#: measured both ways:
+#:
+#: * ``import pyvips`` *then* ``import h5py`` → ``ValueError: Not a datatype``.
+#:   h5py is unusable, so anndata is, for the rest of the process.
+#: * ``import h5py`` *then* ``import pyvips`` → fine. Both libraries are mapped,
+#:   but h5py already bound to the env's HDF5 and keeps working; an h5ad
+#:   round-trip afterwards succeeds.
+#:
+#: The viewer is always in the second case (anndata is imported at startup), and
+#: so is :func:`dega_available`, which imports ``celldega.pre`` — and therefore
+#: anndata, and therefore h5py — *before* pyvips. That ordering is load bearing
+#: rather than stylistic, and ``tests/test_dega_export.py`` pins it.
+#:
+#: ``pyvips-binary`` removes the hazard rather than sequencing around it: it
+#: ships its own libvips wheel, which pyvips prefers, so the host build is never
+#: mapped at all. Recommended for that reason, not because the GUI needs it.
+#: conda-forge's ``libvips`` would also fix it and is **not** the route —
+#: solving it into the live env downgrades napari 0.8→0.7, spatialdata
+#: 0.8→0.6.1 and squidpy 1.8.2→1.7.
+PYVIPS_PINS = ("pyvips~=2.2.2", "pyvips-binary")
+
+
+def install_hint() -> str:
+    """The install command that actually works, as one block of shell."""
+    return (f"    pip install --no-deps {CELLDEGA_PIN}\n"
+            f"    pip install {' '.join(PYVIPS_PINS + CELLDEGA_RUNTIME_DEPS)}")
 
 
 class DegaUnavailable(RuntimeError):
     """Celldega is not importable, with the reason and the remedy attached."""
+
+
+class NotExportable(RuntimeError):
+    """The dataset has no raw 10x output, so there is nothing to convert."""
 
 
 def dega_available() -> tuple[bool, str]:
@@ -78,22 +152,33 @@ def dega_available() -> tuple[bool, str]:
     is most of this function's value.
     """
     try:
+        # ORDER IS LOAD BEARING: celldega.pre first, pyvips second. Importing
+        # celldega pulls in anndata and therefore h5py, which binds to this
+        # env's HDF5 before pyvips can map the host libvips and its own. The
+        # reverse order raises `ValueError: Not a datatype` out of h5py and
+        # leaves anndata broken for the rest of the process -- measured, and see
+        # PYVIPS_PINS. Do not sort these two imports.
         import celldega.pre  # noqa: F401
 
         # celldega imports pyvips in a try/except that leaves the module bound
-        # to None, so a bare install reaches "generating dapi image tiles" and
-        # dies there with an AttributeError. It is declared under celldega's own
-        # `pre` extra; checking here turns a failure twenty minutes into an
-        # export into one before it starts.
+        # to None, so an install without it reaches "generating dapi image
+        # tiles" and dies there with an AttributeError. Checking here turns a
+        # failure ten minutes into an export into one before it starts.
         import pyvips  # noqa: F401
     except ImportError as exc:
         return False, (
-            f"Celldega is not installed ({exc}). Install it *without* its "
-            f"dependency pins:\n"
-            f"    pip install --no-deps {CELLDEGA_PIN}\n"
-            f"A plain install downgrades anndata, spatialdata and pandas "
-            f"underneath the viewer; celldega's upper caps are conservative and "
-            f"it runs against the versions already here."
+            f"Celldega is not installed ({exc}). Two commands, and the split "
+            f"matters:\n"
+            f"{install_hint()}\n"
+            f"The first is --no-deps because celldega caps anndata<0.13 and "
+            f"spatialdata<0.8 while the viewer runs 0.13 and 0.8, so a plain "
+            f"install succeeds and downgrades the stack underneath it; those "
+            f"caps are conservative and it runs against the versions already "
+            f"here. The second puts back the dependencies --no-deps skipped — "
+            f"note that pip ignores extras under --no-deps, so 'celldega[pre]' "
+            f"would NOT have brought pyvips. pyvips-binary is strongly "
+            f"advised: without it pyvips maps the host libvips, whose HDF5 can "
+            f"collide with this env's h5py depending on import order."
         )
     return True, ""
 
@@ -103,6 +188,74 @@ def require_dega() -> None:
     ok, message = dega_available()
     if not ok:
         raise DegaUnavailable(message)
+
+
+#: What ``celldega.pre.main`` reads that only raw 10x output has. A Crop Dataset
+#: export has none of them — it ships ``experiment.xenium`` plus the zarr cache
+#: and derived transcripts, and that *is* the whole dataset.
+_REQUIRED_RAW = ("cells.csv.gz", "cells.zarr.zip", "cell_feature_matrix.tar.gz",
+                 "morphology_focus")
+
+
+def missing_raw_inputs(data_path) -> list[str]:
+    """Which of celldega's raw inputs *data_path* does not have.
+
+    Empty means the export can run. Named individually rather than answered with
+    a bool because the two cases need different advice: a Crop Dataset export is
+    missing all of them and can never be published, while a bundle missing one is
+    an incomplete download.
+    """
+    data_path = Path(data_path)
+    return [name for name in _REQUIRED_RAW if not (data_path / name).exists()]
+
+
+def is_cache_only(data_path) -> bool:
+    """True when *none* of celldega's raw inputs is present.
+
+    The distinction :func:`missing_raw_inputs` draws, as the predicate a caller
+    usually wants: this dataset can never be published, as against one that is
+    merely an incomplete copy and could be. Mirrors
+    ``loader.has_raw_xenium_source``'s "all or nothing" reading, and for the same
+    reason — a bundle missing *some* files is broken raw output, not a crop.
+    """
+    return len(missing_raw_inputs(data_path)) == len(_REQUIRED_RAW)
+
+
+def require_exportable(data_path) -> None:
+    """Raise :class:`NotExportable` unless the raw 10x output is here.
+
+    Checked *before* anything is staged, because the failure without it is both
+    late and misleading: ``celldega.pre.main`` gets as far as its own unzipper
+    and dies with ``CalledProcessError: Command '['gzip', '-dk',
+    'cells.csv.gz']' returned non-zero exit status 1`` — measured on the
+    ``crop_6`` demo dataset. That reads as a broken gzip or a corrupt archive
+    rather than as the real answer, which is that this dataset has no raw output
+    and never will.
+
+    This is the rule issue #17 established for every rebuild path, applied to the
+    one path that reads the raw output *instead of* the cache: a crop export's
+    zarr **is** the data. ``loader.has_raw_xenium_source`` is the general form;
+    the check here is narrower on purpose, since celldega needs specific files
+    that a merely *partial* bundle could still be missing.
+    """
+    missing = missing_raw_inputs(data_path)
+    if not missing:
+        return
+    data_path = Path(data_path)
+    if is_cache_only(data_path):
+        raise NotExportable(
+            f"{data_path.name} has no raw 10x output, so there is nothing for "
+            f"celldega to convert: it is a Crop Dataset export (or another "
+            f"cache-only dataset), whose SpatialData zarr *is* the data.\n"
+            f"DegaFile export reads the original 10x bundle — "
+            f"{', '.join(_REQUIRED_RAW)} — not the cache, so it cannot run "
+            f"here. Publish the dataset this one was cropped from instead."
+        )
+    raise NotExportable(
+        f"{data_path.name} is missing {', '.join(missing)}, which celldega "
+        f"needs. This looks like an incomplete copy of a 10x bundle rather "
+        f"than a Crop Dataset export — the rest of the raw output is here."
+    )
 
 
 def degafiles_dir(data_path) -> Path:
@@ -237,9 +390,12 @@ def export_degafiles(data_path, out_dir=None, tile_size: int = TILE_SIZE_UM,
     argument for eventually running the export in a subprocess.
     """
     require_dega()
+    data_path = Path(data_path).resolve()
+    # Before the output directory is made and before anything is staged: a
+    # dataset that cannot be exported should leave no trace of having tried.
+    require_exportable(data_path)
     import celldega.pre as dega_pre
 
-    data_path = Path(data_path).resolve()
     out = Path(out_dir) if out_dir is not None else degafiles_dir(data_path)
     out.mkdir(parents=True, exist_ok=True)
 

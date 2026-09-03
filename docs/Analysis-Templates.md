@@ -1908,22 +1908,28 @@ The one template whose computation is third-party, and the reason it still impor
 # symlink, so the links alone are not enough. The raw output is left
 # byte-for-byte unchanged.
 #
-# celldega is an optional dependency, and its version caps are conservative
-# rather than real: a plain install downgrades anndata, spatialdata and pandas
-# underneath this environment, while the export runs fine against the versions
-# already here. So:
+# celldega is an optional dependency and takes two commands, because its
+# version caps are conservative rather than real - a plain install downgrades
+# anndata, spatialdata and pandas underneath this environment, while the export
+# runs fine against the versions already here:
 #
-#     pip install --no-deps 'celldega[pre]==0.24.2'
+#     pip install --no-deps celldega==0.24.2
+#     pip install pyvips~=2.2.2 pyvips-binary mudata ipywidgets anywidget \
+#         libpysal polars
 #
-# The `pre` extra is not optional - pyvips is declared only there, and celldega
-# imports it in a try/except that leaves the module None, so a bare install runs
-# for minutes and then dies in the image-tiling step.
+# Not `celldega[pre]`: pip ignores extras under --no-deps, so that spelling
+# installs celldega alone while reading as though it fetched pyvips too, and the
+# export then dies in the image-tiling step. pyvips-binary is advised too --
+# plain pyvips maps the host's libvips, whose HDF5 can collide with a conda
+# env's h5py when pyvips is imported first.
 from palms.utils.dega_export import export_degafiles
 
-# Measured at 322 s and 220 MB for a 10.6 x 6.3 mm section, most of it in the
-# DAPI pyramid. `out_dir` is recorded relative to the dataset, the convention
-# every other written artifact follows here, so a replay writes beside whatever
-# data it was pointed at rather than at the exporting machine's copy of it.
+# Measured twice on a 10.6 x 6.3 mm section, same machine: 322 s and 637 s, to
+# 220 MB out. Most of it is transcript tiling and the DAPI pyramid.
+#
+# `out_dir` is recorded relative to the dataset, the convention every other
+# written artifact follows here, so a replay writes beside whatever data it was
+# pointed at rather than at the exporting machine's copy of it.
 degafiles_path = export_degafiles(
     data_path,
     out_dir=data_path / $out_dir,

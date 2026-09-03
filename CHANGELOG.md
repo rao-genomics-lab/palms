@@ -7,6 +7,58 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **Four defects found by running the DegaFile export for real**, on
+  `Xenium_V1_human_Pancreas_FFPE_outs` with celldega 0.24.2 installed into the
+  live env. The export itself works — 220 MB written, and the raw output
+  verified byte-for-byte untouched afterwards, with `cells.csv`, `cells.zarr`,
+  `analysis` and `cell_feature_matrix` all in the staging farm and none of them
+  beside the data — but everything written *about* installing and running it was
+  wrong in some way:
+
+  - **`celldega[pre]` under `--no-deps` installs no pyvips.** pip ignores extras
+    when that flag is set: `pip install --dry-run --no-deps
+    'celldega[pre]==0.24.2'` reports "Would install celldega-0.24.2" and nothing
+    more. So the documented command produced exactly the `AttributeError:
+    'NoneType' object has no attribute 'Image'` that naming `[pre]` was supposed
+    to prevent. The pin is bare `celldega==0.24.2` now, with every dependency
+    named on a second line that resolves normally, and
+    `dega_export.install_hint()` is the single definition of the remedy —
+    pinned by a test, and what the Check button shows.
+  - **`--no-deps` also skipped five runtime imports** celldega needs and does
+    not cap: mudata, ipywidgets, anywidget, libpysal, polars. `import
+    celldega.pre` fails without them.
+  - **pyvips can break h5py, order-dependently.** Plain pyvips runs against the
+    host `libvips.so.42`; on this box that drags system HDF5 1.10 into a process
+    whose h5py is built for 1.14 — the `libglx` collision in `utils/gl_check.py`
+    wearing a different hat. Measured both ways: `import pyvips` then `import
+    h5py` raises `ValueError: Not a datatype` and anndata is unusable for the
+    rest of the process; h5py first then pyvips is fine. The viewer is always in
+    the safe case, and so is `dega_available`, which imports `celldega.pre` (and
+    therefore anndata, and therefore h5py) *before* pyvips — **that ordering is
+    load bearing**, so a source guard now pins it, because alphabetising two
+    imports would make an availability check break the session it was only
+    asking a question about. `pyvips-binary` is in the extra to remove the
+    hazard rather than sequence around it. conda-forge `libvips` also fixes it
+    and is not the route: it downgrades napari 0.8→0.7, spatialdata 0.8→0.6.1
+    and squidpy 1.8.2→1.7 in the live env.
+  - **A cache-only dataset failed late and misleadingly.** Publishing the
+    `crop_6` demo dataset — a Crop Dataset export, whose SpatialData zarr *is*
+    the data — got as far as celldega's own unzipper and died with
+    `CalledProcessError: Command '['gzip', '-dk', 'cells.csv.gz']' returned
+    non-zero exit status 1`, which reads as a broken gzip rather than as "this
+    dataset has no raw output and never will". `require_exportable()` now
+    refuses before anything is staged, and the Publish tab says so when it is
+    built. Issue #17's rule, applied to the one path that reads the raw output
+    *instead of* the cache. `missing_raw_inputs` separates a crop (every input
+    absent, unpublishable) from a truncated download (some absent), since the
+    advice differs and telling the second to "publish the dataset this one was
+    cropped from" would be nonsense.
+
+  Also corrected: the export was **637 s** this time against the 322 s recorded
+  earlier for the same dataset on the same machine, so every place that quoted a
+  single figure now quotes the range. celldega drives its tiling through tqdm,
+  which the tab's `qt_tqdm_context` relay picks up as real progress.
+
 - **Tools → Publish — export the dataset as Celldega DegaFiles** (second half of
   Phase E; the wrapper below is the first). A session already ends as a
   replayable notebook; it now ends as a *viewable* artifact too — WebP Deep Zoom

@@ -40,7 +40,8 @@ from palms.tabs._helpers import (
 )
 from palms.utils.dega_export import (
     IMAGE_TILE_LAYER, TILE_SIZE_UM, clear_staging, dega_available,
-    degafiles_dir, staging_dir,
+    NotExportable, degafiles_dir, is_cache_only, require_exportable,
+    staging_dir,
 )
 from palms.utils.plot_output import recorded_paths
 from palms.utils.prov_graph import TERMINAL
@@ -89,6 +90,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
     check_btn = PushButton(label="Check Celldega")
     publish_btn = PushButton(label="Publish DegaFiles")
+    # A cache-only dataset is stated on arrival rather than on failure. Not
+    # disabled, though: the button is what prints the full explanation, and a
+    # dead control with no reason beside it is the worse of the two.
+    if is_cache_only(ctx.data_path):
+        intro.setText(
+            intro.text() + "<br><br><b>This dataset has no raw 10x output.</b> "
+            "It is a Crop Dataset export, whose SpatialData zarr <i>is</i> the "
+            "data; celldega reads the original 10x bundle, so there is nothing "
+            "here for it to convert. Publish the dataset this one came from."
+        )
     clear_btn = PushButton(label="Clear Staging Files")
 
     progress = make_progress_bar()
@@ -121,21 +132,52 @@ def build_tab(ctx: ViewerContext) -> tuple:
     state.setdefault("template_preview", {})[TEMPLATE_ID] = _publish_preview
 
     # ── Availability ─────────────────────────────────────────────────────────
+    def _exportable() -> str:
+        """Empty when this dataset can be published, else why it cannot.
+
+        Filesystem-only, so it costs nothing to call while building the tab —
+        which is the point: a Crop Dataset export can *never* be published, and
+        finding that out from celldega takes minutes and arrives as
+        ``CalledProcessError: ['gzip', '-dk', 'cells.csv.gz']``.
+        """
+        try:
+            require_exportable(ctx.data_path)
+        except NotExportable as exc:
+            return str(exc)
+        return ""
+
     def _on_check():
+        blocker = _exportable()
         ok, message = dega_available()
+        parts = []
         if ok:
             import celldega
-            report.setPlainText(
+            parts.append(
                 f"Celldega {getattr(celldega, '__version__', '?')} is importable, "
-                f"with pyvips. Ready to publish."
-            )
+                f"with pyvips.")
+        else:
+            parts.append(message)
+        if blocker:
+            parts.append(blocker)
+            status.value = "This dataset has no raw 10x output to publish."
+        elif ok:
+            parts.append("Ready to publish.")
             status.value = "Celldega is available."
         else:
-            report.setPlainText(message)
             status.value = "Celldega is not installed."
+        report.setPlainText("\n\n".join(parts))
 
     # ── Publish ──────────────────────────────────────────────────────────────
     def _on_publish():
+        # Cheapest refusal first, and the one that can never be satisfied: a
+        # dataset with no raw 10x output has nothing for celldega to read, so
+        # asking whether celldega is installed would be beside the point.
+        blocker = _exportable()
+        if blocker:
+            report.setPlainText(blocker)
+            status.value = "This dataset has no raw 10x output to publish."
+            return
+
         # The pre-flight is here and not in the worker so the remedy text lands
         # instantly; the worker's own require_dega() still guards the call, for
         # the notebook path where nobody pressed a button.

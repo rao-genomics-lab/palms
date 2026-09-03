@@ -96,25 +96,46 @@ novae = ["novae"]
 # `insitucnv` git URL was a reproducibility hit once and shipping a second one
 # would be worse.
 #
-# **Install this extra with `--no-deps`**, and it is deliberately NOT in `full`
-# for that reason. celldega 0.24.2 caps `anndata<0.13` and `spatialdata<0.8`
-# while the viewer runs 0.13 and 0.8, so a plain resolve *succeeds* and quietly
-# downgrades the stack underneath it — measured 2026-09-03 with
-# `pip install --dry-run celldega==0.24.2` against the live env: anndata
-# 0.12.19, spatialdata 0.7.3, pandas 2.3.3, ome-zarr 0.15.0, plus dask and
-# distributed. Those caps are conservative rather than real; celldega imports
-# and runs against the versions already here. `utils/dega_export.dega_available`
-# says so in the message a user actually sees.
-# `[pre]` and not bare `celldega`: pyvips is what tiles the morphology image
-# into the WebP pyramid, and celldega declares it only under that extra — the
-# bare install gets all the way to "generating dapi image tiles" and then fails
-# with `AttributeError: 'NoneType' object has no attribute 'Image'`, because
-# their import is a try/except that leaves the module None.
-# pyvips is named here as well as reached through `[pre]`: dega_export imports
-# it directly to check for it, and a dependency this package imports has to be
-# one this package declares — tests/test_declared_dependencies.py enforces that,
-# and it is right to, since celldega could rename or drop that extra.
-dega = ["celldega[pre]==0.24.2", "pyvips~=2.2.2"]
+# **This extra cannot be installed in one command**, and it is deliberately NOT
+# in `full`. Two things have to happen separately, both measured 2026-09-03
+# against the live env:
+#
+# 1. celldega itself must go in with `--no-deps`. It caps `anndata<0.13` and
+#    `spatialdata<0.8` while the viewer runs 0.13 and 0.8, so a plain resolve
+#    *succeeds* and quietly downgrades the stack: anndata 0.12.19, spatialdata
+#    0.7.3, pandas 2.3.3, ome-zarr 0.15.0, plus dask and distributed. Those caps
+#    are conservative rather than real — a complete export ran against anndata
+#    0.13.2, spatialdata 0.8.0 and pandas 3.0.5.
+# 2. Everything else must go in *without* `--no-deps`, because pip ignores
+#    extras under that flag. `pip install --dry-run --no-deps
+#    'celldega[pre]==0.24.2'` reports "Would install celldega-0.24.2" and
+#    nothing more — so the `[pre]` spelling that used to be here brought no
+#    pyvips at all, and the export died exactly where naming `[pre]` was
+#    supposed to prevent. Hence `celldega` bare, and every dependency listed.
+#
+# `pyvips-binary` guards an ORDER-DEPENDENT collision. Plain pyvips runs
+# against the host's `libvips.so.42`; on a box with Ubuntu's libvips that build
+# drags in system HDF5 1.10, while the env's h5py is built for 1.14. Measured
+# both ways: `import pyvips` then `import h5py` raises `ValueError: Not a
+# datatype` and anndata is dead for the process, whereas h5py first then pyvips
+# is fine -- h5py has already bound to the env's HDF5. The viewer is always in
+# the safe case (anndata at startup) and so is dega_available, which imports
+# celldega.pre before pyvips; that ordering is load bearing and pinned by
+# tests/test_dega_export.py. pyvips-binary removes the hazard instead of
+# sequencing around it, by shipping its own libvips wheel that pyvips prefers.
+# Same shape as the libglx collision in utils/gl_check.py. conda-forge's
+# `libvips` also fixes it and is not the route: solving it into the live env
+# downgrades napari 0.8 -> 0.7, spatialdata 0.8 -> 0.6.1, squidpy 1.8.2 -> 1.7.
+#
+# mudata/ipywidgets/anywidget/libpysal/polars are celldega's own runtime imports
+# that `--no-deps` skips; none is capped by celldega, so they resolve normally.
+# utils/dega_export.install_hint() prints the two commands, and is what the
+# Publish tab shows the user.
+dega = [
+  "celldega==0.24.2",
+  "pyvips~=2.2.2", "pyvips-binary",
+  "mudata", "ipywidgets", "anywidget", "libpysal", "polars",
+]
 full = ["palms[celltypist,r,gpu,references,cnv,novae]"]
 # Dev only, and deliberately out of `full` and environment.yml: `--mcp` starts an
 # unauthenticated localhost server that executes arbitrary Python in the viewer
