@@ -52,7 +52,8 @@ from palms.utils.registration import (  # noqa: E402
     mask_area_scale,
 )
 from palms.utils.nuclei_registration import (  # noqa: E402
-    detect_he_nuclei, fit_nuclei_similarity, nucleus_centroids,
+    apply_affine as _apply, detect_he_nuclei, fit_nuclei_similarity,
+    nucleus_centroids,
 )
 
 
@@ -70,10 +71,6 @@ def _pick(group, min_long_side=384):
         if max(sorted(group[name].shape)[-2:]) >= min_long_side:
             chosen = name
     return chosen
-
-
-def _apply(m, pts):
-    return (np.asarray(m, float) @ np.hstack([pts, np.ones((len(pts), 1))]).T).T[:, :2]
 
 
 def _held_out_residual(matrix, points, tree, pixel_size, radius_um=3.0):

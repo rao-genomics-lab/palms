@@ -103,6 +103,12 @@ class TemplateSpec:
     requires: frozenset[str] = frozenset()
     outputs: tuple[str, ...] = ()
     doc: str = ""
+    #: Why this template is allowed to import from ``palms``. Empty for every
+    #: template that does not, which is nearly all of them: the exported
+    #: notebook is meant to run in a plain scverse environment, so reaching back
+    #: into this package is a validation error unless the header says why. See
+    #: ``validate._check_palms_reference``.
+    palms_reason: str = ""
     schema_version: int = 1
     sample_params: dict = field(default_factory=dict)
     origin: str = "builtin"

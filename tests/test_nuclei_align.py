@@ -27,6 +27,8 @@ plausible edit would break:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -37,9 +39,12 @@ pytest.importorskip("scipy")
 from palms.utils.nuclei_registration import (
     MIN_ENRICHMENT, _weighted_similarity, bracket_seed, detect_he_nuclei,
     finest_level, fit_nuclei_similarity, haematoxylin_od, nucleus_centroids,
-    register_he_nuclei,
+    apply_affine,
 )
+from palms.utils.prov_graph import ProvGraph
 from palms.utils.registration import flip_matrix
+from palms.utils.step_templates import builtin_assemble
+from palms.utils.steps import Step, StepExecutor
 
 PIXEL_SIZE = 0.2125          # um per Xenium pixel, as on the reference datasets
 SPACING_UM = 6.0             # median nucleus separation, as on the pancreas
@@ -72,8 +77,10 @@ def _nuclei(n=4000, seed=0, spacing_um=SPACING_UM):
     return rng.uniform(0, side, (n, 2))
 
 
-def _apply(m, pts):
-    return (np.asarray(m, float) @ np.hstack([pts, np.ones((len(pts), 1))]).T).T[:, :2]
+#: The public one, not a fourth copy: this file used to carry its own, as did
+#: ``scripts/score_nuclei_align.py``, and a test that applies a transform
+#: differently from the code under test is testing its own arithmetic.
+_apply = apply_affine
 
 
 def _nudge(matrix, shift_um, deg=0.0):
@@ -437,18 +444,49 @@ def test_background_only_tiles_are_skipped():
 
 
 # ── End to end ────────────────────────────────────────────────────────────────
+#
+# The orchestration -- centroids, detection, flip, fit -- is the shipped
+# ``he.nuclei_align`` template, so that is what these run. The tests got stronger
+# for it: they used to exercise a generator that merely resembled the recorded
+# cell, and now they exercise the recorded cell itself, in the assembly the tab
+# selects. ``builtin_assemble`` rather than ``step_template`` on purpose -- it
+# cannot see a user override, so a developer's own customisation cannot change
+# what this file asserts.
+
+
+def _run_nuclei_template(labels, he_image, seed, *, he_px_um=None,
+                         flip_v=False, flip_h=False):
+    """Execute the shipped template exactly as the tab's run site does."""
+    # A bare array, which is what `pyramid_levels` reduces a single-scale
+    # element to -- the multiscale case is covered by test_registration.py.
+    sdata = SimpleNamespace(labels={"nucleus_labels": labels})
+    ns = {
+        "np": np, "sdata": sdata,
+        "he_pyramid": [he_image],
+        "he_px_um": he_px_um,
+        "he_flip_vertical": flip_v, "he_flip_horizontal": flip_h,
+        "he_coarse_affine": np.asarray(seed, dtype=float),
+    }
+    ex = StepExecutor(namespace=ns, graph=ProvGraph())
+    step = Step(
+        id="he:nuclei_register",
+        template=builtin_assemble("he.nuclei_align", ["seed_coarse", "main"]),
+        params={"pixel_size": PIXEL_SIZE},
+        outputs=["he_nuclei_fit", "he_affine"],
+    )
+    return ex.run(step)["he_nuclei_fit"]
+
 
 def test_register_he_nuclei_recovers_a_known_transform():
-    """The orchestrator, from a label raster and an RGB image to a matrix."""
+    """The recorded cell, from a label raster and an RGB image to a matrix."""
     labels, centres = _label_raster(shape=(2400, 2400), n=1600, seed=11, radius=8)
     truth = _similarity_yx(1.0, 0.0, 20.0, 15.0)
     he_centres = _apply(np.linalg.inv(truth), centres)
     shape = (int(he_centres[:, 0].max()) + 20, int(he_centres[:, 1].max()) + 20)
     rgb = _he_with_nuclei(shape=shape, centres=he_centres, radius=6.0)
 
-    result = register_he_nuclei(labels, rgb, _nudge(truth, 1.5),
-                                pixel_size_um=PIXEL_SIZE,
-                                he_pixel_size_um=PIXEL_SIZE)
+    result = _run_nuclei_template(labels, rgb, _nudge(truth, 1.5),
+                                  he_px_um=PIXEL_SIZE)
 
     assert result.confident
     assert result.seed_shift_um > 0.5
@@ -469,11 +507,9 @@ def test_the_he_pixel_size_falls_back_to_the_seed_scale():
     shape = (int(he_centres[:, 0].max()) + 20, int(he_centres[:, 1].max()) + 20)
     rgb = _he_with_nuclei(shape=shape, centres=he_centres, radius=6.0)
 
-    declared = register_he_nuclei(labels, rgb, _nudge(truth, 1.5),
-                                  pixel_size_um=PIXEL_SIZE,
-                                  he_pixel_size_um=PIXEL_SIZE)
-    derived = register_he_nuclei(labels, rgb, _nudge(truth, 1.5),
-                                 pixel_size_um=PIXEL_SIZE)      # scale is 1.0
+    declared = _run_nuclei_template(labels, rgb, _nudge(truth, 1.5),
+                                    he_px_um=PIXEL_SIZE)
+    derived = _run_nuclei_template(labels, rgb, _nudge(truth, 1.5))  # scale is 1.0
 
     assert np.allclose(declared.affine_3x3_yx, derived.affine_3x3_yx)
 
@@ -482,7 +518,7 @@ def test_register_he_nuclei_applies_the_flip_to_its_detections():
     """The orchestrator's half of the frame rule, through the real code path.
 
     The H&E on disk is unflipped; the transform is composed as ``fine @ flip``.
-    So ``register_he_nuclei`` must map its detections into the flipped frame
+    So the template must map its detections into the flipped frame
     before fitting — detecting on the flipped *array* instead would be a 1.2 GB
     copy for the identical answer, which is why it does it to the points.
     """
@@ -495,9 +531,8 @@ def test_register_he_nuclei_applies_the_flip_to_its_detections():
     rgb = _he_with_nuclei(shape=(int(shape[0]), int(shape[1])),
                           centres=unflipped_he, radius=6.0)
 
-    result = register_he_nuclei(labels, rgb, _nudge(truth, 1.5),
-                                pixel_size_um=PIXEL_SIZE, he_pixel_size_um=PIXEL_SIZE,
-                                he_shape_yx=shape, flip_v=True, flip_h=False)
+    result = _run_nuclei_template(labels, rgb, _nudge(truth, 1.5),
+                                  he_px_um=PIXEL_SIZE, flip_v=True, flip_h=False)
 
     assert result.confident
     residual = np.linalg.norm(

@@ -6,7 +6,82 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Changed
+- **H&E registration records the code that produced the alignment, not the
+  matrix.** Coarse Align and Fine Align each recorded a literal
+  `he_affine = np.array([[...]])` under a comment explaining where it came
+  from — a cell that runs, succeeds, and reproduces nothing. Both now run
+  through `ctx.run_step` against templates
+  (`he.load`, `he.flip`, `he.coarse_align`, `he.nuclei_align`,
+  `he.landmark_align`), so the recorded cell *is* the executed source, by
+  construction rather than by discipline.
+
+  Verified end to end on `Xenium_V1_human_Pancreas_FFPE`, by executing the
+  shipped templates in a bare `StepExecutor` with no GUI: **0.696 µm mean
+  disagreement with 10x's own alignment matrix** (max 1.227 µm), 39,475 of
+  126,122 detections matched, 17.2× enrichment, scale 1.2890, rotation
+  −89.88° — the same answer the pre-migration code path produced, and the
+  recorded graph is `he:load → he:flip → he:coarse_align → he:nuclei_register`.
+  Coarse alone scores 17.6 µm here against the 15.5 µm reported earlier, which
+  is not a change in this work: `pick_level` chooses 860×466 from the OME-TIFF
+  and 1718×931 from the cache for one and the same slide, and the earlier figure
+  was measured on the cache. The fine fit lands in the same place either way.
+
+  Three defects underneath, each fixed in the same pass:
+
+  - **The dependency edges were wrong.** All five nodes declared
+    `deps=["preamble"]`, so re-running Coarse Align did not mark the fine fit
+    stale even though the fine fit is *seeded by* it. The chain is now
+    `he:load → he:flip → he:coarse_align → he:nuclei_register`, with the nuclei
+    fit depending instead on `he:landmark_register` when that is what it
+    refined — the seed block and the graph edge are chosen together, so the
+    notebook says which happened.
+  - **The kinds were wrong, which is probably why.** `he:load`, `he:flip`,
+    `he:coarse_align` and `he:landmark_register` were `TERMINAL`, defined in
+    `prov_graph.py` as "side-effect only … code, and no dependents". A loaded
+    image, a flip and a seed matrix are reusable state; they are `ARTIFACT` now.
+  - **Re-running Fine Align fed it its own previous answer**, which cannot be
+    recorded — the step would depend on itself. It re-seeds from the same place
+    the first run did, which is also what makes the recorded step the one that
+    replays.
+
+- **A template may import `palms` when its header declares why.** The exported
+  notebook is meant to run in a plain scverse environment, and
+  `validate.py` rejected any template mentioning this package. That invariant
+  was already false for the H&E family — four `record_node` cells imported
+  `palms.utils.registration`, and `record_node` output is never validated — and
+  the registration algorithms genuinely have no scverse equivalent. So the rule
+  is now declaration rather than prohibition: `# palms: <reason>` in the header,
+  the five H&E templates carry it, every other template is guarded exactly as
+  before, and a user override cannot grant itself the allowance (the contract
+  comes from the builtin on merge). `tests/test_template_registry.py` asserts
+  the exemption list in both directions.
+
+- **`register_he_nuclei` / `register_he_nuclei_steps` are gone.** The
+  orchestration they performed — centroids, detection, flip, fit — *is*
+  `he.nuclei_align.tmpl` now. Keeping both would be two statements of one
+  algorithm with only one of them recorded, which is the drift the step
+  templates exist to make impossible. The end-to-end tests execute the shipped
+  template instead, which makes them stronger: they used to exercise a generator
+  that merely resembled the recorded cell. The per-stage progress readout
+  survives — it rides on `StepExecutor.run(progress=)`, so it cannot claim a
+  stage the recorded cell does not contain.
+
+- **`registration.pyramid_levels` is the one definition** of "the levels of a
+  multiscale spatialdata element". `_extract_dt_scales` had been copied into
+  seven modules; the three the templates and this tab reach through are now the
+  helper (the remaining four are unchanged and tracked separately).
+  `nuclei_registration.apply_affine` is public for the same reason: the tab, the
+  scoring script and the test file each carried their own two-line copy, and a
+  test that applies a transform differently from the code under test is testing
+  its own arithmetic.
+
 ### Fixed
+- **A restored session forgot where its H&E came from.** `he_state["he_path"]`
+  was set to `None` on restore, so the next session save wrote a null path over
+  the recorded one. It is carried forward now — which is also what lets `he:load`
+  keep recording a cell that replays against the raw output rather than against
+  the viewer's cache.
 - **The nuclei fit could not correct a scale error, and reported it honestly
   rather than silently** — found by running Fine Align on a 10.6 × 6.3 mm
   prostate section, where it returned enrichment 1.4× and LOW CONFIDENCE. The

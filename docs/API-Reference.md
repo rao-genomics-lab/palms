@@ -437,24 +437,26 @@ Global search in rotation, scale and reflection over the cross-correlation of bl
 
 > Find the similarity that best overlays an H&E on the Xenium morphology.
 
-### `register_he_nuclei`
+### `fit_nuclei_similarity`
 
 ```python
-from palms.utils.nuclei_registration import register_he_nuclei
-register_he_nuclei(*args, **kwargs) -> 'NucleiAlignResult'
+from palms.utils.nuclei_registration import fit_nuclei_similarity
+fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: 'float', sigma_start_um: 'float' = 20.0, sigma_end_um: 'float' = 1.0, steps: 'int' = 10, iters: 'int' = 6, image_shape_yx=None, bracket: 'bool' = True) -> 'NucleiAlignResult'
 ```
 
-Automatic *fine* registration: haematoxylin nuclei in the H&E matched to the centroids of Xenium's nuclear masks, seeded by the coarse transform. Sub-micron on the reference datasets.
+Automatic *fine* registration: haematoxylin nuclei in the H&E matched to the centroids of Xenium's nuclear masks, seeded by the coarse transform. Sub-micron on the reference datasets. The three calls below are what the recorded `he.nuclei_align` template runs, in that order — there is no fourth function wrapping them, so that the notebook's cell and this API are the same sequence.
 
-> Blocking form of :func:`register_he_nuclei_steps`.
+> Fit the similarity that puts *source_yx* onto *target_yx*, from *seed_3x3*.
 
 ```python
-from palms.utils.nuclei_registration import register_he_nuclei
+from palms.utils.nuclei_registration import (
+    detect_he_nuclei, fit_nuclei_similarity, nucleus_centroids)
 
-fit = register_he_nuclei(
-    sdata.labels['nucleus_labels'],
-    sdata.images['he_image'],
-    seed_3x3=coarse.affine_3x3_yx,   # from compute_coarse_affine
+targets = nucleus_centroids(sdata.labels['nucleus_labels'])
+found = detect_he_nuclei(he_pyramid[0], pixel_size_um=0.2735)
+fit = fit_nuclei_similarity(
+    targets, found[:, :2],
+    coarse.affine_3x3_yx,             # from compute_coarse_affine
     pixel_size_um=0.2125,
 )
 print(fit.summary())

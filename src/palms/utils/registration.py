@@ -407,6 +407,43 @@ def flip_matrix(shape_yx, flip_v: bool, flip_h: bool) -> np.ndarray:
 
 # ─── Tissue masks ─────────────────────────────────────────────────────────────
 
+def pyramid_levels(element):
+    """The levels of a multiscale spatialdata element, finest first.
+
+    spatialdata stores a pyramid as a DataTree whose children are named
+    ``scale0``, ``scale1``, …, each holding a Dataset with one variable called
+    ``image``. A single-scale element is returned as a one-level list, so a
+    caller never has to ask which of the two it was handed.
+
+    Sorted on the *number* in the child name rather than the name itself, or
+    ``scale10`` would sort between ``scale1`` and ``scale2`` and the pyramid
+    would come back with its levels interleaved.
+    """
+    import re
+
+    children = getattr(element, "children", None)
+    if not children:
+        # A DataArray wraps its dask array in ``.data``; a bare array is already
+        # one. ``.dims`` is the xarray test rather than ``hasattr(.., "data")``,
+        # which a numpy array answers with a memoryview.
+        return [element.data if hasattr(element, "dims") else element]
+
+    def _order(name):
+        digits = re.findall(r"\d+", name)
+        return int(digits[0]) if digits else 0
+
+    levels = []
+    for name in sorted(children, key=_order):
+        ds = getattr(children[name], "ds", None)
+        if ds is None:
+            continue
+        if "image" in ds:
+            levels.append(ds["image"].data)
+        elif ds.data_vars:
+            levels.append(ds[next(iter(ds.data_vars))].data)
+    return levels
+
+
 def pick_level(pyramid, min_long_side=384):
     """Return the smallest pyramid level whose longest spatial side is >= *min_long_side*.
 

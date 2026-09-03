@@ -314,6 +314,7 @@ def parse_template(text: str, *, source: Optional[str] = None) -> TemplateSpec:
         requires=frozenset(_csv(fields.get("requires", ""))),
         outputs=tuple(_csv(fields.get("outputs", ""))),
         doc=fields.get("doc", ""),
+        palms_reason=fields.get("palms", ""),
         schema_version=int(fields.get("schema_version", "1")),
         sample_params=sample_params,
         source=source,

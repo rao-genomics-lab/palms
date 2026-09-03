@@ -138,4 +138,19 @@ afterwards clears a coarse alignment — it was fitted for the other orientation
   residual is what to read.
 - Registration is persisted automatically to `sdata_cached.zarr` and restored on the next launch; you do not need to redo registration between sessions. The transform lives in `viewer_session/he/`, alongside the image path, its dimensions and the flip settings.
 - The H&E image itself is also stored in the zarr cache, so you do not need to re-load the original file on subsequent sessions.
-- The flips, the coarse alignment, the automatic nuclei fit and the landmark registration are each recorded into the analysis provenance, with the landmark coordinates inlined, so the exported notebook reproduces the transform without needing the landmark files.
+- Loading the image, the flips, the coarse alignment, the automatic nuclei fit
+  and the landmark registration are each recorded into the analysis provenance
+  as the **code that produced them**, not as the matrix that came out. The
+  exported notebook re-runs the searches, in dependency order: re-loading a
+  different H&E or re-ticking a flip marks both fits stale, and a nuclei fit
+  seeded from the landmark transform records that it was. Landmark coordinates
+  are inlined, since a landmark file may never have been saved.
+- Those five cells are the only ones in the notebook that `import palms`. It is
+  declared in each template's header rather than tacit: the registration
+  algorithms are this package's own and no scanpy, squidpy or spatialdata call
+  computes them, so the alternative was a cell stating a 3×3 matrix as a literal
+  — which reproduces nothing. Every other template is still barred from
+  importing the viewer, and a user override cannot grant itself the allowance.
+- Re-running Fine Align starts from the same seed the first run did rather than
+  from its own previous answer. A step that fed itself would be a cycle in the
+  graph, and no notebook can express "run this again on its own output".

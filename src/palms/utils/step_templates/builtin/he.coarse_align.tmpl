@@ -1,0 +1,71 @@
+# palms template
+# id: he.coarse_align
+# schema-version: 1
+# assemblies: main
+# doc: Coarse H&E alignment by a global search over blurred nuclear density.
+# palms: the search, its objective and its scale prior are this package's own;
+#        no scanpy, squidpy or spatialdata call computes an image registration.
+# requires: np, sdata, he_pyramid, he_px_um, he_flip_vertical, he_flip_horizontal
+# outputs: he_coarse_fit, he_coarse_affine
+# params: pixel_size:float
+
+#--- block main
+# Coarse H&E alignment. Scores the normalised cross-correlation of *blurred
+# nuclear density* over a global search in rotation, scale and reflection, with
+# the translation for each hypothesis taken from phase correlation.
+#
+# Density rather than a tissue outline, because an outline says nothing when
+# tissue fills both images, which is what every crop export looks like: on one
+# such crop the two outlines cover 100.0% and 99.6% of their frames and an
+# outline search scores a perfect 1.0 at a scale 36% wrong.
+from palms.utils.registration import (
+    SCALE_BAND_FOR, build_alignment_fields, compute_coarse_affine,
+    extract_tissue_mask_fluorescence, extract_tissue_mask_he, mask_area_scale,
+    pick_level, pyramid_levels,
+)
+
+_morph = pyramid_levels(sdata.images['morphology_focus'])
+_morph_thumb = _morph[-1].compute()               # (C, Y, X), uint16
+_morph_full_yx = (_morph[0].shape[-2], _morph[0].shape[-1])
+
+# pick_level, not the bottom of the pyramid: the bottom is not a size, it is
+# however many levels the file happens to carry. For one and the same H&E that
+# is 860x466 read from the OME-TIFF and 1718x931 read back from the viewer's
+# cache, so the same slide was being aligned at two different resolutions
+# depending on whether the session had been restored.
+_he_low = np.asarray(pick_level(he_pyramid))
+# The fit has to happen in the frame the resulting affine is composed with.
+if he_flip_vertical:
+    _he_low = _he_low[::-1]
+if he_flip_horizontal:
+    _he_low = _he_low[:, ::-1]
+_he_low = np.ascontiguousarray(_he_low)
+
+_he_full_yx = (he_pyramid[0].shape[0], he_pyramid[0].shape[1])
+_target_ds = _morph_full_yx[0] / _morph_thumb.shape[1]
+_source_ds = _he_full_yx[0] / _he_low.shape[0]
+
+# The H&E's declared pixel size is the best scale prior available. The ratio of
+# tissue areas is the fallback, and is carried through as the guess it is: the
+# width of the scale search is chosen from which of the two this was.
+if he_px_um:
+    _scale_prior, _scale_source = he_px_um / $pixel_size, 'metadata'
+else:
+    _scale_prior = mask_area_scale(
+        extract_tissue_mask_fluorescence(_morph_thumb),
+        extract_tissue_mask_he(_he_low), _target_ds, _source_ds,
+    )
+    _scale_source = 'tissue-area'
+
+_target_field, _source_field = build_alignment_fields(_morph_thumb, _he_low)
+he_coarse_fit = compute_coarse_affine(
+    _target_field, _source_field,
+    target_downsample=_target_ds, source_downsample=_source_ds,
+    scale_prior=_scale_prior, scale_band=SCALE_BAND_FOR[_scale_source],
+    scale_source=_scale_source, source_shape_yx=_he_full_yx,
+)
+# The similarity mapping *flipped* full-resolution H&E pixels to Xenium pixels,
+# in napari's (y, x) order. The flip is not folded into it: it is declared
+# separately and composed as `he_coarse_affine @ flip`, so that a reflection
+# never has to come out of a fit that forbids one.
+he_coarse_affine = he_coarse_fit.affine_3x3_yx

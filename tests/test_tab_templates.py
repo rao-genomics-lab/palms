@@ -344,7 +344,7 @@ _PROVIDER_TABS = (
     "tab_clustering", "tab_gene_analysis", "tab_nhood", "tab_co_occurrence",
     "tab_ligrec", "tab_gene_correlation", "tab_marker_genes", "tab_roi",
     "tab_cnv", "tab_umap", "tab_annot_nhood", "tab_annot_distance",
-    "tab_transcripts",
+    "tab_transcripts", "tab_he_registration",
 )
 
 

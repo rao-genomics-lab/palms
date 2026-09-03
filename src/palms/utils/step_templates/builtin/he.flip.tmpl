@@ -1,0 +1,18 @@
+# palms template
+# id: he.flip
+# schema-version: 1
+# assemblies: main
+# doc: Whether the H&E is mirrored relative to the Xenium morphology image.
+# outputs: he_flip_vertical, he_flip_horizontal
+# params: flip_v:bool, flip_h:bool
+
+#--- block main
+# Is the H&E mirrored relative to the Xenium morphology image?
+#
+# A similarity transform cannot contain a reflection, and forbidding one is
+# deliberate: a fit free to mirror the section can "improve" its score by doing
+# so, and a mirrored answer is not a worse alignment but a wrong one. So a
+# mirrored slide is *declared* here and applied to the coordinates before either
+# fit sees them, leaving the fit itself a rotation, a scale and a translation.
+he_flip_vertical = $flip_v
+he_flip_horizontal = $flip_h

@@ -113,7 +113,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from palms.utils.registration import flip_matrix
 
 #: Nuclear scale, in microns. The haematoxylin field is smoothed by
 #: ``_SMOOTH_UM`` and peaks closer than ``_MIN_SEPARATION_UM`` are one nucleus.
@@ -408,10 +407,19 @@ def _parabolic(left, centre, right):
 
 # ─── The fit ──────────────────────────────────────────────────────────────────
 
-def _apply(m_yx, pts_yx):
+def apply_affine(m_yx, pts_yx):
+    """Map ``(N, 2)`` points through a 3x3 homogeneous matrix, both in (y, x).
+
+    Public because the recorded registration templates need it and a two-line
+    matrix multiply written out in a template is exactly the manual coordinate
+    transform those templates are supposed not to contain: the direction of the
+    multiply, and which of the pair is (y, x), are the two things that go wrong,
+    so there is one place to get them right.
+    """
     pts = np.asarray(pts_yx, dtype=np.float64)
     return (np.asarray(m_yx, dtype=np.float64)
             @ np.hstack([pts, np.ones((len(pts), 1))]).T).T[:, :2]
+
 
 
 def _weighted_similarity(src, dst, weights):
@@ -540,7 +548,7 @@ def bracket_seed(tree, source_yx, seed_3x3, pixel_size_um: float, image_shape_yx
                              16, 256))
 
     def score(matrix):
-        moved = _apply(matrix, source)
+        moved = apply_affine(matrix, source)
         dist, idx = tree.query(moved, k=neighbours, workers=-1)
         inside = dist < radius_px
         if not inside.any():
@@ -626,7 +634,7 @@ def fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: float,
         k = _neighbours_for(sigma, spacing_px)
         floor = _OUTLIER * k * np.exp(-4.5)     # as if 0.3k targets sat at 3 sigma
         for _ in range(iters):
-            moved = _apply(affine, source)
+            moved = apply_affine(affine, source)
             dist, idx = tree.query(moved, k=k, workers=-1)
             weight = np.exp(-0.5 * (dist / sigma) ** 2)
             total = weight.sum(axis=1)
@@ -651,7 +659,7 @@ def fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: float,
             confidence = total / (total + floor)
             affine = _weighted_similarity(source, virtual, confidence + 1e-9)
 
-    moved = _apply(affine, source)
+    moved = apply_affine(affine, source)
     dist, _ = tree.query(moved, workers=-1)
     dist_um = dist * pixel_size_um
     matched = dist_um < MATCH_RADIUS_UM
@@ -697,75 +705,11 @@ def _seed_shift_um(fitted, seed, image_shape_yx, pixel_size_um, grid=20):
 
 # ─── Orchestration ────────────────────────────────────────────────────────────
 
-def register_he_nuclei_steps(nucleus_labels, he_image, seed_3x3, pixel_size_um: float,
-                             he_pixel_size_um: float | None = None,
-                             label_downsample: float = 1.0,
-                             he_downsample: float = 1.0,
-                             he_shape_yx=None,
-                             flip_v: bool = False, flip_h: bool = False):
-    """Register an H&E to Xenium by matching its nuclei to the nuclear masks.
-
-    A **generator**, yielding ``(stage, fraction_done)`` before each of the three
-    stages and returning the ``NucleiAlignResult`` (as ``StopIteration.value``).
-    ``register_he_nuclei`` is the blocking wrapper; the GUI drives this one
-    directly, because a napari ``thread_worker`` reports progress by yielding and
-    a callback invoked from the worker thread would be touching Qt from off the
-    main thread. One mechanism, so the two cannot drift.
-
-    ``nucleus_labels`` and ``he_image`` are single 2-D / 3-D arrays — pass the
-    **finest level** of each; see the module docstring for the measurement that
-    says so. ``seed_3x3`` is the starting transform in napari (y, x), mapping
-    *flipped* H&E pixels to Xenium pixels, which is exactly what
-    ``compute_coarse_affine`` returns and what the tab composes.
-
-    ``he_pixel_size_um`` is only used to make the detector physical; when the H&E
-    declares none it is derived from the seed's scale, which is a measurement of
-    the same quantity and is always available because a seed is required.
-
-    The detection runs on the H&E *unflipped* and the points are put into the
-    flipped frame afterwards. A flip is a relabelling of coordinates and the
-    haematoxylin field is unchanged by it, so flipping the array instead would be
-    a 1.2 GB copy for nothing.
-    """
-    seed = np.asarray(seed_3x3, dtype=np.float64)
-    if he_pixel_size_um is None:
-        # scale is H&E px -> Xenium px, so px * scale * um-per-Xenium-px is the
-        # H&E pixel in microns.
-        he_pixel_size_um = float(np.hypot(seed[0, 0], seed[0, 1])) * pixel_size_um
-
-    yield ("reading the nuclear masks", 0.0)
-    target = nucleus_centroids(nucleus_labels, downsample=label_downsample)
-
-    yield (f"finding nuclei in the H&E ({len(target):,} masks to match)", 0.25)
-    detections = detect_he_nuclei(he_image,
-                                  pixel_size_um=he_pixel_size_um * he_downsample,
-                                  downsample=he_downsample)
-    source = detections[:, :2]
-
-    if he_shape_yx is None:
-        base = finest_level(he_image)
-        channel_first = (getattr(base, "ndim", 0) == 3
-                         and base.shape[0] in (3, 4)
-                         and base.shape[-1] not in (3, 4))
-        spatial = ((base.shape[1], base.shape[2]) if channel_first
-                   else (base.shape[0], base.shape[1]))
-        he_shape_yx = (spatial[0] * he_downsample, spatial[1] * he_downsample)
-
-    if flip_v or flip_h:
-        source = _apply(flip_matrix(he_shape_yx, flip_v, flip_h), source)
-
-    yield (f"matching {len(source):,} H&E nuclei to {len(target):,} masks", 0.75)
-    result = fit_nuclei_similarity(target, source, seed, pixel_size_um=pixel_size_um,
-                                   image_shape_yx=he_shape_yx)
-    yield ("done", 1.0)
-    return result
-
-
-def register_he_nuclei(*args, **kwargs) -> NucleiAlignResult:
-    """Blocking form of :func:`register_he_nuclei_steps`."""
-    steps = register_he_nuclei_steps(*args, **kwargs)
-    while True:
-        try:
-            next(steps)
-        except StopIteration as done:
-            return done.value
+# Orchestration lives in the recorded templates, not here.
+#
+# There used to be a ``register_he_nuclei_steps`` generator right here, doing
+# the same four things ``he.nuclei_align.tmpl`` now does: centroids, detection,
+# flip, fit. Keeping both would be keeping two statements of one algorithm, and
+# only one of them would be the code the notebook records -- the drift that the
+# step templates exist to make impossible. So the sequence is in the template
+# and the pieces it composes are the public functions above.

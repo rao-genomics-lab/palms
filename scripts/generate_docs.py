@@ -534,10 +534,98 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "built without cell ids; the points element always carries them."
         ),
     ),
+    # ── H&E registration ─────────────────────────────────────────────────
+    "he.load": TemplateNote(
+        group="H&E registration",
+        tab="[H&E Registration](Tab-HE-Registration)",
+        what=(
+            "Opens the H&E slide as the pyramid of levels the file carries, "
+            "finest first, and reads the physical pixel size the file declares. "
+            "The levels are dask arrays, so this reads no pixels."
+        ),
+        reading=(
+            "The `from_store` assembly is the honest record of an awkward case: "
+            "a session whose original slide is no longer on the machine, whose "
+            "H&E survives only in the viewer's cache. That cell replays against "
+            "the cache and not against raw Xenium output, which is a real "
+            "narrowing — so `from_file` is used whenever a path is known, and "
+            "the path is now carried across a session restore for that reason."
+        ),
+    ),
+    "he.flip": TemplateNote(
+        group="H&E registration",
+        tab="[H&E Registration](Tab-HE-Registration)",
+        what=(
+            "Declares whether the H&E is mirrored relative to the Xenium "
+            "morphology image. Both fits consume it and neither can derive it."
+        ),
+        reading=(
+            "A similarity transform has no reflection, and that is deliberate: "
+            "a fit free to mirror the section can improve its score by doing so, "
+            "and a mirrored answer is not a worse alignment but a wrong one. So "
+            "the mirror is declared and applied to coordinates before either fit "
+            "sees them. It is an artifact rather than a terminal because the two "
+            "fits depend on it — re-ticking a flip marks them stale, which is "
+            "what the GUI has always done without the graph saying so."
+        ),
+    ),
+    "he.coarse_align": TemplateNote(
+        group="H&E registration",
+        tab="[H&E Registration](Tab-HE-Registration)",
+        what=(
+            "The starting transform, with no landmarks: a global search in "
+            "rotation, scale and reflection over the normalised "
+            "cross-correlation of blurred nuclear density, with each "
+            "hypothesis's translation taken from phase correlation."
+        ),
+        reading=(
+            "Until 2026-09-03 this node recorded the 3x3 matrix it produced as a "
+            "literal, under a comment explaining where it came from. That is a "
+            "cell which runs, succeeds, and reproduces nothing. It records the "
+            "search now, which means the notebook imports `palms` — declared in "
+            "the template header, because these algorithms are this package's "
+            "own and no scverse call computes them."
+        ),
+    ),
+    "he.nuclei_align": TemplateNote(
+        group="H&E registration",
+        tab="[H&E Registration](Tab-HE-Registration)",
+        what=(
+            "Fine registration with no landmarks: every haematoxylin nucleus in "
+            "the H&E matched onto the centroids of `nucleus_labels`, by a "
+            "bracketing search over scale and rotation followed by annealed soft "
+            "assignment. 15 um to 0.7 um on the pancreas reference."
+        ),
+        reading=(
+            "The three seed assemblies are the dependency edge as much as the "
+            "code: a fit refined from the landmark transform depends on that "
+            "step, one refined from the coarse search on that, and one refined "
+            "from a transform merely restored from the store inlines it and "
+            "depends on neither. Seeding a nuclei fit from a *previous* nuclei "
+            "fit is deliberately absent — the step would depend on itself, and "
+            "no notebook can express 'run this again on its own output'."
+        ),
+    ),
+    "he.landmark_align": TemplateNote(
+        group="H&E registration",
+        tab="[H&E Registration](Tab-HE-Registration)",
+        what=(
+            "The least-squares similarity taking hand-placed H&E landmarks onto "
+            "their Xenium counterparts, with per-landmark residuals."
+        ),
+        reading=(
+            "The point pairs are inlined because they are the whole input: there "
+            "is nothing else to read them back from, and a landmark file may "
+            "never have been saved. The points are recorded already flipped, "
+            "which is the frame the fit works in — they are *stored* unflipped, "
+            "as clicked, so restoring a session puts each marker back where the "
+            "user put it."
+        ),
+    ),
 }
 
 GROUP_ORDER = ["Setup", "Clustering", "Genes", "Spatial", "ROI", "Annotations",
-               "Transcripts"]
+               "Transcripts", "H&E registration"]
 
 TEMPLATES_INTRO = """\
 # Analysis Templates
@@ -1018,16 +1106,22 @@ API_SECTIONS: list[ApiSection] = [
                 "transform, with no landmarks.",
             ),
             ApiEntry(
-                "palms.utils.nuclei_registration", "register_he_nuclei",
+                "palms.utils.nuclei_registration", "fit_nuclei_similarity",
                 "Automatic *fine* registration: haematoxylin nuclei in the H&E "
                 "matched to the centroids of Xenium's nuclear masks, seeded by "
-                "the coarse transform. Sub-micron on the reference datasets.",
+                "the coarse transform. Sub-micron on the reference datasets. "
+                "The three calls below are what the recorded `he.nuclei_align` "
+                "template runs, in that order — there is no fourth function "
+                "wrapping them, so that the notebook's cell and this API are "
+                "the same sequence.",
                 snippet=(
-                    "from palms.utils.nuclei_registration import register_he_nuclei\n\n"
-                    "fit = register_he_nuclei(\n"
-                    "    sdata.labels['nucleus_labels'],\n"
-                    "    sdata.images['he_image'],\n"
-                    "    seed_3x3=coarse.affine_3x3_yx,   # from compute_coarse_affine\n"
+                    "from palms.utils.nuclei_registration import (\n"
+                    "    detect_he_nuclei, fit_nuclei_similarity, nucleus_centroids)\n\n"
+                    "targets = nucleus_centroids(sdata.labels['nucleus_labels'])\n"
+                    "found = detect_he_nuclei(he_pyramid[0], pixel_size_um=0.2735)\n"
+                    "fit = fit_nuclei_similarity(\n"
+                    "    targets, found[:, :2],\n"
+                    "    coarse.affine_3x3_yx,             # from compute_coarse_affine\n"
                     "    pixel_size_um=0.2125,\n"
                     ")\n"
                     "print(fit.summary())"
