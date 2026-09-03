@@ -539,6 +539,18 @@ def _pick_template(rig):
     _process_events(0.6)
 
 
+def _check_celldega(rig):
+    """Ask the Publish tab whether the optional dependency is there.
+
+    Its readout is an empty black box until something has been asked of it, and
+    what it says either way is the useful half of the picture: the version when
+    celldega is installed, and the exact ``--no-deps`` install line when it is
+    not — which is the state most readers of this page will be in.
+    """
+    rig.click("Check Celldega")
+    _process_events(0.6)
+
+
 # Tab reference screenshots: grab the dock widget only. Taken after the tutorial
 # shots so the panels show results rather than empty boxes.
 #
@@ -575,17 +587,19 @@ TAB_SHOTS = [   # literal ints, not the names above: literal_eval reads this
     # with a picture of the Crop Dataset tab. Indices here are positional into
     # app.py's addTab() order — when a tab is inserted, this list shifts with it.
     (4, 2, "tab-crop-dataset.png"),
-    (4, 3, "tab-notebook.png"),
-    (4, 4, "tab-dataset.png"),
-    (4, 5, "tab-cache.png"),
-    (4, 6, "tab-templates.png"),
+    (4, 3, "tab-publish.png"),
+    (4, 4, "tab-notebook.png"),
+    (4, 5, "tab-dataset.png"),
+    (4, 6, "tab-cache.png"),
+    (4, 7, "tab-templates.png"),
 ]
 
 
-# Two tabs photograph as empty boxes unless something has been asked of them.
+# Three tabs photograph as empty boxes unless something has been asked of them.
 TAB_SETUPS = {
     "tab-dataset.png": _scan_dataset,
     "tab-templates.png": _pick_template,
+    "tab-publish.png": _check_celldega,
 }
 
 

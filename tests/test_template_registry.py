@@ -123,13 +123,19 @@ def test_declared_outputs_are_bound(case):
 
 #: Templates allowed to import ``palms``, and why. Kept here as well as in each
 #: ``.tmpl`` header so that granting the allowance is a change to a shared list a
-#: reviewer sees, not a line added to one file. Every one of them is an H&E
-#: registration step: those algorithms are this package's own and no scanpy,
-#: squidpy or spatialdata call computes them, so the choice is between a cell
-#: that imports palms and a cell that states a matrix as a literal — and the
-#: literal reproduces nothing, which is what these templates exist to prevent.
+#: reviewer sees, not a line added to one file.
+#:
+#: Four of them are H&E registration steps: those algorithms are this package's
+#: own and no scanpy, squidpy or spatialdata call computes them, so the choice is
+#: between a cell that imports palms and a cell that states a matrix as a literal
+#: — and the literal reproduces nothing, which is what these templates exist to
+#: prevent. The fifth is the DegaFile export, where the computation *is*
+#: third-party (``celldega.pre.main``) but calling it directly would decompress
+#: ~200 MB into the reader's own copy of the raw 10x data: the wrapper is what
+#: keeps a replayed cell from writing to the data it reads.
 _MAY_IMPORT_PALMS = {
     "he.load", "he.coarse_align", "he.nuclei_align", "he.landmark_align",
+    "export.degafiles",
 }
 
 

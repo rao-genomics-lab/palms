@@ -42,6 +42,7 @@
 - [Annotations](Tab-Annotations)
 - [Segmentation](Tab-Segmentation)
 - [Crop Dataset](Tab-Crop-Dataset)
+- [Publish](Tab-Publish)
 - [Notebook](Tab-Notebook)
 - [Dataset](Tab-Dataset)
 - [Cache](Tab-Cache)

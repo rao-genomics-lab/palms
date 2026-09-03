@@ -6,6 +6,152 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Added
+- **Four defects found by running the DegaFile export for real**, on
+  `Xenium_V1_human_Pancreas_FFPE_outs` with celldega 0.24.2 installed into the
+  live env. The export itself works — 220 MB written, and the raw output
+  verified byte-for-byte untouched afterwards, with `cells.csv`, `cells.zarr`,
+  `analysis` and `cell_feature_matrix` all in the staging farm and none of them
+  beside the data — but everything written *about* installing and running it was
+  wrong in some way:
+
+  - **`celldega[pre]` under `--no-deps` installs no pyvips.** pip ignores extras
+    when that flag is set: `pip install --dry-run --no-deps
+    'celldega[pre]==0.24.2'` reports "Would install celldega-0.24.2" and nothing
+    more. So the documented command produced exactly the `AttributeError:
+    'NoneType' object has no attribute 'Image'` that naming `[pre]` was supposed
+    to prevent. The pin is bare `celldega==0.24.2` now, with every dependency
+    named on a second line that resolves normally, and
+    `dega_export.install_hint()` is the single definition of the remedy —
+    pinned by a test, and what the Check button shows.
+  - **`--no-deps` also skipped five runtime imports** celldega needs and does
+    not cap: mudata, ipywidgets, anywidget, libpysal, polars. `import
+    celldega.pre` fails without them.
+  - **pyvips can break h5py, order-dependently.** Plain pyvips runs against the
+    host `libvips.so.42`; on this box that drags system HDF5 1.10 into a process
+    whose h5py is built for 1.14 — the `libglx` collision in `utils/gl_check.py`
+    wearing a different hat. Measured both ways: `import pyvips` then `import
+    h5py` raises `ValueError: Not a datatype` and anndata is unusable for the
+    rest of the process; h5py first then pyvips is fine. The viewer is always in
+    the safe case, and so is `dega_available`, which imports `celldega.pre` (and
+    therefore anndata, and therefore h5py) *before* pyvips — **that ordering is
+    load bearing**, so a source guard now pins it, because alphabetising two
+    imports would make an availability check break the session it was only
+    asking a question about. `pyvips-binary` is in the extra to remove the
+    hazard rather than sequence around it. conda-forge `libvips` also fixes it
+    and is not the route: it downgrades napari 0.8→0.7, spatialdata 0.8→0.6.1
+    and squidpy 1.8.2→1.7 in the live env.
+  - **A cache-only dataset failed late and misleadingly.** Publishing the
+    `crop_6` demo dataset — a Crop Dataset export, whose SpatialData zarr *is*
+    the data — got as far as celldega's own unzipper and died with
+    `CalledProcessError: Command '['gzip', '-dk', 'cells.csv.gz']' returned
+    non-zero exit status 1`, which reads as a broken gzip rather than as "this
+    dataset has no raw output and never will". `require_exportable()` now
+    refuses before anything is staged, and the Publish tab says so when it is
+    built. Issue #17's rule, applied to the one path that reads the raw output
+    *instead of* the cache. `missing_raw_inputs` separates a crop (every input
+    absent, unpublishable) from a truncated download (some absent), since the
+    advice differs and telling the second to "publish the dataset this one was
+    cropped from" would be nonsense.
+
+  Also corrected: the export was **637 s** this time against the 322 s recorded
+  earlier for the same dataset on the same machine, so every place that quoted a
+  single figure now quotes the range. celldega drives its tiling through tqdm,
+  which the tab's `qt_tqdm_context` relay picks up as real progress.
+
+- **Tools → Publish — export the dataset as Celldega DegaFiles** (second half of
+  Phase E; the wrapper below is the first). A session already ends as a
+  replayable notebook; it now ends as a *viewable* artifact too — WebP Deep Zoom
+  pyramids plus Parquet vector data, which Celldega's `Landscape` widget renders
+  in a browser with no server and no install, so a collaborator with neither the
+  raw 10x output nor a Linux box can still look at the section.
+
+  Three pieces, each shaped by something measured rather than by taste:
+
+  - **`builtin/export.degafiles.tmpl`**, so the export is a recorded
+    `export:degafiles` TERMINAL like every other written artifact rather than a
+    button that leaves no trace. It is the **sixth** template allowed to import
+    `palms` (`# palms:` header, `_MAY_IMPORT_PALMS`) and the first whose
+    computation is third-party: the cell calls
+    `palms.utils.dega_export.export_degafiles`, *not* `celldega.pre.main`,
+    because the latter would decompress ~200 MB into the reader's own copy of
+    the raw 10x data. The staging is not a convenience a notebook may skip.
+    `out_dir` is recorded relative to the dataset — the convention
+    `plot_output.recorded_paths` sets — so a replay writes beside whatever data
+    it was pointed at rather than at the exporting machine's copy of it.
+  - **`tabs/tab_publish.py`**, the 27th tab. The export is 322 s, so it runs in
+    a `thread_worker` with an indeterminate bar and a per-second elapsed
+    readout; a blocking button would look like a hung viewer for five minutes.
+    celldega is imported **lazily** — at build time it would cost every launch a
+    spatialdata-sized import for a tab most users never open — with `Check
+    Celldega` and the publish pre-flight sharing the one `dega_available()`
+    answer, and `Clear Staging Files` for the farm under `viewer_cache/`. The
+    destination is fixed at `<data_path>/degafiles`, outside every
+    `deletable_roots()` directory like `plots/`: a chooser would put an absolute
+    path in the recorded cell.
+  - **`tests/test_dega_export.py`** (23 tests), and **none of them require
+    celldega**. The wrapper's own logic is stdlib and is tested for real — the
+    farm, the extraction that exists because `gzip -dk` refuses a symlink, a tar
+    member that tries to escape, and a before/after snapshot asserting the raw
+    output is byte-for-byte unchanged. `export_degafiles` is tested against a
+    stub `celldega.pre`, which is stronger than skipping: it pins the argument
+    list, which is the thing that silently changes meaning when the pin moves,
+    and it reproduces their `os.chdir` so the cwd restore is asserted rather
+    than assumed. Two tests skip when celldega *is* installed — they are the
+    ones about what its absence looks like. One more guards the drift a template
+    is uniquely exposed to: a renamed keyword is a syntax error nowhere, so
+    every argument the rendered template passes is checked against
+    `inspect.signature(export_degafiles)`, and a `**kwargs` there is refused.
+
+  Also: `degafiles` is registered in `store_inventory.DERIVED_IN_DATA_DIR`, and
+  the staging directory gets a detail line. Without the first, a 220 MB export
+  fell through to the unrecognised default and Tools → Dataset labelled it
+  "original 10x output, never modified by the viewer" — safe, since the default
+  is un-deletable, but false, and the size report stopped adding up.
+
+- **`utils/dega_export.py` — Celldega DegaFile export** (first half of Phase E).
+  A wrapper over `celldega.pre.main`, not a second implementation of their
+  format, and export only: reading DegaFiles stays out of scope.
+
+  Measured end to end on `Xenium_V1_human_Pancreas_FFPE_outs` with
+  celldega 0.24.2: **322 s** to a 220 MB DegaFile set — WebP Deep Zoom pyramid,
+  transcript tiles, cell segmentation tiles, per-gene CBG parquet, clusters,
+  metadata and `landscape_parameters.json`.
+
+  Three things the bare API does not do, each found by running it:
+
+  - **It writes into the raw 10x output.** `celldega.pre._xenium_unzipper`
+    `os.chdir`s into the dataset directory and runs `gzip -dk cells.csv.gz`,
+    `unzip cells.zarr.zip` and two `tar -xvzf` in place, leaving ~200 MB of
+    decompressed duplicates beside the user's data — and failing outright on the
+    read-only NAS mount a shared dataset usually sits on. Nothing else in this
+    package writes there; `store_inventory` will not even let a user *delete* a
+    file there. So the export runs against a symlink farm under `viewer_cache/`,
+    and the verification asserts the dataset directory is unchanged afterwards.
+  - **`gzip -dk` refuses a symlink** ("not a regular file", exit 1), so the farm
+    alone does not work: `extract_archives` unpacks the four archives into the
+    staging directory with `gzip`/`zipfile`/`tarfile`, which also drops
+    celldega's unstated dependency on the `gzip`, `unzip` and `tar` binaries and
+    leaves `_xenium_unzipper` a no-op.
+  - **pyvips is declared only under celldega's own `pre` extra**, and their
+    import is a `try/except` that leaves the module bound to `None`. A bare
+    `pip install celldega` therefore runs for minutes, reaches "generating dapi
+    image tiles", and dies with `AttributeError: 'NoneType' object has no
+    attribute 'Image'`. The extra is `celldega[pre]`, and `dega_available()`
+    checks for pyvips so the failure arrives before the export starts rather
+    than in the middle of it.
+
+- **A `dega` extra in `pyproject.toml`**, pinned to `celldega[pre]==0.24.2` —
+  not floating, because the `insitucnv` git URL was a reproducibility hit once.
+  **Install it with `--no-deps`**, and it is deliberately out of `full`:
+  celldega caps `anndata<0.13` and `spatialdata<0.8` while the viewer runs 0.13
+  and 0.8, so a plain resolve *succeeds* and quietly downgrades the stack.
+  Measured with `pip install --dry-run celldega==0.24.2` against the live env:
+  anndata 0.12.19, spatialdata 0.7.3, pandas 2.3.3, ome-zarr 0.15.0, plus dask
+  and distributed. Those caps are conservative rather than real — the 322 s
+  export above ran against anndata 0.13.2, spatialdata 0.8.0 and pandas 3.0.5,
+  over every one of them.
+
 ### Changed
 - **H&E registration records the code that produced the alignment, not the
   matrix.** Coarse Align and Fine Align each recorded a literal

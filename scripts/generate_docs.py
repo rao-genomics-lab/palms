@@ -622,10 +622,34 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "user put it."
         ),
     ),
+    "export.degafiles": TemplateNote(
+        group="Publishing",
+        tab="[Publish](Tab-Publish)",
+        what=(
+            "Writes the whole dataset out as a Celldega **DegaFile** set — WebP "
+            "Deep Zoom image pyramids plus Parquet vector data, which Celldega's "
+            "`Landscape` widget renders in a browser with no server and no "
+            "install. The conversion is celldega's own `pre.main`; this is a "
+            "wrapper over it, not a second implementation of their format."
+        ),
+        reading=(
+            "The one template whose computation is third-party, and the reason "
+            "it still imports `palms` rather than calling `celldega.pre.main` "
+            "directly: their entry point `os.chdir`s into the directory it is "
+            "pointed at and decompresses roughly 200 MB in place. Pointed at raw "
+            "10x output that leaves duplicates beside the reader's own data, and "
+            "fails outright on a read-only mount. `export_degafiles` runs it "
+            "against a farm of symlinks under `viewer_cache/` instead, so the "
+            "staging is not a convenience a replayed notebook may skip. "
+            "`out_dir` is recorded relative to the dataset, so a replay writes "
+            "beside whatever data it was pointed at. Needs the optional `dega` "
+            "extra, installed with `--no-deps`."
+        ),
+    ),
 }
 
 GROUP_ORDER = ["Setup", "Clustering", "Genes", "Spatial", "ROI", "Annotations",
-               "Transcripts", "H&E registration"]
+               "Transcripts", "H&E registration", "Publishing"]
 
 TEMPLATES_INTRO = """\
 # Analysis Templates
