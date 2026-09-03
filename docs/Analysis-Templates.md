@@ -65,6 +65,11 @@ substituted string for the settings currently in the owning tab.
 - [`annot.virtual_cells`](#annotvirtual_cells) — Virtual cells on a regular grid inside the annotated regions.
 - [`transcripts.density`](#transcriptsdensity) — 2-D histogram of one gene's transcripts over the morphology image.
 - [`transcripts.gene`](#transcriptsgene) — One gene's transcripts, in the morphology image's coordinate frame.
+- [`he.coarse_align`](#hecoarse_align) — Coarse H&E alignment by a global search over blurred nuclear density.
+- [`he.flip`](#heflip) — Whether the H&E is mirrored relative to the Xenium morphology image.
+- [`he.landmark_align`](#helandmark_align) — Fine H&E registration from hand-placed matching landmarks.
+- [`he.load`](#heload) — The H&E image the registration works on, as a pyramid, finest level first.
+- [`he.nuclei_align`](#henuclei_align) — Fine H&E registration: haematoxylin nuclei matched onto the nuclear masks.
 
 ## Setup
 
@@ -1555,4 +1560,308 @@ transcript_points = sd.transform(
     ),
     to_coordinate_system='global',
 ).compute()
+```
+
+## H&E registration
+
+### `he.coarse_align`
+
+**Run by:** [H&E Registration](Tab-HE-Registration)
+
+The starting transform, with no landmarks: a global search in rotation, scale and reflection over the normalised cross-correlation of blurred nuclear density, with each hypothesis's translation taken from phase correlation.
+
+Until 2026-09-03 this node recorded the 3x3 matrix it produced as a literal, under a comment explaining where it came from. That is a cell which runs, succeeds, and reproduces nothing. It records the search now, which means the notebook imports `palms` — declared in the template header, because these algorithms are this package's own and no scverse call computes them.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `pixel_size` | `float` | yes |
+
+- **Requires:** `he_flip_horizontal`, `he_flip_vertical`, `he_px_um`, `he_pyramid`, `np`, `sdata`
+- **Outputs:** `he_coarse_fit`, `he_coarse_affine`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Coarse H&E alignment. Scores the normalised cross-correlation of *blurred
+# nuclear density* over a global search in rotation, scale and reflection, with
+# the translation for each hypothesis taken from phase correlation.
+#
+# Density rather than a tissue outline, because an outline says nothing when
+# tissue fills both images, which is what every crop export looks like: on one
+# such crop the two outlines cover 100.0% and 99.6% of their frames and an
+# outline search scores a perfect 1.0 at a scale 36% wrong.
+from palms.utils.registration import (
+    SCALE_BAND_FOR, build_alignment_fields, compute_coarse_affine,
+    extract_tissue_mask_fluorescence, extract_tissue_mask_he, mask_area_scale,
+    pick_level, pyramid_levels,
+)
+
+_morph = pyramid_levels(sdata.images['morphology_focus'])
+_morph_thumb = _morph[-1].compute()               # (C, Y, X), uint16
+_morph_full_yx = (_morph[0].shape[-2], _morph[0].shape[-1])
+
+# pick_level, not the bottom of the pyramid: the bottom is not a size, it is
+# however many levels the file happens to carry. For one and the same H&E that
+# is 860x466 read from the OME-TIFF and 1718x931 read back from the viewer's
+# cache, so the same slide was being aligned at two different resolutions
+# depending on whether the session had been restored.
+_he_low = np.asarray(pick_level(he_pyramid))
+# The fit has to happen in the frame the resulting affine is composed with.
+if he_flip_vertical:
+    _he_low = _he_low[::-1]
+if he_flip_horizontal:
+    _he_low = _he_low[:, ::-1]
+_he_low = np.ascontiguousarray(_he_low)
+
+_he_full_yx = (he_pyramid[0].shape[0], he_pyramid[0].shape[1])
+_target_ds = _morph_full_yx[0] / _morph_thumb.shape[1]
+_source_ds = _he_full_yx[0] / _he_low.shape[0]
+
+# The H&E's declared pixel size is the best scale prior available. The ratio of
+# tissue areas is the fallback, and is carried through as the guess it is: the
+# width of the scale search is chosen from which of the two this was.
+if he_px_um:
+    _scale_prior, _scale_source = he_px_um / $pixel_size, 'metadata'
+else:
+    _scale_prior = mask_area_scale(
+        extract_tissue_mask_fluorescence(_morph_thumb),
+        extract_tissue_mask_he(_he_low), _target_ds, _source_ds,
+    )
+    _scale_source = 'tissue-area'
+
+_target_field, _source_field = build_alignment_fields(_morph_thumb, _he_low)
+he_coarse_fit = compute_coarse_affine(
+    _target_field, _source_field,
+    target_downsample=_target_ds, source_downsample=_source_ds,
+    scale_prior=_scale_prior, scale_band=SCALE_BAND_FOR[_scale_source],
+    scale_source=_scale_source, source_shape_yx=_he_full_yx,
+)
+# The similarity mapping *flipped* full-resolution H&E pixels to Xenium pixels,
+# in napari's (y, x) order. The flip is not folded into it: it is declared
+# separately and composed as `he_coarse_affine @ flip`, so that a reflection
+# never has to come out of a fit that forbids one.
+he_coarse_affine = he_coarse_fit.affine_3x3_yx
+```
+
+### `he.flip`
+
+**Run by:** [H&E Registration](Tab-HE-Registration)
+
+Declares whether the H&E is mirrored relative to the Xenium morphology image. Both fits consume it and neither can derive it.
+
+A similarity transform has no reflection, and that is deliberate: a fit free to mirror the section can improve its score by doing so, and a mirrored answer is not a worse alignment but a wrong one. So the mirror is declared and applied to coordinates before either fit sees them. It is an artifact rather than a terminal because the two fits depend on it — re-ticking a flip marks them stale, which is what the GUI has always done without the graph saying so.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `flip_v` | `bool` | yes |
+| `flip_h` | `bool` | yes |
+
+- **Requires:** _nothing_
+- **Outputs:** `he_flip_vertical`, `he_flip_horizontal`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Is the H&E mirrored relative to the Xenium morphology image?
+#
+# A similarity transform cannot contain a reflection, and forbidding one is
+# deliberate: a fit free to mirror the section can "improve" its score by doing
+# so, and a mirrored answer is not a worse alignment but a wrong one. So a
+# mirrored slide is *declared* here and applied to the coordinates before either
+# fit sees them, leaving the fit itself a rotation, a scale and a translation.
+he_flip_vertical = $flip_v
+he_flip_horizontal = $flip_h
+```
+
+### `he.landmark_align`
+
+**Run by:** [H&E Registration](Tab-HE-Registration)
+
+The least-squares similarity taking hand-placed H&E landmarks onto their Xenium counterparts, with per-landmark residuals.
+
+The point pairs are inlined because they are the whole input: there is nothing else to read them back from, and a landmark file may never have been saved. The points are recorded already flipped, which is the frame the fit works in — they are *stored* unflipped, as clicked, so restoring a session puts each marker back where the user put it.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `xenium_points` | `list` | yes |
+| `he_points` | `list` | yes |
+
+- **Requires:** `np`
+- **Outputs:** `he_affine`, `he_residuals`
+- **Blocks:** `main`
+
+**Default source**
+
+```python
+# Fine H&E registration from hand-placed landmarks: the least-squares similarity
+# taking the H&E points onto the Xenium ones. The pairs are inlined because they
+# are the whole input -- there is nothing else to read them back from.
+#
+# A similarity, so a reflection cannot come out of the fit; a mirrored slide is
+# declared as a flip and composed separately.
+from palms.utils.registration import compute_landmark_affine
+
+he_xen_pts = np.array($xenium_points)
+he_he_pts = np.array($he_points)
+he_affine, he_residuals = compute_landmark_affine(he_xen_pts, he_he_pts)
+```
+
+### `he.load`
+
+**Run by:** [H&E Registration](Tab-HE-Registration)
+
+Opens the H&E slide as the pyramid of levels the file carries, finest first, and reads the physical pixel size the file declares. The levels are dask arrays, so this reads no pixels.
+
+The `from_store` assembly is the honest record of an awkward case: a session whose original slide is no longer on the machine, whose H&E survives only in the viewer's cache. That cell replays against the cache and not against raw Xenium output, which is a real narrowing — so `from_file` is used whenever a path is known, and the path is now carried across a session restore for that reason.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `path` | `str` | no |
+| `px_um` | `float` | no |
+
+- **Requires:** `sdata`
+- **Outputs:** `he_pyramid`, `he_px_um`
+- **Blocks:** `from_file`, `from_store`
+
+**Variants** — 2 assemblies:
+
+- `from_file`
+- `from_store`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
+
+```python
+#--- block from_file
+# The H&E image, as the pyramid of levels the file carries, finest first. The
+# levels are dask arrays, so this opens the file and reads no pixels.
+from palms.utils.registration import he_pixel_size_um, load_he_pyramid
+
+he_pyramid, he_tif = load_he_pyramid($path)
+# The best scale prior the coarse search can get, and free: the pancreas
+# reference declares 0.27377 um in its OME metadata, which is 0.06% off the
+# scale that was ultimately fitted. None when the file declares no physical
+# pixel size, and the search then falls back to a tissue-area estimate.
+he_px_um = he_pixel_size_um(he_tif)
+
+#--- block from_store
+# The H&E as the viewer cached it, for a session whose original file is no
+# longer reachable. Note what this costs: `sdata` here has to be the viewer's
+# cache rather than the raw Xenium output the preamble reads, so this cell
+# replays only against that cache. That is why `from_file` is used whenever the
+# path is known, and why this block records the pixel size as a literal — the
+# TIFF metadata it came from is not being read here.
+from palms.utils.registration import pyramid_levels
+
+he_pyramid = pyramid_levels(sdata.images['he_image'])
+he_px_um = $px_um
+```
+
+### `he.nuclei_align`
+
+**Run by:** [H&E Registration](Tab-HE-Registration)
+
+Fine registration with no landmarks: every haematoxylin nucleus in the H&E matched onto the centroids of `nucleus_labels`, by a bracketing search over scale and rotation followed by annealed soft assignment. 15 um to 0.7 um on the pancreas reference.
+
+The three seed assemblies are the dependency edge as much as the code: a fit refined from the landmark transform depends on that step, one refined from the coarse search on that, and one refined from a transform merely restored from the store inlines it and depends on neither. Seeding a nuclei fit from a *previous* nuclei fit is deliberately absent — the step would depend on itself, and no notebook can express 'run this again on its own output'.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `pixel_size` | `float` | yes |
+| `seed` | `list` | no |
+
+- **Requires:** `he_affine`, `he_coarse_affine`, `he_flip_horizontal`, `he_flip_vertical`, `he_px_um`, `he_pyramid`, `np`, `sdata`
+- **Outputs:** `he_nuclei_fit`, `he_affine`
+- **Blocks:** `seed_coarse`, `seed_fine`, `seed_restored`, `main`
+
+**Variants** — 3 assemblies:
+
+- `seed_coarse + main`
+- `seed_fine + main`
+- `seed_restored + main`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
+
+```python
+#--- block seed_coarse
+# Seeded by the coarse alignment.
+he_seed_affine = he_coarse_affine
+
+#--- block seed_fine
+# Seeded by the fine transform already in force rather than by the coarse one:
+# there is a better starting point available, so it is the one to refine.
+he_seed_affine = he_affine
+
+#--- block seed_restored
+# Seeded by the transform this dataset was already carrying. The step that
+# produced it ran in an earlier session, so it is stated as the literal it is
+# rather than named: an alignment restored from the store is a starting point,
+# not a computation this notebook performs.
+he_seed_affine = np.array($seed)
+
+#--- block main
+# Fine H&E registration, from the nuclei themselves.
+#
+# What a person does by hand when they register these two images is match
+# nuclei: the haematoxylin blobs in the H&E against the nuclear masks Xenium
+# segmented. This does the same thing to every nucleus in the section instead of
+# to the dozen a person has patience to click, which is where the accuracy comes
+# from -- 15 um to 0.7 um on the pancreas reference, with no landmarks placed.
+#
+# Two passes, and neither can do the other's job. A *bracket* grid over scale and
+# rotation runs first, because a scale error is invisible to the anneal that
+# follows: it displaces each point in proportion to its distance from the centre,
+# so on a 10.6 x 6.3 mm section a 1.5% error is under a micron in the middle and
+# 127 um at the corners, and no single sigma sees both. Then the anneal, which
+# is not ICP -- a seed one nucleus spacing out makes nearest-neighbour
+# correspondences wrong *and* self-consistent, and ICP converges confidently to
+# 13.1 um. Soft assignment keeps every candidate weighted until the width comes
+# down.
+from palms.utils.nuclei_registration import (
+    apply_affine, detect_he_nuclei, fit_nuclei_similarity, nucleus_centroids,
+)
+from palms.utils.registration import flip_matrix, pyramid_levels
+
+# Full resolution on both sides. A coarser pixel biases every peak the same way:
+# 2.2x as many detections one level down bought 0.002 um, and one level finer
+# bought 0.145 um.
+he_nuclei_masks = pyramid_levels(sdata.labels['nucleus_labels'])[0]
+he_nuclei_image = he_pyramid[0]
+he_nuclei_shape_yx = (he_nuclei_image.shape[0], he_nuclei_image.shape[1])
+
+# The H&E's pixel size makes the detector physical. When the file declares none,
+# the seed's own scale is a measurement of the same quantity, and a seed is
+# required, so it is always available.
+he_nuclei_px_um = he_px_um or (
+    float(np.hypot(he_seed_affine[0][0], he_seed_affine[0][1])) * $pixel_size)
+
+he_nuclei_targets = nucleus_centroids(he_nuclei_masks)
+he_nuclei_found = detect_he_nuclei(he_nuclei_image, pixel_size_um=he_nuclei_px_um)
+
+# Detection runs on the H&E *unflipped* and the points are relabelled into the
+# flipped frame afterwards. A flip is a renaming of coordinates and leaves the
+# haematoxylin field unchanged, so flipping the array instead would be a 1.2 GB
+# copy for nothing.
+he_nuclei_source = he_nuclei_found[:, :2]
+if he_flip_vertical or he_flip_horizontal:
+    he_nuclei_source = apply_affine(
+        flip_matrix(he_nuclei_shape_yx, he_flip_vertical, he_flip_horizontal),
+        he_nuclei_source)
+
+he_nuclei_fit = fit_nuclei_similarity(
+    he_nuclei_targets, he_nuclei_source, he_seed_affine,
+    pixel_size_um=$pixel_size, image_shape_yx=he_nuclei_shape_yx)
+# The fine transform now in force: flipped H&E pixels to Xenium pixels, (y, x).
+he_affine = he_nuclei_fit.affine_3x3_yx
 ```

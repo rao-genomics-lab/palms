@@ -397,7 +397,7 @@ The same for a multi-channel fluorescence image.
 
 ```python
 from palms.utils.registration import save_landmarks
-save_landmarks(path, xenium_yx, he_yx, affine=None, he_filename=None)
+save_landmarks(path, xenium_yx, he_yx, affine=None, he_filename=None, flip_v=None, flip_h=None)
 ```
 
 Persist landmark pairs beside the dataset.
@@ -419,12 +419,70 @@ Read them back.
 
 ```python
 from palms.utils.registration import extract_tissue_mask
-extract_tissue_mask(image_gray, blur_ksize=5, open_ksize=5, close_ksize=5, min_area_ratio=0.01)
+extract_tissue_mask(image_gray, blur_ksize=5, open_ksize=5, close_ksize=5, min_area_ratio=0.01, method='otsu', outline=False, outline_sigma=6)
 ```
 
 Segment tissue from background, for a coarse initial alignment.
 
-> Extract a binary tissue mask via Otsu thresholding + morphological cleanup.
+> Extract a binary tissue mask via thresholding + morphological cleanup.
+
+### `compute_coarse_affine`
+
+```python
+from palms.utils.registration import compute_coarse_affine
+compute_coarse_affine(target_field, source_field, target_downsample=1.0, source_downsample=1.0, scale_prior=None, scale_band=0.25, n_scales=7, rotation_step=2.0, mirror=True, refine=True, scale_source='search', source_shape_yx=None)
+```
+
+Global search in rotation, scale and reflection over the cross-correlation of blurred nuclear density — the starting transform, with no landmarks.
+
+> Find the similarity that best overlays an H&E on the Xenium morphology.
+
+### `fit_nuclei_similarity`
+
+```python
+from palms.utils.nuclei_registration import fit_nuclei_similarity
+fit_nuclei_similarity(target_yx, source_yx, seed_3x3, pixel_size_um: 'float', sigma_start_um: 'float' = 20.0, sigma_end_um: 'float' = 1.0, steps: 'int' = 10, iters: 'int' = 6, image_shape_yx=None, bracket: 'bool' = True) -> 'NucleiAlignResult'
+```
+
+Automatic *fine* registration: haematoxylin nuclei in the H&E matched to the centroids of Xenium's nuclear masks, seeded by the coarse transform. Sub-micron on the reference datasets. The three calls below are what the recorded `he.nuclei_align` template runs, in that order — there is no fourth function wrapping them, so that the notebook's cell and this API are the same sequence.
+
+> Fit the similarity that puts *source_yx* onto *target_yx*, from *seed_3x3*.
+
+```python
+from palms.utils.nuclei_registration import (
+    detect_he_nuclei, fit_nuclei_similarity, nucleus_centroids)
+
+targets = nucleus_centroids(sdata.labels['nucleus_labels'])
+found = detect_he_nuclei(he_pyramid[0], pixel_size_um=0.2735)
+fit = fit_nuclei_similarity(
+    targets, found[:, :2],
+    coarse.affine_3x3_yx,             # from compute_coarse_affine
+    pixel_size_um=0.2125,
+)
+print(fit.summary())
+```
+
+### `detect_he_nuclei`
+
+```python
+from palms.utils.nuclei_registration import detect_he_nuclei
+detect_he_nuclei(image, pixel_size_um: 'float', downsample: 'float' = 1.0, od_floor: 'float' = 0.04, tile: 'int' = 2048) -> 'np.ndarray'
+```
+
+Sub-pixel nucleus positions in an H&E, from deconvolved haematoxylin optical density.
+
+> Sub-pixel nucleus positions in an H&E, as (N, 3): y, x, haematoxylin OD.
+
+### `nucleus_centroids`
+
+```python
+from palms.utils.nuclei_registration import nucleus_centroids
+nucleus_centroids(labels, downsample: 'float' = 1.0, block_rows: 'int' = 1024) -> 'np.ndarray'
+```
+
+Area centroids of every label in a label raster, streamed in row blocks.
+
+> Area centroids of every label in a 2-D label raster, as (N, 2) in (y, x).
 
 ## Cache, storage and persistence
 

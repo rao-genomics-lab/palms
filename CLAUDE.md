@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1612 tests** across 66 files, measured 2026-09-02 —
+There is a `pytest` suite in `tests/` (**1755 tests** across 72 files, measured 2026-09-03 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -177,7 +177,9 @@ honour the format setting.
 | `coloring.py` | `CellColorManager` with `DirectLabelColormap` for O(nonzero) raster colorization |
 | `gene_analysis.py` | Rank genes, normalization, Leiden clustering |
 | `spatial_analysis.py` | Squidpy-based spatial analysis (neighborhood enrichment, co-occurrence, L-R) |
-| `registration.py` | Landmark-based similarity affine registration for H&E/ARMS |
+| `registration.py` | H&E/ARMS registration: landmark similarity fit, `flip_matrix` (**the** one definition of the flip — four copies had accumulated), `pyramid_levels` (likewise, for `_extract_dt_scales`, which had seven), and `Coarse Align` — a global search in rotation, scale and reflection over the normalised cross-correlation of blurred nuclear density |
+| `nuclei_registration.py` | Automatic *fine* H&E registration: haematoxylin nuclei matched to `nucleus_labels` centroids by annealed soft assignment, seeded by Coarse Align. 15 µm → 0.7 µm on the pancreas with no landmarks. Two passes, both load-bearing: a `bracket_seed` grid over scale and rotation (translation per hypothesis from a coincidence peak) then the anneal — a scale error is invisible at the centre and larger than any usable sigma at the edges, so neither pass can do the other's job. Two further rules: **not ICP** (a seed one nucleus spacing out makes nearest-neighbour correspondences wrong *and* self-consistent — ICP converges confidently to 13.1 µm), and **full resolution on both sides** (a coarser pixel biases each peak; 2.2× as many detections at s1 bought 0.002 µm, one level finer bought 0.145 µm). Scored by `scripts/score_nuclei_align.py`, whose held-out check is the one that means something — see the memory `a-self-referential-metric-needs-an-independent-check`. **There is no `register_he_nuclei` orchestrator**: the sequence is `he.nuclei_align.tmpl`, so that the code the notebook records is the code that runs; this module owns the pieces (`nucleus_centroids`, `detect_he_nuclei`, `bracket_seed`, `fit_nuclei_similarity`, `apply_affine`) and nothing else composes them |
+| `affine_compare.py` | The (y,x)/(x,y) convention arithmetic and the microns-of-disagreement metric, shared by `scripts/compare_he_registration.py` and `scripts/score_coarse_align.py` |
 | `transcript_index.py` | Per-gene feather loader |
 | `session.py` | Zarr-based session persistence (ROIs, H&E/ARMS registration, clusterings, DEG results, provenance graph) |
 | `prov_graph.py` | Provenance DAG for reproducible code — nodes/deps, upsert+staleness, topo-sort, cells/script/mermaid/dot rendering |
@@ -609,6 +611,26 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   that is fine where the cell is real code (`sc.pl.*`, `to_csv`); what is not fine is a
   terminal whose cell is prose, which the source guard above now catches.
   Also migrated: **UMAP plots** (`umap.plot`, both by gene and by cluster).
+  Also migrated, 2026-09-03: the whole **H&E registration** family, in five templates —
+  `he.load`, `he.flip`, `he.coarse_align`, `he.nuclei_align`, `he.landmark_align`. Both
+  fits used to record the 3×3 matrix they produced as a literal, under a comment saying
+  where it came from: a cell that runs, succeeds, and reproduces nothing. Four things are
+  worth not re-deriving. **The stated blocker was stale** — "the notebook's
+  `xenium(data_path)` preamble does not carry the H&E" stopped being true when `he:load`
+  started recording `load_he_pyramid(path)`, so every input was already reachable.
+  **The kinds were the reason nothing depended on anything**: all five were `TERMINAL`,
+  which `prov_graph.py` defines as "no dependents", so the graph could not say that the
+  fine fit is seeded by the coarse one; they are `ARTIFACT` now and the chain is
+  `he:load → he:flip → he:coarse_align → he:nuclei_register`. **A template may import
+  `palms` when its header declares why** (`# palms: <reason>`, parsed into
+  `TemplateSpec.palms_reason`) — the guard was already false for this family, since four
+  `record_node` cells imported `palms.utils.registration` and `record_node` output is never
+  validated; the allowance is per-template, listed in `tests/test_template_registry.py`
+  in both directions, and a user override cannot grant itself one because `_merge` takes
+  the contract from the builtin. And **a nuclei fit may not be seeded by a nuclei fit**:
+  that is what the GUI used to do on a re-run, and it cannot be recorded — the step would
+  depend on itself. Re-running starts where the first run did, which is also what makes
+  the recorded step the one that replays.
 - **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
   in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
   and executed code could drift. Re-running a step (same `id`) revises its node in place

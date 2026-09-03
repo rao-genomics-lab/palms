@@ -1,0 +1,35 @@
+# palms template
+# id: he.load
+# schema-version: 1
+# assemblies: from_file | from_store
+# doc: The H&E image the registration works on, as a pyramid, finest level first.
+# palms: reading an OME-TIFF/SVS pyramid and its declared pixel size is this
+#        package's loader; no scverse call opens a slide image.
+# requires: sdata
+# outputs: he_pyramid, he_px_um
+# params: path:str?, px_um:float?
+# sample-params: path = '/data/section.ome.tif'
+
+#--- block from_file
+# The H&E image, as the pyramid of levels the file carries, finest first. The
+# levels are dask arrays, so this opens the file and reads no pixels.
+from palms.utils.registration import he_pixel_size_um, load_he_pyramid
+
+he_pyramid, he_tif = load_he_pyramid($path)
+# The best scale prior the coarse search can get, and free: the pancreas
+# reference declares 0.27377 um in its OME metadata, which is 0.06% off the
+# scale that was ultimately fitted. None when the file declares no physical
+# pixel size, and the search then falls back to a tissue-area estimate.
+he_px_um = he_pixel_size_um(he_tif)
+
+#--- block from_store
+# The H&E as the viewer cached it, for a session whose original file is no
+# longer reachable. Note what this costs: `sdata` here has to be the viewer's
+# cache rather than the raw Xenium output the preamble reads, so this cell
+# replays only against that cache. That is why `from_file` is used whenever the
+# path is known, and why this block records the pixel size as a literal — the
+# TIFF metadata it came from is not being read here.
+from palms.utils.registration import pyramid_levels
+
+he_pyramid = pyramid_levels(sdata.images['he_image'])
+he_px_um = $px_um

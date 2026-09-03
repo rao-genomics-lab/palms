@@ -121,17 +121,50 @@ def validate(
     for assembly in spec.assemblies:
         problems += _check_assembly(spec, assembly, available)
 
-    for block in spec.blocks.values():
-        if "palms" in block.text:
-            problems.append(Problem(
-                "reaches back into palms; the exported notebook has to "
-                "run without this package installed",
-                block=block.name,
-            ))
+    problems += _check_palms_reference(spec)
     return problems
 
 
 # ── individual checks ────────────────────────────────────────────────────────
+
+def _check_palms_reference(spec: TemplateSpec) -> list[Problem]:
+    """Reaching back into ``palms`` is an error unless the header says why.
+
+    The exported notebook is meant to run in a plain scverse environment, so a
+    template that imports this package narrows where its cell can be replayed.
+    That is worth refusing by default and it is not worth refusing absolutely:
+    the H&E registration is this package's *own* algorithm, and no scanpy,
+    squidpy or spatialdata call computes it. The choice is between a cell that
+    imports ``palms`` and a cell that states a 3x3 matrix as a literal and
+    explains in a comment where it came from — and the second reproduces
+    nothing, which is the failure this whole module exists to prevent.
+
+    So the rule is declaration, not prohibition. ``# palms: <reason>`` in the
+    header makes the dependency a documented property of that template rather
+    than an accident, ``scripts/verify_notebook.py`` can report which cells
+    carry it, and every template without the field is guarded exactly as before.
+
+    A user override cannot grant itself the allowance: ``_merge`` takes the
+    contract from the builtin, so ``palms_reason`` is the shipped template's
+    answer to a question the user's text does not get to re-answer.
+    """
+    used = [b.name for b in spec.blocks.values() if "palms" in b.text]
+    if not spec.palms_reason:
+        return [Problem(
+            "reaches back into palms; the exported notebook has to run without "
+            "this package installed. If the computation genuinely has no "
+            "scverse equivalent, declare it with a '# palms: <reason>' header "
+            "line instead of removing the import.",
+            block=name,
+        ) for name in used]
+    if not used:
+        return [Problem(
+            "declares '# palms:' but no block imports palms; drop the header "
+            "line so the exemption list stays a list of real ones",
+            severity=WARNING,
+        )]
+    return []
+
 
 def _check_structure(spec: TemplateSpec, builtin: TemplateSpec) -> list[Problem]:
     problems = []

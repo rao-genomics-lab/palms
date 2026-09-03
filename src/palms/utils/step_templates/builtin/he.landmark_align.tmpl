@@ -1,0 +1,22 @@
+# palms template
+# id: he.landmark_align
+# schema-version: 1
+# assemblies: main
+# doc: Fine H&E registration from hand-placed matching landmarks.
+# palms: the similarity fit and its residuals are this package's own.
+# requires: np
+# outputs: he_affine, he_residuals
+# params: xenium_points:list, he_points:list
+
+#--- block main
+# Fine H&E registration from hand-placed landmarks: the least-squares similarity
+# taking the H&E points onto the Xenium ones. The pairs are inlined because they
+# are the whole input -- there is nothing else to read them back from.
+#
+# A similarity, so a reflection cannot come out of the fit; a mirrored slide is
+# declared as a flip and composed separately.
+from palms.utils.registration import compute_landmark_affine
+
+he_xen_pts = np.array($xenium_points)
+he_he_pts = np.array($he_points)
+he_affine, he_residuals = compute_landmark_affine(he_xen_pts, he_he_pts)

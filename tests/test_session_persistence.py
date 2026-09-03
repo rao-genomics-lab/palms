@@ -130,6 +130,36 @@ def test_arms_attrs_fall_back_to_previous_when_absent():
     assert attrs["arms_csv_path"] == "/tmp/a.csv"
 
 
+# ── which method made the fine H&E affine ────────────────────────────────────
+
+def test_the_fine_affine_records_which_method_produced_it():
+    """`affine_3x3` is written by the landmark fit *and* by the nuclei fit.
+
+    Sharing the slot is right — it is the fine transform, whoever made it — but
+    nothing recorded which, and `scripts/score_nuclei_align.py` falls back to it
+    as its reference when a dataset ships no 10x matrix. On demo_data/crop_6 it
+    duly scored the automatic fit against a stored run of itself and reported
+    0.000 um of disagreement, which reads as a perfect result and means nothing.
+    """
+    import numpy as np
+
+    attrs = _build_session_attrs(**_args(
+        he_state={"affine_3x3": np.eye(3), "affine_source": "nuclei"},
+    ))
+    assert attrs["affine_source"] == "nuclei"
+
+    attrs = _build_session_attrs(**_args(
+        he_state={"affine_3x3": np.eye(3), "affine_source": "landmarks"},
+    ))
+    assert attrs["affine_source"] == "landmarks"
+
+
+def test_the_affine_source_is_carried_forward_when_no_affine_is_in_play():
+    """A save from a session that never touched the H&E must not erase it."""
+    attrs = _build_session_attrs(**_args(prev_attrs={"affine_source": "landmarks"}))
+    assert attrs["affine_source"] == "landmarks"
+
+
 # ── serialisability ──────────────────────────────────────────────────────────
 
 def test_built_attrs_are_json_serializable():

@@ -6,7 +6,279 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Changed
+- **H&E registration records the code that produced the alignment, not the
+  matrix.** Coarse Align and Fine Align each recorded a literal
+  `he_affine = np.array([[...]])` under a comment explaining where it came
+  from — a cell that runs, succeeds, and reproduces nothing. Both now run
+  through `ctx.run_step` against templates
+  (`he.load`, `he.flip`, `he.coarse_align`, `he.nuclei_align`,
+  `he.landmark_align`), so the recorded cell *is* the executed source, by
+  construction rather than by discipline.
+
+  Verified end to end on `Xenium_V1_human_Pancreas_FFPE`, by executing the
+  shipped templates in a bare `StepExecutor` with no GUI: **0.696 µm mean
+  disagreement with 10x's own alignment matrix** (max 1.227 µm), 39,475 of
+  126,122 detections matched, 17.2× enrichment, scale 1.2890, rotation
+  −89.88° — the same answer the pre-migration code path produced, and the
+  recorded graph is `he:load → he:flip → he:coarse_align → he:nuclei_register`.
+  Coarse alone scores 17.6 µm here against the 15.5 µm reported earlier, which
+  is not a change in this work: `pick_level` chooses 860×466 from the OME-TIFF
+  and 1718×931 from the cache for one and the same slide, and the earlier figure
+  was measured on the cache. The fine fit lands in the same place either way.
+
+  Three defects underneath, each fixed in the same pass:
+
+  - **The dependency edges were wrong.** All five nodes declared
+    `deps=["preamble"]`, so re-running Coarse Align did not mark the fine fit
+    stale even though the fine fit is *seeded by* it. The chain is now
+    `he:load → he:flip → he:coarse_align → he:nuclei_register`, with the nuclei
+    fit depending instead on `he:landmark_register` when that is what it
+    refined — the seed block and the graph edge are chosen together, so the
+    notebook says which happened.
+  - **The kinds were wrong, which is probably why.** `he:load`, `he:flip`,
+    `he:coarse_align` and `he:landmark_register` were `TERMINAL`, defined in
+    `prov_graph.py` as "side-effect only … code, and no dependents". A loaded
+    image, a flip and a seed matrix are reusable state; they are `ARTIFACT` now.
+  - **Re-running Fine Align fed it its own previous answer**, which cannot be
+    recorded — the step would depend on itself. It re-seeds from the same place
+    the first run did, which is also what makes the recorded step the one that
+    replays.
+
+- **A template may import `palms` when its header declares why.** The exported
+  notebook is meant to run in a plain scverse environment, and
+  `validate.py` rejected any template mentioning this package. That invariant
+  was already false for the H&E family — four `record_node` cells imported
+  `palms.utils.registration`, and `record_node` output is never validated — and
+  the registration algorithms genuinely have no scverse equivalent. So the rule
+  is now declaration rather than prohibition: `# palms: <reason>` in the header,
+  the five H&E templates carry it, every other template is guarded exactly as
+  before, and a user override cannot grant itself the allowance (the contract
+  comes from the builtin on merge). `tests/test_template_registry.py` asserts
+  the exemption list in both directions.
+
+- **`register_he_nuclei` / `register_he_nuclei_steps` are gone.** The
+  orchestration they performed — centroids, detection, flip, fit — *is*
+  `he.nuclei_align.tmpl` now. Keeping both would be two statements of one
+  algorithm with only one of them recorded, which is the drift the step
+  templates exist to make impossible. The end-to-end tests execute the shipped
+  template instead, which makes them stronger: they used to exercise a generator
+  that merely resembled the recorded cell. The per-stage progress readout
+  survives — it rides on `StepExecutor.run(progress=)`, so it cannot claim a
+  stage the recorded cell does not contain.
+
+- **`registration.pyramid_levels` is the one definition** of "the levels of a
+  multiscale spatialdata element". `_extract_dt_scales` had been copied into
+  seven modules; the three the templates and this tab reach through are now the
+  helper (the remaining four are unchanged and tracked separately).
+  `nuclei_registration.apply_affine` is public for the same reason: the tab, the
+  scoring script and the test file each carried their own two-line copy, and a
+  test that applies a transform differently from the code under test is testing
+  its own arithmetic.
+
+### Fixed
+- **A restored session forgot where its H&E came from.** `he_state["he_path"]`
+  was set to `None` on restore, so the next session save wrote a null path over
+  the recorded one. It is carried forward now — which is also what lets `he:load`
+  keep recording a cell that replays against the raw output rather than against
+  the viewer's cache.
+- **The nuclei fit could not correct a scale error, and reported it honestly
+  rather than silently** — found by running Fine Align on a 10.6 × 6.3 mm
+  prostate section, where it returned enrichment 1.4× and LOW CONFIDENCE. The
+  H&E detections were fine (366k of them, at the same density as the 342k nuclear
+  masks, and locally coinciding with them as well as on any dataset); the section
+  was fine; a similarity fits it to 1.6 µm. **Coarse Align's scale was 1.49% low**,
+  which put its transform 60 µm mean / 127 µm max from the truth, and the fit
+  could not cross that.
+
+  Not for want of range — the first attempt, raising the annealing sigma from
+  20 µm to a size-derived 144 µm and thinning the target set so the neighbour
+  budget could not silently truncate it, made the result *worse* and cost twice
+  the time. **The blind spot is structural.** A scale error displaces each point
+  in proportion to its distance from the centre, so it is under a micron in the
+  middle of a section and 127 µm at the corners, and no single sigma sees both:
+  small enough to resolve nuclei in the middle and the corners match at random,
+  large enough to reach the corners and the nuclear density is flat, with no
+  gradient to follow.
+
+  The fix is a **bracketing search over scale and rotation before the anneal**
+  (`bracket_seed`), which has no such blind spot because it does not follow a
+  gradient at all. Two things make it work, each measured against the alternative:
+  the translation for each hypothesis is read off the peak of the offset histogram
+  rather than searched — holding the centre fixed and scoring a match count, the
+  grid chose +1.00% of scale and stopped 28.4 µm from the answer, against +1.50%
+  and 1.3 µm when translation is solved per hypothesis — and the histogram is
+  smoothed by exactly the displacement half a grid step produces, so the peak is
+  as wide as the grid is coarse *at any section size*. That last point is not
+  cosmetic: the peak falls to half height 0.15% of scale from the optimum on both
+  reference datasets, which is narrower than the 0.25% grid step, so the search
+  was finding it by luck and on a section twice as long would have been reading
+  noise.
+
+  Result on the prostate section: enrichment **1.4× → 9.6×**, confident, and
+  0.90 µm from an independently derived transform (a similarity fitted to local
+  displacements measured in 48 patches across the slide, which no part of the fit
+  saw). The pancreas and crop_6 are **bit-identical** to before — there the
+  bracket finds the same correction the anneal would have. `NucleiAlignResult`
+  now reports `bracket_shift_um` so a large Coarse Align error is visible rather
+  than inferred: 61 µm on the prostate section, 15–18 µm on the two references.
+
+- **`scripts/score_nuclei_align.py` scored the fit against a stored run of
+  itself.** The fine transform has one session slot, written by the landmark fit
+  *and* by the nuclei fit, and the script falls back to it as its reference when a
+  dataset ships no 10x matrix. On `demo_data/crop_6`, where the automatic fit had
+  been run and saved, it duly reported **0.000 µm** of disagreement — which reads
+  as a perfect result and means nothing. The session now records `affine_source`
+  ("landmarks" or "nuclei"), the script refuses a nuclei-derived reference
+  outright, and it says so plainly when a pre-existing session cannot tell it
+  which. `--landmarks landmarks.json` was added because a saved landmark file is a
+  record of a registration made another way and, unlike the session slot, it
+  survives — crop_6 scores 0.845 µm against its own.
+
 ### Added
+- **Automatic fine H&E registration, from nuclei** (issue `xv-bdi`) — a new
+  **Fine Align (nuclei)** button beside Coarse Align, and
+  `src/palms/utils/nuclei_registration.py` behind it. The manual landmark step is
+  really matching nuclei in the H&E against Xenium's nuclear masks; this does that
+  directly, over every nucleus in the section rather than the handful a user can
+  click. Haematoxylin is deconvolved out of the H&E and its nuclei found as
+  sub-pixel peaks; that point set is fitted onto the centroids of
+  `labels/nucleus_labels`, seeded by Coarse Align's transform.
+
+  Measured against the two datasets that carry an independent transform:
+
+  |  | coarse seed | automatic | landmarks, by hand |
+  |---|---|---|---|
+  | pancreas, vs 10x's `he_imagealignment.csv` | 15.5 µm | **0.70 µm** | 0.93 µm |
+  | `demo_data/crop_6`, vs a landmark fit | 17.4 µm | **0.85 µm** | — |
+
+  **It is not ICP, and that is not a stylistic choice.** Nuclei on the pancreas sit
+  a median 6.1 µm apart while Coarse Align lands 15 µm out, so the nearest target to
+  a source point is usually the *wrong* nucleus — and those wrong correspondences are
+  mutually consistent, being a whole-field shift of about one spacing. Trimmed ICP
+  from the coarse seed drives its own matched-pair RMSE from 5.10 µm to 1.06 µm while
+  moving the transform only from 15.5 µm to 13.1 µm: it converges, confidently, to the
+  wrong answer. The fit is annealed soft assignment instead (the similarity case of
+  coherent point drift, neighbour sum truncated), which has no such basin limit — at
+  large σ each point is drawn toward a weighted mean of many targets, which is the same
+  nuclear architecture Coarse Align correlates, and annealing σ from 20 µm to 1 µm walks
+  that down to per-nucleus correspondence. On the identical point sets that left ICP at
+  13.1 µm it reaches 1.02 µm.
+
+  **Resolution is the accuracy, not the point count.** Holding the detector's parameters
+  fixed *in microns* so only the sampling changes: at pyramid level s1 the fit disagrees
+  with 10x by 1.023 µm, and detecting 2.2× as many nuclei at s1 changes that by 0.002 µm.
+  Running the same detector at full resolution gives 0.878 µm, and taking the label
+  centroids at full resolution too gives 0.682 µm. A coarser pixel does not add noise
+  that 10⁵ points average away — it biases each peak, and a bias does not average away.
+  So the level is not tunable: both point sets are built at s0.
+
+  **The acceptance bar is not a ruler fine enough to measure this.** All three estimates
+  — 10x's, the landmark fit and the automatic one — agree with each other only to about
+  a micron in every pairing, while the automatic fit reproduces itself to **0.02 µm**
+  (eight independent random halves of the detections agree to 0.010–0.035 µm). So the
+  residual micron is not this estimator's noise. `scripts/score_nuclei_align.py` reports
+  the check that is evidence rather than agreement with another estimate: fit on one half
+  of the *section*, then score every candidate transform on the other half's nuclei,
+  which that fit has never seen. The automatic fit wins on both halves of both datasets,
+  including against the reference it is being compared to — pancreas 1.472/1.139 µm
+  against 10x's 1.479/1.240, crop_6 0.982/1.012 against the landmark fit's 1.299/1.217.
+
+  It says how much to believe itself, as Coarse Align does. Confidence is an **enrichment
+  over chance** — how many more H&E nuclei land within a micron of a nuclear mask than a
+  Poisson field of the same density would — so it is comparable across datasets where a
+  raw matched fraction is not (31% on the pancreas and 45% on crop_6 are the same quality
+  of fit). Measured: 17.2× and 22.0× when right, against 1.6×/1.8× at the coarse seed,
+  1.4× for the fitted transform rotated 5°, and 1.0×/0.8× for a fit seeded 640 µm out,
+  which does not converge. Nothing observed sits between 1.8 and 17.
+
+  One to three minutes on a whole section, most of it finding nuclei at full resolution.
+  It refuses rather than approximating on a dataset with no `nucleus_labels`: matching
+  haematoxylin peaks against *cell* centroids would return a confident transform wrong by
+  however far a nucleus sits from its cell's centre.
+
+### Changed
+- **`flip_matrix` is now the one definition of the H&E flip** (`utils/registration.py`).
+  Four hand-written copies of the same 3×3 had accumulated — in `tab_he_registration`,
+  `tab_arms`, `tab_external_images` and `scripts/score_coarse_align.py` — and the flip is
+  load-bearing: `coarse` and `fine` are both maps *from* the flipped frame, and Coarse
+  Align reports a detected reflection by asking the caller to tick a flip rather than
+  baking it into the matrix. A copy that composed the axes in the other order, or used the
+  wrong side's shape, would misplace a mirrored overlay with nothing to catch it.
+  `tests/test_nuclei_align.py` is the source guard.
+
+### Fixed
+- **Coarse Align rarely produced a usable starting transform** (issue `xv-asc`). On the
+  pancreas reference dataset it returned scale 0.5515 where the truth is 1.2891, and
+  −55.0° where the truth is −89.88°; on a crop export, scale 1.1702 against 2.3532. It now
+  lands within **0.7% of the correct scale and 0.04° of the correct rotation on both** —
+  15 µm and 17 µm of mean disagreement across the whole slide, measured against 10x's own
+  `he_imagealignment.csv` and against a landmark fit respectively.
+
+  Two separate defects, and the search was the smaller one.
+
+  **The tissue mask was wrong, so the objective was maximised in the wrong place.**
+  `extract_tissue_mask_fluorescence` ran Otsu on the morphology max-projection, and Otsu
+  splits a histogram at the valley between its two largest modes — which on a fluorescence
+  image are *both tissue*. It cut between the bright acinar region and the dim fibrotic one
+  and kept 17.4% of the frame, discarding two thirds of the section. The consequence is
+  worse than a bad estimate: the **true** transform scored IoU 0.216 while the wrong answer
+  scored 0.493, so no amount of better searching could have helped. A triangle threshold,
+  which anchors on the single background peak, keeps 88.0% and is the actual section; the
+  true transform then scores 0.989.
+
+  **Tissue outlines say nothing about a crop.** On `demo_data/crop_6` the corrected masks
+  cover 100.0% and 99.6% of their images, and an outline search scores a perfect 1.0 at a
+  scale 36% wrong. The match is now made on **blurred nuclear density** — DAPI against a
+  haematoxylin proxy — which carries internal structure, over a global search in rotation,
+  scale and reflection with the translation for each hypothesis from phase correlation.
+  Outlines are still used, for the scale prior.
+
+  Three things that had to be right, each measured rather than assumed. The **scale prior**
+  comes from the H&E's declared pixel size when it has one (0.06% on the pancreas) and from
+  the tissue-area ratio otherwise (1.0% on a crop, 3.5% on a section) — but it is still
+  searched, because the errors trade off: pinning the pancreas scale at its declared value
+  leaves the rotation 0.87° out. The **smoothing is fixed in working pixels**, not thumbnail
+  pixels, or the amount of blur becomes an accident of which pyramid level a file happens to
+  carry. And the refinement is a **coordinate descent that halves its own window**, because
+  a fixed window narrower than the scale grid's spacing cannot reach the truth even when the
+  grid straddles it — that alone was the difference between 132 µm and 15 µm.
+
+  Coarse Align now reports its match score and refuses to sound certain: a result that does
+  not clearly beat the next distinct orientation is labelled **LOW CONFIDENCE**. Images with
+  nothing to match score 0.24–0.34 with margins of 0.04–0.08, against 0.49–0.78 and
+  0.12–0.20 for the two real datasets.
+
+- **A mirrored H&E could not be registered at all.** Reflection was in neither the coarse
+  search nor `compute_landmark_affine`, which fits a `similarity`; the flip checkboxes were
+  the only route and nothing said so. Coarse Align now detects a reflection and **ticks
+  "Flip horizontally" itself**, rather than baking it into the matrix — where the next press
+  of Compute Registration would silently have discarded it.
+
+- **A registration made with a Flip ticked was flipped twice.** `coarse` was fitted on the
+  unflipped pyramid and `fine` on unflipped landmark coordinates, but both are composed as
+  `X @ flip`. Both fit sites now work in the flipped frame, which is what
+  `_apply_he_affine` and the tab documentation always claimed. Latent until now — both
+  reference datasets have their flips off — but automatic mirror detection routes through
+  the flip, so it had to be right. Toggling a flip now also clears a coarse alignment
+  fitted for the previous orientation, and "Save Landmarks…" records the orientation its
+  points and affine are expressed in, so the file stays self-consistent.
+
+- **Coarse Align used `pyramid[-1]`, which is not a size.** It is however many levels the
+  file happens to carry: the same pancreas H&E bottoms out at 860×466 read from its
+  OME-TIFF and at 1718×931 read back from the zarr cache, so the identical dataset was
+  aligned at two different resolutions depending on whether the session had been restored.
+  `pick_level` chooses by size.
+
+### Added
+- **`scripts/score_coarse_align.py`** — runs Coarse Align exactly as the GUI does, headless
+  from the zarr store alone, and reports how far its transform places the H&E from an
+  independently known one: 10x's `<sample>_he_imagealignment.csv` where a dataset ships one,
+  otherwise the landmark fit in the session. Reports the same quantity
+  `compare_he_registration.py` does — the distance distribution in microns over a grid
+  across the whole H&E — so a coarse figure and a landmark figure can be read side by side.
+  That shared arithmetic now lives once, in `palms/utils/affine_compare.py`.
+
 - **`scripts/compare_he_registration.py`** — scores a landmark H&E registration against
   10x's shipped `<sample>_he_imagealignment.csv`. The residual PALMS reports is
   *self-referential*: it measures how well a similarity fits the very points that were

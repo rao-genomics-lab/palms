@@ -1,0 +1,82 @@
+# palms template
+# id: he.nuclei_align
+# schema-version: 1
+# assemblies: seed_coarse+main | seed_fine+main | seed_restored+main
+# doc: Fine H&E registration: haematoxylin nuclei matched onto the nuclear masks.
+# palms: nucleus detection, the bracketing seed search and the annealed fit are
+#        this package's own; no scverse call registers two point clouds.
+# requires: np, sdata, he_pyramid, he_px_um, he_flip_vertical,
+#           he_flip_horizontal, he_coarse_affine, he_affine
+# outputs: he_nuclei_fit, he_affine
+# params: pixel_size:float, seed:list?
+
+#--- block seed_coarse
+# Seeded by the coarse alignment.
+he_seed_affine = he_coarse_affine
+
+#--- block seed_fine
+# Seeded by the fine transform already in force rather than by the coarse one:
+# there is a better starting point available, so it is the one to refine.
+he_seed_affine = he_affine
+
+#--- block seed_restored
+# Seeded by the transform this dataset was already carrying. The step that
+# produced it ran in an earlier session, so it is stated as the literal it is
+# rather than named: an alignment restored from the store is a starting point,
+# not a computation this notebook performs.
+he_seed_affine = np.array($seed)
+
+#--- block main
+# Fine H&E registration, from the nuclei themselves.
+#
+# What a person does by hand when they register these two images is match
+# nuclei: the haematoxylin blobs in the H&E against the nuclear masks Xenium
+# segmented. This does the same thing to every nucleus in the section instead of
+# to the dozen a person has patience to click, which is where the accuracy comes
+# from -- 15 um to 0.7 um on the pancreas reference, with no landmarks placed.
+#
+# Two passes, and neither can do the other's job. A *bracket* grid over scale and
+# rotation runs first, because a scale error is invisible to the anneal that
+# follows: it displaces each point in proportion to its distance from the centre,
+# so on a 10.6 x 6.3 mm section a 1.5% error is under a micron in the middle and
+# 127 um at the corners, and no single sigma sees both. Then the anneal, which
+# is not ICP -- a seed one nucleus spacing out makes nearest-neighbour
+# correspondences wrong *and* self-consistent, and ICP converges confidently to
+# 13.1 um. Soft assignment keeps every candidate weighted until the width comes
+# down.
+from palms.utils.nuclei_registration import (
+    apply_affine, detect_he_nuclei, fit_nuclei_similarity, nucleus_centroids,
+)
+from palms.utils.registration import flip_matrix, pyramid_levels
+
+# Full resolution on both sides. A coarser pixel biases every peak the same way:
+# 2.2x as many detections one level down bought 0.002 um, and one level finer
+# bought 0.145 um.
+he_nuclei_masks = pyramid_levels(sdata.labels['nucleus_labels'])[0]
+he_nuclei_image = he_pyramid[0]
+he_nuclei_shape_yx = (he_nuclei_image.shape[0], he_nuclei_image.shape[1])
+
+# The H&E's pixel size makes the detector physical. When the file declares none,
+# the seed's own scale is a measurement of the same quantity, and a seed is
+# required, so it is always available.
+he_nuclei_px_um = he_px_um or (
+    float(np.hypot(he_seed_affine[0][0], he_seed_affine[0][1])) * $pixel_size)
+
+he_nuclei_targets = nucleus_centroids(he_nuclei_masks)
+he_nuclei_found = detect_he_nuclei(he_nuclei_image, pixel_size_um=he_nuclei_px_um)
+
+# Detection runs on the H&E *unflipped* and the points are relabelled into the
+# flipped frame afterwards. A flip is a renaming of coordinates and leaves the
+# haematoxylin field unchanged, so flipping the array instead would be a 1.2 GB
+# copy for nothing.
+he_nuclei_source = he_nuclei_found[:, :2]
+if he_flip_vertical or he_flip_horizontal:
+    he_nuclei_source = apply_affine(
+        flip_matrix(he_nuclei_shape_yx, he_flip_vertical, he_flip_horizontal),
+        he_nuclei_source)
+
+he_nuclei_fit = fit_nuclei_similarity(
+    he_nuclei_targets, he_nuclei_source, he_seed_affine,
+    pixel_size_um=$pixel_size, image_shape_yx=he_nuclei_shape_yx)
+# The fine transform now in force: flipped H&E pixels to Xenium pixels, (y, x).
+he_affine = he_nuclei_fit.affine_3x3_yx

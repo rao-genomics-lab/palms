@@ -1,7 +1,18 @@
-"""Tab 5: H&E Registration — load, flip, coarse align, landmarks, register."""
+"""Tab 5: H&E Registration — load, flip, coarse align, landmarks, register.
+
+**The frame rule.** ``coarse`` and ``fine`` are both maps from the *flipped* H&E
+frame to Xenium pixels. That is what ``_apply_he_affine`` composes (``X @ flip``)
+and what docs/Tab-HE-Registration.md describes — but neither fit site honoured it
+until 2026-09-02: the coarse mask came off the unflipped pyramid and the landmark
+points came off ``he_lm_layer.data``, which is unflipped layer-data coordinates.
+Any registration made with a Flip ticked was therefore flipped twice. It matters
+beyond that latent bug, because automatic mirror detection routes *through* the
+flip: ``compute_landmark_affine`` fits a similarity, which has no reflection, so
+a mirror baked into ``coarse`` would be silently discarded the moment the user
+pressed Compute Registration.
+"""
 
 from __future__ import annotations
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,18 +22,27 @@ from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
 from palms.utils.units import px_affine_to_world
 from palms.tabs._helpers import make_tab, StatusProxy
-from palms.utils.prov_graph import TERMINAL
+from palms.utils.prov_graph import ARTIFACT, TERMINAL
+from palms.utils.step_templates import Preview, step_template
+from palms.utils.steps import Step, coerce
 from palms.utils.zarr_safe import safe_write_element
 
 if TYPE_CHECKING:
     from palms.utils.viewer_context import ViewerContext
 
 from palms.utils.registration import (
-    load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
-    extract_tissue_mask_fluorescence, extract_tissue_mask_he, compute_coarse_affine,
-    describe_pyramid, parse_rgb_image_for_store,
+    save_landmarks, load_landmarks,
+    describe_pyramid, parse_rgb_image_for_store, flip_matrix, pyramid_levels,
 )
 from palms.utils.reporting import report_write_failure
+
+# The five steps this tab runs. Named once so the Templates tab, the preview
+# providers and the run sites cannot disagree about which template is which.
+LOAD_TEMPLATE = "he.load"
+FLIP_TEMPLATE = "he.flip"
+COARSE_TEMPLATE = "he.coarse_align"
+NUCLEI_TEMPLATE = "he.nuclei_align"
+LANDMARK_TEMPLATE = "he.landmark_align"
 
 
 def build_tab(ctx: ViewerContext) -> tuple:
@@ -35,6 +55,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     he_opacity_slider.enabled = False
 
     coarse_align_button = PushButton(label="Coarse Align", enabled=False)
+    nuclei_align_button = PushButton(label="Fine Align (nuclei)", enabled=False)
 
     add_xenium_lm_button = PushButton(label="Add Xenium Landmark", enabled=False)
     add_he_lm_button = PushButton(label="Add H&E Landmark", enabled=False)
@@ -58,20 +79,61 @@ def build_tab(ctx: ViewerContext) -> tuple:
     data_path = ctx.data_path
     no_cache = ctx.no_cache
     pixel_size = ctx.pixel_size
-    morph_thumb = ctx.morph_thumb
-    morph_full_shape_yx = ctx.morph_full_shape_yx
+    # Only to decide whether Coarse Align can be offered at all. The search
+    # derives its own thumbnail inside the template, from `sdata`, so that the
+    # notebook's cell reads the same element rather than a value the viewer
+    # happened to compute at launch.
+    morph_thumb = getattr(ctx, "morph_thumb", None)
+
+    def _step_progress(prefix: str, status):
+        """Adapt ``StepExecutor``'s per-statement callback to the status bar.
+
+        Both fits are long -- the nuclei one runs for ten minutes on a full
+        slide over a network share -- so silence is not an option. The reporting
+        rides on ``run(progress=)``, which fires before each top-level statement
+        of the very source being recorded, so the readout cannot claim a stage
+        the cell does not contain; a hand-maintained list of stage names beside
+        the template could, and the previous generator-based version did exactly
+        that in a second copy of the orchestration.
+
+        Bounced to the GUI thread: steps run in a napari worker and a status
+        write is a Qt write.
+        """
+        from superqt.utils import ensure_main_thread
+
+        @ensure_main_thread
+        def _show(text):
+            status.value = text
+
+        def _report(index, total, label):
+            _show(f"{prefix} ({index}/{total}): {label}")
+
+        return _report
+
+    def _flip_step() -> Step:
+        blocks, params, _ = _flip_preview()
+        return Step(
+            id="he:flip", **step_template(FLIP_TEMPLATE, blocks),
+            params=params,
+            deps=["preamble"], kind=ARTIFACT, label="H&E flip",
+            outputs=["he_flip_vertical", "he_flip_horizontal"],
+        )
+
+    def _record_flip():
+        """Run and record the flip declaration both fits consume.
+
+        An ``ARTIFACT`` rather than a terminal, and that is the point: the two
+        fits ``deps`` on it, so changing a flip checkbox marks them stale --
+        which is what the GUI has always *done* (``on_flip_changed`` drops the
+        coarse affine) without the graph ever saying so.
+        """
+        ctx.run_step(_flip_step())
 
     def _build_flip_affine():
         shape = he_state.get("he_shape_yx")
         if shape is None:
             return np.eye(3)
-        h, w = shape
-        M = np.eye(3)
-        if he_flip_v.value:
-            M = np.array([[-1, 0, h - 1], [0, 1, 0], [0, 0, 1]], dtype=np.float64) @ M
-        if he_flip_h.value:
-            M = np.array([[1, 0, 0], [0, -1, w - 1], [0, 0, 1]], dtype=np.float64) @ M
-        return M
+        return flip_matrix(shape, he_flip_v.value, he_flip_h.value)
 
     def _apply_he_affine():
         flip = _build_flip_affine()
@@ -92,30 +154,46 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if he_state["he_lm_layer"] is not None:
             he_state["he_lm_layer"].affine = world
 
+    def _flip_points(pts_yx):
+        """H&E landmark data (unflipped layer coordinates) in the flipped frame.
+
+        See the frame rule in the module docstring: the fit has to happen in the
+        frame the affine is composed with, or the flip is applied twice.
+        """
+        pts = np.asarray(pts_yx, dtype=np.float64)
+        if len(pts) == 0:
+            return pts
+        flip = _build_flip_affine()
+        homo = np.hstack([pts, np.ones((len(pts), 1))])
+        return (flip @ homo.T).T[:, :2]
+
     def on_flip_changed(_value=None):
-        _apply_he_affine()
         he_state["flip_v"] = he_flip_v.value
         he_state["flip_h"] = he_flip_h.value
+        # A coarse affine was fitted for the orientation that has just changed,
+        # so it no longer describes this image. Cleared *before* the layer is
+        # re-placed, or the overlay jumps to a transform that is already void.
+        dropped_coarse = he_state.get("coarse_affine") is not None
+        if dropped_coarse:
+            he_state["coarse_affine"] = None
+        _apply_he_affine()
         _save_he_affine_to_sdata()
         flips = []
         if he_flip_v.value: flips.append("V")
         if he_flip_h.value: flips.append("H")
-        if flips:
-            he_status_label.value = f"Flip applied: {'+'.join(flips)}"
-        ctx.record_node(
-            "he:flip",
-            f"\n# H&E image flip, applied before registration\n"
-            f"he_flip_vertical = {he_flip_v.value}\n"
-            f"he_flip_horizontal = {he_flip_h.value}",
-            deps=["preamble"], kind=TERMINAL, label="H&E flip",
-        )
+        parts = ([f"Flip applied: {'+'.join(flips)}"] if flips else [])
+        if dropped_coarse:
+            parts.append("coarse alignment cleared — run Coarse Align again")
+        if parts:
+            he_status_label.value = " — ".join(parts)
+        _record_flip()
 
     he_flip_v.changed.connect(on_flip_changed)
     he_flip_h.changed.connect(on_flip_changed)
 
     def _check_landmark_count(*_args):
-        xen = he_state["xenium_lm_layer"]
-        he = he_state["he_lm_layer"]
+        xen = he_state.get("xenium_lm_layer")
+        he = he_state.get("he_lm_layer")
         if xen is not None and he is not None:
             n = min(len(xen.data), len(he.data))
             register_button.enabled = n >= 3
@@ -198,12 +276,71 @@ def build_tab(ctx: ViewerContext) -> tuple:
             sess = store["viewer_session"]
             sess.attrs["flip_v"] = bool(he_state.get("flip_v", False))
             sess.attrs["flip_h"] = bool(he_state.get("flip_h", False))
+            if he_state.get("he_pixel_size_um"):
+                sess.attrs["he_pixel_size_um"] = float(he_state["he_pixel_size_um"])
             if fine is not None:
                 sess.attrs["affine_3x3"] = fine.tolist()
+                if he_state.get("affine_source"):
+                    sess.attrs["affine_source"] = he_state["affine_source"]
             if coarse is not None:
                 sess.attrs["coarse_affine"] = coarse.tolist()
         except Exception as e:
             print(f"  Warning: could not save H&E affine: {e}")
+
+    def _he_load_step(path: str) -> Step:
+        """The step that binds ``he_pyramid`` and ``he_px_um``.
+
+        ``from_file`` whenever the original image is still on this machine,
+        which is the only variant a notebook replayed against the raw Xenium
+        output can run; ``from_store`` is the fallback for a session whose H&E
+        survives only in the viewer's cache. The block is chosen here rather
+        than in the template because which of the two is available is runtime
+        state, exactly like every other block selection in this codebase.
+        """
+        blocks, params, _ = _he_load_preview(path)
+        return Step(
+            id="he:load", **step_template(LOAD_TEMPLATE, blocks),
+            params=params,
+            deps=["preamble"], kind=ARTIFACT, label="Load H&E image",
+            outputs=["he_pyramid", "he_px_um"],
+        )
+
+    def _he_load_preview(path=None) -> Preview:
+        """Which image the load step would read, and how it would reach it.
+
+        *path* is passed by the run site at the moment the user picks a file --
+        before ``he_state`` knows about it -- and defaults to whatever is on
+        record, which is what the Templates pane asks for.
+        """
+        path = path or he_state.get("he_path")
+        return Preview(
+            blocks=["from_file"] if path else ["from_store"],
+            params={"path": str(path) if path else None,
+                    "px_um": coerce(he_state.get("he_pixel_size_um"))},
+            note=("" if path else
+                  "no file path is on record for this H&E, so the cell reads "
+                  "the copy in the viewer's cache"),
+        )
+
+    def _flip_preview() -> Preview:
+        return Preview(blocks=["main"],
+                       params={"flip_v": bool(he_flip_v.value),
+                               "flip_h": bool(he_flip_h.value)})
+
+    def _ensure_he_loaded():
+        """Bind the H&E in the executor namespace, running ``he:load`` if needed.
+
+        Beside ``ctx.ensure_normalized`` and ``ctx.ensure_spatial_neighbors``,
+        and for the same reason: a fit that consumes ``he_pyramid`` must be able
+        to say what produced it. A session restored from the cache has an H&E on
+        the canvas that no step in *this* session ever bound, so without this the
+        first Coarse Align after a restore would fail on a NameError from a
+        template that is perfectly correct.
+        """
+        executor = ctx.executor
+        if executor is not None and "he_pyramid" in executor.names():
+            return
+        ctx.run_step(_he_load_step(he_state.get("he_path")))
 
     def _on_he_loaded(result):
         (pyramid, tif), path = result
@@ -217,6 +354,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_state["he_path"] = str(path)
         base = pyramid[0]
         he_state["he_shape_yx"] = (base.shape[0], base.shape[1])
+        # Read by the recorded step, not here: it is the step's `he_px_um`
+        # output. Stored in the session because a cache-restored H&E has no
+        # TiffFile to read it back from.
+        he_state["he_pixel_size_um"] = ctx.executor.get("he_px_um")
         he_layer = viewer.add_image(
             pyramid, name=f"H&E ({Path(path).name})",
             rgb=True, blending="translucent",
@@ -226,6 +367,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_state["affine_3x3"] = None
         he_state["coarse_affine"] = None
         _apply_he_affine()
+        _refresh_nuclei_button()
         _create_landmark_layers()
         _save_he_to_sdata(pyramid, Path(path).name)
         he_opacity_slider.enabled = True
@@ -234,13 +376,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         shape_str = "x".join(str(s) for s in pyramid[0].shape)
         print(f"  {describe_pyramid(pyramid, f'H&E {Path(path).name}')}")
         he_status_label.value = f"H&E loaded: {Path(path).name} ({shape_str}, {len(pyramid)} levels)"
-        ctx.record_node(
-            "he:load",
-            f"\n# Load H&E image\n"
-            f"from palms.utils.registration import load_he_pyramid\n"
-            f"he_pyramid, he_tif = load_he_pyramid(\"{path}\")",
-            deps=["preamble"], kind=TERMINAL, label="Load H&E image",
-        )
+        # No recording here: `load_task` ran the step, which recorded itself.
 
     def on_load_he():
         default_dir = str(data_path) if data_path else ""
@@ -256,7 +392,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         @thread_worker
         def load_task():
-            return load_he_pyramid(path), path
+            # Run the recorded step rather than calling the loader beside it:
+            # the pyramid the viewer displays is then the object the notebook's
+            # cell produces, not a second read of the same file that happens to
+            # agree. `he_tif` comes back out of the namespace because the tab
+            # needs the open handle to write the image into the store.
+            out = ctx.run_step(_he_load_step(path))
+            return (out["he_pyramid"], ctx.executor.get("he_tif")), path
 
         worker = load_task()
         worker.returned.connect(lambda result: _on_he_loaded(result) if ctx.dataset_generation == gen else None)
@@ -266,27 +408,76 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if he_state["he_layer"] is not None:
             he_state["he_layer"].opacity = value / 100.0
 
-    def _on_coarse_done(coarse_affine):
-        he_state["coarse_affine"] = coarse_affine
+    def _on_coarse_done(result):
+        coarse_align_button.enabled = True
+        if result is None:
+            return
+        if result.mirrored:
+            # The reflection is carried as an explicit flip, not inside the
+            # matrix, so that the landmark refinement inherits it — a similarity
+            # fit cannot reproduce a reflection.
+            #
+            # *Toggling* rather than setting: the search ran on the image as
+            # already flipped, so what it found is one further reflection on top
+            # of that. Composed with the flips in force it is exactly this — H on
+            # nothing is H, H on H is nothing, H on V is both, H on both is V.
+            #
+            # Blocked because this is the tool choosing the orientation, not the
+            # user: on_flip_changed would clear the very coarse affine that is
+            # about to be applied.
+            with he_flip_v.changed.blocked(), he_flip_h.changed.blocked():
+                he_flip_h.value = not he_flip_h.value
+            he_state["flip_h"] = he_flip_h.value
+            _record_flip()
+        he_state["coarse_affine"] = result.affine_3x3_yx
         he_state["affine_3x3"] = None
         _apply_he_affine()
         _save_he_affine_to_sdata()
-        coarse_align_button.enabled = True
-        scale = np.sqrt(coarse_affine[0, 0]**2 + coarse_affine[0, 1]**2)
-        reg_status_label.value = f"Coarse aligned (scale={scale:.4f}). Place landmarks to refine."
-        ctx.record_node(
-            "he:coarse_align",
-            f"\n# Coarse H&E alignment to tissue outlines (scale={scale:.4f}).\n"
-            f"# Computed from the morphology thumbnail; the matrix it produced:\n"
-            f"he_coarse_affine = np.array({np.asarray(coarse_affine).tolist()})",
-            deps=["preamble"], kind=TERMINAL, label="H&E coarse align",
+        _refresh_nuclei_button()
+        confidence = "" if result.confident else " — LOW CONFIDENCE, check the overlay"
+        reg_status_label.value = (
+            f"Coarse aligned (scale={result.scale:.4f}, "
+            f"{result.rotation_deg:.1f} deg{', mirrored' if result.mirrored else ''}, "
+            f"match {result.score:.2f}){confidence}. Place landmarks to refine."
         )
+        # No recording here: `_compute_coarse` ran the step, which recorded the
+        # search it performed rather than the matrix that came out of it.
         reg_residuals_qt.setPlainText(
-            f"Coarse tissue-outline alignment applied.\n"
-            f"Scale: {scale:.4f}\n"
-            f"Place >= 3 matching landmarks, then click 'Compute Registration'\n"
-            f"to refine alignment."
+            "Coarse alignment applied.\n"
+            + result.summary()
+            + "\n\nPlace >= 3 matching landmarks, then click 'Compute Registration'\n"
+              "to refine alignment."
         )
+
+    def _coarse_preview() -> Preview:
+        """What "Coarse Align" would run as things stand.
+
+        The run site builds its Step from this, so the pane in Tools ->
+        Templates and the button are one expression of the settings rather than
+        two. There is only one param -- everything else the search reads is
+        derived inside the template from `sdata` and the steps it depends on --
+        but going through the provider is the property, not the saving.
+        """
+        return Preview(blocks=["main"],
+                       params={"pixel_size": coerce(ctx.pixel_size)})
+
+    def _coarse_step() -> Step:
+        blocks, params, _ = _coarse_preview()
+        return Step(
+            id="he:coarse_align", **step_template(COARSE_TEMPLATE, blocks),
+            params=params,
+            # Both, and not "preamble": the search reads the image `he:load`
+            # binds and works in the frame `he:flip` declares, so re-loading a
+            # different H&E or re-ticking a flip has to mark this stale.
+            deps=["he:load", "he:flip"], kind=ARTIFACT,
+            label="H&E coarse align",
+            outputs=["he_coarse_fit", "he_coarse_affine"],
+        )
+
+    def _on_coarse_failed(message):
+        coarse_align_button.enabled = True
+        reg_status_label.value = f"Coarse align failed: {message}"
+        reg_residuals_qt.setPlainText(f"Coarse alignment could not run.\n{message}")
 
     def on_coarse_align():
         if he_state["he_layer"] is None:
@@ -295,27 +486,169 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if morph_thumb is None:
             reg_status_label.value = "No morphology data available"
             return
-        reg_status_label.value = "Computing coarse alignment..."
+        reg_status_label.value = "Computing coarse alignment (global rotation search)..."
         coarse_align_button.enabled = False
         gen = ctx.dataset_generation
 
         @thread_worker
         def _compute_coarse():
-            he_pyramid = he_state["he_layer"].data
-            he_low = np.asarray(he_pyramid[-1])
-            morph_mask = extract_tissue_mask_fluorescence(morph_thumb)
-            he_mask = extract_tissue_mask_he(he_low)
-            target_ds = morph_full_shape_yx[0] / morph_thumb.shape[1]
-            he_full_shape = he_state["he_shape_yx"]
-            source_ds = he_full_shape[0] / he_low.shape[0]
-            coarse_affine_yx = compute_coarse_affine(
-                target_mask=morph_mask, source_mask=he_mask,
-                target_downsample=target_ds, source_downsample=source_ds,
-            )
-            return coarse_affine_yx
+            # Everything the fit reads -- the morphology thumbnail, the H&E
+            # level, the flip, the scale prior -- is derived inside the template
+            # from `sdata` and the two steps this one depends on. The tab's only
+            # contribution is the dataset's pixel size, as a param.
+            _ensure_he_loaded()
+            _record_flip()
+            out = ctx.run_step(_coarse_step(), progress=_step_progress(
+                "Coarse align", reg_status_label))
+            return out["he_coarse_fit"]
 
         worker = _compute_coarse()
-        worker.returned.connect(lambda result: _on_coarse_done(result) if ctx.dataset_generation == gen else None)
+        worker.returned.connect(
+            lambda result: _on_coarse_done(result) if ctx.dataset_generation == gen else None)
+        worker.errored.connect(
+            lambda exc: _on_coarse_failed(str(exc)) if ctx.dataset_generation == gen else None)
+        worker.start()
+
+    def _nuclei_labels_element():
+        """The finest level of ``nucleus_labels``, or None if the store has none.
+
+        The nuclei fit is refused rather than approximated when it is missing: a
+        cell-boundary raster is not a nuclear one, and matching haematoxylin
+        peaks against cell centroids would return a confident transform that is
+        wrong by however far a nucleus sits from its cell's centre.
+        """
+        if sdata is None or "nucleus_labels" not in getattr(sdata, "labels", {}):
+            return None
+        levels = pyramid_levels(sdata.labels["nucleus_labels"])
+        return levels[0] if levels else None
+
+    def _refresh_nuclei_button():
+        seed = he_state["affine_3x3"] if he_state["affine_3x3"] is not None \
+            else he_state["coarse_affine"]
+        nuclei_align_button.enabled = bool(
+            he_state["he_layer"] is not None and seed is not None
+            and _nuclei_labels_element() is not None)
+
+    def _on_nuclei_done(result):
+        nuclei_align_button.enabled = True
+        if result is None:
+            return
+        he_state["affine_3x3"] = result.affine_3x3_yx
+        he_state["affine_source"] = "nuclei"
+        _apply_he_affine()
+        _save_he_affine_to_sdata()
+        confidence = "" if result.confident else " — LOW CONFIDENCE, check the overlay"
+        reg_status_label.value = (
+            f"Fine aligned on {result.n_matched:,} nuclei "
+            f"(median residual {result.median_residual_um:.2f} um, "
+            f"moved {result.seed_shift_um:.1f} um){confidence}"
+        )
+        reg_residuals_qt.setPlainText(
+            "Automatic fine registration from nuclei.\n" + result.summary()
+            + "\n\nPlace landmarks and press 'Compute Registration' only if this\n"
+              "needs overriding — it replaces this fit."
+        )
+        # No recording here: `_compute_nuclei` ran the step, which recorded the
+        # detection and the fit rather than the matrix they produced.
+
+    def _on_nuclei_failed(message):
+        nuclei_align_button.enabled = True
+        reg_status_label.value = f"Fine align failed: {message}"
+        reg_residuals_qt.setPlainText(f"Automatic fine registration could not run.\n{message}")
+
+    def _has_step(node_id: str, binding: str) -> bool:
+        """Is *node_id* a step this session can actually name as a dependency?
+
+        Both halves are needed and they fail apart. A node restored from the
+        session says a step *ran*, in some earlier session, but binds nothing in
+        this one -- a template naming its output would raise ``NameError``. A
+        binding with no node is the mirror case, and ``upsert`` rejects a
+        dependency on a node that does not exist.
+        """
+        graph = ctx.state.get("prov_graph")
+        executor = getattr(ctx, "executor", None)
+        return bool(graph is not None and graph.get(node_id) is not None
+                    and executor is not None and binding in executor.names())
+
+    def _nuclei_seed():
+        """The seed to refine: ``(blocks, extra_params, dependency, note)``.
+
+        Which transform is on hand is runtime state, so the choice is made here
+        rather than in the template -- and it *is* the dependency edge, which is
+        why the three come back together: a fit refined from the landmark
+        transform depends on the landmark step, one refined from the coarse
+        search depends on that, and one refined from a transform this session
+        merely restored depends on neither and has to inline it.
+
+        Note what is deliberately absent: seeding a nuclei fit from a *previous
+        nuclei fit*. That is what the GUI used to do, and it cannot be recorded
+        -- the step would depend on itself, which is a cycle, and no notebook can
+        express "run this again on its own output". Re-running therefore starts
+        from the same place the first run did, which is also what makes the
+        recorded step the one that replays.
+        """
+        fine = he_state.get("affine_3x3")
+        if (fine is not None and he_state.get("affine_source") == "landmarks"
+                and _has_step("he:landmark_register", "he_affine")):
+            return ["seed_fine", "main"], {}, "he:landmark_register", ""
+        if _has_step("he:coarse_align", "he_coarse_affine"):
+            return ["seed_coarse", "main"], {}, "he:coarse_align", ""
+        seed = fine if fine is not None else he_state.get("coarse_affine")
+        if seed is None:
+            # Only the preview reaches this: the button refuses to run without a
+            # starting transform. Shown as the identity so the pane can still
+            # say what the cell would look like, with the header saying which
+            # value is not settled -- the alternative is a blank pane whenever
+            # the tab is opened before Coarse Align has been pressed.
+            return (["seed_restored", "main"], {"seed": np.eye(3).tolist()},
+                    None, "no alignment yet; the seed shown is the identity")
+        return (["seed_restored", "main"],
+                {"seed": coerce(np.asarray(seed, dtype=float))}, None, "")
+
+    def _nuclei_preview() -> Preview:
+        blocks, extra, _, note = _nuclei_seed()
+        return Preview(blocks=blocks,
+                       params={"pixel_size": coerce(ctx.pixel_size), **extra},
+                       note=note)
+
+    def _nuclei_step() -> Step:
+        blocks, params, _ = _nuclei_preview()
+        _, _, seed_dep, _ = _nuclei_seed()
+        deps = ["he:load", "he:flip"] + ([seed_dep] if seed_dep else [])
+        return Step(
+            id="he:nuclei_register", **step_template(NUCLEI_TEMPLATE, blocks),
+            params=params,
+            deps=deps, kind=ARTIFACT,
+            label="H&E fine align (nuclei)",
+            outputs=["he_nuclei_fit", "he_affine"],
+        )
+
+    def on_nuclei_align():
+        if _nuclei_labels_element() is None:
+            reg_status_label.value = "No nucleus_labels in this dataset"
+            return
+        seed = he_state["affine_3x3"] if he_state["affine_3x3"] is not None \
+            else he_state["coarse_affine"]
+        if seed is None:
+            reg_status_label.value = "Run Coarse Align first — the nuclei fit needs a starting transform"
+            return
+        nuclei_align_button.enabled = False
+        reg_status_label.value = "Fine align: matching nuclei to nuclear masks..."
+        gen = ctx.dataset_generation
+
+        @thread_worker
+        def _compute_nuclei():
+            _ensure_he_loaded()
+            _record_flip()
+            out = ctx.run_step(_nuclei_step(), progress=_step_progress(
+                "Fine align", reg_status_label))
+            return out["he_nuclei_fit"]
+
+        worker = _compute_nuclei()
+        worker.returned.connect(
+            lambda result: _on_nuclei_done(result) if ctx.dataset_generation == gen else None)
+        worker.errored.connect(
+            lambda exc: _on_nuclei_failed(str(exc)) if ctx.dataset_generation == gen else None)
         worker.start()
 
     def on_add_xenium_lm():
@@ -341,6 +674,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_state["affine_3x3"] = None
         he_state["coarse_affine"] = None
         _apply_he_affine()
+        _refresh_nuclei_button()
         reg_residuals_qt.clear()
         reg_status_label.value = "Landmarks cleared"
         register_button.enabled = False
@@ -348,6 +682,38 @@ def build_tab(ctx: ViewerContext) -> tuple:
         from palms.utils.adata_persistence import save_landmarks_to_sdata
         save_landmarks_to_sdata(ctx, 'he_xenium_landmarks', None)
         save_landmarks_to_sdata(ctx, 'he_he_landmarks', None)
+
+    def _landmark_step() -> Step:
+        blocks, params, _ = _landmark_preview()
+        return Step(
+            id="he:landmark_register",
+            **step_template(LANDMARK_TEMPLATE, blocks),
+            params=params,
+            # The landmarks are inlined, so the fit needs nothing the preamble
+            # does not already provide -- but it is still an ARTIFACT, because
+            # the nuclei fit can be seeded from the transform it binds.
+            deps=["preamble"], kind=ARTIFACT,
+            label="H&E landmark registration",
+            outputs=["he_affine", "he_residuals"],
+        )
+
+    def _landmark_preview() -> Preview:
+        """The points as they stand, flipped into the frame the fit works in.
+
+        Read-only, and it has to stay that way: drawing a preview must not move
+        a landmark or touch the layer. Empty layers render as empty arrays,
+        which is the honest picture of a button that cannot yet be pressed.
+        """
+        xen = he_state.get("xenium_lm_layer")
+        he = he_state.get("he_lm_layer")
+        xen_pts = np.asarray(getattr(xen, "data", np.empty((0, 2))), dtype=float)
+        he_pts = np.asarray(getattr(he, "data", np.empty((0, 2))), dtype=float)
+        n = min(len(xen_pts), len(he_pts))
+        return Preview(
+            blocks=["main"],
+            params={"xenium_points": coerce(xen_pts[:n]),
+                    "he_points": coerce(_flip_points(he_pts[:n]))},
+        )
 
     def on_register():
         xen_pts = he_state["xenium_lm_layer"].data
@@ -357,10 +723,18 @@ def build_tab(ctx: ViewerContext) -> tuple:
             reg_status_label.value = "Need at least 3 paired landmarks"
             return
         xen_pts = np.asarray(xen_pts[:n], dtype=np.float64)
-        he_pts = np.asarray(he_pts[:n], dtype=np.float64)
-        affine, residuals = compute_landmark_affine(xen_pts, he_pts)
+        # No arguments: the step reads the layers through the same provider the
+        # Templates pane does, so the points that are fitted are the points the
+        # pane showed. The H&E points are flipped in there -- they are read in
+        # unflipped layer-data coordinates while the affine is composed as
+        # `fine @ flip`, so the fit has to happen in the flipped frame. See the
+        # frame rule in the module docstring.
+        out = ctx.run_step(_landmark_step())
+        affine, residuals = out["he_affine"], out["he_residuals"]
         he_state["affine_3x3"] = affine
+        he_state["affine_source"] = "landmarks"
         _apply_he_affine()
+        _refresh_nuclei_button()
         lines = [f"Registration: {n} landmarks, similarity transform"]
         lines.append(f"Mean residual: {residuals.mean():.1f} px ({residuals.mean() * pixel_size:.1f} um)")
         lines.append(f"Max  residual: {residuals.max():.1f} px ({residuals.max() * pixel_size:.1f} um)")
@@ -371,19 +745,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
         lines.append(f"\nScale factor: {scale:.4f}")
         reg_residuals_qt.setPlainText("\n".join(lines))
         reg_status_label.value = f"Registered ({n} landmarks, mean residual {residuals.mean():.1f} px)"
-        ctx.record_node(
-            "he:landmark_register",
-            f"\n# H&E landmark registration\n"
-            f"from palms.utils.registration import compute_landmark_affine\n"
-            f"he_xen_pts = np.array({xen_pts.tolist()})\n"
-            f"he_he_pts = np.array({he_pts.tolist()})\n"
-            f"he_affine, he_residuals = compute_landmark_affine(he_xen_pts, he_he_pts)",
-            deps=["preamble"], kind=TERMINAL, label="H&E landmark registration",
-        )
+        # No recording here: the fit above ran through `ctx.run_step`.
         _save_he_affine_to_sdata()
         from palms.utils.adata_persistence import save_landmarks_to_sdata
+        # Persist the points as *clicked* — the layer's own data coordinates —
+        # so restoring them puts each marker back where the user put it. The
+        # flip is applied at fit time, not baked into the stored geometry.
         save_landmarks_to_sdata(ctx, 'he_xenium_landmarks', np.asarray(xen_pts))
-        save_landmarks_to_sdata(ctx, 'he_he_landmarks', np.asarray(he_pts))
+        save_landmarks_to_sdata(ctx, 'he_he_landmarks',
+                                np.asarray(he_state["he_lm_layer"].data[:n], dtype=np.float64))
 
     def on_save_landmarks():
         default_dir = str(data_path) if data_path else ""
@@ -393,10 +763,14 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if not path:
             return
         xen_pts = np.asarray(he_state["xenium_lm_layer"].data, dtype=np.float64)
-        he_pts = np.asarray(he_state["he_lm_layer"].data, dtype=np.float64)
+        # Saved in the frame the affine was fitted in, so the file is
+        # self-consistent: `affine @ he_pts == xen_pts`, which is what
+        # scripts/compare_he_registration.py and any other reader assume.
+        he_pts = _flip_points(np.asarray(he_state["he_lm_layer"].data, dtype=np.float64))
         save_landmarks(
             path, xen_pts, he_pts,
             affine=he_state["affine_3x3"], he_filename=he_state["he_filename"],
+            flip_v=he_flip_v.value, flip_h=he_flip_h.value,
         )
         reg_status_label.value = f"Landmarks saved to {Path(path).name}"
         # The points are inlined rather than referenced: landmarks can be saved
@@ -412,6 +786,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"    np.array({he_pts.tolist()}),\n"
             f"    affine={None if affine is None else f'np.array({np.asarray(affine).tolist()})'},\n"
             f"    he_filename={he_state['he_filename']!r},\n"
+            f"    flip_v={he_flip_v.value}, flip_h={he_flip_h.value},\n"
             f")",
             deps=["preamble"], kind=TERMINAL, label="Save H&E landmarks",
         )
@@ -425,12 +800,23 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         data = load_landmarks(path)
         _create_landmark_layers()
+        # The file stores the H&E points in the orientation they were fitted in;
+        # the layer wants its own (unflipped) data coordinates. Adopt the file's
+        # flips first, then undo them — both flips are involutions, so the same
+        # transform converts each way.
+        with he_flip_v.changed.blocked(), he_flip_h.changed.blocked():
+            he_flip_v.value = bool(data.get("flip_v", False))
+            he_flip_h.value = bool(data.get("flip_h", False))
+        he_state["flip_v"] = he_flip_v.value
+        he_state["flip_h"] = he_flip_h.value
         he_state["xenium_lm_layer"].data = data["xenium_landmarks_yx"]
-        he_state["he_lm_layer"].data = data["he_landmarks_yx"]
+        he_state["he_lm_layer"].data = _flip_points(data["he_landmarks_yx"])
         if "affine_3x3_yx" in data:
             affine = data["affine_3x3_yx"]
             he_state["affine_3x3"] = affine
+            he_state["affine_source"] = "landmarks"
             _apply_he_affine()
+            _refresh_nuclei_button()
             scale = np.sqrt(affine[0, 0]**2 + affine[0, 1]**2)
             reg_residuals_qt.setPlainText(f"Loaded affine (scale={scale:.4f})")
         if "he_filename" in data:
@@ -449,6 +835,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
     he_load_button.clicked.connect(on_load_he)
     he_opacity_slider.changed.connect(on_he_opacity)
     coarse_align_button.clicked.connect(on_coarse_align)
+    nuclei_align_button.clicked.connect(on_nuclei_align)
     add_xenium_lm_button.clicked.connect(on_add_xenium_lm)
     add_he_lm_button.clicked.connect(on_add_he_lm)
     clear_lm_button.clicked.connect(on_clear_lm)
@@ -479,11 +866,21 @@ def build_tab(ctx: ViewerContext) -> tuple:
     flip_layout.addWidget(he_flip_h.native)
     flip_row.setLayout(flip_layout)
 
+    # Registered so Tools -> Templates can show what each button would run, with
+    # this tab's current settings rather than the template's sample values.
+    ctx.state.setdefault("template_preview", {})[LOAD_TEMPLATE] = _he_load_preview
+    ctx.state.setdefault("template_preview", {})[FLIP_TEMPLATE] = _flip_preview
+    ctx.state.setdefault("template_preview", {})[COARSE_TEMPLATE] = _coarse_preview
+    ctx.state.setdefault("template_preview", {})[NUCLEI_TEMPLATE] = _nuclei_preview
+    ctx.state.setdefault(
+        "template_preview", {})[LANDMARK_TEMPLATE] = _landmark_preview
+
     widget = make_tab(
         he_load_button,
         flip_row,
         he_opacity_slider,
         coarse_align_button,
+        nuclei_align_button,
         lm_btn_row,
         register_button,
         # Filled at :361 but never laid out. Tab-HE-Registration.md has always
@@ -505,7 +902,12 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_filename = session_he_data.get("he_filename", "H&E")
         he_state["he_tif"] = None
         he_state["he_filename"] = he_filename
-        he_state["he_path"] = None
+        # The pyramid on the canvas came from the cache, but the *path* is still
+        # the honest record of where this H&E is, and it is what lets `he:load`
+        # record a cell a notebook can replay against the raw output. Dropping it
+        # here also silently erased it from the session on the next save, since
+        # `_build_session_attrs` writes back whatever `he_state` holds.
+        he_state["he_path"] = session_he_data.get("he_path")
         base = pyramid_rgb[0]
         # Resolve the placement before the flip widgets are read: on a store with
         # no viewer_session the element's own transform is the only record of the
@@ -518,6 +920,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             element_shape_yx=(base.shape[0], base.shape[1]),
         )
         he_state["he_shape_yx"] = reg.shape_yx or (base.shape[0], base.shape[1])
+        he_state["he_pixel_size_um"] = session_he_data.get("he_pixel_size_um")
         # Blocked: on_flip_changed writes the element transform and records a
         # `he:flip` provenance node. Restoring a value the user chose earlier is
         # not the user choosing it again.
@@ -531,6 +934,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         )
         he_state["he_layer"] = he_layer
         he_state["affine_3x3"] = reg.fine
+        he_state["affine_source"] = session_he_data.get("affine_source")
         he_state["coarse_affine"] = reg.coarse
         he_state["flip_v"] = reg.flip_v
         he_state["flip_h"] = reg.flip_h
@@ -545,6 +949,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         he_opacity_slider.enabled = True
         he_load_button.enabled = True
         coarse_align_button.enabled = morph_thumb is not None
+        _refresh_nuclei_button()
         has_affine = he_state["affine_3x3"] is not None or he_state["coarse_affine"] is not None
         how = ""
         if has_affine:
@@ -561,6 +966,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             # session flip with an element affine that already contains one.
             _session_he_data = {
                 "affine_3x3": session.get("affine_3x3"),
+                "affine_source": session.get("affine_source"),
                 "coarse_affine": session.get("coarse_affine"),
                 "xenium_landmarks": session.get("xenium_landmarks"),
                 "he_landmarks": session.get("he_landmarks"),
@@ -572,9 +978,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
             he_status_label.value = "Restoring H&E from cache..."
             gen = ctx.dataset_generation
 
-            # Import _extract_dt_scales at runtime from the main module
-            from palms.tabs.tab_he_registration import _extract_dt_scales
-
             @thread_worker
             def _load_he_from_sdata():
                 # Lazy on purpose: the eager version computed every level,
@@ -583,7 +986,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 # napari fetches only the tiles it draws from a dask multiscale.
                 import dask.array as da
                 he_dt = sdata.images["he_image"]
-                pyramid = _extract_dt_scales(he_dt)
+                pyramid = pyramid_levels(he_dt)
                 pyramid_rgb = []
                 for arr in pyramid:
                     if not isinstance(arr, da.Array):
@@ -608,28 +1011,8 @@ def build_tab(ctx: ViewerContext) -> tuple:
         "he_flip_h": he_flip_h,
         "he_opacity_slider": he_opacity_slider,
         "coarse_align_button": coarse_align_button,
+        "nuclei_align_button": nuclei_align_button,
         "create_landmark_layers": _create_landmark_layers,
         "apply_he_affine": _apply_he_affine,
     }
 
-
-def _extract_dt_scales(dt):
-    """Extract an ordered list of dask arrays from a spatialdata DataTree."""
-    import re
-
-    def _sort_key(name):
-        nums = re.findall(r'\d+', name)
-        return int(nums[0]) if nums else 0
-
-    scales = []
-    for name in sorted(dt.children.keys(), key=_sort_key):
-        child = dt.children[name]
-        ds = getattr(child, 'ds', None)
-        if ds is None:
-            continue
-        if 'image' in ds:
-            scales.append(ds['image'].data)
-        elif ds.data_vars:
-            first = next(iter(ds.data_vars))
-            scales.append(ds[first].data)
-    return scales

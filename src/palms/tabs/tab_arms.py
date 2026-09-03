@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 from palms.utils.registration import (
     load_he_pyramid, compute_landmark_affine, save_landmarks, load_landmarks,
-    describe_pyramid, parse_rgb_image_for_store,
+    describe_pyramid, flip_matrix, parse_rgb_image_for_store, pyramid_levels,
 )
 from palms.utils.reporting import report_write_failure
 from palms.utils.gene_analysis import compute_arms_tile_deg
@@ -106,13 +106,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         shape = arms_state.get("he_shape_yx")
         if shape is None:
             return np.eye(3)
-        h, w = shape
-        M = np.eye(3)
-        if arms_flip_v.value:
-            M = np.array([[-1, 0, h - 1], [0, 1, 0], [0, 0, 1]], dtype=np.float64) @ M
-        if arms_flip_h.value:
-            M = np.array([[1, 0, 0], [0, -1, w - 1], [0, 0, 1]], dtype=np.float64) @ M
-        return M
+        return flip_matrix(shape, arms_flip_v.value, arms_flip_h.value)
 
     def _apply_arms_affine():
         flip = _build_arms_flip_affine()
@@ -1108,13 +1102,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
             arms_status_label.value = "Restoring ARMS H&E from cache..."
             gen = ctx.dataset_generation
 
-            from palms.tabs.tab_he_registration import _extract_dt_scales
-
             @thread_worker
             def _load_arms_from_sdata():
                 import dask.array as da
                 arms_dt = sdata.images["arms_he_image"]
-                pyramid = _extract_dt_scales(arms_dt)
+                pyramid = pyramid_levels(arms_dt)
                 pyramid_rgb = []
                 for arr in pyramid:
                     if not isinstance(arr, da.Array):

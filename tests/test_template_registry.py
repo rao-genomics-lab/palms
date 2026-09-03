@@ -121,14 +121,72 @@ def test_declared_outputs_are_bound(case):
     )
 
 
+#: Templates allowed to import ``palms``, and why. Kept here as well as in each
+#: ``.tmpl`` header so that granting the allowance is a change to a shared list a
+#: reviewer sees, not a line added to one file. Every one of them is an H&E
+#: registration step: those algorithms are this package's own and no scanpy,
+#: squidpy or spatialdata call computes them, so the choice is between a cell
+#: that imports palms and a cell that states a matrix as a literal — and the
+#: literal reproduces nothing, which is what these templates exist to prevent.
+_MAY_IMPORT_PALMS = {
+    "he.load", "he.coarse_align", "he.nuclei_align", "he.landmark_align",
+}
+
+
 @pytest.mark.parametrize("tid", builtin_ids())
 def test_no_template_imports_the_viewer(tid):
-    """The notebook replays from raw Xenium output, without this package."""
-    for block in builtin_spec(tid).blocks.values():
-        assert "palms" not in block.text, (
-            f"{tid}/{block.name} reaches back into palms; the exported "
-            f"notebook must run without it installed"
+    """The notebook replays from raw Xenium output, without this package.
+
+    Declaration rather than prohibition since 2026-09-03: a template may import
+    ``palms`` when its header says why, and every other template is guarded
+    exactly as before. The two halves are asserted in both directions, because
+    an exemption nobody uses and an import nobody declared are each a way for
+    this list to stop describing the tree.
+    """
+    spec = builtin_spec(tid)
+    imports = [b.name for b in spec.blocks.values() if "palms" in b.text]
+    if tid not in _MAY_IMPORT_PALMS:
+        assert not imports, (
+            f"{tid}/{imports} reaches back into palms; the exported notebook "
+            f"must run without it installed. If the computation genuinely has "
+            f"no scverse equivalent, declare it with a '# palms:' header and "
+            f"add the id to _MAY_IMPORT_PALMS here."
         )
+        assert not spec.palms_reason, (
+            f"{tid} declares a '# palms:' reason but is not in _MAY_IMPORT_PALMS"
+        )
+        return
+    assert imports, f"{tid} is exempted but no block imports palms"
+    assert spec.palms_reason, (
+        f"{tid} imports palms but its header declares no '# palms:' reason; "
+        f"the validator is what turns that into a hard stop"
+    )
+
+
+def test_the_palms_allowance_cannot_be_granted_by_a_user_override():
+    """A user's own ``.tmpl`` must not be able to authorise a palms import.
+
+    The contract comes from the builtin on merge, so ``palms_reason`` is the
+    shipped template's answer to a question a user's text does not get to
+    re-answer. Asserted here rather than assumed, because the whole guard would
+    be decorative if an override could switch it off.
+    """
+    from palms.utils.step_templates.loader import _merge, parse_template
+    from palms.utils.step_templates.validate import ERROR, validate
+
+    base = builtin_spec("clustering.leiden")
+    forged = parse_template(
+        "# palms template\n"
+        "# id: clustering.leiden\n"
+        "# palms: I would like to import whatever I please\n"
+        "\n#--- block head\n"
+        "from palms.utils.registration import compute_coarse_affine\n"
+    )
+    merged = _merge(base, forged, source="<forged>")
+
+    assert merged.palms_reason == base.palms_reason == ""
+    problems = validate(merged, builtin=base)
+    assert any(p.severity == ERROR and "palms" in p.message for p in problems)
 
 
 @pytest.mark.parametrize("tid", builtin_ids())
