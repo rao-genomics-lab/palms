@@ -6,6 +6,8 @@ Or with pytest:   pytest tests/test_prov_graph.py
 from __future__ import annotations
 
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -301,3 +303,100 @@ def test_the_diagrams_render_a_note():
     g = _with_note()
     assert "classDef note" in graph_to_mermaid(g)
     assert '"viewer:background"' in graph_to_dot(g)
+
+
+# ── barriers ──────────────────────────────────────────────────────────────────
+# A barrier rebinds a name that nodes outside its lineage read. The readers do
+# not depend on it, so a deps edge cannot say "run them first"; the barrier
+# says it for them by sorting after every node that is not its descendant.
+
+def _two_lineages() -> ProvGraph:
+    """Everything recorded before the filter, then the filter, then a second
+    lineage under it — plus one node recorded *after* the filter but rooted
+    above it, which is the case a recording-order tie-break would get wrong."""
+    g = ProvGraph()
+    g.upsert("environment", "# versions", kind=SETUP)
+    g.upsert("preamble", "adata = sdata['table'].copy()", kind=SETUP)
+    g.upsert("normalize", "adata_norm = adata.copy()", deps=["preamble"], kind=SETUP)
+    g.upsert("clustering:leiden_r1.0", "sc.tl.leiden(adata_norm)", deps=["normalize"])
+    g.upsert("plot:umap:leiden_r1.0", "sc.pl.umap(adata_norm)",
+             deps=["clustering:leiden_r1.0"], kind=TERMINAL)
+    g.upsert("viewer:background", "# canvas", kind=NOTE)
+    g.upsert("qc_filter", "adata = adata[keep].copy()", deps=["preamble"],
+             kind=SETUP, barrier=True)
+    g.upsert("normalize:qc", "adata_norm = adata.copy()", deps=["qc_filter"], kind=SETUP)
+    g.upsert("clustering:leiden_r0.9", "sc.tl.leiden(adata_norm)", deps=["normalize:qc"])
+    g.upsert("clustering:leiden_r0.8", "sc.tl.leiden(adata_norm)", deps=["normalize"])
+    return g
+
+
+def test_a_barrier_sorts_after_every_node_that_is_not_its_descendant():
+    order = _two_lineages().topo_sort()
+    at = order.index("qc_filter")
+    for nid in ("environment", "preamble", "normalize", "clustering:leiden_r1.0",
+                "plot:umap:leiden_r1.0", "viewer:background",
+                "clustering:leiden_r0.8"):
+        assert order.index(nid) < at, f"{nid} reads the old binding; it must precede the filter"
+    for nid in ("normalize:qc", "clustering:leiden_r0.9"):
+        assert order.index(nid) > at
+
+
+def test_a_node_recorded_after_the_barrier_but_rooted_above_it_still_precedes_it():
+    """The reason the rule is structural rather than a recording-order tie-break."""
+    order = _two_lineages().topo_sort()
+    assert order.index("clustering:leiden_r0.8") < order.index("qc_filter")
+
+
+def test_a_barrier_flags_nothing_when_inserted():
+    g = _two_lineages()
+    assert not any(n.stale for n in g.nodes())
+
+
+def test_the_barrier_keeps_the_ordering_invariance():
+    """Same nodes recorded in a different order → the same notebook."""
+    a = _two_lineages()
+    b = ProvGraph()
+    for nid in ("preamble", "qc_filter", "normalize", "environment", "normalize:qc",
+                "clustering:leiden_r0.9", "clustering:leiden_r1.0",
+                "clustering:leiden_r0.8", "viewer:background", "plot:umap:leiden_r1.0"):
+        n = a.get(nid)
+        b.upsert(nid, n.code, deps=n.deps, kind=n.kind, barrier=n.barrier)
+    assert a.topo_sort() == b.topo_sort()
+
+
+def test_two_unordered_barriers_are_refused_with_a_reason():
+    g = _two_lineages()
+    g.upsert("segmentation_swap", "adata = tables['custom_table']",
+             deps=["preamble"], kind=SETUP, barrier=True)
+    with pytest.raises(CycleError, match="unordered"):
+        g.topo_sort()
+
+
+def test_dep_ordered_barriers_chain():
+    g = _two_lineages()
+    g.upsert("qc_filter:2", "adata = adata[keep2].copy()", deps=["qc_filter"],
+             kind=SETUP, barrier=True)
+    g.upsert("clustering:leiden_r0.7", "sc.tl.leiden(adata)", deps=["qc_filter:2"])
+    order = g.topo_sort()
+    assert order.index("clustering:leiden_r0.9") < order.index("qc_filter:2") \
+        < order.index("clustering:leiden_r0.7")
+
+
+def test_barrier_survives_a_round_trip_and_defaults_off_for_old_graphs():
+    g = _two_lineages()
+    back = ProvGraph.from_list(g.to_list())
+    assert back.get("qc_filter").barrier is True
+    assert back.get("normalize").barrier is False
+    assert back.topo_sort() == g.topo_sort()
+
+    old = [{"id": "preamble", "code": "x"}, {"id": "n", "code": "y", "deps": ["preamble"]}]
+    assert all(n.barrier is False for n in ProvGraph.from_list(old).nodes())
+
+
+def test_changing_only_the_barrier_flag_stales_nothing():
+    """Where a node sorts is not what it computes."""
+    g = _two_lineages()
+    g.upsert("qc_filter", "adata = adata[keep].copy()", deps=["preamble"],
+             kind=SETUP, barrier=False)
+    assert g.get("clustering:leiden_r0.9").stale is False
+    assert g.get("qc_filter").barrier is False
