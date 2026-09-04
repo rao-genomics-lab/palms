@@ -396,6 +396,7 @@ def _build_control_panel(ctx: ViewerContext):
     from palms.tabs.tab_annotations import build_tab as build_annotations_tab
     from palms.tabs.tab_annot_nhood import build_tab as build_annot_nhood_tab
     from palms.tabs.tab_annot_distance import build_tab as build_annot_distance_tab
+    from palms.tabs.tab_qc import build_tab as build_qc_tab
     from palms.tabs.tab_segmentation import build_tab as build_segmentation_tab
     from palms.tabs.tab_external_images import build_tab as build_external_images_tab
     from palms.tabs.tab_patch_overlays import build_tab as build_patch_overlays_tab
@@ -446,6 +447,7 @@ def _build_control_panel(ctx: ViewerContext):
     annot_widget, annot_exports = build_annotations_tab(ctx)
     annot_nhood_widget, annot_nhood_exports = build_annot_nhood_tab(ctx)
     annot_dist_widget, annot_dist_exports = build_annot_distance_tab(ctx)
+    qc_widget, qc_exports = build_qc_tab(ctx)
     seg_widget, seg_exports = build_segmentation_tab(ctx)
     ext_img_widget, ext_img_exports = build_external_images_tab(ctx)
     patch_widget, patch_exports = build_patch_overlays_tab(ctx)
@@ -530,6 +532,7 @@ def _build_control_panel(ctx: ViewerContext):
 
     tools_tabs = QTabWidget()
     tools_tabs.addTab(annot_widget,    "Annotations")
+    tools_tabs.addTab(qc_widget,       "QC")
     tools_tabs.addTab(seg_widget,      "Segmentation")
     tools_tabs.addTab(crop_widget,     "Crop Dataset")
     tools_tabs.addTab(publish_widget,  "Publish")
@@ -554,7 +557,7 @@ def _build_control_panel(ctx: ViewerContext):
         umap_exports, roi_exports, he_exports, ga_exports, mg_exports,
         lr_exports, nhood_exports, co_exports, cnv_exports, novae_exports, arms_exports, corr_exports,
         notebook_exports, annot_exports, annot_nhood_exports, annot_dist_exports,
-        seg_exports, ext_img_exports, patch_exports, crop_exports,
+        qc_exports, seg_exports, ext_img_exports, patch_exports, crop_exports,
         publish_exports,
         dataset_exports, cache_exports, templates_exports,
     ]
@@ -1138,6 +1141,10 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         no_cache=no_cache,
         gene_names=data["gene_names"],
         clustering_names=data["clustering_names"],
+        # The unfiltered pair, which Tools -> QC narrows but never replaces.
+        full_adata=adata,
+        full_label_to_obs=data["label_to_obs"],
+        umap_df=data["umap_df"],
         cell_labels_layer=layers["cell_labels_layer"],
         transcript_layer=layers["transcript_layer"],
         transcript_bins_layer=layers["transcript_bins_layer"],
@@ -1269,6 +1276,10 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         "segmentation_source", session.get("segmentation_source", "xenium")
     )
 
+    # The QC cutoffs in force, seeded here for the same reason and applied a
+    # few lines below, once the preamble the filter depends on exists.
+    ctx.state.setdefault("qc_filter", session.get("qc_filter"))
+
     if have_session:
         # One-time migration of legacy zarr landmark arrays and GeoJSON/CSV tile
         # data into sdata.shapes. Gated because it reads the group it migrates
@@ -1344,6 +1355,20 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         if _sync:
             _sync()
         print(f"Restored code provenance graph: {len(_g)} node(s)")
+
+    # Re-apply the stored QC filter before any tab restores. Here rather than
+    # in the QC tab's own restore handler because it has to come after the
+    # preamble its node depends on, and before any other handler can reach
+    # ensure_normalized() and normalise the unfiltered table -- which would
+    # also upsert `normalize` back onto "preamble" and flag the whole notebook
+    # stale on every launch. The same ordering the segmentation_source seed
+    # above exists for, one step further down.
+    try:
+        ctx.ensure_qc_filter()
+    except Exception as _qc_err:      # noqa: BLE001 - never block a launch
+        from palms.utils.reporting import report_recording_failure
+        report_recording_failure("qc_filter", _qc_err)
+        ctx.state["qc_filter"] = None
 
     print("Restoring session from zarr cache..." if have_session
           else "No stored session; restoring from the store's own elements...")
@@ -1596,6 +1621,9 @@ def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = No
 
                 ctx.sdata = None
                 ctx.adata = None
+                ctx.full_adata = None
+                ctx.full_label_to_obs = None
+                ctx.umap_df = None
                 ctx.clusterings = None
                 ctx.color_manager = None
                 ctx.transcript_loader = None
@@ -1712,6 +1740,8 @@ def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = No
         viewer.layers.clear()
         if ctx is not None:
             ctx.sdata = None;  ctx.adata = None;  ctx.clusterings = None
+            ctx.full_adata = None;  ctx.full_label_to_obs = None
+            ctx.umap_df = None
             ctx.color_manager = None;  ctx.transcript_loader = None
             ctx.label_to_obs = None;  ctx.gene_names = None
             ctx.clustering_names = None;  ctx.centroids_yx = None

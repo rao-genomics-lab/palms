@@ -568,3 +568,188 @@ def _harvest_the_rankings(uns: dict, expected: list[str]):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── the same claim, with a QC filter in the chain ────────────────────────────
+#
+# Filtering rebinds ``adata``, and the notebook's whole reason for existing is
+# that it analyses the same cells the viewer did. That is a different question
+# from the one above: not "does this code reproduce its numbers" but "does the
+# recorded chain still describe the right *input*" — the class of defect a
+# replay cannot normally see, and the reason the filter is a recorded step
+# rather than a viewer setting.
+
+_QC_DUMP_TEMPLATE = """
+out = Path({out!r})
+adata.obs[{keys!r}].to_csv(out / "qc_replay_obs.csv")
+pd.Series({{"n_obs": adata.n_obs, "n_vars": adata.n_vars}}).to_csv(
+    out / "qc_replay_shape.csv")"""
+
+
+def _biting_cutoffs(h5ad_path: Path) -> tuple[int, int]:
+    """Cutoffs that actually drop something from the synthetic fixture.
+
+    Derived rather than hard-coded: its cells carry hundreds of counts and its
+    genes are detected almost everywhere, so any fixed pair would silently
+    become a no-op and leave every assertion below vacuous. The tab picks its
+    numbers from a distribution too — this is the same move.
+    """
+    import scanpy as sc
+
+    adata = sc.read_h5ad(h5ad_path)
+    per_cell = np.asarray(adata.X.sum(axis=1)).ravel()
+    min_counts = int(np.median(per_cell))
+
+    # Counted over the cells that survive, because that is what the template
+    # does. Deriving it from the unfiltered matrix instead gives a cutoff no
+    # gene can meet afterwards, and the run dies in PCA with zero features --
+    # which is the sequential ordering asserting itself.
+    kept = np.asarray(adata.X)[per_cell >= min_counts]
+    per_gene = (kept > 0).sum(axis=0)
+    return min_counts, int(np.percentile(per_gene, 20))
+
+
+# The full-cell run is the r1.0 one on purpose: on this fixture r0.5 finds the
+# same two blobs whether or not the filter ran first (ARI 1.0 either way, so it
+# would not catch a wrong order), while r1.0 splits them by neighbourhood and
+# lands at ARI 0.49 when replayed on the filtered cells. Measured 2026-09-04.
+FULL_CELL_KEY = CLUSTER_KEYS[1]   # clustered on every cell, before the filter
+FILTERED_KEY = CLUSTER_KEYS[0]    # clustered under the filter
+
+
+def _run_the_qc_analysis(h5ad_path: Path) -> tuple[StepExecutor, pd.DataFrame]:
+    """Two lineages, in the order the crop_6 session ran them.
+
+    ``preamble -> normalize -> leiden(r0.5)`` on every cell, *then*
+    ``qc_filter -> normalize:qc -> leiden(r1.0)`` under it -- as Tools -> QC
+    records it. The filter is a barrier and ``normalize:qc`` is the scoped id,
+    so the notebook has to run the full-cell clustering before the rebind
+    without any edge saying so; the ARI gate below is what checks it did.
+
+    Returns the executor and the *full-cell* ``obs`` as it stood before the
+    filter, since afterwards ``adata`` is the subset.
+    """
+    from palms.tabs._helpers import qc_filter_preview
+    from palms.utils.step_templates import builtin_assemble
+
+    blocks, params, _ = qc_filter_preview(*_biting_cutoffs(h5ad_path))
+    ex = StepExecutor(namespace={})
+    ex.graph.upsert("environment", environment_code(), kind=SETUP,
+                    label="Environment & seeds")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ex.run(Step(
+            id="preamble", template=_PREAMBLE_TEMPLATE,
+            params={"data_path": str(h5ad_path)}, kind=SETUP,
+            label="Setup & data loading",
+        ))
+        ex.run(Step(
+            id="normalize", template=_NORMALIZE_TEMPLATE, deps=["preamble"],
+            kind=SETUP, label="Normalize, log-transform, PCA",
+            outputs=["adata_norm"],
+        ))
+        ex.run(_leiden_step(float(FULL_CELL_KEY.rsplit("r", 1)[1])))
+        full_obs = ex.get("adata").obs.copy()
+        ex.run(Step(
+            id="qc_filter", template=builtin_assemble("qc.filter", blocks),
+            params=params, deps=["preamble"], kind=SETUP,
+            label="QC filter", outputs=["adata"], barrier=True,
+        ))
+        ex.run(Step(
+            id="normalize:qc", template=_NORMALIZE_TEMPLATE, deps=["qc_filter"],
+            kind=SETUP, label="Normalize, log-transform, PCA",
+            outputs=["adata_norm"],
+        ))
+        filtered = _leiden_step(float(FILTERED_KEY.rsplit("r", 1)[1]))
+        filtered.deps = ["normalize:qc"]
+        ex.run(filtered)
+    return ex, full_obs
+
+
+@pytest.fixture(scope="module")
+def qc_replay(tmp_path_factory, replay_adata):
+    """Module-scoped for the same reason as ``replay``: the kernel dominates."""
+    tmp_path = tmp_path_factory.mktemp("qc_replay")
+    h5ad_path = tmp_path / "input.h5ad"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        replay_adata().write_h5ad(h5ad_path)
+
+    executor, full_obs = _run_the_qc_analysis(h5ad_path)
+
+    nb_path = tmp_path / "qc_notebook.ipynb"
+    cells = notebook_export.graph_to_cells(executor.graph)
+    cells.append(("code", _QC_DUMP_TEMPLATE.format(
+        out=str(tmp_path), keys=[FULL_CELL_KEY, FILTERED_KEY],
+    )))
+    notebook_export.write_notebook(cells, nb_path)
+    notebook_export.execute_notebook(nb_path, cwd=tmp_path, timeout=900)
+
+    return {
+        "executor": executor,
+        "gui_obs": executor.get("adata").obs,
+        "full_obs": full_obs,
+        "gui_shape": executor.get("adata").shape,
+        "replay_obs": pd.read_csv(tmp_path / "qc_replay_obs.csv", index_col=0),
+        "replay_shape": pd.read_csv(tmp_path / "qc_replay_shape.csv",
+                                    index_col=0).iloc[:, 0].to_dict(),
+        "nb_path": nb_path,
+    }
+
+
+def test_the_filter_actually_removed_something(qc_replay, replay_adata):
+    """Guard the guard: a no-op filter would make everything below vacuous."""
+    unfiltered = replay_adata()
+    n_obs, n_vars = qc_replay["gui_shape"]
+    assert n_obs < unfiltered.n_obs, "the cutoff dropped no cells"
+    assert n_vars < unfiltered.n_vars, "the cutoff dropped no genes"
+    assert n_obs > 0 and n_vars > 0
+
+
+def test_the_replayed_notebook_analyses_the_same_cells(qc_replay):
+    """The claim the filter has to earn: same cell set on both sides."""
+    assert qc_replay["replay_shape"]["n_obs"] == qc_replay["gui_shape"][0]
+    assert qc_replay["replay_shape"]["n_vars"] == qc_replay["gui_shape"][1]
+    assert list(qc_replay["replay_obs"].index.astype(str)) == \
+        list(qc_replay["gui_obs"].index.astype(str))
+
+
+def test_the_replayed_notebook_reproduces_the_filtered_clustering(qc_replay):
+    gui = qc_replay["gui_obs"][FILTERED_KEY].astype(str).to_numpy()
+    replayed = qc_replay["replay_obs"][FILTERED_KEY].astype(str).to_numpy()
+    assert len(set(gui)) >= 2, "the fixture must produce something to cluster"
+    assert adjusted_rand_score(gui, replayed) == 1.0
+    assert (gui == replayed).all()
+
+
+def test_the_replayed_notebook_reproduces_the_full_cell_clustering(qc_replay):
+    """The empirical half of the barrier: r0.5 ran on every cell, before the
+    filter, and the replay must too. Compared over the kept cells -- the
+    notebook's final ``adata`` is the filtered lineage, which is also how
+    ``verify_notebook._align`` compares a pre-filter result on a real dataset.
+    A replay that filtered first would cluster a different cell set here.
+    """
+    full = qc_replay["full_obs"][FULL_CELL_KEY].astype(str)
+    replayed = qc_replay["replay_obs"][FULL_CELL_KEY].astype(str)
+    kept = replayed.index.astype(str)
+    assert len(kept) < len(full), "the comparison must be over a strict subset"
+    gui = full.loc[kept].to_numpy()
+    assert len(set(gui)) >= 2
+    assert adjusted_rand_score(gui, replayed.to_numpy()) == 1.0
+    assert (gui == replayed.to_numpy()).all()
+
+
+def test_the_filter_cell_follows_the_full_cell_work_and_precedes_its_own(qc_replay):
+    """SETUP sorts first and nothing names r0.5 as the filter's dependency, so
+    without the barrier the filter would come first in the notebook."""
+    order = qc_replay["executor"].graph.topo_sort()
+    assert order.index("normalize") < order.index(f"clustering:{FULL_CELL_KEY}")
+    assert order.index(f"clustering:{FULL_CELL_KEY}") < order.index("qc_filter")
+    assert order.index("qc_filter") < order.index("normalize:qc")
+    assert order.index("normalize:qc") < order.index(f"clustering:{FILTERED_KEY}")
+
+    sources = [source for kind, source in notebook_export.graph_to_cells(
+        qc_replay["executor"].graph) if kind == "code"]
+    filter_at = next(i for i, s in enumerate(sources) if "sc.pp.filter_cells" in s)
+    norm_ats = [i for i, s in enumerate(sources) if "sc.pp.normalize_total" in s]
+    assert norm_ats[0] < filter_at < norm_ats[1]

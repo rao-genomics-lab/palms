@@ -12,6 +12,7 @@ Returns a SpatialData object with:
   - tables:  table (AnnData 318K cells x 480+ genes)
 """
 
+import logging
 import os
 import re
 import shutil
@@ -23,6 +24,8 @@ import numpy as np
 import pandas as pd
 
 from palms.utils import mem_probe, sdata_write
+
+log = logging.getLogger(__name__)
 
 # ─── Channel names for the 4 morphology_focus planes ───────────────────────
 CHANNEL_NAMES = [
@@ -1166,22 +1169,18 @@ def load_clusterings(path: Path):
     return clusterings
 
 
-def get_label_to_obs_mapping(sdata):
-    """
-    Build a mapping from integer label value -> AnnData obs index position.
+def label_to_obs_for(adata) -> np.ndarray:
+    """Build ``arr[label value] = obs row index`` (``-1`` for none) from *adata*.
 
-    Xenium cell labels are stored as integer raster masks where pixel value k
-    corresponds to cell k. The AnnData obs DataFrame has a 'cell_id' or
-    similar column linking to label values.
+    Xenium cell labels are an integer raster where pixel value *k* is cell *k*,
+    and ``obs`` carries the link column. The result is indexed by the raster's
+    pixel value, so its length is the maximum label rather than the row count --
+    which is what lets a table with fewer rows than labels (a QC filter, a
+    custom segmentation) still be colourable.
 
-    Returns
-    -------
-    np.ndarray of shape (max_label + 1,) where arr[k] = row index in adata.obs
-    or -1 if no cell has label k.
+    The one definition. ``tab_segmentation`` grew a private copy of this while
+    ``get_label_to_obs_mapping`` was reachable only through an ``sdata``.
     """
-    adata = sdata["table"]
-    # spatialdata_io stores the label value in obs under the region column
-    # Look for a column that links obs rows to label values
     region_col = None
     for col in ["cell_labels", "cell_id", "label"]:
         if col in adata.obs.columns:
@@ -1190,18 +1189,23 @@ def get_label_to_obs_mapping(sdata):
 
     if region_col is None:
         # Fall back: assume obs are ordered 1..N matching label 1..N
-        print("Warning: no label-obs link column found; assuming sequential ordering")
+        log.warning("no label-obs link column found; assuming sequential ordering")
         n = len(adata.obs)
-        label_to_obs = np.arange(-1, n, dtype=np.int32)  # index 0 = -1 (background)
-        return label_to_obs
+        return np.arange(-1, n, dtype=np.int32)  # index 0 = -1 (background)
 
     label_values = adata.obs[region_col].values.astype(np.int32)
+    if label_values.size == 0:
+        return np.zeros(1, dtype=np.int32) - 1
     max_label = int(label_values.max())
     label_to_obs = np.full(max_label + 1, -1, dtype=np.int32)
-    for obs_idx, lv in enumerate(label_values):
-        if lv > 0:
-            label_to_obs[lv] = obs_idx
+    positive = label_values > 0
+    label_to_obs[label_values[positive]] = np.flatnonzero(positive).astype(np.int32)
     return label_to_obs
+
+
+def get_label_to_obs_mapping(sdata):
+    """``label_to_obs_for`` for the store's main table."""
+    return label_to_obs_for(sdata["table"])
 
 
 def _build_parser():

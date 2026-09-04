@@ -97,6 +97,9 @@ class Step:
     template_id: Optional[str] = None
     template_origin: str = TEMPLATE_BUILTIN
     template_hash: Optional[str] = None
+    # This step rebinds a name that steps outside its lineage read, so it must
+    # sort after all of them; see ``ProvGraph.topo_sort``.
+    barrier: bool = False
 
     def render(self) -> str:
         """Return the single source string — executed *and* recorded."""
@@ -304,6 +307,7 @@ class StepExecutor:
                 template_id=step.template_id,
                 template_origin=step.template_origin,
                 template_hash=step.template_hash,
+                barrier=step.barrier,
             )
 
             missing = [name for name in step.outputs if name not in self.ns]

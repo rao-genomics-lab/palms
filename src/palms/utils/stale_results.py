@@ -90,6 +90,14 @@ _SHARED_CNV_OBSM = ("X_cnv",)
 #: ``cnv:copykat_propagated`` — it must also stay out of the ``cnv`` family
 #: test, or a stale propagation step alone would clear the run registry that
 #: describes a CNV run which is still current.
+#: Unkeyed steps that exist once per cell set (``normalize`` / ``normalize:qc``,
+#: see ``ViewerContext.cell_scoped_id``) but share a single sidecar. Same rule
+#: as :data:`SHARED_UNS`: cleared only when every node in the family is stale.
+_SHARED_SIDECAR = {
+    "normalize": "adata_norm_cache.h5ad",
+    "roi_deg": ROI_DEG_CACHE,
+}
+
 _NO_ARTIFACT = {
     "preamble": "defines data_path and binds adata; writes nothing",
     "environment": "records package versions; writes nothing",
@@ -206,10 +214,13 @@ def artifact_names(node_id: str, graph) -> tuple[tuple[str, str], ...]:
         if _family_all_stale(graph, "cnv")[0]:
             out += [(store_inventory.UNS, n) for n in _SHARED_CNV_UNS]
             out += [(store_inventory.OBSM, n) for n in _SHARED_CNV_OBSM]
-    elif node_id == "normalize":
-        out.append((store_inventory.SIDECAR, "adata_norm_cache.h5ad"))
-    elif node_id == "roi_deg":
-        out.append((store_inventory.SIDECAR, ROI_DEG_CACHE))
+    elif family in _SHARED_SIDECAR:
+        # ``normalize`` and ``normalize:qc`` (likewise ``roi_deg``) are the same
+        # step under two cell sets -- ``cell_scoped_id`` -- and write one
+        # sidecar between them, so the family vote applies here as it does to
+        # the squidpy ``uns`` slots: stale on one side spares the other's file.
+        if _family_all_stale(graph, family)[0]:
+            out.append((store_inventory.SIDECAR, _SHARED_SIDECAR[family]))
     elif node_id == "arms:tile_deg":
         out.append((store_inventory.SIDECAR, ARMS_DEG_CACHE))
 
@@ -288,10 +299,12 @@ def select_stale(graph, sections: Iterable) -> StaleSelection:
             unmatched.append((node_id, _reason_unmatched(node_id, bool(targets))))
 
         family = _family(node_id)
-        if family in SHARED_UNS or family in ("rank_genes", "cnv"):
+        if (family in SHARED_UNS or family in _SHARED_SIDECAR
+                or family in ("rank_genes", "cnv")):
             all_stale, fresh = _family_all_stale(graph, family)
             if not all_stale:
-                slot = SHARED_UNS.get(family, f"{family} shared state")
+                slot = (SHARED_UNS.get(family) or _SHARED_SIDECAR.get(family)
+                        or f"{family} shared state")
                 spared[slot] = fresh
 
     return StaleSelection(

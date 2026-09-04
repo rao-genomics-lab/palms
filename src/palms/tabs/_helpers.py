@@ -87,6 +87,43 @@ def annotation_polygons_preview(ctx) -> Preview:
     )
 
 
+# ── QC filtering ─────────────────────────────────────────────────────────────
+
+#: The node that filters the cell set, when one is in force.
+QC_NODE_ID = "qc_filter"
+
+def qc_filter_preview(min_counts, min_cells) -> Preview:
+    """The ``qc.filter`` step for a pair of cutoffs; ``None`` switches one off.
+
+    Module level, beside :func:`annotation_polygons_preview`, and for the same
+    reason: the QC tab's provider and the launch-time restore in ``app.py`` both
+    have to turn the same two numbers into the same blocks, and two expressions
+    of that would drift.
+
+    There is no assembly that filters nothing, because that is not a step. A
+    caller with both cutoffs off wants :func:`ViewerContext.clear_qc_filter`.
+    """
+    blocks = [name for name, on in (("cells", min_counts is not None),
+                                    ("genes", min_cells is not None)) if on]
+    blocks.append("bind")
+    params = {}
+    if min_counts is not None:
+        params["min_counts"] = int(min_counts)
+    if min_cells is not None:
+        params["min_cells"] = int(min_cells)
+    return Preview(blocks, params)
+
+
+def qc_label(min_counts, min_cells) -> str:
+    """The node label for a pair of cutoffs, as the Notebook tab shows it."""
+    halves = []
+    if min_counts is not None:
+        halves.append(f"≥{int(min_counts)} counts/cell")
+    if min_cells is not None:
+        halves.append(f"≥{int(min_cells)} cells/gene")
+    return "QC filter: " + ", ".join(halves)
+
+
 # ── magicgui ComboBox default helper ─────────────────────────────────────────
 
 def combo_value_kwargs(choices, index: int = 0) -> dict:
@@ -755,6 +792,163 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.record_preamble = _record_preamble
 
+    # ── QC filter: cell_root, apply, ensure, clear ───────────────────────
+    def _cell_root() -> str:
+        """The node that says which *cells* a step is about.
+
+        ``"preamble"`` normally, ``"qc_filter"`` once a filter is in force.
+        Every step that reads ``obs``, ``var`` or ``X`` roots here rather than
+        naming the preamble directly, so the cell set a step was computed on is
+        recorded once, at the step -- and stays recorded: a filter applied
+        later does not move it. That is what makes the two lineages (the
+        unfiltered work, then the filtered work) both true in the graph.
+
+        Steps that read only images (H&E, ARMS, external images, patch
+        overlays) or only the dataset path keep depending on ``"preamble"``:
+        they are about the dataset, not about the cells.
+
+        Membership is checked rather than assumed, because naming a node that
+        is not in the graph raises out of ``upsert``.
+        """
+        graph = state.get("prov_graph")
+        if state.get("qc_filter") and graph is not None and QC_NODE_ID in graph:
+            return QC_NODE_ID
+        return "preamble"
+
+    ctx.cell_root = _cell_root
+
+    def _cell_scoped_id(base: str) -> str:
+        """The id of an *unkeyed* artifact under the current cell set.
+
+        ``normalize``, ``spatial_neighbors`` and ``roi_deg`` have no key of
+        their own, so without this a normalisation run under the filter would
+        upsert the node the unfiltered clusterings depend on and flag them
+        stale -- when nothing about them changed. Suffixing ``:qc`` gives the
+        filtered lineage its own node, and a dependent asks for the same
+        scoped id rather than writing the base name, so the two can never
+        cross. Keyed ids (``clustering:<key>``) do not need it: re-running one
+        under the filter is a genuine revision of that result.
+        """
+        return base if _cell_root() == "preamble" else f"{base}:qc"
+
+    ctx.cell_scoped_id = _cell_scoped_id
+
+    def _apply_qc_filter(preview):
+        """Run and record a QC filter, then re-point the viewer at its cells.
+
+        Takes a live ``Preview`` the way ``ensure_annotations`` does, so the tab
+        and this function cannot disagree about what the widgets meant.
+
+        The step is a **barrier**: it rebinds ``adata``, which every earlier
+        cell-rooted step read, so the notebook has to run all of them before
+        it. ``topo_sort`` orders that from the flag alone. Nothing recorded
+        before the filter is touched -- those results were computed on the
+        full table and still were; only work recorded from here on roots at
+        ``qc_filter``.
+        """
+        from palms.utils.adata_persistence import full_table
+        from palms.utils.rebind_cells import (
+            kept_mask, rebind_cells, repoint_label_to_obs,
+        )
+
+        blocks, params, _ = preview
+        if not params:
+            raise ValueError("a QC filter needs at least one cutoff")
+
+        full = full_table(ctx)
+        full_l2o = ctx.full_label_to_obs
+        if full_l2o is None:
+            full_l2o = ctx.label_to_obs
+
+        # Always filter *the full table*, never the current one: re-running with
+        # a looser cutoff must be able to bring cells back, and a filter of a
+        # filter could not. It is also what makes the recorded step the one that
+        # replays -- the notebook's adata is the whole table at this point.
+        #
+        # Restored on failure, because the intermediate state is the dangerous
+        # one: ``adata`` would be the full table while ``label_to_obs`` still
+        # described the previous filter, and that mismatch paints cells with
+        # other cells' values rather than raising.
+        previous = ctx.adata
+        ctx.adata = full
+        try:
+            _record_preamble()
+            _run_step(Step(
+                id=QC_NODE_ID,
+                **_resolved("qc.filter", blocks),
+                params=params,
+                deps=["preamble"],
+                kind=SETUP,
+                label=qc_label(params.get("min_counts"), params.get("min_cells")),
+                outputs=["adata"],
+                barrier=True,
+            ))
+        except Exception:
+            ctx.adata = previous
+            if ctx.executor is not None:
+                ctx.executor.ns["adata"] = previous
+            raise
+        state["qc_filter"] = {
+            "min_counts": params.get("min_counts"),
+            "min_cells": params.get("min_cells"),
+        }
+
+        rebind_cells(ctx, ctx.adata, repoint_label_to_obs(full_l2o, kept_mask(full, ctx.adata)))
+        state["_qc_applied_key"] = (tuple(sorted(params.items())), id(full))
+        _save_prov_graph()
+
+    ctx.apply_qc_filter = _apply_qc_filter
+
+    def _ensure_qc_filter():
+        """Re-apply the stored cutoffs if they are not already in force.
+
+        Idempotent, and what ``app.py`` calls at launch so a session comes back
+        filtered without any tab having to run first.
+        """
+        from palms.utils.adata_persistence import full_table
+
+        qc = state.get("qc_filter")
+        if not qc:
+            return
+        params = {k: v for k, v in qc.items() if v is not None}
+        key = (tuple(sorted(params.items())), id(full_table(ctx)))
+        if state.get("_qc_applied_key") == key:
+            return
+        _apply_qc_filter(qc_filter_preview(qc.get("min_counts"), qc.get("min_cells")))
+
+    ctx.ensure_qc_filter = _ensure_qc_filter
+
+    def _clear_qc_filter():
+        """Revert to every cell, recording nothing.
+
+        There is no code for "un-filter", and none is needed: work recorded
+        from here on roots at ``preamble`` again, and the barrier sorts it
+        *before* ``qc_filter`` in the notebook, where ``adata`` is still the
+        full table. The node is removed only if nothing depends on it -- a
+        filtered lineage that exists keeps its step, and ``ProvGraph.remove``
+        refusing is how that is decided, not a list of ids that might rot.
+        """
+        from palms.utils.adata_persistence import full_table
+        from palms.utils.rebind_cells import rebind_cells
+
+        if not state.get("qc_filter"):
+            return
+        state["qc_filter"] = None
+        state.pop("_qc_applied_key", None)
+        graph = state.get("prov_graph")
+        if graph is not None and QC_NODE_ID in graph:
+            try:
+                graph.remove(QC_NODE_ID)
+            except ValueError:
+                pass  # something was computed under it; its step stays
+
+        full = full_table(ctx)
+        full_l2o = ctx.full_label_to_obs
+        rebind_cells(ctx, full, full_l2o if full_l2o is not None else ctx.label_to_obs)
+        _save_prov_graph()
+
+    ctx.clear_qc_filter = _clear_qc_filter
+
     # ── ensure_normalized ────────────────────────────────────────────────
     def _ensure_normalized():
         """Run the ``normalize`` step if needed and return ``adata_norm``.
@@ -778,9 +972,9 @@ def create_shared_helpers(ctx: ViewerContext):
             return executor.ns["adata_norm"]
         _record_preamble()
         outputs = _run_step(Step(
-            id="normalize",
+            id=_cell_scoped_id("normalize"),
             **_resolved("normalize", list(builtin_spec("normalize").blocks)),
-            deps=["preamble"],
+            deps=[_cell_root()],
             kind=SETUP,
             label="Normalize, log-transform, PCA",
             outputs=["adata_norm"],
@@ -841,7 +1035,7 @@ def create_shared_helpers(ctx: ViewerContext):
         _record_node(
             f"clustering:{key}",
             code,
-            deps=["preamble"],   # puts labels into obs; needs no normalisation
+            deps=[_cell_root()],  # puts labels into obs; needs no normalisation
             kind=ARTIFACT,
             label=f"Clustering: {key}",
         )
@@ -868,10 +1062,10 @@ def create_shared_helpers(ctx: ViewerContext):
         if state.get("_spatial_neighbors_key") == cache_key:
             return
         _run_step(Step(
-            id="spatial_neighbors",
+            id=_cell_scoped_id("spatial_neighbors"),
             **_resolved("spatial_neighbors", list(builtin_spec("spatial_neighbors").blocks)),
             params={"n_neighs": n_neighs},
-            deps=["normalize"],
+            deps=[_cell_scoped_id("normalize")],
             kind=ARTIFACT,
             label="Spatial neighbors",
         ))
@@ -972,6 +1166,35 @@ def create_shared_helpers(ctx: ViewerContext):
         return recorded_paths(ctx.data_path, paths)
 
     ctx.recorded_plot_paths = _recorded_plot_paths
+
+    # ── refresh_gene_choices ─────────────────────────────────────────────
+    def _refresh_gene_choices():
+        """Re-populate every gene ComboBox from ``ctx.gene_names``.
+
+        The counterpart of ``refresh_clustering_choices``, and needed for the
+        same reason one step later: the gene pickers are built once from
+        ``var_names``, so a gene filter (or a segmentation swap onto a table
+        with a different panel) leaves them offering genes the table no longer
+        has, and the first click is a ``KeyError`` out of ``CellColorManager``.
+
+        A combo whose current value survives keeps it; one whose value is gone
+        falls back to the first name rather than to ``None``, which magicgui
+        rejects as an invalid choice.
+        """
+        names = list(ctx.gene_names or [])
+        for combo in [ctx.gene_widget, ctx.corr_gene_a_widget,
+                      ctx.corr_gene_b_widget, ctx.transcript_gene_widget,
+                      ctx.transcript_density_gene_widget, ctx.umap_gene_widget]:
+            if combo is None:
+                continue
+            old_val = combo.value
+            combo.choices = names
+            if old_val in names:
+                combo.value = old_val
+            elif names:
+                combo.value = names[0]
+
+    ctx.refresh_gene_choices = _refresh_gene_choices
 
     # ── refresh_clustering_choices ───────────────────────────────────────
     def _refresh_clustering_choices():

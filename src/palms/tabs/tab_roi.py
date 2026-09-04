@@ -172,7 +172,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _record_rois()
 
         blocks, params, _ = _roi_expr_preview()
-        deps = ["rois"]
+        deps = [ctx.cell_root(), "rois"]
         filter_desc = ""
         clustering_key = params.get("clustering")
         if clustering_key is not None:
@@ -325,7 +325,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _record_rois()
 
         blocks, params, _ = _roi_deg_preview()
-        deps = ["rois"]
+        deps = [ctx.cell_root(), "rois"]
         clustering_key = params.get("clustering")
         if clustering_key is not None:
             ctx.record_clustering(clustering_key)
@@ -335,7 +335,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             deps.append(f"clustering:{clustering_key}")
 
         step = Step(
-            id="roi_deg",
+            id=ctx.cell_scoped_id("roi_deg"),
             **_resolved(ROI_DEG_TEMPLATE_ID, blocks),
             params=params,
             deps=deps,
@@ -402,7 +402,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             "export:roi_deg",
             f"\n# Export ROI DEG results\n"
             f"roi_deg_df.to_csv(\"{os.path.basename(path)}\", index=False)",
-            deps=["roi_deg"],
+            deps=[ctx.cell_scoped_id("roi_deg")],
             kind=TERMINAL,
             label="Export ROI DEG results",
         )
@@ -441,7 +441,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"    for _ext in {formats!r}:\n"
             f"        _vfig.savefig(roi_volcano_dir / f'{{_stem}}.{{_ext}}', dpi=300)\n"
             f"    plt.close(_vfig)",
-            deps=["roi_deg"],
+            deps=[ctx.cell_scoped_id("roi_deg")],
             kind=TERMINAL,
             label="ROI pairwise volcano plots",
         )

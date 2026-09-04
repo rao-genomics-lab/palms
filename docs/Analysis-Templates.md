@@ -41,6 +41,8 @@ substituted string for the settings currently in the owning tab.
 ## Contents
 
 - [`normalize`](#normalize) — Normalised copy every expression-based analysis reads.
+- [`qc.filter`](#qcfilter) — Drop near-empty cells and rarely-detected genes; rebinds adata.
+- [`qc.metrics`](#qcmetrics) — The standard Xenium QC panel: count distributions and control rates.
 - [`spatial_neighbors`](#spatial_neighbors) — Spatial neighbour graph, built on the normalised copy.
 - [`clustering.leiden`](#clusteringleiden) — Leiden community detection on a copy of the normalised data.
 - [`genes.cnv_infercnv`](#genescnv_infercnv) — inferCNV over a reference population, run in-process.
@@ -98,6 +100,182 @@ adata_norm = adata.copy()
 sc.pp.normalize_total(adata_norm, target_sum=1e4)
 sc.pp.log1p(adata_norm)
 sc.pp.pca(adata_norm)
+```
+
+### `qc.filter`
+
+**Run by:** [QC](Tab-QC)
+
+Drops near-empty cells and rarely-detected genes, and **rebinds `adata`** to what is left. Opt-in: a dataset that has never been through the QC tab has no such node, and nothing downstream changes.
+
+`inplace=False` and the rebind are the same decision twice. `sc.pp.filter_cells(inplace=True)` subsets the object it is handed, and in the viewer that object is the table inside the open SpatialData store — so filtering in place would shrink the store's own cells behind every other reader's back, while in the notebook (where the preamble binds a copy) it would be harmless. A divergence in that direction is invisible to a replay. The closing `adata.copy()` materialises what the two masks left as a view, because the next step writes `adata.obs[key]` and anndata converts a view silently at that point.
+
+Work recorded after this node depends on it; work recorded before it does not, and is not marked stale — it was computed on every cell and still was. The node is a *barrier*: it rebinds `adata`, which every earlier step read, so the notebook places it after all of them and before its own dependents without any edge saying so. Re-running it with different cutoffs flags only the filtered lineage. Reverting records nothing, because a notebook without a filter simply never filtered; the node stays while any result depends on it.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `min_counts` | `int` | no |
+| `min_cells` | `int` | no |
+
+- **Requires:** `adata`, `sc`
+- **Outputs:** `adata`
+- **Blocks:** `cells`, `genes`, `bind`
+
+**Variants** — 3 assemblies:
+
+Cells only, genes only, or both. Genes are counted over the cells that survive the cell cutoff, which is the order scanpy's own tutorials use. There is no assembly that filters nothing.
+
+- `cells + bind`
+- `genes + bind`
+- `cells + genes + bind`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
+
+```python
+#--- block cells
+# Quality control: keep cells with at least $min_counts transcripts.
+#
+# inplace=False for two separate reasons. filter_cells(inplace=True) *mutates the
+# object it is handed*, and in the viewer `adata` is the table inside the open
+# SpatialData store -- filtering in place would shrink the store's own cells
+# behind every other reader's back. It also writes obs['n_counts'] onto a table
+# that already carries Xenium's own count columns. The call returns a mask; the
+# rebind below is what changes which cells the analysis is about.
+_keep_cells, _ = sc.pp.filter_cells(adata, min_counts=$min_counts, inplace=False)
+adata = adata[_keep_cells]
+
+#--- block genes
+# ...and keep genes detected in at least $min_cells cells. Counted over the cells
+# that survive the block above -- filter_cells then filter_genes, each seeing the
+# other's result, which is the order scanpy's own tutorials use.
+_keep_genes, _ = sc.pp.filter_genes(adata, min_cells=$min_cells, inplace=False)
+adata = adata[:, _keep_genes]
+
+#--- block bind
+# One materialisation, at the end. The blocks above leave an AnnData *view*, and
+# a view is not a safe thing to hand on: the next step writes adata.obs[key],
+# which makes anndata silently convert the view mid-analysis. Copying once here
+# also avoids paying for two copies when both filters run.
+adata = adata.copy()
+```
+
+### `qc.metrics`
+
+**Run by:** [QC](Tab-QC)
+
+The standard Xenium QC panel: transcripts per cell, genes per cell, and — where the table carries them — segmented cell area and nucleus ratio, plus the negative-control rates printed as percentages of all counts. What a filtering cutoff is chosen from.
+
+Two details carry the arithmetic, and neither shows up in the numbers. `calculate_qc_metrics` runs on `adata_qc`, a copy, because in the viewer `adata` *is* the table inside the open store and the in-place form would write a recomputed `total_counts` over Xenium's own column. And the control rates read the untouched `adata`, so the denominator stays every codeword class — Xenium's `total_counts` sums all of them, scanpy's sums `X` alone. Measured on the pancreas section that is 5,512,036 against 5,511,215: 0.015%, which is why only a source guard can catch the difference. `percent_top` is a parameter rather than the literal it reads as, because scanpy raises when a position exceeds the panel size.
+
+**Contract**
+
+| Parameter | Type | Required |
+|---|---|---|
+| `title` | `str` | yes |
+| `paths` | `list` | yes |
+| `percent_top` | `tuple` | yes |
+
+- **Requires:** `Path`, `adata`, `plt`, `sc`
+- **Outputs:** `fig`, `cprobes`, `cwords`
+- **Blocks:** `head`, `controls`, `plot4`, `plot2`, `areas`, `save`
+
+**Variants** — 2 assemblies:
+
+Four panels when the table has `cell_area` and `nucleus_area` — the 10x output does — and two when it does not, which a table built from a custom segmentation need not.
+
+- `head + controls + plot4 + areas + save`
+- `head + controls + plot2 + save`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
+
+```python
+#--- block head
+import seaborn as sns
+
+# The metrics go onto a working copy, not onto `adata` itself.
+# calculate_qc_metrics writes obs['total_counts'], and in the viewer `adata` IS
+# the table inside the open SpatialData store -- so inplace=True there would
+# persist a *recomputed* total_counts over Xenium's own column. They are not the
+# same quantity: Xenium's total_counts sums every codeword class, scanpy's sums
+# X, i.e. gene expression only. Measured on Xenium_V1_human_Pancreas_FFPE:
+# 5,512,036 against 5,511,215 -- 0.015%, immaterial to the percentages below,
+# but it silently redefines a column the viewer treats as structural.
+adata_qc = adata.copy()
+sc.pp.calculate_qc_metrics(adata_qc, percent_top=$percent_top, inplace=True)
+
+#--- block controls
+# Negative-control rates, read off the untouched object so the denominator is
+# Xenium's own total_counts -- every codeword class, which is what "% of counts"
+# means for a control probe. Reading it off adata_qc would divide by the
+# gene-only sum instead.
+cprobes = (
+    adata.obs["control_probe_counts"].sum() / adata.obs["total_counts"].sum() * 100
+)
+cwords = (
+    adata.obs["control_codeword_counts"].sum() / adata.obs["total_counts"].sum() * 100
+)
+print(f"Negative DNA probe count % : {cprobes}")
+print(f"Negative decoding count % : {cwords}")
+
+#--- block plot4
+fig, axs = plt.subplots(1, 4, figsize=(15, 4))
+
+axs[0].set_title("Total transcripts per cell")
+sns.histplot(
+    adata_qc.obs["total_counts"],
+    kde=False,
+    ax=axs[0],
+)
+
+axs[1].set_title("Unique transcripts per cell")
+sns.histplot(
+    adata_qc.obs["n_genes_by_counts"],
+    kde=False,
+    ax=axs[1],
+)
+
+#--- block plot2
+# The two-panel form, for a table with no cell_area/nucleus_area -- a custom
+# segmentation need not carry them, and the ratio below would raise mid-figure.
+fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+
+axs[0].set_title("Total transcripts per cell")
+sns.histplot(
+    adata_qc.obs["total_counts"],
+    kde=False,
+    ax=axs[0],
+)
+
+axs[1].set_title("Unique transcripts per cell")
+sns.histplot(
+    adata_qc.obs["n_genes_by_counts"],
+    kde=False,
+    ax=axs[1],
+)
+
+#--- block areas
+axs[2].set_title("Area of segmented cells")
+sns.histplot(
+    adata_qc.obs["cell_area"],
+    kde=False,
+    ax=axs[2],
+)
+
+axs[3].set_title("Nucleus ratio")
+sns.histplot(
+    adata_qc.obs["nucleus_area"] / adata_qc.obs["cell_area"],
+    kde=False,
+    ax=axs[3],
+)
+
+#--- block save
+fig.suptitle($title)
+fig.tight_layout()
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, dpi=300, bbox_inches="tight")
 ```
 
 ### `spatial_neighbors`

@@ -167,7 +167,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"_dom = [c for c in adata_novae.obs.columns if c.startswith('novae_domain')]\n"
             f"_col = 'novae_domain' if 'novae_domain' in _dom else _dom[-1]\n"
             f"adata.obs['novae_domains'] = pd.Categorical(adata_novae.obs[_col].values)",
-            deps=["preamble"],
+            deps=[ctx.cell_root()],
             label="Novae spatial domains",
         )
 

@@ -121,7 +121,7 @@ get_label_to_obs_mapping(sdata)
 
 Map label-raster values to row positions in `adata.obs`. This is what turns a pixel you clicked into a cell, and it is needed whenever you colour the segmentation raster by a per-cell value.
 
-> Build a mapping from integer label value -> AnnData obs index position.
+> ``label_to_obs_for`` for the store's main table.
 
 ### `TranscriptLoader`
 

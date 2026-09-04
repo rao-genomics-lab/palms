@@ -25,6 +25,14 @@ class ViewerContext:
     plots_panel: Any = None          # the Plots dock gallery; set by app.py
     label_to_obs: np.ndarray | None = None
     centroids_yx: np.ndarray | None = None
+    # The unfiltered table and its label map. ``adata``/``label_to_obs``
+    # above are what the analysis is *about*, which Tools -> QC may narrow
+    # to a subset; these stay pointed at every cell, and are what results
+    # are persisted into. Equal to ``adata``/``label_to_obs`` while no
+    # filter is in force. Set wherever those two are.
+    full_adata: Any = None
+    full_label_to_obs: np.ndarray | None = None
+    umap_df: Any = None              # UMAP frame, kept so a rebind can re-index it
     pixel_size: float = 1.0
     data_path: Path | None = None
     no_cache: bool = False
@@ -68,6 +76,14 @@ class ViewerContext:
     annot_nhood_clustering_widget: Any = None
     annot_dist_clustering_widget: Any = None
     mg_clustering_widget: Any = None      # marker genes tab
+    # Per-tab gene pickers. Bound to var_names at build time, so every one
+    # of them needs re-populating when a gene filter shrinks the panel --
+    # see ``refresh_gene_choices``.
+    corr_gene_a_widget: Any = None
+    corr_gene_b_widget: Any = None
+    transcript_gene_widget: Any = None
+    transcript_density_gene_widget: Any = None
+    umap_gene_widget: Any = None
     cnv_clustering_widget: Any = None     # CNV tab — reference-population picker
 
     # ── Step execution (attached by create_shared_helpers) ───────────────────
@@ -100,6 +116,19 @@ class ViewerContext:
     ensure_spatial_neighbors: Any = None  # runs the "spatial_neighbors" step on adata_norm
     record_clustering: Any = None
     refresh_clustering_choices: Any = None
+    refresh_gene_choices: Any = None      # re-populate every gene ComboBox
+    # QC filtering (Tools -> QC). ``cell_root`` names the node a step that
+    # reads cells must depend on -- "qc_filter" when a filter is in force,
+    # "preamble" otherwise -- and is the one definition of it.
+    cell_root: Any = None
+    # ``cell_scoped_id("normalize")`` is "normalize" or "normalize:qc": the id
+    # an unkeyed artifact gets under the current cell set, so a filtered run
+    # does not revise the node the unfiltered results depend on. Dependents
+    # must ask it for the dep rather than writing the base name.
+    cell_scoped_id: Any = None
+    ensure_qc_filter: Any = None     # re-apply the stored cutoffs; idempotent
+    apply_qc_filter: Any = None      # run + record a filter from a Preview
+    clear_qc_filter: Any = None      # revert to every cell; the step stays if used
     # The one route a figure takes: saves it under <data_path>/plots/ in every
     # configured format and shows it in the Plots dock. Replaced auto_save_plot,
     # which only ever wrote a file, in one format, from six of eighteen sites.

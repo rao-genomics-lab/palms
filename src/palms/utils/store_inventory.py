@@ -220,6 +220,7 @@ _SESSION_ATTRS = {
 _BLOCKED_SESSION_ATTRS = {
     "prov_graph": "the provenance graph — the notebook's source of truth",
     "segmentation_source": "which segmentation is active — not data",
+    "qc_filter": "the QC cutoffs in force — a setting, not data",
 }
 
 

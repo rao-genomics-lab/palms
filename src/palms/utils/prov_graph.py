@@ -12,6 +12,14 @@ topological sort, so:
 - A missing dependency is an error at record time, not a ``NameError`` at replay.
 - The emitted cell order always respects dependencies, regardless of the
   wall-clock order actions were taken (even across sessions).
+- A node that *rebinds* a name other nodes read (``qc_filter`` rebinds
+  ``adata``) is a **barrier**: it sorts after every node that is not its
+  descendant, so the steps recorded against the old binding run before it in
+  the one kernel a notebook has. That is the write-after-read constraint a
+  deps edge cannot express — the readers of the old ``adata`` do not depend on
+  the filter, they merely have to precede it — and it is what lets two cell
+  sets share one binding name without either lineage being re-rooted or
+  flagged stale for the other's sake.
 
 This module is deliberately pure Python (no Qt/napari/nbformat imports) so the
 graph logic can be unit-tested in isolation. nbformat wrapping lives in
@@ -84,6 +92,9 @@ class ProvNode:
     params: dict = field(default_factory=dict)
     stale: bool = False                  # an upstream input changed after this ran
     seq: int = 0                         # insertion order, for deterministic sort
+    # This node rebinds a name that nodes outside its lineage read. A sort
+    # attribute, not part of the node's identity: see ``topo_sort``.
+    barrier: bool = False
     # Provenance of the *template*, not of the rendered code. ``template_hash``
     # is taken over the template text before substitution: hashing ``code``
     # would add nothing, since ``code`` is already stored verbatim, whereas
@@ -139,6 +150,7 @@ class ProvGraph:
         template_id: Optional[str] = None,
         template_origin: Optional[str] = None,
         template_hash: Optional[str] = None,
+        barrier: Optional[bool] = None,
     ) -> ProvNode:
         """Insert a node, or revise it in place if ``node_id`` already exists.
 
@@ -184,6 +196,10 @@ class ProvGraph:
                 existing.template_origin = template_origin
             if template_hash is not None:
                 existing.template_hash = template_hash
+            # Like the template fields: where the node *sorts* is not what it
+            # *computes*, so changing it must not flag anything stale.
+            if barrier is not None:
+                existing.barrier = barrier
             if unchanged:
                 # The step just ran again, against its inputs as they are now,
                 # so this node is fresh — even though the code it emits is
@@ -219,6 +235,7 @@ class ProvGraph:
             template_id=template_id,
             template_origin=template_origin or TEMPLATE_BUILTIN,
             template_hash=template_hash,
+            barrier=bool(barrier),
         )
         self._nodes[node_id] = node
         return node
@@ -282,6 +299,47 @@ class ProvGraph:
             stack.extend(self._nodes[n].deps)
         return closure
 
+    def descendants(self, node_id: str) -> set[str]:
+        """Every node that transitively depends on *node_id* (not itself)."""
+        kids = self._children_map()
+        seen: set[str] = set()
+        stack = list(kids.get(node_id, []))
+        while stack:
+            c = stack.pop()
+            if c in seen:
+                continue
+            seen.add(c)
+            stack.extend(kids.get(c, []))
+        return seen
+
+    def _barrier_edges(self) -> dict[str, list[str]]:
+        """The implicit edges a barrier adds: ``{barrier: [predecessors]}``.
+
+        A barrier's predecessors are every node that is not its descendant. The
+        set is acyclic with the deps edges by construction -- a node the barrier
+        cannot reach cannot be reached *from* it either -- with one exception:
+        two barriers neither of which reaches the other would each demand to
+        follow the other. That is a modelling error (a rebinder must depend on
+        the rebinder before it), so it is raised here rather than surfacing as
+        an unexplained ``CycleError`` from the sort.
+        """
+        barriers = [n.id for n in self._nodes.values() if n.barrier]
+        if not barriers:
+            return {}
+        below = {b: self.descendants(b) for b in barriers}
+        for i, a in enumerate(barriers):
+            for b in barriers[i + 1:]:
+                if a not in below[b] and b not in below[a]:
+                    raise CycleError(
+                        f"barriers '{a}' and '{b}' are unordered: a node that "
+                        f"rebinds a name must depend on the one that rebound it "
+                        f"before"
+                    )
+        return {
+            b: [nid for nid in self._nodes if nid != b and nid not in below[b]]
+            for b in barriers
+        }
+
     def topo_sort(self) -> list[str]:
         """Return node ids in dependency order.
 
@@ -289,9 +347,21 @@ class ProvGraph:
         order — so setup sorts before artifacts before terminals and the derived
         notebook is identical regardless of the order actions were recorded
         (ordering invariance). ``id`` is unique, so the sort is total.
+
+        A **barrier** node additionally follows every node that is not its
+        descendant (see :meth:`_barrier_edges`). The extra edges are structural,
+        so the invariance holds: a step recorded *after* the barrier but rooted
+        above it still sorts before it, because it reads the binding the barrier
+        replaces.
         """
         indeg = {n.id: len(n.deps) for n in self._nodes.values()}
         kids = self._children_map()
+        for barrier, preds in self._barrier_edges().items():
+            for pred in preds:
+                if pred in self._nodes[barrier].deps:
+                    continue  # already an explicit edge; do not count it twice
+                indeg[barrier] += 1
+                kids[pred].append(barrier)
 
         def sort_key(nid: str):
             n = self._nodes[nid]
@@ -321,7 +391,7 @@ class ProvGraph:
             {
                 "id": n.id, "code": n.code, "deps": list(n.deps),
                 "kind": n.kind, "label": n.label, "params": n.params,
-                "stale": n.stale, "seq": n.seq,
+                "stale": n.stale, "seq": n.seq, "barrier": n.barrier,
                 "template_id": n.template_id,
                 "template_origin": n.template_origin,
                 "template_hash": n.template_hash,
@@ -353,6 +423,7 @@ class ProvGraph:
                 # by definition — there was no way for it not to be.
                 template_origin=it.get("template_origin") or TEMPLATE_BUILTIN,
                 template_hash=it.get("template_hash"),
+                barrier=bool(it.get("barrier", False)),
             )
             g._nodes[node.id] = node
             max_seq = max(max_seq, node.seq)

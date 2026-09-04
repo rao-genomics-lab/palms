@@ -1,0 +1,34 @@
+# palms template
+# id: qc.filter
+# schema-version: 1
+# assemblies: cells+bind | genes+bind | cells+genes+bind
+# doc: Drop near-empty cells and rarely-detected genes; rebinds adata.
+# requires: sc, adata
+# outputs: adata
+# params: min_counts:int?, min_cells:int?
+
+#--- block cells
+# Quality control: keep cells with at least $min_counts transcripts.
+#
+# inplace=False for two separate reasons. filter_cells(inplace=True) *mutates the
+# object it is handed*, and in the viewer `adata` is the table inside the open
+# SpatialData store -- filtering in place would shrink the store's own cells
+# behind every other reader's back. It also writes obs['n_counts'] onto a table
+# that already carries Xenium's own count columns. The call returns a mask; the
+# rebind below is what changes which cells the analysis is about.
+_keep_cells, _ = sc.pp.filter_cells(adata, min_counts=$min_counts, inplace=False)
+adata = adata[_keep_cells]
+
+#--- block genes
+# ...and keep genes detected in at least $min_cells cells. Counted over the cells
+# that survive the block above -- filter_cells then filter_genes, each seeing the
+# other's result, which is the order scanpy's own tutorials use.
+_keep_genes, _ = sc.pp.filter_genes(adata, min_cells=$min_cells, inplace=False)
+adata = adata[:, _keep_genes]
+
+#--- block bind
+# One materialisation, at the end. The blocks above leave an AnnData *view*, and
+# a view is not a safe thing to hand on: the next step writes adata.obs[key],
+# which makes anndata silently convert the view mid-analysis. Copying once here
+# also avoids paying for two copies when both filters run.
+adata = adata.copy()

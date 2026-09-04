@@ -60,6 +60,85 @@ entries under **Development log** are the closed pre-1.0.0 record.
   export (`xv-hdg`).
 
 ### Added
+- **Cell and gene QC filtering, and the Xenium QC panel** (Tools → QC, issue #77).
+  The viewer had neither: `grep -rn "filter_cells\|filter_genes"` over `src/palms`
+  returned nothing, so every analysis — Leiden, rank genes, CNV, ROI DEG, the
+  spatial statistics — ran on the raw cell set, near-empty cells included.
+
+  The tab draws the standard QC panel (transcripts per cell, genes per cell, cell
+  area, nucleus ratio, plus the two negative-control rates), reports exactly what a
+  cutoff would keep as the spin boxes move, and applies `sc.pp.filter_cells` /
+  `sc.pp.filter_genes` as a recorded step. Opt-in: a dataset that has never been
+  through the tab gains no node and nothing goes stale.
+
+  Six things this needed that were not obvious:
+
+  - **The filter rebinds `adata`; it must not mutate it.** In the viewer `adata`
+    *is* the table inside the open SpatialData store, while the notebook preamble
+    binds a copy — so `inplace=True` would be harmless on replay and would shrink
+    the store's own cells in the GUI. A divergence in that direction is invisible
+    to the replay tier, which is why the template uses `inplace=False` plus a mask.
+  - **The store is never written filtered.** `_persist_table` writes
+    `sdata["table"]`, not `ctx.adata`; the two stopped being the same object the
+    moment a filter could rebind, and without the new
+    `_sync_filtered_obs_into_full` merge every clustering and DEG computed under a
+    filter would have been written to an object nothing persists and lost at exit,
+    with no error. Persisting the subset instead would have been worse:
+    `_persist_custom_table` copies `ctx.adata` straight into `custom_table`, the
+    only copy of a cell set the raw output does not contain.
+  - **The merge must sync only what changed** (xv-cbz, found by reading the store
+    back on `demo_data/crop_6`). The first merge reindexed *every* column of the
+    filtered `obs` onto the full index, which nulled `cell_id` and `region` for the
+    dropped cells; `TableModel` refused the null instance key, `_persist_table`
+    logged it and carried on, and no result computed under a filter ever reached
+    the store while the graph recorded that it had — Leiden r0.9 fresh in the
+    notebook, no `clustering_leiden_igraph_r0.9` on disk. It also erased the
+    dropped cells' values of every pre-filter column (r0.8 was in the filtered
+    `obs` as its kept rows only). Per column now: new → reindex with `NaN`;
+    present and equal over the kept rows → untouched; present and different →
+    reindex, because it was re-computed on the filtered set and a dropped cell has
+    no value. Not "update the kept rows only", which leaves one column holding
+    two runs. `test_a_filtered_write_reaches_a_real_store` is the end-to-end gate
+    through a real zarr store; it failed against the old merge.
+  - **A filter starts a second lineage; it does not revise the first.** Results
+    recorded before it were computed on every cell and still were, so they keep
+    `deps=["preamble"]` and stay fresh — `[no QC] → r0.8/r1.0`, `[QC] → r0.9`, as
+    `analysis.py`'s append order already showed. The first design re-pointed every
+    cell-rooted node at the filter and forced it stale, which marked a whole
+    session ⚠ for nothing and made Revert a ratchet. What that reroot was really
+    solving was *notebook order*: `qc_filter` rebinds `adata`, which every earlier
+    step read, and the `(kind, id)` tie-break put it ahead of the unfiltered
+    clusterings. That is a write-after-read hazard the graph could not express,
+    so it can now: a **barrier** node (`Step(barrier=True)`) gets an implicit
+    in-edge from every node that is not its descendant. Acyclic by construction,
+    ordering-invariant, not part of the staleness comparison, and two unordered
+    barriers are refused. Revert records nothing and needs no restore node —
+    post-revert work depends on `preamble` and sorts before the barrier — and
+    removes the step only when nothing depends on it. `normalize`,
+    `spatial_neighbors` and `roi_deg` are the three unkeyed ids a filtered run
+    would otherwise upsert from under the unfiltered results; they are scoped
+    (`normalize:qc`) through `ctx.cell_scoped_id`, with a source guard against a
+    literal dep. The replay test records a full-cell r1.0 before the filter: ARI
+    1.0 with the barrier, 0.49 without it.
+  - **`label_to_obs` is positional**, so a filtered table with a stale map paints
+    each cell with another cell's value and raises nothing. `repoint_label_to_obs`
+    keeps the array's original length — it is indexed by the raster's pixel value,
+    not the row count — and gives dropped cells `-1`, so they render transparent.
+  - **`sc.pp.calculate_qc_metrics(inplace=True)` redefines `total_counts`.**
+    Xenium's column sums every codeword class; scanpy's sums `X`. Measured on
+    `Xenium_V1_human_Pancreas_FFPE_outs`: 5,512,036 against 5,511,215. The 0.015%
+    leaves both control percentages identical to four decimals, so no value
+    assertion can catch it — the metrics run on a copy, and the control rates read
+    the untouched object, both pinned by source guards.
+
+  Three latent defects fixed on the way, all of which were already live for a
+  custom-segmentation swap: six gene ComboBoxes bound to `var_names` at build time
+  with nothing to refresh them (`ctx.refresh_gene_choices`), `UMAPViewer.n_cells`
+  frozen at construction, and the executor namespace keeping `adata_norm` and
+  friends at the old cell count. `utils/rebind_cells.py` is now the one place that
+  repoints everything, shared with `tab_segmentation`, and
+  `loader.label_to_obs_for` replaces the two near-duplicate mappings.
+
 - **Four defects found by running the DegaFile export for real**, on
   `Xenium_V1_human_Pancreas_FFPE_outs` with celldega 0.24.2 installed into the
   live env. The export itself works — 220 MB written, and the raw output

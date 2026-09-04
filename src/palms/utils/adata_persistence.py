@@ -140,13 +140,100 @@ def _convert_arrow_strings(sdata) -> None:
     _convert_adata_arrow_strings(sdata["table"])
 
 
+def full_table(ctx: ViewerContext):
+    """The table results are *persisted* into: every cell, always.
+
+    ``ctx.adata`` may be a strict subset of it -- Tools -> QC rebinds ``adata``
+    to the cells a filter kept. The store's job is to hold the dataset; the
+    filter is a session-level view, recorded in the provenance graph and in one
+    session attr, and re-derived in about a second at the next launch.
+
+    Persisting the subset instead would be destructive in two directions: it
+    would leave a store that disagrees with ``cells.parquet``, so a cache
+    rebuild would silently un-filter; and under a custom segmentation it would
+    overwrite ``custom_table`` -- the only copy of a cell set the raw output
+    does not contain.
+    """
+    full = getattr(ctx, "full_adata", None)
+    return full if full is not None else ctx.adata
+
+
+def _sync_filtered_obs_into_full(ctx: ViewerContext) -> None:
+    """Merge results computed on a filtered ``adata`` back onto the full table.
+
+    Every ``save_*_to_adata`` writes onto ``ctx.adata`` and then calls
+    ``_persist_table``, which writes the element out of ``sdata`` -- the *full*
+    table. While the two are the same object that works; once a QC filter
+    rebinds ``adata`` they are not, and without this every clustering, ranked
+    gene list, neighbourhood result and CNV run would be written to an object
+    nothing persists and lost at exit, with no error.
+
+    Only a column that is **new or changed** is merged; everything else on the
+    full table is left byte-for-byte as it was. ``_persist_table`` is a
+    whole-table write with a dozen callers and no idea which column was just
+    written, so the merge has to detect change rather than be told -- and the
+    first version, which reindexed *every* column of the filtered ``obs``, was
+    the reason nothing computed under a filter was ever persisted (xv-cbz).
+    The filtered ``obs`` carries every column of the full one, as the kept-row
+    view, so reindexing it back nulled ``cell_id`` and ``region`` for every
+    dropped cell -- ``TableModel`` refuses a null instance key, so the write
+    raised and ``_persist_table`` reported and carried on -- and it also wiped
+    the dropped cells' values of every result computed *before* the filter.
+
+    Three cases, per column of the filtered ``obs``:
+
+    - absent from the full table: a new result. Reindexed by name, so a cell the
+      filter dropped gets ``NaN`` -- the honest value, since it has no cluster,
+      and one every reader already handles
+      (``verify_notebook.compare_clusterings`` masks on ``notna()``).
+    - present, and equal over the kept cells: untouched. That is every
+      structural column and every earlier result, dtype included
+      (``transcript_counts`` was silently becoming float64).
+    - present, and different over the kept cells: re-computed under the filter,
+      so a dropped cell has no value any more. Reindexed like a new column. Not
+      "update the kept rows and leave the rest" -- that would leave one column
+      holding two runs.
+
+    The comparison casts both sides to ``object`` so that a categorical whose
+    *categories* differ but whose values agree counts as equal.
+
+    ``uns`` slots are cluster-level rather than per-cell, so they copy across
+    whole. ``X``, ``var`` and ``obsm`` are deliberately untouched: the full
+    table keeps every gene and every stored embedding.
+
+    A merge rather than pointing each save function at ``full_table(ctx)``,
+    because the Leiden template writes the bare ``adata.obs[key]`` column
+    itself -- ``store_inventory._clustering_twin_of`` pairs that with
+    ``clustering_<key>`` so a deletion cascades, and only a merge catches a
+    column a *template* wrote.
+    """
+    full = full_table(ctx)
+    sub = ctx.adata
+    if sub is full or full is None or sub is None:
+        return
+    for col in sub.obs.columns:
+        if col in full.obs.columns and _same_over_kept(full.obs[col], sub.obs[col]):
+            continue
+        full.obs[col] = sub.obs[col].reindex(full.obs_names)
+    for key, value in sub.uns.items():
+        if key != "spatialdata_attrs":
+            full.uns[key] = value
+
+
+def _same_over_kept(full_col: pd.Series, sub_col: pd.Series) -> bool:
+    """True if *full_col* agrees with *sub_col* on every row *sub_col* has."""
+    kept = full_col.reindex(sub_col.index).astype(object)
+    return kept.equals(sub_col.astype(object))
+
+
 def _persist_custom_table(ctx: ViewerContext) -> None:
     """Write custom adata to sdata.tables['custom_table']."""
     if ctx.no_cache or ctx.sdata is None or ctx.sdata.path is None:
         return
     try:
         from spatialdata.models import TableModel
-        adata_copy = ctx.adata.copy()
+        _sync_filtered_obs_into_full(ctx)
+        adata_copy = full_table(ctx).copy()
         _convert_adata_arrow_strings(adata_copy)
         adata_copy = TableModel.parse(
             adata_copy,
@@ -179,6 +266,9 @@ def _persist_table(ctx: ViewerContext) -> None:
     if sdata is None or sdata.path is None:
         return
     try:
+        # Results are computed on ctx.adata, which a QC filter may have made a
+        # subset; the element written below is the store's full table.
+        _sync_filtered_obs_into_full(ctx)
         _convert_arrow_strings(sdata)
         safe_write_element(sdata, "table")
     except Exception as e:

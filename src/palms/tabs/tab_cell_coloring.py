@@ -151,7 +151,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             + (f"  (viewer filter: {filter_desc})" if filter_desc else "") + "\n"
             f"sc.pl.embedding(adata, basis=\"spatial\", color=\"{gene}\", "
             f"cmap=\"{state['current_colormap']}\")",
-            deps=["preamble"],
+            deps=[ctx.cell_root()],
             kind=TERMINAL,
             label=f"Spatial plot: {gene}",
         )
