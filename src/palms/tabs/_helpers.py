@@ -504,7 +504,13 @@ def create_shared_helpers(ctx: ViewerContext):
             import squidpy as sq
             from pathlib import Path as _Path
 
-            graph = state.setdefault("prov_graph", ProvGraph())
+            # A placeholder graph, deliberately not state["prov_graph"]. The
+            # executor is also built for ``preview_step``, and a preview must
+            # not have side effects — seeding a session graph (or creating one)
+            # from a call that only draws a pane is exactly the kind of side
+            # effect that rule exists to forbid. ``_run_step`` points it at the
+            # real graph on every run, so nothing here needs to be right yet.
+            graph = ProvGraph()
             base_namespace = {
                 "sc": sc, "sq": sq, "sd": sd, "pd": pd, "np": _np, "plt": plt,
                 "Path": _Path,
@@ -519,6 +525,57 @@ def create_shared_helpers(ctx: ViewerContext):
             ctx.executor = StepExecutor(namespace=base_namespace, graph=graph)
         return ctx.executor
 
+    def _step_graph():
+        """The graph ``run_step`` records into — and its root, guaranteed.
+
+        Two things this settles, each of which was a real failure.
+
+        **Which graph.** ``StepExecutor.run`` always records; recording is not a
+        mode of ``run``, it is what ``run`` is (see :meth:`StepExecutor.preview`
+        for why that is deliberate). So Preferences -> "Record reproducible code"
+        off cannot mean *don't record*, only *don't record here*: the executor is
+        pointed at a throwaway graph that nothing exports and nothing persists,
+        which leaves the session's own graph exactly as the user left it.
+
+        Letting the session graph take those nodes instead would be worse than
+        the crash it replaces. ``_record_node`` still returns early with the
+        toggle off, so ``environment``, every ``clustering:<key>`` and every
+        ``plot:*`` terminal would be missing while the migrated steps were
+        present — and ``save_session`` writes that graph at exit. A persisted
+        graph describing an analysis nobody ran that way is the shape of
+        provenance defect this codebase is most careful about.
+
+        **The root.** Every migrated step declares ``deps=["preamble"]`` and
+        ``ProvGraph.upsert`` refuses an unknown dep, so a graph without a
+        preamble makes ``run_step`` raise *after* the step's code has already
+        executed — the user sees a failure for a computation that succeeded, and
+        its output binding is thrown away. ``app.py`` seeds the preamble at
+        launch only when recording is on, which is precisely the case that
+        cannot be relied on here, so ``run_step`` establishes its own
+        precondition rather than inheriting a conditional launch-time side
+        effect. That also self-heals the recording-on path if the seed is ever
+        missed again.
+        """
+        if state.get("record_code"):
+            graph = state.setdefault("prov_graph", ProvGraph())
+            if graph.get("preamble") is None:
+                # Through the real recorder, so this seed is indistinguishable
+                # from app.py's: it brings the environment node with it and
+                # reaches the flat journal.
+                _record_preamble()
+            return graph
+
+        graph = state.get("_unrecorded_prov_graph")
+        if graph is None:
+            graph = state["_unrecorded_prov_graph"] = ProvGraph()
+        if graph.get("preamble") is None:
+            # Not through _record_preamble: that goes via _record_node, which
+            # returns early with recording off — which is the whole reason this
+            # graph has no root. Upsert the same text directly.
+            graph.upsert("preamble", _preamble_code(), kind=SETUP,
+                         label="Setup & data loading")
+        return graph
+
     def _run_step(step: Step, progress=None) -> dict:
         """Execute *step* and record the same source, then sync viewer state.
 
@@ -527,6 +584,11 @@ def create_shared_helpers(ctx: ViewerContext):
         visible instead of producing a node for an artifact that never existed.
         """
         executor = _get_executor()
+        # Keep the executor pointed at the live graph as well as the live
+        # objects. Both can be swapped out from under it: a dataset reload
+        # rebinds ctx.adata/ctx.sdata, and toggling recording replaces
+        # state["prov_graph"] wholesale.
+        executor.graph = _step_graph()
         # Keep the namespace pointed at the live objects: a dataset reload
         # rebinds ctx.adata/ctx.sdata without going through the executor.
         if executor.ns.get("adata") is not ctx.adata:
@@ -610,7 +672,14 @@ def create_shared_helpers(ctx: ViewerContext):
     ctx.record_environment = _record_environment
 
     # ── record_preamble ──────────────────────────────────────────────────
-    def _record_preamble():
+    def _preamble_code() -> str:
+        """Build the preamble cell's source.
+
+        Split out from :func:`_record_preamble` because ``_step_graph`` needs the
+        *text* without the recording: a step's graph must have its root before
+        ``upsert`` will accept ``deps=["preamble"]``, and with recording off
+        ``_record_node`` is a no-op.
+        """
         # A Crop Dataset export has no raw 10x output — the zarr store *is* the
         # data — so ``spatialdata_io.xenium()`` cannot read it, and a notebook
         # recorded with that call fails on its very first cell. Branch on
@@ -665,9 +734,7 @@ def create_shared_helpers(ctx: ViewerContext):
         else:
             table = "adata = sdata[\"table\"].copy()"
 
-        _record_environment()
-        _record_node(
-            "preamble",
+        return (
             "import scanpy as sc\n"
             "import squidpy as sq\n"
             "import spatialdata as sd\n"
@@ -678,10 +745,13 @@ def create_shared_helpers(ctx: ViewerContext):
             f"\nplt.rcParams['font.size'] = {state.get('plot_font_size', 10)}\n"
             f"\n# Load data\n"
             + load
-            + table,
-            kind=SETUP,
-            label="Setup & data loading",
+            + table
         )
+
+    def _record_preamble():
+        _record_environment()
+        _record_node("preamble", _preamble_code(), kind=SETUP,
+                     label="Setup & data loading")
 
     ctx.record_preamble = _record_preamble
 
