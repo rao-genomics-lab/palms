@@ -168,12 +168,38 @@ def _sync_filtered_obs_into_full(ctx: ViewerContext) -> None:
     gene list, neighbourhood result and CNV run would be written to an object
     nothing persists and lost at exit, with no error.
 
-    ``obs`` columns are reindexed by name, so a cell the filter dropped gets
-    ``NaN`` -- the honest value, since it has no cluster, and one every reader
-    already handles (``verify_notebook.compare_clusterings`` masks on
-    ``notna()``). ``uns`` slots are cluster-level rather than per-cell, so they
-    copy across whole. ``X``, ``var`` and ``obsm`` are deliberately untouched:
-    the full table keeps every gene and every stored embedding.
+    Only a column that is **new or changed** is merged; everything else on the
+    full table is left byte-for-byte as it was. ``_persist_table`` is a
+    whole-table write with a dozen callers and no idea which column was just
+    written, so the merge has to detect change rather than be told -- and the
+    first version, which reindexed *every* column of the filtered ``obs``, was
+    the reason nothing computed under a filter was ever persisted (xv-cbz).
+    The filtered ``obs`` carries every column of the full one, as the kept-row
+    view, so reindexing it back nulled ``cell_id`` and ``region`` for every
+    dropped cell -- ``TableModel`` refuses a null instance key, so the write
+    raised and ``_persist_table`` reported and carried on -- and it also wiped
+    the dropped cells' values of every result computed *before* the filter.
+
+    Three cases, per column of the filtered ``obs``:
+
+    - absent from the full table: a new result. Reindexed by name, so a cell the
+      filter dropped gets ``NaN`` -- the honest value, since it has no cluster,
+      and one every reader already handles
+      (``verify_notebook.compare_clusterings`` masks on ``notna()``).
+    - present, and equal over the kept cells: untouched. That is every
+      structural column and every earlier result, dtype included
+      (``transcript_counts`` was silently becoming float64).
+    - present, and different over the kept cells: re-computed under the filter,
+      so a dropped cell has no value any more. Reindexed like a new column. Not
+      "update the kept rows and leave the rest" -- that would leave one column
+      holding two runs.
+
+    The comparison casts both sides to ``object`` so that a categorical whose
+    *categories* differ but whose values agree counts as equal.
+
+    ``uns`` slots are cluster-level rather than per-cell, so they copy across
+    whole. ``X``, ``var`` and ``obsm`` are deliberately untouched: the full
+    table keeps every gene and every stored embedding.
 
     A merge rather than pointing each save function at ``full_table(ctx)``,
     because the Leiden template writes the bare ``adata.obs[key]`` column
@@ -186,10 +212,18 @@ def _sync_filtered_obs_into_full(ctx: ViewerContext) -> None:
     if sub is full or full is None or sub is None:
         return
     for col in sub.obs.columns:
+        if col in full.obs.columns and _same_over_kept(full.obs[col], sub.obs[col]):
+            continue
         full.obs[col] = sub.obs[col].reindex(full.obs_names)
     for key, value in sub.uns.items():
         if key != "spatialdata_attrs":
             full.uns[key] = value
+
+
+def _same_over_kept(full_col: pd.Series, sub_col: pd.Series) -> bool:
+    """True if *full_col* agrees with *sub_col* on every row *sub_col* has."""
+    kept = full_col.reindex(sub_col.index).astype(object)
+    return kept.equals(sub_col.astype(object))
 
 
 def _persist_custom_table(ctx: ViewerContext) -> None:

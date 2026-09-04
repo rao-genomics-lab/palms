@@ -103,6 +103,95 @@ def test_the_bare_template_written_column_reaches_the_store_too():
     assert "clustering_leiden_r1.0" in full.obs.columns
 
 
+def _filtered_ctx(tiny_sdata, keep):
+    """A ctx whose ``adata`` is a filtered view of a real, on-disk store's table."""
+    full = tiny_sdata["table"]
+    ctx = _Ctx(full, full[keep].copy())
+    ctx.sdata = tiny_sdata
+    ctx.no_cache = False
+    return ctx
+
+
+def test_a_filtered_write_reaches_a_real_store(tmp_path, tiny_sdata):
+    """The xv-cbz gate: what ``_persist_table`` does after a filter, end to end.
+
+    The first merge reindexed every column of the filtered ``obs`` -- the
+    structural ones included -- so ``instance_id`` was null for every dropped
+    cell, ``TableModel`` refused it, and ``_persist_table`` reported the failure
+    and carried on. Nothing computed under a filter was ever written; the graph
+    kept recording that it had been.
+    """
+    from spatialdata import read_zarr
+
+    from palms.utils.adata_persistence import _persist_table
+
+    ctx = _filtered_ctx(tiny_sdata, np.array([True, True, False, True, False, True]))
+    ctx.adata.obs["clustering_leiden"] = pd.Categorical(["0", "1", "0", "1"])
+
+    _persist_table(ctx)
+
+    obs = read_zarr(tiny_sdata.path)["table"].obs
+    assert "clustering_leiden" in obs.columns, "the result never reached the store"
+    assert obs["clustering_leiden"].isna().sum() == 2
+    assert obs["instance_id"].isna().sum() == 0, "the instance key was nulled"
+    assert obs["region"].isna().sum() == 0
+
+
+def test_structural_columns_keep_their_values_and_dtypes_for_dropped_cells():
+    from palms.utils.adata_persistence import _sync_filtered_obs_into_full
+
+    full, sub = _tables()
+    full.obs["region"] = pd.Categorical(["r"] * full.n_obs)
+    full.obs["transcript_counts"] = np.arange(full.n_obs, dtype="int64")
+    sub = full[np.arange(full.n_obs) % 2 == 0].copy()
+    before = full.obs.copy()
+
+    _sync_filtered_obs_into_full(_Ctx(full, sub))
+
+    pd.testing.assert_frame_equal(full.obs, before)
+    assert full.obs["transcript_counts"].dtype == "int64"
+    assert full.obs["cell_id"].isna().sum() == 0
+
+
+def test_a_pre_filter_column_survives_for_dropped_cells():
+    """r0.8 was computed on every cell; the filtered view carries only the kept
+    rows of it, and reindexing that back used to erase the rest."""
+    from palms.utils.adata_persistence import _sync_filtered_obs_into_full
+
+    full, _ = _tables()
+    full.obs["clustering_r0.8"] = pd.Categorical([str(i % 4) for i in range(full.n_obs)])
+    keep = np.arange(full.n_obs) % 2 == 0
+    sub = full[keep].copy()
+    sub.obs["clustering_r0.9"] = pd.Categorical(["a"] * sub.n_obs)
+
+    _sync_filtered_obs_into_full(_Ctx(full, sub))
+
+    assert full.obs["clustering_r0.8"].isna().sum() == 0
+    assert list(full.obs["clustering_r0.8"]) == [str(i % 4) for i in range(full.n_obs)]
+    assert full.obs["clustering_r0.9"].isna().sum() == (~keep).sum()
+
+
+def test_a_column_recomputed_under_the_filter_is_null_for_dropped_cells():
+    """Re-run r1.0 under the filter and the dropped cells have no r1.0 any more.
+
+    Not "update the kept rows and leave the rest": that leaves one column
+    holding two runs, and nothing downstream could tell.
+    """
+    from palms.utils.adata_persistence import _sync_filtered_obs_into_full
+
+    full, _ = _tables()
+    full.obs["clustering_r1.0"] = pd.Categorical(["old"] * full.n_obs)
+    keep = np.arange(full.n_obs) % 2 == 0
+    sub = full[keep].copy()
+    sub.obs["clustering_r1.0"] = pd.Categorical(["new"] * sub.n_obs)
+
+    _sync_filtered_obs_into_full(_Ctx(full, sub))
+
+    col = full.obs["clustering_r1.0"]
+    assert (col[keep] == "new").all()
+    assert col[~keep].isna().all(), "the old run must not survive on dropped cells"
+
+
 def test_uns_results_copy_across_whole():
     """They are cluster-level, not per-cell, so there is nothing to reindex."""
     from palms.utils.adata_persistence import _sync_filtered_obs_into_full
