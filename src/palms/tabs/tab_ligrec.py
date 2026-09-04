@@ -164,7 +164,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             id=f"ligrec:{clustering_key}",
             **_resolved(TEMPLATE_ID, blocks),
             params=params,
-            deps=[f"clustering:{clustering_key}", "spatial_neighbors"],
+            deps=[f"clustering:{clustering_key}", ctx.cell_scoped_id("spatial_neighbors")],
             kind=ARTIFACT,
             label=f"Ligand-receptor: {clustering_key}",
             outputs=["ligrec_res"],

@@ -110,7 +110,7 @@ Drops near-empty cells and rarely-detected genes, and **rebinds `adata`** to wha
 
 `inplace=False` and the rebind are the same decision twice. `sc.pp.filter_cells(inplace=True)` subsets the object it is handed, and in the viewer that object is the table inside the open SpatialData store — so filtering in place would shrink the store's own cells behind every other reader's back, while in the notebook (where the preamble binds a copy) it would be harmless. A divergence in that direction is invisible to a replay. The closing `adata.copy()` materialises what the two masks left as a view, because the next step writes `adata.obs[key]` and anndata converts a view silently at that point.
 
-Everything that reads cells depends on this node once it exists, so re-running it with different cutoffs flags every result stale — which is right: they were computed on cells that are no longer bound. Reverting removes the node rather than recording another, because a notebook without a filter simply never filtered.
+Work recorded after this node depends on it; work recorded before it does not, and is not marked stale — it was computed on every cell and still was. The node is a *barrier*: it rebinds `adata`, which every earlier step read, so the notebook places it after all of them and before its own dependents without any edge saying so. Re-running it with different cutoffs flags only the filtered lineage. Reverting records nothing, because a notebook without a filter simply never filtered; the node stays while any result depends on it.
 
 **Contract**
 

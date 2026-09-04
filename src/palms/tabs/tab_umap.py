@@ -256,7 +256,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             return
         ctx.apply_plot_font_size()
         _run("genes", f"plot:umap_genes:{'_'.join(genes)}",
-             deps=["normalize"],
+             deps=[ctx.cell_scoped_id("normalize")],
              label=f"UMAP: {', '.join(genes)}",
              stem=_stem_for_genes(genes))
 
@@ -273,7 +273,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         add_clustering_to_obs(ctx.adata, ctx.adata, ctx.clusterings[key], key)
         ctx.apply_plot_font_size()
         _run("clusters", f"plot:umap:{key}",
-             deps=["normalize", f"clustering:{key}"],
+             deps=[ctx.cell_scoped_id("normalize"), f"clustering:{key}"],
              label=f"UMAP: {key}",
              stem=_stem_for_clusters(key))
 

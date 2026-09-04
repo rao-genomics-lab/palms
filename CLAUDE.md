@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1947 tests** across 79 files, measured 2026-09-04 —
+There is a `pytest` suite in `tests/` (**1991 tests** across 81 files, measured 2026-09-04 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -128,20 +128,39 @@ Tools → Segmentation; five facts are worth not re-deriving.
   `_persist_custom_table` copies `ctx.adata` straight into `custom_table`, the only
   copy of a cell set the raw output does not contain. Dropped cells get `NaN`, which
   `verify_notebook.compare_clusterings` already masks on.
-- **`ctx.cell_root()` is the one definition of "which node says which cells".**
-  `"qc_filter"` when a filter is in force, `"preamble"` otherwise. Every step that
-  reads obs/var/X declares it; image-only steps (H&E, ARMS, external images, patches)
-  do not. Needed for order as well as staleness: `normalize` is *also* SETUP rooted at
-  the preamble, and `"normalize" < "qc_filter"` breaks the `(kind, id)` tie the wrong
-  way, so without a real edge the notebook would normalise the unfiltered table.
-- **Inserting the node flags nothing** — `upsert` of a new id has no descendants — so
-  `_reroot_cell_nodes` re-points the nodes already recorded, and sets `stale` on each
-  *explicitly*, because `upsert` clears that flag on the assumption the caller just
-  re-ran the node. The two directions differ on purpose: applying picks cell-rooted ids
-  out of the preamble's dependents (a miss costs a stale badge), while reverting moves
-  **everything** naming `qc_filter` whatever its id (a miss leaves a dangling dep and
-  `ProvGraph.remove` refuses). Revert removes the node rather than recording one:
-  there is no code for "un-filter".
+- **A filter starts a second lineage; it does not revise the first.** Results
+  recorded before it were computed on every cell and still were, so they keep
+  `deps=["preamble"]` and stay fresh; work recorded after it roots at `qc_filter`.
+  That is the user's model of it (`[no QC] → r0.8/r1.0`, `[QC] → r0.9`) and it is what
+  `analysis.py`'s append order already showed. The first design instead re-pointed
+  every cell-rooted node at the filter and forced it stale (`_reroot_cell_nodes`, gone),
+  which marked a whole session ⚠ for nothing and made Revert a ratchet.
+  `ctx.cell_root()` is still the one definition of "which node says which cells" —
+  `"qc_filter"` when a filter is in force, `"preamble"` otherwise; every step that reads
+  obs/var/X declares it, image-only steps do not — but its answer is recorded once, at
+  the step, and never moved.
+- **The node is a barrier** (`Step(barrier=True)` → `ProvNode.barrier`), which is what
+  makes the notebook right without rewriting history. `qc_filter` rebinds `adata`,
+  which every earlier cell-rooted step *read*: a write-after-read hazard the graph could
+  not express, and `topo_sort`'s `(kind, id)` tie-break put SETUP first, so the filter
+  sorted ahead of the unfiltered clusterings and the exported notebook ran them on the
+  wrong cells. A barrier gets an implicit in-edge from every node that is not its
+  descendant — acyclic by construction, ordering-invariant, and the flag is not part of
+  the staleness comparison. Two unordered barriers raise `CycleError`. Revert records
+  nothing: post-revert work depends on `preamble` and sorts *before* the barrier, where
+  `adata` is still the full table, so no restore node is needed; the step is removed
+  only when nothing depends on it (`ProvGraph.remove` refusing is how that is decided).
+  `tests/test_notebook_replay.py`'s QC section is the empirical gate: a full-cell r1.0
+  recorded before the filter replays at ARI 1.0 with the barrier and **0.49 without it**
+  (r0.5 would not do — it finds the same two blobs either way).
+- **Three ids are cell-scoped.** `normalize`, `spatial_neighbors` and `roi_deg` carry no
+  key, so a filtered run would upsert the node the unfiltered results depend on and flag
+  them stale. `ctx.cell_scoped_id(base)` returns `base` or `base:qc`, and every dependent
+  asks it rather than writing the base name (`tests/test_qc_recording.py` parses every
+  `Step`/`record_node` for a literal). Keyed ids need nothing: re-running
+  `clustering:leiden_r1.0` under the filter is a genuine revision of that result. The two
+  lineages share one sidecar, so `stale_results` clears it only when both are stale — the
+  `SHARED_UNS` family-vote rule, in `_SHARED_SIDECAR`.
 - **`utils/rebind_cells.py` is the shared checklist**, and `repoint_label_to_obs` is the
   dangerous line. `label_to_obs` is indexed by the raster's pixel value and holds an obs
   *row position*, so a stale map paints each cell with another cell's value and raises

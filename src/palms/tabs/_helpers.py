@@ -92,28 +92,6 @@ def annotation_polygons_preview(ctx) -> Preview:
 #: The node that filters the cell set, when one is in force.
 QC_NODE_ID = "qc_filter"
 
-#: Recorded nodes that are about *cells*, so they have to be re-pointed when
-#: ``cell_root()``'s answer changes. The mirror image of ``cell_root``: that
-#: names the dep a *new* node declares, this names the *old* nodes to move.
-#: Kept beside it because they are two ends of one fact, in the idiom of
-#: ``stale_results.py`` being the id bridge -- nothing on a ``ProvNode`` says
-#: whether its code reads ``adata``, so the correspondence has to be written
-#: down somewhere, once. ``tests/test_qc_recording.py`` checks it both ways.
-_CELL_ROOTED_IDS = frozenset({
-    "normalize", "plot:spatial_gene", "roi_deg", "plot:qc_metrics",
-})
-_CELL_ROOTED_PREFIXES = (
-    "clustering:", "transcripts:", "roi_expression:", "annot_distance:",
-    "crop_export:",
-)
-
-
-def is_cell_rooted(node_id: str) -> bool:
-    """True if *node_id* names a step that is about a particular set of cells."""
-    return (node_id in _CELL_ROOTED_IDS
-            or node_id.startswith(_CELL_ROOTED_PREFIXES))
-
-
 def qc_filter_preview(min_counts, min_cells) -> Preview:
     """The ``qc.filter`` step for a pair of cutoffs; ``None`` switches one off.
 
@@ -820,8 +798,10 @@ def create_shared_helpers(ctx: ViewerContext):
 
         ``"preamble"`` normally, ``"qc_filter"`` once a filter is in force.
         Every step that reads ``obs``, ``var`` or ``X`` roots here rather than
-        naming the preamble directly, so applying or reverting a filter
-        re-points them all in one place instead of at twenty call sites.
+        naming the preamble directly, so the cell set a step was computed on is
+        recorded once, at the step -- and stays recorded: a filter applied
+        later does not move it. That is what makes the two lineages (the
+        unfiltered work, then the filtered work) both true in the graph.
 
         Steps that read only images (H&E, ARMS, external images, patch
         overlays) or only the dataset path keep depending on ``"preamble"``:
@@ -837,57 +817,34 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.cell_root = _cell_root
 
-    def _reroot_cell_nodes(old: str, new: str) -> None:
-        """Re-point every already-recorded cell-rooted node from *old* to *new*.
+    def _cell_scoped_id(base: str) -> str:
+        """The id of an *unkeyed* artifact under the current cell set.
 
-        The load-bearing half of applying a filter. ``upsert`` of a *new* id has
-        no descendants, so inserting ``qc_filter`` flags nothing -- the user
-        would filter, and the Notebook tab would show a clean graph while every
-        stored result was about a different cell set.
-
-        Only the edge moves; the code is byte-identical. ``upsert`` compares
-        deps as well as code, so each re-pointed node and everything downstream
-        of it is flagged stale, which is exactly right.
-
-        The two directions ask different questions, deliberately. Applying picks
-        the cell-rooted nodes out of the preamble's dependents, and a miss there
-        costs a missing stale badge. Reverting has to move **everything** naming
-        the node about to be removed, whatever its id -- a miss there leaves a
-        dangling dep and ``ProvGraph.remove`` refuses, so it cannot be left to a
-        list that might have rotted.
+        ``normalize``, ``spatial_neighbors`` and ``roi_deg`` have no key of
+        their own, so without this a normalisation run under the filter would
+        upsert the node the unfiltered clusterings depend on and flag them
+        stale -- when nothing about them changed. Suffixing ``:qc`` gives the
+        filtered lineage its own node, and a dependent asks for the same
+        scoped id rather than writing the base name, so the two can never
+        cross. Keyed ids (``clustering:<key>``) do not need it: re-running one
+        under the filter is a genuine revision of that result.
         """
-        graph = state.get("prov_graph")
-        if graph is None or new not in graph:
-            return
-        removing = old == QC_NODE_ID
-        for node in graph.nodes():
-            if node.id == new or old not in node.deps:
-                continue
-            if not removing and not is_cell_rooted(node.id):
-                continue
-            deps = [new if d == old else d for d in node.deps]
-            try:
-                graph.upsert(
-                    node.id, node.code, deps=deps, kind=node.kind,
-                    label=node.label, params=node.params,
-                    template_id=node.template_id,
-                    template_origin=node.template_origin,
-                    template_hash=node.template_hash,
-                )
-                # ``upsert`` clears the flag on the node it revises, on the
-                # assumption that the caller just ran it. That is false here:
-                # nothing re-ran, the node's *input* moved. Its artifact was
-                # produced from a cell set that is no longer bound, which is the
-                # definition of stale -- so say so explicitly.
-                graph.get(node.id).stale = True
-            except (KeyError, CycleError) as e:
-                report_recording_failure(node.id, e)
+        return base if _cell_root() == "preamble" else f"{base}:qc"
+
+    ctx.cell_scoped_id = _cell_scoped_id
 
     def _apply_qc_filter(preview):
         """Run and record a QC filter, then re-point the viewer at its cells.
 
         Takes a live ``Preview`` the way ``ensure_annotations`` does, so the tab
         and this function cannot disagree about what the widgets meant.
+
+        The step is a **barrier**: it rebinds ``adata``, which every earlier
+        cell-rooted step read, so the notebook has to run all of them before
+        it. ``topo_sort`` orders that from the flag alone. Nothing recorded
+        before the filter is touched -- those results were computed on the
+        full table and still were; only work recorded from here on roots at
+        ``qc_filter``.
         """
         from palms.utils.adata_persistence import full_table
         from palms.utils.rebind_cells import (
@@ -924,6 +881,7 @@ def create_shared_helpers(ctx: ViewerContext):
                 kind=SETUP,
                 label=qc_label(params.get("min_counts"), params.get("min_cells")),
                 outputs=["adata"],
+                barrier=True,
             ))
         except Exception:
             ctx.adata = previous
@@ -934,7 +892,6 @@ def create_shared_helpers(ctx: ViewerContext):
             "min_counts": params.get("min_counts"),
             "min_cells": params.get("min_cells"),
         }
-        _reroot_cell_nodes("preamble", QC_NODE_ID)
 
         rebind_cells(ctx, ctx.adata, repoint_label_to_obs(full_l2o, kept_mask(full, ctx.adata)))
         state["_qc_applied_key"] = (tuple(sorted(params.items())), id(full))
@@ -962,11 +919,14 @@ def create_shared_helpers(ctx: ViewerContext):
     ctx.ensure_qc_filter = _ensure_qc_filter
 
     def _clear_qc_filter():
-        """Revert to every cell, and remove the node rather than recording one.
+        """Revert to every cell, recording nothing.
 
-        There is no code for "un-filter": a notebook without a filter simply
-        never filtered. So the step is removed, which ``ProvGraph.remove``
-        allows only once nothing names it -- hence the re-rooting first.
+        There is no code for "un-filter", and none is needed: work recorded
+        from here on roots at ``preamble`` again, and the barrier sorts it
+        *before* ``qc_filter`` in the notebook, where ``adata`` is still the
+        full table. The node is removed only if nothing depends on it -- a
+        filtered lineage that exists keeps its step, and ``ProvGraph.remove``
+        refusing is how that is decided, not a list of ids that might rot.
         """
         from palms.utils.adata_persistence import full_table
         from palms.utils.rebind_cells import rebind_cells
@@ -975,13 +935,12 @@ def create_shared_helpers(ctx: ViewerContext):
             return
         state["qc_filter"] = None
         state.pop("_qc_applied_key", None)
-        _reroot_cell_nodes(QC_NODE_ID, "preamble")
         graph = state.get("prov_graph")
         if graph is not None and QC_NODE_ID in graph:
             try:
                 graph.remove(QC_NODE_ID)
-            except ValueError as e:
-                report_recording_failure(QC_NODE_ID, e)
+            except ValueError:
+                pass  # something was computed under it; its step stays
 
         full = full_table(ctx)
         full_l2o = ctx.full_label_to_obs
@@ -1013,7 +972,7 @@ def create_shared_helpers(ctx: ViewerContext):
             return executor.ns["adata_norm"]
         _record_preamble()
         outputs = _run_step(Step(
-            id="normalize",
+            id=_cell_scoped_id("normalize"),
             **_resolved("normalize", list(builtin_spec("normalize").blocks)),
             deps=[_cell_root()],
             kind=SETUP,
@@ -1103,10 +1062,10 @@ def create_shared_helpers(ctx: ViewerContext):
         if state.get("_spatial_neighbors_key") == cache_key:
             return
         _run_step(Step(
-            id="spatial_neighbors",
+            id=_cell_scoped_id("spatial_neighbors"),
             **_resolved("spatial_neighbors", list(builtin_spec("spatial_neighbors").blocks)),
             params={"n_neighs": n_neighs},
-            deps=["normalize"],
+            deps=[_cell_scoped_id("normalize")],
             kind=ARTIFACT,
             label="Spatial neighbors",
         ))

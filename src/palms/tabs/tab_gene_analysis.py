@@ -246,7 +246,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             id=f"rank_genes:{clustering_key}",
             **_resolved(RANK_GENES_TEMPLATE_ID, blocks),
             params=params,
-            deps=["normalize", f"clustering:{clustering_key}"],
+            deps=[ctx.cell_scoped_id("normalize"), f"clustering:{clustering_key}"],
             label=f"Rank genes: {clustering_key}",
             outputs=["rank_df", "adata_norm"],
         )

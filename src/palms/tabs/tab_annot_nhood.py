@@ -240,7 +240,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             id=f"annot_nhood:{clustering_key}",
             **_resolved(TEMPLATE_ID, nhood_blocks),
             params=nhood_params,
-            deps=["normalize", f"clustering:{clustering_key}",
+            deps=[ctx.cell_scoped_id("normalize"), f"clustering:{clustering_key}",
                   "annot_virtual_cells"],
             kind=ARTIFACT,
             label=f"Annotation nhood enrichment: {clustering_key}",

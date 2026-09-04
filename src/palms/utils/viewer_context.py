@@ -121,9 +121,14 @@ class ViewerContext:
     # reads cells must depend on -- "qc_filter" when a filter is in force,
     # "preamble" otherwise -- and is the one definition of it.
     cell_root: Any = None
+    # ``cell_scoped_id("normalize")`` is "normalize" or "normalize:qc": the id
+    # an unkeyed artifact gets under the current cell set, so a filtered run
+    # does not revise the node the unfiltered results depend on. Dependents
+    # must ask it for the dep rather than writing the base name.
+    cell_scoped_id: Any = None
     ensure_qc_filter: Any = None     # re-apply the stored cutoffs; idempotent
     apply_qc_filter: Any = None      # run + record a filter from a Preview
-    clear_qc_filter: Any = None      # revert to every cell, and drop the node
+    clear_qc_filter: Any = None      # revert to every cell; the step stays if used
     # The one route a figure takes: saves it under <data_path>/plots/ in every
     # configured format and shows it in the Plots dock. Replaced auto_save_plot,
     # which only ever wrote a file, in one format, from six of eighteen sites.

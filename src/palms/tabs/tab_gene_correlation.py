@@ -146,7 +146,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
         deps = ["preamble"]
         if norm == "Log1p(CPM)":
-            deps = ["normalize"]
+            deps = [ctx.cell_scoped_id("normalize")]
         if clustering_key is not None:
             ctx.record_clustering(clustering_key)
             from palms.utils.gene_analysis import add_clustering_to_obs

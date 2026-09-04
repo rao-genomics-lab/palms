@@ -259,7 +259,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             id=f"plot:markers:{plot_name}:{clustering_key}",
             **_resolved(TEMPLATE_ID, blocks),
             params=params,
-            deps=["normalize", f"clustering:{clustering_key}"],
+            deps=[ctx.cell_scoped_id("normalize"), f"clustering:{clustering_key}"],
             kind=TERMINAL,
             label=f"Marker {plot_name}: {clustering_key}",
             outputs=["fig"],

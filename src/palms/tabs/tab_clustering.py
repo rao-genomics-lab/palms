@@ -232,7 +232,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             id=f"clustering:{key}",
             **_resolved(TEMPLATE_ID, blocks),
             params=params,
-            deps=["normalize"],
+            deps=[ctx.cell_scoped_id("normalize")],
             kind=ARTIFACT,
             label=f"Clustering: {key}",
             # The labels come back through the declared-output contract rather
