@@ -70,6 +70,11 @@ def build_tab(ctx: ViewerContext) -> tuple:
                              **combo_value_kwargs(ctx.gene_names, index=0))
     gene_b_widget = ComboBox(label="Gene B", choices=ctx.gene_names,
                              **combo_value_kwargs(ctx.gene_names, index=1))
+    # Published on ctx so refresh_gene_choices can re-populate it: the
+    # choices are bound to var_names once, here, and a gene filter or a
+    # segmentation swap can shrink that panel underneath them.
+    ctx.corr_gene_a_widget = gene_a_widget
+    ctx.corr_gene_b_widget = gene_b_widget
     norm_widget    = ComboBox(
         label="Normalisation",
         choices=["Raw counts", "Fraction of total", "Log1p(CPM)"],

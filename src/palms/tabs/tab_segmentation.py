@@ -318,24 +318,6 @@ def build_tab(ctx: ViewerContext) -> tuple:
 
 # ── Segmentation swap helpers ─────────────────────────────────────────────────
 
-def _build_label_to_obs(adata) -> np.ndarray:
-    """Build label_value → obs row index mapping from adata.obs['cell_id']."""
-    if "cell_id" in adata.obs.columns:
-        label_values = adata.obs["cell_id"].values.astype(np.int32)
-    else:
-        # Assume sequential 1..N
-        n = len(adata.obs)
-        lto = np.arange(-1, n, dtype=np.int32)
-        return lto
-
-    max_label = int(label_values.max())
-    lto = np.full(max_label + 1, -1, dtype=np.int32)
-    for obs_idx, lv in enumerate(label_values):
-        if lv > 0:
-            lto[lv] = obs_idx
-    return lto
-
-
 def _apply_custom_segmentation(ctx: ViewerContext, new_adata, scales: list):
     """Replace the cell labels layer and all derived state with custom data.
 
@@ -343,6 +325,15 @@ def _apply_custom_segmentation(ctx: ViewerContext, new_adata, scales: list):
     (from source zarr) or dask arrays (from sdata DataTree on restore).
     """
     from palms.utils.coloring import CellColorManager
+
+    # A QC filter is cutoffs chosen against the cells that are being replaced,
+    # so it cannot survive the swap. Cleared *first*, before anything rebinds:
+    # leaving it on would give a notebook that reads coherently (preamble ->
+    # filter the new table -> normalize) while the GUI showed unfiltered cells,
+    # which is the GUI/notebook divergence _record_segmentation exists to stop.
+    clear_qc = getattr(ctx, "clear_qc_filter", None)
+    if callable(clear_qc):
+        clear_qc()
 
     # ── Replace labels layer in napari viewer ─────────────────────────────────
     old_layer = ctx.cell_labels_layer
@@ -355,7 +346,7 @@ def _apply_custom_segmentation(ctx: ViewerContext, new_adata, scales: list):
     new_layer.contour = 0
 
     # ── Build new label_to_obs and CellColorManager ───────────────────────────
-    new_l2o = _build_label_to_obs(new_adata)
+    new_l2o = _import_loader().label_to_obs_for(new_adata)
     new_cm = CellColorManager(new_adata, new_l2o)
 
     # ── Compute new centroids ─────────────────────────────────────────────────
@@ -366,7 +357,9 @@ def _apply_custom_segmentation(ctx: ViewerContext, new_adata, scales: list):
     # ── Update ctx ────────────────────────────────────────────────────────────
     ctx.cell_labels_layer = new_layer
     ctx.adata = new_adata
+    ctx.full_adata = new_adata
     ctx.label_to_obs = new_l2o
+    ctx.full_label_to_obs = new_l2o
     ctx.color_manager = new_cm
     ctx.centroids_yx = new_centroids_yx
     ctx.segmentation_source = "custom"
@@ -464,6 +457,15 @@ def _revert_xenium_segmentation(ctx: ViewerContext):
     """Restore native Xenium cell labels layer and adata."""
     from palms.utils.coloring import CellColorManager
 
+    # A QC filter is cutoffs chosen against the cells that are being replaced,
+    # so it cannot survive the swap. Cleared *first*, before anything rebinds:
+    # leaving it on would give a notebook that reads coherently (preamble ->
+    # filter the new table -> normalize) while the GUI showed unfiltered cells,
+    # which is the GUI/notebook divergence _record_segmentation exists to stop.
+    clear_qc = getattr(ctx, "clear_qc_filter", None)
+    if callable(clear_qc):
+        clear_qc()
+
     if ctx.sdata is None:
         raise RuntimeError("sdata not available — cannot revert")
 
@@ -494,7 +496,9 @@ def _revert_xenium_segmentation(ctx: ViewerContext):
     # ── Update ctx ────────────────────────────────────────────────────────────
     ctx.cell_labels_layer = new_layer
     ctx.adata = new_adata
+    ctx.full_adata = new_adata
     ctx.label_to_obs = new_l2o
+    ctx.full_label_to_obs = new_l2o
     ctx.color_manager = new_cm
     ctx.centroids_yx = new_centroids_yx
     ctx.segmentation_source = "xenium"

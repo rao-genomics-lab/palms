@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1755 tests** across 72 files, measured 2026-09-03 —
+There is a `pytest` suite in `tests/` (**1947 tests** across 79 files, measured 2026-09-04 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -105,6 +105,58 @@ The tabs are grouped under Cells / Genes / Spatial / Images / Tools. **Tools →
 (`tabs/tab_cache.py`) exposes the cache health check and repair actions described
 under "Cache safety" below: verify, re-consolidate, recover from a backup, and a
 force rebuild that moves the old cache aside rather than deleting it.
+
+**Tools → QC** (`tabs/tab_qc.py`) shows the Xenium QC panel and applies cell/gene
+filtering. It is the *second* feature that rebinds `ctx.adata`, so read it beside
+Tools → Segmentation; five facts are worth not re-deriving.
+
+- **The filter rebinds, it does not mutate.** `_run_step` already followed a rebind
+  (`# A step may rebind rather than mutate (adata = adata[:, mask])`), so `ctx.adata`
+  tracks it for free and all 31 other templates keep working — they pair `adata` and
+  `adata_norm` positionally. In the viewer `adata` **is** `sdata["table"]`, while the
+  notebook preamble binds `sdata["table"].copy()`, so in-place filtering would be
+  harmless on replay and destructive in the GUI: a divergence no replay test can see.
+  Hence `inplace=False` + mask + one closing `.copy()` (which also materialises the
+  view the masks leave — the next step's `adata.obs[key] = …` would otherwise convert
+  it silently).
+- **The store is never written filtered.** `full_adata` / `full_label_to_obs` hold the
+  unfiltered pair, and `adata_persistence._sync_filtered_obs_into_full` merges results
+  back onto it by `obs_names` before either persist path writes. Without that merge
+  every clustering, DEG and CNV result computed under a filter is written to an object
+  nothing persists and lost at exit, silently — `_persist_table` writes
+  `sdata["table"]`, not `ctx.adata`. Persisting the subset instead is worse:
+  `_persist_custom_table` copies `ctx.adata` straight into `custom_table`, the only
+  copy of a cell set the raw output does not contain. Dropped cells get `NaN`, which
+  `verify_notebook.compare_clusterings` already masks on.
+- **`ctx.cell_root()` is the one definition of "which node says which cells".**
+  `"qc_filter"` when a filter is in force, `"preamble"` otherwise. Every step that
+  reads obs/var/X declares it; image-only steps (H&E, ARMS, external images, patches)
+  do not. Needed for order as well as staleness: `normalize` is *also* SETUP rooted at
+  the preamble, and `"normalize" < "qc_filter"` breaks the `(kind, id)` tie the wrong
+  way, so without a real edge the notebook would normalise the unfiltered table.
+- **Inserting the node flags nothing** — `upsert` of a new id has no descendants — so
+  `_reroot_cell_nodes` re-points the nodes already recorded, and sets `stale` on each
+  *explicitly*, because `upsert` clears that flag on the assumption the caller just
+  re-ran the node. The two directions differ on purpose: applying picks cell-rooted ids
+  out of the preamble's dependents (a miss costs a stale badge), while reverting moves
+  **everything** naming `qc_filter` whatever its id (a miss leaves a dangling dep and
+  `ProvGraph.remove` refuses). Revert removes the node rather than recording one:
+  there is no code for "un-filter".
+- **`utils/rebind_cells.py` is the shared checklist**, and `repoint_label_to_obs` is the
+  dangerous line. `label_to_obs` is indexed by the raster's pixel value and holds an obs
+  *row position*, so a stale map paints each cell with another cell's value and raises
+  nothing; the re-pointed map keeps its original length and gives dropped cells `-1`
+  (they render transparent). The rebind also resets the executor namespace to
+  `EXECUTOR_BASE_NAMES` — `adata_norm` and friends are still at the old cell count —
+  and rebuilds the UMAP window, whose `n_cells` is frozen at construction. Two of those
+  were already broken for a segmentation swap; the gene ComboBoxes
+  (`ctx.refresh_gene_choices`) were the third.
+
+A segmentation swap calls `clear_qc_filter()` first, in both directions.
+`sc.pp.calculate_qc_metrics` in `qc.metrics` runs on a copy for the `genes.correlation`
+reason, and its control rates read the untouched `adata` so the denominator stays
+Xenium's all-codeword `total_counts` (5,512,036 vs `X`'s 5,511,215 on the pancreas
+section — 0.015%, so only a source guard can catch the difference).
 
 **Tools → Dataset** (`tabs/tab_dataset.py`) is the per-item view the Cache tab's
 whole-store report cannot give: a `QTreeWidget` of everything on disk with sizes, and
@@ -934,6 +986,6 @@ reproducibility defect rather than a kernel-discovery one.
 ## Version History
 
 See `CHANGELOG.md`. The codebase was refactored from a 4295-line monolith into modular tabs in
-March 2026; that refactor produced 11, and there are **27** now, in 5 groups. `app.py`'s
+March 2026; that refactor produced 11, and there are **28** now, in 5 groups. `app.py`'s
 `addTab` calls are the authoritative count — `src/palms/tabs/*.py` agrees, but neither
 the docs nor `tabs/__init__.py` did until 2026-08-26.

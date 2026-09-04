@@ -60,6 +60,55 @@ entries under **Development log** are the closed pre-1.0.0 record.
   export (`xv-hdg`).
 
 ### Added
+- **Cell and gene QC filtering, and the Xenium QC panel** (Tools → QC, issue #77).
+  The viewer had neither: `grep -rn "filter_cells\|filter_genes"` over `src/palms`
+  returned nothing, so every analysis — Leiden, rank genes, CNV, ROI DEG, the
+  spatial statistics — ran on the raw cell set, near-empty cells included.
+
+  The tab draws the standard QC panel (transcripts per cell, genes per cell, cell
+  area, nucleus ratio, plus the two negative-control rates), reports exactly what a
+  cutoff would keep as the spin boxes move, and applies `sc.pp.filter_cells` /
+  `sc.pp.filter_genes` as a recorded step. Opt-in: a dataset that has never been
+  through the tab gains no node and nothing goes stale.
+
+  Five things this needed that were not obvious:
+
+  - **The filter rebinds `adata`; it must not mutate it.** In the viewer `adata`
+    *is* the table inside the open SpatialData store, while the notebook preamble
+    binds a copy — so `inplace=True` would be harmless on replay and would shrink
+    the store's own cells in the GUI. A divergence in that direction is invisible
+    to the replay tier, which is why the template uses `inplace=False` plus a mask.
+  - **The store is never written filtered.** `_persist_table` writes
+    `sdata["table"]`, not `ctx.adata`; the two stopped being the same object the
+    moment a filter could rebind, and without the new
+    `_sync_filtered_obs_into_full` merge every clustering and DEG computed under a
+    filter would have been written to an object nothing persists and lost at exit,
+    with no error. Persisting the subset instead would have been worse:
+    `_persist_custom_table` copies `ctx.adata` straight into `custom_table`, the
+    only copy of a cell set the raw output does not contain.
+  - **Adding the node flags nothing stale**, because `upsert` of a new id has no
+    descendants. The retroactive re-rooting (`ctx.cell_root()` and
+    `_reroot_cell_nodes`) is the load-bearing half; without it a user filters and
+    the Notebook tab shows a clean graph over results about different cells.
+  - **`label_to_obs` is positional**, so a filtered table with a stale map paints
+    each cell with another cell's value and raises nothing. `repoint_label_to_obs`
+    keeps the array's original length — it is indexed by the raster's pixel value,
+    not the row count — and gives dropped cells `-1`, so they render transparent.
+  - **`sc.pp.calculate_qc_metrics(inplace=True)` redefines `total_counts`.**
+    Xenium's column sums every codeword class; scanpy's sums `X`. Measured on
+    `Xenium_V1_human_Pancreas_FFPE_outs`: 5,512,036 against 5,511,215. The 0.015%
+    leaves both control percentages identical to four decimals, so no value
+    assertion can catch it — the metrics run on a copy, and the control rates read
+    the untouched object, both pinned by source guards.
+
+  Three latent defects fixed on the way, all of which were already live for a
+  custom-segmentation swap: six gene ComboBoxes bound to `var_names` at build time
+  with nothing to refresh them (`ctx.refresh_gene_choices`), `UMAPViewer.n_cells`
+  frozen at construction, and the executor namespace keeping `adata_norm` and
+  friends at the old cell count. `utils/rebind_cells.py` is now the one place that
+  repoints everything, shared with `tab_segmentation`, and
+  `loader.label_to_obs_for` replaces the two near-duplicate mappings.
+
 - **Four defects found by running the DegaFile export for real**, on
   `Xenium_V1_human_Pancreas_FFPE_outs` with celldega 0.24.2 installed into the
   live env. The export itself works — 220 MB written, and the raw output

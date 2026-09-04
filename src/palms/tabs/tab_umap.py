@@ -70,6 +70,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         choices=ctx.gene_names,
         value=ctx.gene_names[0] if ctx.gene_names else None,
     )
+    # Published on ctx so refresh_gene_choices can re-populate it: the
+    # choices are bound to var_names once, here, and a gene filter or a
+    # segmentation swap can shrink that panel underneath them.
+    ctx.umap_gene_widget = gene_widget
     add_gene_button = PushButton(label="Add Gene")
     remove_gene_button = PushButton(label="Remove Selected")
     clear_genes_button = PushButton(label="Clear All")

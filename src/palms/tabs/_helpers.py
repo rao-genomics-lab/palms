@@ -87,6 +87,65 @@ def annotation_polygons_preview(ctx) -> Preview:
     )
 
 
+# ── QC filtering ─────────────────────────────────────────────────────────────
+
+#: The node that filters the cell set, when one is in force.
+QC_NODE_ID = "qc_filter"
+
+#: Recorded nodes that are about *cells*, so they have to be re-pointed when
+#: ``cell_root()``'s answer changes. The mirror image of ``cell_root``: that
+#: names the dep a *new* node declares, this names the *old* nodes to move.
+#: Kept beside it because they are two ends of one fact, in the idiom of
+#: ``stale_results.py`` being the id bridge -- nothing on a ``ProvNode`` says
+#: whether its code reads ``adata``, so the correspondence has to be written
+#: down somewhere, once. ``tests/test_qc_recording.py`` checks it both ways.
+_CELL_ROOTED_IDS = frozenset({
+    "normalize", "plot:spatial_gene", "roi_deg", "plot:qc_metrics",
+})
+_CELL_ROOTED_PREFIXES = (
+    "clustering:", "transcripts:", "roi_expression:", "annot_distance:",
+    "crop_export:",
+)
+
+
+def is_cell_rooted(node_id: str) -> bool:
+    """True if *node_id* names a step that is about a particular set of cells."""
+    return (node_id in _CELL_ROOTED_IDS
+            or node_id.startswith(_CELL_ROOTED_PREFIXES))
+
+
+def qc_filter_preview(min_counts, min_cells) -> Preview:
+    """The ``qc.filter`` step for a pair of cutoffs; ``None`` switches one off.
+
+    Module level, beside :func:`annotation_polygons_preview`, and for the same
+    reason: the QC tab's provider and the launch-time restore in ``app.py`` both
+    have to turn the same two numbers into the same blocks, and two expressions
+    of that would drift.
+
+    There is no assembly that filters nothing, because that is not a step. A
+    caller with both cutoffs off wants :func:`ViewerContext.clear_qc_filter`.
+    """
+    blocks = [name for name, on in (("cells", min_counts is not None),
+                                    ("genes", min_cells is not None)) if on]
+    blocks.append("bind")
+    params = {}
+    if min_counts is not None:
+        params["min_counts"] = int(min_counts)
+    if min_cells is not None:
+        params["min_cells"] = int(min_cells)
+    return Preview(blocks, params)
+
+
+def qc_label(min_counts, min_cells) -> str:
+    """The node label for a pair of cutoffs, as the Notebook tab shows it."""
+    halves = []
+    if min_counts is not None:
+        halves.append(f"≥{int(min_counts)} counts/cell")
+    if min_cells is not None:
+        halves.append(f"≥{int(min_cells)} cells/gene")
+    return "QC filter: " + ", ".join(halves)
+
+
 # ── magicgui ComboBox default helper ─────────────────────────────────────────
 
 def combo_value_kwargs(choices, index: int = 0) -> dict:
@@ -755,6 +814,182 @@ def create_shared_helpers(ctx: ViewerContext):
 
     ctx.record_preamble = _record_preamble
 
+    # ── QC filter: cell_root, apply, ensure, clear ───────────────────────
+    def _cell_root() -> str:
+        """The node that says which *cells* a step is about.
+
+        ``"preamble"`` normally, ``"qc_filter"`` once a filter is in force.
+        Every step that reads ``obs``, ``var`` or ``X`` roots here rather than
+        naming the preamble directly, so applying or reverting a filter
+        re-points them all in one place instead of at twenty call sites.
+
+        Steps that read only images (H&E, ARMS, external images, patch
+        overlays) or only the dataset path keep depending on ``"preamble"``:
+        they are about the dataset, not about the cells.
+
+        Membership is checked rather than assumed, because naming a node that
+        is not in the graph raises out of ``upsert``.
+        """
+        graph = state.get("prov_graph")
+        if state.get("qc_filter") and graph is not None and QC_NODE_ID in graph:
+            return QC_NODE_ID
+        return "preamble"
+
+    ctx.cell_root = _cell_root
+
+    def _reroot_cell_nodes(old: str, new: str) -> None:
+        """Re-point every already-recorded cell-rooted node from *old* to *new*.
+
+        The load-bearing half of applying a filter. ``upsert`` of a *new* id has
+        no descendants, so inserting ``qc_filter`` flags nothing -- the user
+        would filter, and the Notebook tab would show a clean graph while every
+        stored result was about a different cell set.
+
+        Only the edge moves; the code is byte-identical. ``upsert`` compares
+        deps as well as code, so each re-pointed node and everything downstream
+        of it is flagged stale, which is exactly right.
+
+        The two directions ask different questions, deliberately. Applying picks
+        the cell-rooted nodes out of the preamble's dependents, and a miss there
+        costs a missing stale badge. Reverting has to move **everything** naming
+        the node about to be removed, whatever its id -- a miss there leaves a
+        dangling dep and ``ProvGraph.remove`` refuses, so it cannot be left to a
+        list that might have rotted.
+        """
+        graph = state.get("prov_graph")
+        if graph is None or new not in graph:
+            return
+        removing = old == QC_NODE_ID
+        for node in graph.nodes():
+            if node.id == new or old not in node.deps:
+                continue
+            if not removing and not is_cell_rooted(node.id):
+                continue
+            deps = [new if d == old else d for d in node.deps]
+            try:
+                graph.upsert(
+                    node.id, node.code, deps=deps, kind=node.kind,
+                    label=node.label, params=node.params,
+                    template_id=node.template_id,
+                    template_origin=node.template_origin,
+                    template_hash=node.template_hash,
+                )
+                # ``upsert`` clears the flag on the node it revises, on the
+                # assumption that the caller just ran it. That is false here:
+                # nothing re-ran, the node's *input* moved. Its artifact was
+                # produced from a cell set that is no longer bound, which is the
+                # definition of stale -- so say so explicitly.
+                graph.get(node.id).stale = True
+            except (KeyError, CycleError) as e:
+                report_recording_failure(node.id, e)
+
+    def _apply_qc_filter(preview):
+        """Run and record a QC filter, then re-point the viewer at its cells.
+
+        Takes a live ``Preview`` the way ``ensure_annotations`` does, so the tab
+        and this function cannot disagree about what the widgets meant.
+        """
+        from palms.utils.adata_persistence import full_table
+        from palms.utils.rebind_cells import (
+            kept_mask, rebind_cells, repoint_label_to_obs,
+        )
+
+        blocks, params, _ = preview
+        if not params:
+            raise ValueError("a QC filter needs at least one cutoff")
+
+        full = full_table(ctx)
+        full_l2o = ctx.full_label_to_obs
+        if full_l2o is None:
+            full_l2o = ctx.label_to_obs
+
+        # Always filter *the full table*, never the current one: re-running with
+        # a looser cutoff must be able to bring cells back, and a filter of a
+        # filter could not. It is also what makes the recorded step the one that
+        # replays -- the notebook's adata is the whole table at this point.
+        #
+        # Restored on failure, because the intermediate state is the dangerous
+        # one: ``adata`` would be the full table while ``label_to_obs`` still
+        # described the previous filter, and that mismatch paints cells with
+        # other cells' values rather than raising.
+        previous = ctx.adata
+        ctx.adata = full
+        try:
+            _record_preamble()
+            _run_step(Step(
+                id=QC_NODE_ID,
+                **_resolved("qc.filter", blocks),
+                params=params,
+                deps=["preamble"],
+                kind=SETUP,
+                label=qc_label(params.get("min_counts"), params.get("min_cells")),
+                outputs=["adata"],
+            ))
+        except Exception:
+            ctx.adata = previous
+            if ctx.executor is not None:
+                ctx.executor.ns["adata"] = previous
+            raise
+        state["qc_filter"] = {
+            "min_counts": params.get("min_counts"),
+            "min_cells": params.get("min_cells"),
+        }
+        _reroot_cell_nodes("preamble", QC_NODE_ID)
+
+        rebind_cells(ctx, ctx.adata, repoint_label_to_obs(full_l2o, kept_mask(full, ctx.adata)))
+        state["_qc_applied_key"] = (tuple(sorted(params.items())), id(full))
+        _save_prov_graph()
+
+    ctx.apply_qc_filter = _apply_qc_filter
+
+    def _ensure_qc_filter():
+        """Re-apply the stored cutoffs if they are not already in force.
+
+        Idempotent, and what ``app.py`` calls at launch so a session comes back
+        filtered without any tab having to run first.
+        """
+        from palms.utils.adata_persistence import full_table
+
+        qc = state.get("qc_filter")
+        if not qc:
+            return
+        params = {k: v for k, v in qc.items() if v is not None}
+        key = (tuple(sorted(params.items())), id(full_table(ctx)))
+        if state.get("_qc_applied_key") == key:
+            return
+        _apply_qc_filter(qc_filter_preview(qc.get("min_counts"), qc.get("min_cells")))
+
+    ctx.ensure_qc_filter = _ensure_qc_filter
+
+    def _clear_qc_filter():
+        """Revert to every cell, and remove the node rather than recording one.
+
+        There is no code for "un-filter": a notebook without a filter simply
+        never filtered. So the step is removed, which ``ProvGraph.remove``
+        allows only once nothing names it -- hence the re-rooting first.
+        """
+        from palms.utils.adata_persistence import full_table
+        from palms.utils.rebind_cells import rebind_cells
+
+        if not state.get("qc_filter"):
+            return
+        state["qc_filter"] = None
+        state.pop("_qc_applied_key", None)
+        _reroot_cell_nodes(QC_NODE_ID, "preamble")
+        graph = state.get("prov_graph")
+        if graph is not None and QC_NODE_ID in graph:
+            try:
+                graph.remove(QC_NODE_ID)
+            except ValueError as e:
+                report_recording_failure(QC_NODE_ID, e)
+
+        full = full_table(ctx)
+        full_l2o = ctx.full_label_to_obs
+        rebind_cells(ctx, full, full_l2o if full_l2o is not None else ctx.label_to_obs)
+        _save_prov_graph()
+
+    ctx.clear_qc_filter = _clear_qc_filter
+
     # ── ensure_normalized ────────────────────────────────────────────────
     def _ensure_normalized():
         """Run the ``normalize`` step if needed and return ``adata_norm``.
@@ -780,7 +1015,7 @@ def create_shared_helpers(ctx: ViewerContext):
         outputs = _run_step(Step(
             id="normalize",
             **_resolved("normalize", list(builtin_spec("normalize").blocks)),
-            deps=["preamble"],
+            deps=[_cell_root()],
             kind=SETUP,
             label="Normalize, log-transform, PCA",
             outputs=["adata_norm"],
@@ -841,7 +1076,7 @@ def create_shared_helpers(ctx: ViewerContext):
         _record_node(
             f"clustering:{key}",
             code,
-            deps=["preamble"],   # puts labels into obs; needs no normalisation
+            deps=[_cell_root()],  # puts labels into obs; needs no normalisation
             kind=ARTIFACT,
             label=f"Clustering: {key}",
         )
@@ -972,6 +1207,35 @@ def create_shared_helpers(ctx: ViewerContext):
         return recorded_paths(ctx.data_path, paths)
 
     ctx.recorded_plot_paths = _recorded_plot_paths
+
+    # ── refresh_gene_choices ─────────────────────────────────────────────
+    def _refresh_gene_choices():
+        """Re-populate every gene ComboBox from ``ctx.gene_names``.
+
+        The counterpart of ``refresh_clustering_choices``, and needed for the
+        same reason one step later: the gene pickers are built once from
+        ``var_names``, so a gene filter (or a segmentation swap onto a table
+        with a different panel) leaves them offering genes the table no longer
+        has, and the first click is a ``KeyError`` out of ``CellColorManager``.
+
+        A combo whose current value survives keeps it; one whose value is gone
+        falls back to the first name rather than to ``None``, which magicgui
+        rejects as an invalid choice.
+        """
+        names = list(ctx.gene_names or [])
+        for combo in [ctx.gene_widget, ctx.corr_gene_a_widget,
+                      ctx.corr_gene_b_widget, ctx.transcript_gene_widget,
+                      ctx.transcript_density_gene_widget, ctx.umap_gene_widget]:
+            if combo is None:
+                continue
+            old_val = combo.value
+            combo.choices = names
+            if old_val in names:
+                combo.value = old_val
+            elif names:
+                combo.value = names[0]
+
+    ctx.refresh_gene_choices = _refresh_gene_choices
 
     # ── refresh_clustering_choices ───────────────────────────────────────
     def _refresh_clustering_choices():

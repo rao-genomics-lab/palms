@@ -170,6 +170,11 @@ def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
     attrs["marker_genes_json"] = state.get("marker_genes_json")
     attrs["umap_genes"] = list(state.get("umap_genes") or [])
     attrs["segmentation_source"] = state.get("segmentation_source", "xenium")
+    # The QC cutoffs in force, or None. Two integers rather than a filtered
+    # table: the store always holds every cell, and the filter is re-derived
+    # at the next launch. An older store has no such attr, which reads back as
+    # None -- so nothing recorded before this feature is disturbed.
+    attrs["qc_filter"] = state.get("qc_filter")
 
     # ── Reproducible-code provenance graph ───────────────────────────────
     # Never shrinks *here*. A smaller in-memory graph means it is not the
@@ -378,6 +383,7 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "marker_genes_json": attrs.get("marker_genes_json"),
         "umap_genes": list(attrs.get("umap_genes") or []),
         "segmentation_source": attrs.get("segmentation_source", "xenium"),
+        "qc_filter": attrs.get("qc_filter"),
         "external_images_ui": attrs.get("external_images_ui") or [],
         "patch_overlays_ui": attrs.get("patch_overlays_ui") or [],
         "prov_graph": attrs.get("prov_graph"),

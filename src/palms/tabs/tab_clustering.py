@@ -7,8 +7,9 @@ from pathlib import Path
 import os
 
 from magicgui.widgets import CheckBox, ComboBox, PushButton, Slider, SpinBox, FloatSpinBox
-from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QWidget, QFileDialog
+from qtpy.QtWidgets import QTextEdit, QHBoxLayout, QLabel, QWidget, QFileDialog
 from napari.qt.threading import thread_worker
+from superqt.utils import ensure_main_thread
 from palms.tabs._helpers import make_tab, StatusProxy, attach_spinner, make_progress_bar
 from palms.utils.prov_graph import ARTIFACT, TERMINAL
 from palms.utils.step_templates import (
@@ -324,7 +325,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             f"_col = \"group\" if \"group\" in _imp.columns else _imp.columns[1]\n"
             f"adata.obs[\"{name}\"] = pd.Categorical("
             f"_imp.set_index(_idx)[_col].astype(str).reindex(adata.obs_names).values)",
-            deps=["preamble"],
+            deps=[ctx.cell_root()],
             label=f"Import clustering: {name}",
         )
 
@@ -374,6 +375,36 @@ def build_tab(ctx: ViewerContext) -> tuple:
     leiden_io_layout.addWidget(leiden_export_button.native)
     leiden_io_row.setLayout(leiden_io_layout)
 
+    # Which cells this clustering would be about. Read-only, and it points at
+    # the tab that owns the setting: issue #77 asked for the cutoffs here, but
+    # a filter applied here would silently change ten other tabs, so the
+    # controls live in Tools -> QC and only the consequence is shown here.
+    # The kept count, and "off" spelled out -- "12,431 of 167,890" alone reads
+    # as the number dropped.
+    qc_summary = QLabel()
+
+    @ensure_main_thread
+    def _refresh_qc_summary():
+        # is not None, not `or`: AnnData defines __len__, so an empty table
+        # would test falsy.
+        full = getattr(ctx, "full_adata", None)
+        full = full if full is not None else ctx.adata
+        if full is None:
+            qc_summary.setText("")
+            return
+        if state.get("qc_filter"):
+            qc_summary.setText(
+                f"QC: {ctx.adata.n_obs:,} of {full.n_obs:,} cells  ·  Tools \u2192 QC")
+        else:
+            qc_summary.setText(
+                f"QC: off \u2014 all {full.n_obs:,} cells  ·  Tools \u2192 QC")
+
+    # A listener rather than a refresh on tab-show: the label has to be right
+    # the moment Apply finishes, not the next time someone opens this tab.
+    # ensure_main_thread because rebind_cells fires it from a napari worker.
+    state.setdefault("qc_listeners", []).append(_refresh_qc_summary)
+    _refresh_qc_summary()
+
     widget = make_tab(
         leiden_n_neighbors,
         leiden_n_pcs,
@@ -387,6 +418,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         leiden_progress,
         leiden_status_text,
         leiden_io_row,
+        qc_summary,
     )
 
     def _restore_session(session):

@@ -62,6 +62,67 @@ class TemplateNote:
 
 # Ordered: the reader meets setup first, then the analyses that depend on it.
 TEMPLATE_NOTES: dict[str, TemplateNote] = {
+    "qc.metrics": TemplateNote(
+        group="Setup",
+        tab="[QC](Tab-QC)",
+        what=(
+            "The standard Xenium QC panel: transcripts per cell, genes per "
+            "cell, and — where the table carries them — segmented cell area "
+            "and nucleus ratio, plus the negative-control rates printed as "
+            "percentages of all counts. What a filtering cutoff is chosen from."
+        ),
+        reading=(
+            "Two details carry the arithmetic, and neither shows up in the "
+            "numbers. `calculate_qc_metrics` runs on `adata_qc`, a copy, "
+            "because in the viewer `adata` *is* the table inside the open "
+            "store and the in-place form would write a recomputed "
+            "`total_counts` over Xenium's own column. And the control rates "
+            "read the untouched `adata`, so the denominator stays every "
+            "codeword class — Xenium's `total_counts` sums all of them, "
+            "scanpy's sums `X` alone. Measured on the pancreas section that is "
+            "5,512,036 against 5,511,215: 0.015%, which is why only a source "
+            "guard can catch the difference. `percent_top` is a parameter "
+            "rather than the literal it reads as, because scanpy raises when a "
+            "position exceeds the panel size."
+        ),
+        variants=(
+            "Four panels when the table has `cell_area` and `nucleus_area` — "
+            "the 10x output does — and two when it does not, which a table "
+            "built from a custom segmentation need not."
+        ),
+    ),
+    "qc.filter": TemplateNote(
+        group="Setup",
+        tab="[QC](Tab-QC)",
+        what=(
+            "Drops near-empty cells and rarely-detected genes, and **rebinds "
+            "`adata`** to what is left. Opt-in: a dataset that has never been "
+            "through the QC tab has no such node, and nothing downstream "
+            "changes."
+        ),
+        reading=(
+            "`inplace=False` and the rebind are the same decision twice. "
+            "`sc.pp.filter_cells(inplace=True)` subsets the object it is "
+            "handed, and in the viewer that object is the table inside the "
+            "open SpatialData store — so filtering in place would shrink the "
+            "store's own cells behind every other reader's back, while in the "
+            "notebook (where the preamble binds a copy) it would be harmless. "
+            "A divergence in that direction is invisible to a replay. The "
+            "closing `adata.copy()` materialises what the two masks left as a "
+            "view, because the next step writes `adata.obs[key]` and anndata "
+            "converts a view silently at that point.\n\n"
+            "Everything that reads cells depends on this node once it exists, "
+            "so re-running it with different cutoffs flags every result stale "
+            "— which is right: they were computed on cells that are no longer "
+            "bound. Reverting removes the node rather than recording another, "
+            "because a notebook without a filter simply never filtered."
+        ),
+        variants=(
+            "Cells only, genes only, or both. Genes are counted over the cells "
+            "that survive the cell cutoff, which is the order scanpy's own "
+            "tutorials use. There is no assembly that filters nothing."
+        ),
+    ),
     "normalize": TemplateNote(
         group="Setup",
         tab="every expression-based tab",

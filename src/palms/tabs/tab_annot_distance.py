@@ -192,7 +192,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             id=f"annot_distance:{annot_type}",
             **_resolved(TEMPLATE_ID, blocks),
             params=params,
-            deps=["annotations"],
+            deps=[ctx.cell_root(), "annotations"],
             kind=ARTIFACT,
             label=f"Distance to '{annot_type}'",
             outputs=["annot_distances"],

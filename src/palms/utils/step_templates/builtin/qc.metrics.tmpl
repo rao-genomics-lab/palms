@@ -1,0 +1,101 @@
+# palms template
+# id: qc.metrics
+# schema-version: 1
+# assemblies: head+controls+plot4+areas+save | head+controls+plot2+save
+# doc: The standard Xenium QC panel: count distributions and control rates.
+# requires: sc, plt, Path, adata
+# outputs: fig, cprobes, cwords
+# params: title:str, paths:list, percent_top:tuple
+# percent_top is a param rather than the literal (10, 20, 50, 150) it reads as,
+# because scanpy raises "IndexError: Positions outside range of features" when a
+# position exceeds n_vars. A 377-gene Xenium panel is comfortable; a small custom
+# panel, or a table after gene filtering, need not be. The tab drops the
+# positions the panel cannot support rather than letting the figure fail.
+# No sample-params line for it: that field is comma-separated, so a tuple
+# literal cannot survive the parse.
+
+#--- block head
+import seaborn as sns
+
+# The metrics go onto a working copy, not onto `adata` itself.
+# calculate_qc_metrics writes obs['total_counts'], and in the viewer `adata` IS
+# the table inside the open SpatialData store -- so inplace=True there would
+# persist a *recomputed* total_counts over Xenium's own column. They are not the
+# same quantity: Xenium's total_counts sums every codeword class, scanpy's sums
+# X, i.e. gene expression only. Measured on Xenium_V1_human_Pancreas_FFPE:
+# 5,512,036 against 5,511,215 -- 0.015%, immaterial to the percentages below,
+# but it silently redefines a column the viewer treats as structural.
+adata_qc = adata.copy()
+sc.pp.calculate_qc_metrics(adata_qc, percent_top=$percent_top, inplace=True)
+
+#--- block controls
+# Negative-control rates, read off the untouched object so the denominator is
+# Xenium's own total_counts -- every codeword class, which is what "% of counts"
+# means for a control probe. Reading it off adata_qc would divide by the
+# gene-only sum instead.
+cprobes = (
+    adata.obs["control_probe_counts"].sum() / adata.obs["total_counts"].sum() * 100
+)
+cwords = (
+    adata.obs["control_codeword_counts"].sum() / adata.obs["total_counts"].sum() * 100
+)
+print(f"Negative DNA probe count % : {cprobes}")
+print(f"Negative decoding count % : {cwords}")
+
+#--- block plot4
+fig, axs = plt.subplots(1, 4, figsize=(15, 4))
+
+axs[0].set_title("Total transcripts per cell")
+sns.histplot(
+    adata_qc.obs["total_counts"],
+    kde=False,
+    ax=axs[0],
+)
+
+axs[1].set_title("Unique transcripts per cell")
+sns.histplot(
+    adata_qc.obs["n_genes_by_counts"],
+    kde=False,
+    ax=axs[1],
+)
+
+#--- block plot2
+# The two-panel form, for a table with no cell_area/nucleus_area -- a custom
+# segmentation need not carry them, and the ratio below would raise mid-figure.
+fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+
+axs[0].set_title("Total transcripts per cell")
+sns.histplot(
+    adata_qc.obs["total_counts"],
+    kde=False,
+    ax=axs[0],
+)
+
+axs[1].set_title("Unique transcripts per cell")
+sns.histplot(
+    adata_qc.obs["n_genes_by_counts"],
+    kde=False,
+    ax=axs[1],
+)
+
+#--- block areas
+axs[2].set_title("Area of segmented cells")
+sns.histplot(
+    adata_qc.obs["cell_area"],
+    kde=False,
+    ax=axs[2],
+)
+
+axs[3].set_title("Nucleus ratio")
+sns.histplot(
+    adata_qc.obs["nucleus_area"] / adata_qc.obs["cell_area"],
+    kde=False,
+    ax=axs[3],
+)
+
+#--- block save
+fig.suptitle($title)
+fig.tight_layout()
+for _path in $paths:
+    Path(_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(_path, dpi=300, bbox_inches="tight")

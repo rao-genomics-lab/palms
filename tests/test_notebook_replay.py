@@ -568,3 +568,139 @@ def _harvest_the_rankings(uns: dict, expected: list[str]):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── the same claim, with a QC filter in the chain ────────────────────────────
+#
+# Filtering rebinds ``adata``, and the notebook's whole reason for existing is
+# that it analyses the same cells the viewer did. That is a different question
+# from the one above: not "does this code reproduce its numbers" but "does the
+# recorded chain still describe the right *input*" — the class of defect a
+# replay cannot normally see, and the reason the filter is a recorded step
+# rather than a viewer setting.
+
+_QC_DUMP_TEMPLATE = """
+out = Path({out!r})
+adata.obs[{keys!r}].to_csv(out / "qc_replay_obs.csv")
+pd.Series({{"n_obs": adata.n_obs, "n_vars": adata.n_vars}}).to_csv(
+    out / "qc_replay_shape.csv")"""
+
+
+def _biting_cutoffs(h5ad_path: Path) -> tuple[int, int]:
+    """Cutoffs that actually drop something from the synthetic fixture.
+
+    Derived rather than hard-coded: its cells carry hundreds of counts and its
+    genes are detected almost everywhere, so any fixed pair would silently
+    become a no-op and leave every assertion below vacuous. The tab picks its
+    numbers from a distribution too — this is the same move.
+    """
+    import scanpy as sc
+
+    adata = sc.read_h5ad(h5ad_path)
+    per_cell = np.asarray(adata.X.sum(axis=1)).ravel()
+    min_counts = int(np.median(per_cell))
+
+    # Counted over the cells that survive, because that is what the template
+    # does. Deriving it from the unfiltered matrix instead gives a cutoff no
+    # gene can meet afterwards, and the run dies in PCA with zero features --
+    # which is the sequential ordering asserting itself.
+    kept = np.asarray(adata.X)[per_cell >= min_counts]
+    per_gene = (kept > 0).sum(axis=0)
+    return min_counts, int(np.percentile(per_gene, 20))
+
+
+def _run_the_qc_analysis(h5ad_path: Path) -> StepExecutor:
+    """preamble -> qc_filter -> normalize -> leiden, as Tools -> QC records it."""
+    from palms.tabs._helpers import qc_filter_preview
+    from palms.utils.step_templates import builtin_assemble
+
+    blocks, params, _ = qc_filter_preview(*_biting_cutoffs(h5ad_path))
+    ex = StepExecutor(namespace={})
+    ex.graph.upsert("environment", environment_code(), kind=SETUP,
+                    label="Environment & seeds")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ex.run(Step(
+            id="preamble", template=_PREAMBLE_TEMPLATE,
+            params={"data_path": str(h5ad_path)}, kind=SETUP,
+            label="Setup & data loading",
+        ))
+        ex.run(Step(
+            id="qc_filter", template=builtin_assemble("qc.filter", blocks),
+            params=params, deps=["preamble"], kind=SETUP,
+            label="QC filter", outputs=["adata"],
+        ))
+        ex.run(Step(
+            id="normalize", template=_NORMALIZE_TEMPLATE, deps=["qc_filter"],
+            kind=SETUP, label="Normalize, log-transform, PCA",
+            outputs=["adata_norm"],
+        ))
+        ex.run(_leiden_step(float(PRIMARY_KEY.rsplit("r", 1)[1])))
+    return ex
+
+
+@pytest.fixture(scope="module")
+def qc_replay(tmp_path_factory, replay_adata):
+    """Module-scoped for the same reason as ``replay``: the kernel dominates."""
+    tmp_path = tmp_path_factory.mktemp("qc_replay")
+    h5ad_path = tmp_path / "input.h5ad"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        replay_adata().write_h5ad(h5ad_path)
+
+    executor = _run_the_qc_analysis(h5ad_path)
+
+    nb_path = tmp_path / "qc_notebook.ipynb"
+    cells = notebook_export.graph_to_cells(executor.graph)
+    cells.append(("code", _QC_DUMP_TEMPLATE.format(
+        out=str(tmp_path), keys=[PRIMARY_KEY],
+    )))
+    notebook_export.write_notebook(cells, nb_path)
+    notebook_export.execute_notebook(nb_path, cwd=tmp_path, timeout=900)
+
+    return {
+        "executor": executor,
+        "gui_obs": executor.get("adata").obs,
+        "gui_shape": executor.get("adata").shape,
+        "replay_obs": pd.read_csv(tmp_path / "qc_replay_obs.csv", index_col=0),
+        "replay_shape": pd.read_csv(tmp_path / "qc_replay_shape.csv",
+                                    index_col=0).iloc[:, 0].to_dict(),
+        "nb_path": nb_path,
+    }
+
+
+def test_the_filter_actually_removed_something(qc_replay, replay_adata):
+    """Guard the guard: a no-op filter would make everything below vacuous."""
+    unfiltered = replay_adata()
+    n_obs, n_vars = qc_replay["gui_shape"]
+    assert n_obs < unfiltered.n_obs, "the cutoff dropped no cells"
+    assert n_vars < unfiltered.n_vars, "the cutoff dropped no genes"
+    assert n_obs > 0 and n_vars > 0
+
+
+def test_the_replayed_notebook_analyses_the_same_cells(qc_replay):
+    """The claim the filter has to earn: same cell set on both sides."""
+    assert qc_replay["replay_shape"]["n_obs"] == qc_replay["gui_shape"][0]
+    assert qc_replay["replay_shape"]["n_vars"] == qc_replay["gui_shape"][1]
+    assert list(qc_replay["replay_obs"].index.astype(str)) == \
+        list(qc_replay["gui_obs"].index.astype(str))
+
+
+def test_the_replayed_notebook_reproduces_the_filtered_clustering(qc_replay):
+    gui = qc_replay["gui_obs"][PRIMARY_KEY].astype(str).to_numpy()
+    replayed = qc_replay["replay_obs"][PRIMARY_KEY].astype(str).to_numpy()
+    assert len(set(gui)) >= 2, "the fixture must produce something to cluster"
+    assert adjusted_rand_score(gui, replayed) == 1.0
+    assert (gui == replayed).all()
+
+
+def test_the_filter_cell_precedes_the_normalize_cell(qc_replay):
+    """The ``(kind, id)`` tie-break puts "normalize" first without a real edge."""
+    order = qc_replay["executor"].graph.topo_sort()
+    assert order.index("qc_filter") < order.index("normalize")
+
+    sources = [source for kind, source in notebook_export.graph_to_cells(
+        qc_replay["executor"].graph) if kind == "code"]
+    filter_at = next(i for i, s in enumerate(sources) if "sc.pp.filter_cells" in s)
+    norm_at = next(i for i, s in enumerate(sources) if "sc.pp.normalize_total" in s)
+    assert filter_at < norm_at

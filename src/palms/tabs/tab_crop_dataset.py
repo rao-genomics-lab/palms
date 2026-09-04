@@ -226,7 +226,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
                         name, Path(info).parent, want_overlays,
                         [notes] if notes else [],
                     )
-                    ctx.record_node(node_id, code, deps=["preamble"],
+                    ctx.record_node(node_id, code, deps=[ctx.cell_root()],
                                     kind=NOTE, label=label)
                 else:
                     lines.append(f"✗ {name}: {info}")

@@ -63,6 +63,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         choices=ctx.gene_names,
         value=ctx.gene_names[0] if ctx.gene_names else None,
     )
+    # Published on ctx so refresh_gene_choices can re-populate it: the
+    # choices are bound to var_names once, here, and a gene filter or a
+    # segmentation swap can shrink that panel underneath them.
+    ctx.transcript_gene_widget = transcript_gene_widget
     add_gene_button = PushButton(label="Add Gene", enabled=True)
     remove_gene_button = PushButton(label="Remove Selected", enabled=True)
     clear_genes_button = PushButton(label="Clear All", enabled=True)
@@ -179,6 +183,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         choices=ctx.gene_names,
         value=ctx.gene_names[0] if ctx.gene_names else None,
     )
+    # Published on ctx so refresh_gene_choices can re-populate it: the
+    # choices are bound to var_names once, here, and a gene filter or a
+    # segmentation swap can shrink that panel underneath them.
+    ctx.transcript_density_gene_widget = density_gene_widget
     bin_size_slider = Slider(label="Bin size (µm)", min=10, max=500, value=50)
     cluster_filter_density_check = CheckBox(label="Filter by selected clusters", value=False)
     normalise_cells_check = CheckBox(label="Normalise by cells per bin", value=False)
@@ -450,7 +458,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             id=f"transcripts:{gene}",
             **_resolved(GENE_TEMPLATE_ID, gene_blocks),
             params=gene_params,
-            deps=["preamble"],
+            deps=[ctx.cell_root()],
             kind=ARTIFACT,
             label=f"Transcripts: {gene}",
             outputs=["transcript_points"],

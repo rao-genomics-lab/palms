@@ -172,7 +172,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _record_rois()
 
         blocks, params, _ = _roi_expr_preview()
-        deps = ["rois"]
+        deps = [ctx.cell_root(), "rois"]
         filter_desc = ""
         clustering_key = params.get("clustering")
         if clustering_key is not None:
@@ -325,7 +325,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _record_rois()
 
         blocks, params, _ = _roi_deg_preview()
-        deps = ["rois"]
+        deps = [ctx.cell_root(), "rois"]
         clustering_key = params.get("clustering")
         if clustering_key is not None:
             ctx.record_clustering(clustering_key)
