@@ -223,6 +223,59 @@ entries under **Development log** are the closed pre-1.0.0 record.
   its own arithmetic.
 
 ### Fixed
+- **With code recording off, every `run_step` path died.** Turning off
+  Preferences → "Record reproducible code" broke every analysis action that goes
+  through `ctx.run_step`, starting with `ctx.ensure_normalized()`:
+
+      KeyError: node 'normalize' depends on unknown node 'preamble'
+                (dependencies must be recorded first)
+
+  Recording was gated in exactly one layer and `run_step` was not in it.
+  `_record_node` returns early when `state["record_code"]` is false, and
+  `app.py` emits the preamble **only** if that flag is set — but
+  `StepExecutor.run` upserts unconditionally, so with recording off the graph
+  was still written, and written against a graph that had been deliberately left
+  empty. The failure was uniform across all 31 templates: clustering, rank
+  genes, neighbourhood enrichment and every other migrated step reached it.
+
+  Two things made it worse than a plain crash. The step's code had **already
+  executed** when the upsert raised — `_exec_statements` runs first, inside the
+  same lock — so the user saw a failure for a computation that had succeeded,
+  and its output binding was discarded. And `run_step` has none of
+  `_record_node`'s degrade-and-report handling, so the `KeyError` propagated out
+  of the tab callback.
+
+  `run_step` now resolves its graph through `_step_graph()`, which settles two
+  questions:
+
+  - **Which graph.** `StepExecutor.run` always records — recording is not a mode
+    of `run`, it is what `run` is — so the toggle cannot mean *don't record*,
+    only *don't record here*. With it off the executor is pointed at a throwaway
+    graph that nothing exports and nothing persists, leaving the session's own
+    graph exactly as the user left it. Letting the session graph take those
+    nodes instead would have been worse than the crash it replaces:
+    `_record_node` still returns early, so `environment`, every
+    `clustering:<key>` and every `plot:*` terminal would be absent while the
+    migrated steps were present — and `save_session` writes that graph at exit.
+    The realistic case is not the empty graph but a **restored** one: `app.py`
+    restores the graph unconditionally and gates only the preamble re-emit, so
+    on any dataset with previous work the toggle silently grew and re-persisted
+    it, with no crash to notice.
+  - **The root.** Every migrated step declares `deps=["preamble"]`, and
+    `ProvGraph.upsert` refuses an unknown dep, so `run_step` now establishes its
+    own precondition rather than inheriting a launch-time side effect that is
+    conditional on the very flag in question. That also self-heals the
+    recording-on path; when recording, the seed goes through `_record_preamble`
+    so it is indistinguishable from `app.py`'s.
+
+  Two smaller things fell out. `_get_executor` no longer creates or seeds
+  `state["prov_graph"]` — the executor is built for `preview_step` too, and a
+  preview must not have side effects. And the executor's graph is now re-pointed
+  on every run, so turning recording back on mid-session (which replaces
+  `state["prov_graph"]` wholesale) no longer leaves steps landing in the
+  discarded graph. `tests/test_record_code_toggle.py` covers both modes, the
+  mid-session toggle and the restored-graph case; nothing in the suite had
+  turned the flag off before, which is why this survived every green run.
 - **A restored session forgot where its H&E came from.** `he_state["he_path"]`
   was set to `None` on restore, so the next session save wrote a null path over
   the recorded one. It is carried forward now — which is also what lets `he:load`
