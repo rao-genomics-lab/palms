@@ -6,6 +6,59 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Fixed
+- **A crop export's `experiment.xenium` described the parent, not the crop.**
+  `crop_export.py` copied the parent's file verbatim, so every quantity in it
+  was about the wrong dataset — measured on `demo_data/crop_6`: `num_cells`
+  299769 for a table holding 76,577 cells, with `region_area`,
+  `total_cell_area` and `transcripts_per_cell` likewise the parent's. It is the
+  one Xenium-format file a crop writes, so it is the one a reader would trust;
+  and because `loader`'s freshness fingerprint is a sha256 of it, a crop and its
+  parent hashed identically. The file is now *restated* by the new
+  `utils/xenium_specs.py`, which sorts every key into one of three fates:
+
+  - **Carried** — the run's identity (panel, slide, cassette, instrument,
+    software versions, the uuids, `pixel_size`), which stays true of any subset
+    of it. `pixel_size` and `analysis_sw_version` are the only two keys
+    `spatialdata_io.xenium()` itself reads, so both must survive.
+  - **Recomputed** — `num_cells`, `transcripts_per_cell` and `total_cell_area`
+    from the exported table, `region_area` from the drawn polygon. Each formula
+    was verified against a real 10x bundle rather than assumed: recomputing them
+    from `cells.parquet` on `output-XETG00283__0037793__Region_4` (XOA 3.1.0,
+    310,003 cells) reproduces what 10x itself wrote **exactly**, including that
+    `transcripts_per_cell` is the *median* (209) and not the mean (286.5).
+  - **Demoted** — everything else, including every unrecognised key, dropped
+    from the top level and kept verbatim under `palms_crop.run_specs`. Demotion
+    is not deletion: nothing in the parent's file is lost, it is only moved
+    somewhere it cannot be read as a statement about the crop. Unrecognised
+    defaults to demoted for the same reason `store_inventory`'s unrecognised
+    defaults to not-deletable — a key from a future XOA version is more likely a
+    measurement (which would then be a lie) than a provenance string.
+
+  Three of those decisions came out of measurements that contradicted the
+  obvious answer:
+
+  - **`transcripts_per_100um` is demoted, not recomputed.**
+    `transcript_counts.sum() / cell_area.sum() * 100` reproduces the 3.1.0
+    bundle to the last digit (400.4995231102975) — and is 30% out on a 2.0.0 one
+    (63.006 against the 81.975 10x wrote), a gap none of the obvious variants
+    closes. The formula looks verified if you only ever check one dataset.
+  - **`num_transcripts` is not the row count of `transcripts.parquet`**
+    (132,030,595 against 132,310,899 rows), so it and everything derived from it
+    is demoted too.
+  - **`non_zero_matrix_entries` counts the all-feature matrix** (63,557,814 over
+    9,687 features) while the viewer's table is read `gex_only=True` and holds
+    5,101 — counting the crop's `X` would answer a different question under
+    10x's name, the same trap as the QC control-rate denominator.
+
+  A crop of a crop stays flat: `run_specs` is always the original acquisition's
+  file and `palms_crop.derived_from` is the chain of every dataset in between.
+  Verified end to end on `Xenium_V1_human_Pancreas_FFPE_outs` — a 170-cell crop
+  and then a 29-cell crop of that crop — with every restated value matching the
+  exported table, the manifest now fingerprinting the crop's own file, and both
+  exports opening through `loader.load_sdata`. Unblocks the raw-format crop
+  export (`xv-hdg`).
+
 ### Added
 - **Four defects found by running the DegaFile export for real**, on
   `Xenium_V1_human_Pancreas_FFPE_outs` with celldega 0.24.2 installed into the

@@ -316,6 +316,41 @@ Two rules carry the safety, both under test:
   the real tool against a real dataset, and pinned by
   `test_derived_outputs_are_replaced_not_written_in_place`.
 
+### Cropping a dataset (`utils/crop_export.py`, `utils/xenium_specs.py`)
+
+A crop writes exactly one Xenium-format file, `experiment.xenium`, so it is the
+one a reader would trust — and it used to be a `shutil.copy` of the parent's,
+which made every quantity in it describe the wrong dataset (`num_cells` 299769
+for a 76,577-cell crop) and gave the crop the parent's cache-freshness hash,
+since that hash is a sha256 of this file. `xenium_specs.crop_specs` restates it
+instead, sorting every key into one of three fates: **carried** (the run's
+identity — panel, slide, instrument, software versions, uuids, `pixel_size`,
+all of which stay true of a subset), **recomputed** (`num_cells`,
+`transcripts_per_cell`, `total_cell_area` from the exported table,
+`region_area` from the drawn polygon), or **demoted** — dropped from the top
+level and kept verbatim under `palms_crop.run_specs`, which is where an
+unrecognised key goes too, for the same reason `store_inventory`'s unrecognised
+defaults to not-deletable. Demotion is not deletion, so nothing is lost.
+
+Three facts worth not re-deriving, each of which is a measurement:
+
+- **Every recompute formula was checked against real 10x output**, not assumed.
+  `transcripts_per_cell` is the **median** of `transcript_counts` (209, against
+  a mean of 286.5) and `total_cell_area` is a plain `cell_area.sum()` — both
+  reproduce a 3.1.0 bundle to the last digit.
+- **`transcripts_per_100um` is why one dataset is not enough.**
+  `transcript_counts.sum() / cell_area.sum() * 100` reproduces that same bundle
+  exactly and is 30% out on a 2.0.0 one (63.006 against 81.975), which no
+  obvious variant closes — so it has no cross-version definition and is demoted.
+  `num_transcripts` is likewise **not** the row count of `transcripts.parquet`,
+  and `non_zero_matrix_entries` counts the all-feature matrix while the table is
+  read `gex_only=True` — the QC control-rate denominator trap again.
+- **The file is written *before* the zarr**, keeping the mtime ordering the copy
+  had (`app.py`'s batch-preprocess worker still compares those two mtimes), which
+  is what makes the table stats the only inputs it may use. Cropping a crop stays
+  flat: `run_specs` is always the original acquisition's file and
+  `palms_crop.derived_from` is the chain.
+
 ### Deleting components (`utils/store_inventory.py`, `tabs/tab_dataset.py`)
 
 `store_inventory` is the model behind Tools → Dataset: five `Section`s of `Node`s
