@@ -27,7 +27,7 @@ from shapely import contains_xy
 from shapely.affinity import scale as shapely_scale
 from shapely.geometry import Polygon
 
-from palms.utils import sdata_write
+from palms.utils import sdata_write, xenium_specs
 
 log = logging.getLogger(__name__)
 
@@ -417,6 +417,7 @@ def crop_and_export(
     from spatialdata.models import Image2DModel, Labels2DModel, TableModel, PointsModel
     from spatialdata.transformations import Identity, Scale
     from palms.loader import _convert_arrow_strings, write_manifest
+    from palms.utils.zarr_safe import atomic_json
     from palms.preprocess import preprocess
 
     _progress(0, f"Validating region '{name}'...")
@@ -672,9 +673,28 @@ def crop_and_export(
     staging_dir.mkdir(parents=True)
 
     try:
-        # Copy experiment.xenium first so its mtime predates the zarr write —
+        # Write experiment.xenium first so its mtime predates the zarr write —
         # loader.py's cache-freshness check requires the zarr be >= as fresh.
-        shutil.copy(ctx.data_path / "experiment.xenium", staging_dir / "experiment.xenium")
+        #
+        # Restated, never copied: every quantity in the parent's file describes
+        # the parent (measured on demo_data/crop_6: num_cells 299769 for a
+        # 76,577-cell crop), and this is the one Xenium-format file the export
+        # writes, so it is the one a reader would trust. It also gives the crop
+        # a source hash of its own — loader's freshness fingerprint is a sha256
+        # of this file, so a copied one hashed identically to the parent's.
+        # utils/xenium_specs.py owns which keys are carried, restated, or
+        # demoted into the embedded copy of the run's own file.
+        atomic_json(
+            staging_dir / "experiment.xenium",
+            xenium_specs.crop_specs(
+                xenium_specs.read_specs(ctx.data_path / "experiment.xenium"),
+                stats=xenium_specs.crop_table_stats(adata_cropped.obs),
+                # The drawn polygon in microns — already built above for the
+                # transcript filter, and the crop's analogue of region_area.
+                region_area_um2=poly_xy_um.area,
+                source_path=ctx.data_path,
+            ),
+        )
 
         # Image/label pyramid chunks are small enough that the default (~40-way)
         # scheduler already proved safe for them (measured); the points element
