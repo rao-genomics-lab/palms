@@ -74,7 +74,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
     intro.setTextFormat(_rich())
 
     layer_widget = ComboBox(
-        label="Image layer", choices=["dapi", "all"], value=IMAGE_TILE_LAYER,
+        label="Image layer", choices=["all", "dapi"], value=IMAGE_TILE_LAYER,
+        tooltip="Which morphology channels to tile.\n\n"
+                "all — DAPI, boundary, RNA and protein: the four\n"
+                "morphology_focus images a Xenium bundle ships, and the four\n"
+                "the Landscape viewer offers as toggles. Four pyramids, so\n"
+                "roughly four times the runtime and the output size.\n\n"
+                "dapi — the nuclear channel alone. Much faster, and enough\n"
+                "when the image is only a backdrop for the cells.\n\n"
+                "Template parameter: image_tile_layer",
     )
     tile_widget = SpinBox(
         label="Tile size (µm)", min=50, max=2000, step=50, value=TILE_SIZE_UM,

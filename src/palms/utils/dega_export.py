@@ -65,10 +65,21 @@ from typing import Optional
 #: Default Celldega tile size, in microns. Theirs, from the tutorials.
 TILE_SIZE_UM = 250
 
-#: Image layers to tile. 'dapi' is the nuclear channel alone and is what their
-#: Xenium tutorial uses; 'all' tiles every morphology channel and costs
-#: proportionally more.
-IMAGE_TILE_LAYER = "dapi"
+#: Image layers to tile, matching celldega's own default —
+#: ``run_pre_processing.main(image_tile_layer="all")``. For Xenium that is the
+#: four channels ``get_image_info('Xenium', 'all')`` names — dapi, bound, rna,
+#: prot — which are exactly the four ``morphology_focus_000{0..3}.ome.tif``
+#: files a bundle ships, and what their Landscape viewer expects to offer.
+#:
+#: This was ``"dapi"`` until 2026-09-05, on the reading that the nuclear channel
+#: alone "is what their Xenium tutorial uses". That is only half true — their
+#: docstring example does pass ``--image_tile_layer 'dapi'`` and
+#: ``get_image_info`` defaults to it — but their pipeline entry point does not,
+#: and a published export that silently drops three of four channels is the
+#: wrong default for a tool whose point is that the artifact is the record.
+#: The cost is real (four pyramids, so roughly 4x the runtime and output size),
+#: which is why the tab still offers 'dapi' and now says what the choice buys.
+IMAGE_TILE_LAYER = "all"
 
 #: The pin. A floating version here would be the ``insitucnv`` mistake twice —
 #: see the note in CLAUDE.md about why that git URL became a PyPI pin.

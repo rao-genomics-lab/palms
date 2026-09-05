@@ -6,6 +6,21 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Changed
+- **The DegaFile export now tiles every morphology channel by default**
+  (`xv-11y`). It defaulted to `dapi`, so a published Landscape carried one
+  toggle and nothing said the other three channels had been left out. celldega's
+  own entry point defaults the other way — `run_pre_processing.main(
+  image_tile_layer="all")` — and for Xenium `all` is the four channels
+  `get_image_info('Xenium', 'all')` names (dapi, bound, rna, prot), which are
+  exactly the four `morphology_focus_000{0..3}.ome.tif` files a bundle ships.
+  The old justification, that `dapi` is "what their Xenium tutorial uses", was
+  half true: their docstring example does pass it, but their pipeline does not.
+  The narrow option is still there — the cost is real, four pyramids being
+  roughly 4× the 322–637 s runtime and the 220 MB output — and the tab's
+  tooltip now says what the choice buys instead of leaving it to be discovered
+  in the output.
+
 ### Fixed
 - **A crop export's `experiment.xenium` described the parent, not the crop.**
   `crop_export.py` copied the parent's file verbatim, so every quantity in it
