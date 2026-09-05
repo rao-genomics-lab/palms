@@ -662,3 +662,48 @@ def test_the_publish_tab_renders_the_template_it_advertises(qapp, tmp_path):
     assert "degafiles_path = export_degafiles(" in code
     # Only names the notebook preamble binds; `data_path` is the whole of it.
     assert free_names(code) <= {"data_path"}
+
+def test_the_default_tiles_every_channel_celldega_names():
+    """xv-11y: a published export must not silently drop three of four channels.
+
+    ``celldega.pre.run_pre_processing.main`` defaults to ``'all'``, and for
+    Xenium that is the four channels ``get_image_info('Xenium', 'all')`` lists —
+    one per ``morphology_focus_000{0..3}.ome.tif`` the bundle ships. PALMS
+    defaulted to ``'dapi'`` until 2026-09-05, which produced a Landscape with a
+    single toggle and no indication that anything was missing.
+
+    The narrow option stays available: this pins which one is the *default*, not
+    which ones exist.
+    """
+    from palms.utils import dega_export as de
+
+    assert de.IMAGE_TILE_LAYER == "all"
+
+
+def test_the_tab_offers_both_layers_and_says_what_the_choice_costs():
+    """The default is only half of it — the tradeoff has to be visible.
+
+    Four pyramids is roughly four times the runtime and the output size, which
+    is a real reason to pick ``dapi``; it is not a reason to make that choice
+    silently.
+    """
+    import ast
+
+    source = (Path(__file__).resolve().parent.parent / "src" / "palms"
+              / "tabs" / "tab_publish.py").read_text()
+    tree = ast.parse(source)
+    call = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and any(getattr(kw, "arg", None) == "label"
+                and getattr(kw.value, "value", None) == "Image layer"
+                for kw in n.keywords)
+    )
+    kwargs = {kw.arg: kw.value for kw in call.keywords}
+    choices = ast.literal_eval(kwargs["choices"])
+    assert set(choices) == {"all", "dapi"}, "both must stay reachable"
+    assert kwargs["value"].id == "IMAGE_TILE_LAYER", (
+        "the widget must follow the module default, not restate it"
+    )
+    tooltip = ast.literal_eval(kwargs["tooltip"])
+    assert "four" in tooltip.lower(), "the tooltip must say what 'all' costs"

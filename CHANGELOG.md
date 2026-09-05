@@ -6,6 +6,26 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Changed
+- **The DegaFile export now tiles every morphology channel by default**
+  (`xv-11y`). It defaulted to `dapi`, so a published Landscape carried one
+  toggle and nothing said the other three channels had been left out. celldega's
+  own entry point defaults the other way — `run_pre_processing.main(
+  image_tile_layer="all")` — and for Xenium `all` is the four channels
+  `get_image_info('Xenium', 'all')` names (dapi, bound, rna, prot), which are
+  exactly the four `morphology_focus_000{0..3}.ome.tif` files a bundle ships.
+  The old justification, that `dapi` is "what their Xenium tutorial uses", was
+  half true: their docstring example does pass it, but their pipeline does not.
+  The narrow option is still there — four pyramids cost proportionally more
+  time — and the tab's tooltip now says what the choice buys instead of leaving
+  it to be discovered in the output. **Output size is not 4×**, measured on
+  `Xenium_V1_human_Pancreas_FFPE`: 329 MB against the single-channel 220 MB,
+  because the vector data does not multiply and the four WebP pyramids compress
+  very differently (dapi 19 MB, bound 37 MB, rna 41 MB, prot 32 MB). That spread
+  is also the argument against the old default: DAPI is the *smallest* of the
+  four, so tiling it alone dropped most of the image content, not three
+  redundant copies of it.
+
 ### Fixed
 - **The recorded environment reported `palms 0.1.0` while the code that ran was
   1.0.1.** `environment.package_versions()` resolved every name through
