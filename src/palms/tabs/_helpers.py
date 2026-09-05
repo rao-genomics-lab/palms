@@ -19,7 +19,7 @@ from palms.utils.plot_output import (
 )
 from palms.utils.reporting import get_logger, report_recording_failure
 from palms.utils.step_templates import (
-    Preview, builtin_spec, builtin_text, check_base_namespace,
+    Preview, builtin_assemble, builtin_spec, builtin_text, check_base_namespace,
     step_template as _resolved,
 )
 from palms.utils.steps import Step, StepExecutor, coerce
@@ -45,8 +45,15 @@ PROV_GRAPH_SIDECAR = "prov_graph.json"
 # Binds ``adata_norm`` rather than mutating ``adata``, so a step that makes its
 # own copy cannot end up normalising twice. Mirrors what the viewer has always
 # actually run (``utils.gene_analysis.get_normalized_adata``) — including the
-# ``target_sum=1e4`` the old recorded cell omitted.
-_NORMALIZE_TEMPLATE = builtin_text("normalize")
+# ``target_sum`` the old recorded cell omitted.
+#
+# ``builtin_assemble``, not ``builtin_text``: the template gained a second
+# scaling block when the target became settable, and ``builtin_text`` returns
+# *every* block in file order — which for this one means two
+# ``normalize_total`` calls. This constant is the default assembly, the fixed
+# target the viewer has always used.
+_NORMALIZE_BLOCKS = ("copy", "scale.fixed", "tail")
+_NORMALIZE_TEMPLATE = builtin_assemble("normalize", list(_NORMALIZE_BLOCKS))
 
 
 # Built on ``adata_norm`` rather than ``adata``: every consumer of the spatial
@@ -85,6 +92,30 @@ def annotation_polygons_preview(ctx) -> Preview:
             "pixel_size": float(ctx.pixel_size),
         },
     )
+
+
+# ── Normalisation ────────────────────────────────────────────────────────────
+
+#: Counts per cell after normalisation, when a fixed target is used. scanpy's
+#: own default is the median count across cells; this is the other convention,
+#: and the one the viewer has always used.
+DEFAULT_TARGET_SUM = 1e4
+
+
+def normalize_preview(target_sum) -> Preview:
+    """The ``normalize`` step for a scaling target; ``None`` means the median.
+
+    Module level, beside :func:`qc_filter_preview`, and for the same reason: the
+    Preprocess tab's provider and :func:`ViewerContext.ensure_normalized` both
+    have to turn one setting into the same blocks, and two expressions of that
+    would drift — which is precisely the defect that made this step a template
+    in the first place (the GUI scaled to 1e4 while the recorded cell used
+    scanpy's median default).
+    """
+    if target_sum is None:
+        return Preview(["copy", "scale.median", "tail"], {})
+    return Preview(["copy", "scale.fixed", "tail"],
+                   {"target_sum": coerce(float(target_sum))})
 
 
 # ── QC filtering ─────────────────────────────────────────────────────────────
@@ -963,23 +994,30 @@ def create_shared_helpers(ctx: ViewerContext):
         containing both it and a self-contained step could double-normalise.
         Consumers now name ``adata_norm`` explicitly.
 
-        Idempotent: re-running is skipped while the source ``adata`` is unchanged,
-        since the step has already been executed and recorded.
+        Idempotent: re-running is skipped while the source ``adata`` *and* the
+        scaling target are unchanged. The target is part of the memo key for the
+        same reason ``_ensure_spatial_neighbors`` keys on ``n_neighs`` — without
+        it, changing the setting in the Preprocess tab would be a silent no-op
+        for the rest of the session, since every later caller would be handed
+        the ``adata_norm`` the old setting produced.
         """
+        target_sum = state.get("normalize_target_sum", DEFAULT_TARGET_SUM)
+        blocks, params, _ = normalize_preview(target_sum)
+        key = (id(ctx.adata), target_sum)
         executor = _get_executor()
-        if (state.get("_norm_src_id") == id(ctx.adata)
-                and "adata_norm" in executor.ns):
+        if state.get("_norm_src_id") == key and "adata_norm" in executor.ns:
             return executor.ns["adata_norm"]
         _record_preamble()
         outputs = _run_step(Step(
             id=_cell_scoped_id("normalize"),
-            **_resolved("normalize", list(builtin_spec("normalize").blocks)),
+            **_resolved("normalize", blocks),
+            params=params,
             deps=[_cell_root()],
             kind=SETUP,
             label="Normalize, log-transform, PCA",
             outputs=["adata_norm"],
         ))
-        state["_norm_src_id"] = id(ctx.adata)
+        state["_norm_src_id"] = key
         return outputs["adata_norm"]
 
     ctx.ensure_normalized = _ensure_normalized

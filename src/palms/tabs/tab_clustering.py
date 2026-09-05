@@ -108,6 +108,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 "igraph is orders of magnitude faster and is the default.\n"
                 "leidenalg is scanpy's historical backend and gives a different\n"
                 "partition — pick it to reproduce an existing scanpy pipeline.\n\n"
+                "The backend also fixes 'directed', which is why there is no\n"
+                "control for it: igraph raises on a directed graph, and\n"
+                "leidenalg defaults to one. Both are written into the recorded\n"
+                "cell so a scanpy default change cannot move them silently.\n\n"
                 "Template parameter: flavor",
     )
     leiden_n_iterations = SpinBox(

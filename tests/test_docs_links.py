@@ -223,6 +223,7 @@ TAB_PAGES = {
     "Patches": "Tab-Patches.md",
     "Annotations": "Tab-Annotations.md",
     "QC": "Tab-QC.md",
+    "Preprocess": "Tab-Preprocess.md",
     "Segmentation": "Tab-Segmentation.md",
     "Crop Dataset": "Tab-Crop-Dataset.md",
     "Publish": "Tab-Publish.md",

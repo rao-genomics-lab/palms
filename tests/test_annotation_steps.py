@@ -32,7 +32,7 @@ pytest.importorskip("shapely")
 pytest.importorskip("seaborn")
 plt = pytest.importorskip("matplotlib.pyplot")
 
-from palms.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
+from palms.tabs._helpers import DEFAULT_TARGET_SUM, _NORMALIZE_TEMPLATE  # noqa: E402
 from palms.utils.step_templates import (  # noqa: E402
     builtin_assemble, builtin_spec, builtin_text,
 )
@@ -132,6 +132,7 @@ def _distance_export_step(path, annotation_type="tumour"):
 
 def _normalize_step():
     return Step(id="normalize", template=_NORMALIZE_TEMPLATE, kind="setup",
+                params={"target_sum": DEFAULT_TARGET_SUM},
                 outputs=["adata_norm"])
 
 

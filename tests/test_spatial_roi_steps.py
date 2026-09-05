@@ -29,7 +29,7 @@ plt = pytest.importorskip("matplotlib.pyplot")
 
 from palms.utils.steps import Step, StepExecutor, check_step  # noqa: E402
 from palms.tabs._helpers import (  # noqa: E402
-    _NORMALIZE_TEMPLATE, _SPATIAL_NEIGHBORS_TEMPLATE,
+    DEFAULT_TARGET_SUM, _NORMALIZE_TEMPLATE, _SPATIAL_NEIGHBORS_TEMPLATE,
 )
 from palms.tabs.tab_nhood import _NHOOD_TEMPLATE  # noqa: E402
 from palms.tabs.tab_co_occurrence import _COOCCUR_TEMPLATE  # noqa: E402
@@ -72,6 +72,7 @@ def _executor(adata=None):
 
 def _normalize_step():
     return Step(id="normalize", template=_NORMALIZE_TEMPLATE, kind="setup",
+                params={"target_sum": DEFAULT_TARGET_SUM},
                 outputs=["adata_norm"])
 
 

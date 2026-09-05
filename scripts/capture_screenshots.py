@@ -584,17 +584,20 @@ TAB_SHOTS = [   # literal ints, not the names above: literal_eval reads this
     # QC was inserted at Tools index 1 in 2026-09, beside Segmentation, and
     # every entry below shifted by one.
     (4, 1, "tab-qc.png"),
-    (4, 2, "tab-segmentation.png"),
-    # Tools index 3 is Crop Dataset, not Notebook. This entry said
+    # Preprocess was inserted at Tools index 2 in 2026-09, after QC so the tab
+    # order reads filter -> normalise; everything below shifted by one again.
+    (4, 2, "tab-preprocess.png"),
+    (4, 3, "tab-segmentation.png"),
+    # Tools index 4 is Crop Dataset, not Notebook. This entry said
     # "tab-notebook.png", so every capture run overwrote the Notebook screenshot
     # with a picture of the Crop Dataset tab. Indices here are positional into
     # app.py's addTab() order — when a tab is inserted, this list shifts with it.
-    (4, 3, "tab-crop-dataset.png"),
-    (4, 4, "tab-publish.png"),
-    (4, 5, "tab-notebook.png"),
-    (4, 6, "tab-dataset.png"),
-    (4, 7, "tab-cache.png"),
-    (4, 8, "tab-templates.png"),
+    (4, 4, "tab-crop-dataset.png"),
+    (4, 5, "tab-publish.png"),
+    (4, 6, "tab-notebook.png"),
+    (4, 7, "tab-dataset.png"),
+    (4, 8, "tab-cache.png"),
+    (4, 9, "tab-templates.png"),
 ]
 
 

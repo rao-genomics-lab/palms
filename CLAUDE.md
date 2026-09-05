@@ -38,7 +38,7 @@ palms /path/to/xenium/output/ --no-cache
 
 The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
-There is a `pytest` suite in `tests/` (**1991 tests** across 81 files, measured 2026-09-04 —
+There is a `pytest` suite in `tests/` (**2011 tests** across 82 files, measured 2026-09-05 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
 number was "~320" here for months) covering pure logic (provenance graph,
 step templates, CopyKAT subsampling, registration math, LLM parsing, notebook export) and
@@ -176,6 +176,22 @@ A segmentation swap calls `clear_qc_filter()` first, in both directions.
 reason, and its control rates read the untouched `adata` so the denominator stays
 Xenium's all-codeword `total_counts` (5,512,036 vs `X`'s 5,511,215 on the pancreas
 section — 0.015%, so only a source guard can catch the difference).
+
+**Tools → Preprocess** (`tabs/tab_preprocess.py`) owns the one setting `normalize` has:
+the scaling target. It exists because `normalize` is the only step with **no owning tab** —
+`ctx.ensure_normalized()` is called implicitly from nine sites — so its `target_sum` stayed
+a literal in the template. Three facts worth not re-deriving. The two conventions are
+**two blocks, not a nullable param**: `target_sum=None` is valid scanpy and means the
+median, but in a recorded cell it reads as an argument someone forgot, so `scale.median`
+passes nothing and says why. The **scaling target is part of `ensure_normalized`'s memo
+key** — it keyed on `id(ctx.adata)` alone, and the cell set does not move when the target
+does, so the old memo would hand every later analysis the `adata_norm` the previous
+setting produced while the graph recorded the new code (`_ensure_spatial_neighbors` keys
+on `n_neighs` for the same reason). And **`builtin_text` is the wrong accessor for a
+multi-variant template** — it assembles *every* block in file order, which here means two
+`normalize_total` calls in one cell; `_NORMALIZE_TEMPLATE` is the default assembly via
+`builtin_assemble`. `roi.deg` and `genes.cnv_infercnv` normalise their own copies and do
+**not** honour the setting yet; the tab says so.
 
 **Tools → Dataset** (`tabs/tab_dataset.py`) is the per-item view the Cache tab's
 whole-store report cannot give: a `QTreeWidget` of everything on disk with sizes, and
@@ -1005,6 +1021,6 @@ reproducibility defect rather than a kernel-discovery one.
 ## Version History
 
 See `CHANGELOG.md`. The codebase was refactored from a 4295-line monolith into modular tabs in
-March 2026; that refactor produced 11, and there are **28** now, in 5 groups. `app.py`'s
+March 2026; that refactor produced 11, and there are **29** now, in 5 groups. `app.py`'s
 `addTab` calls are the authoritative count — `src/palms/tabs/*.py` agrees, but neither
 the docs nor `tabs/__init__.py` did until 2026-08-26.

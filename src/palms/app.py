@@ -92,6 +92,7 @@ from palms.utils.umap_widget import UMAPViewer
 from palms.utils.viewer_context import ViewerContext
 from palms.utils.units import layer_affine_px
 from palms.tabs._helpers import (
+    DEFAULT_TARGET_SUM,
     create_shared_helpers, create_preferences_menu, create_file_menu,
     create_view_menu, ensure_plots_dock as _ensure_plots_dock,
     reveal_plots_dock as _reveal_plots_dock,
@@ -396,6 +397,7 @@ def _build_control_panel(ctx: ViewerContext):
     from palms.tabs.tab_annotations import build_tab as build_annotations_tab
     from palms.tabs.tab_annot_nhood import build_tab as build_annot_nhood_tab
     from palms.tabs.tab_annot_distance import build_tab as build_annot_distance_tab
+    from palms.tabs.tab_preprocess import build_tab as build_preprocess_tab
     from palms.tabs.tab_qc import build_tab as build_qc_tab
     from palms.tabs.tab_segmentation import build_tab as build_segmentation_tab
     from palms.tabs.tab_external_images import build_tab as build_external_images_tab
@@ -448,6 +450,7 @@ def _build_control_panel(ctx: ViewerContext):
     annot_nhood_widget, annot_nhood_exports = build_annot_nhood_tab(ctx)
     annot_dist_widget, annot_dist_exports = build_annot_distance_tab(ctx)
     qc_widget, qc_exports = build_qc_tab(ctx)
+    preprocess_widget, preprocess_exports = build_preprocess_tab(ctx)
     seg_widget, seg_exports = build_segmentation_tab(ctx)
     ext_img_widget, ext_img_exports = build_external_images_tab(ctx)
     patch_widget, patch_exports = build_patch_overlays_tab(ctx)
@@ -533,6 +536,7 @@ def _build_control_panel(ctx: ViewerContext):
     tools_tabs = QTabWidget()
     tools_tabs.addTab(annot_widget,    "Annotations")
     tools_tabs.addTab(qc_widget,       "QC")
+    tools_tabs.addTab(preprocess_widget, "Preprocess")
     tools_tabs.addTab(seg_widget,      "Segmentation")
     tools_tabs.addTab(crop_widget,     "Crop Dataset")
     tools_tabs.addTab(publish_widget,  "Publish")
@@ -557,7 +561,8 @@ def _build_control_panel(ctx: ViewerContext):
         umap_exports, roi_exports, he_exports, ga_exports, mg_exports,
         lr_exports, nhood_exports, co_exports, cnv_exports, novae_exports, arms_exports, corr_exports,
         notebook_exports, annot_exports, annot_nhood_exports, annot_dist_exports,
-        qc_exports, seg_exports, ext_img_exports, patch_exports, crop_exports,
+        qc_exports, preprocess_exports, seg_exports, ext_img_exports,
+        patch_exports, crop_exports,
         publish_exports,
         dataset_exports, cache_exports, templates_exports,
     ]
@@ -1279,6 +1284,16 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     # The QC cutoffs in force, seeded here for the same reason and applied a
     # few lines below, once the preamble the filter depends on exists.
     ctx.state.setdefault("qc_filter", session.get("qc_filter"))
+
+    # The normalisation target. `None` means scanpy's median default and is a
+    # real choice, so a store that never held the setting is distinguished by
+    # a sentinel rather than by None -- it opens on the historical 1e4.
+    from palms.utils.session import _UNSET_TARGET_SUM
+    _target = session.get("normalize_target_sum", _UNSET_TARGET_SUM)
+    ctx.state.setdefault(
+        "normalize_target_sum",
+        DEFAULT_TARGET_SUM if _target == _UNSET_TARGET_SUM else _target,
+    )
 
     if have_session:
         # One-time migration of legacy zarr landmark arrays and GeoJSON/CSV tile

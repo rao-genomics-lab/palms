@@ -80,24 +80,46 @@ substituted string for the settings currently in the owning tab.
 
 **Run by:** every expression-based tab
 
-Builds `adata_norm`, the normalised copy that every expression-based analysis reads: counts per cell scaled to 10,000, `log1p`, then PCA. Nothing else normalises, and nothing normalises `adata` in place.
+Builds `adata_norm`, the normalised copy that every expression-based analysis reads: counts per cell scaled, `log1p`, then PCA. Nothing else normalises, and nothing normalises `adata` in place.
 
-The copy is the whole point. An earlier version normalised `adata` itself, which made the provenance graph lie: a step that read `adata` got different numbers depending on whether some other tab had run first. Every downstream template declares `deps=["normalize"]` and reads `adata_norm`, so the dependency is explicit and the notebook reproduces it in the right order. `ctx.ensure_normalized()` is idempotent — running it twice does not re-normalise.
+The copy is the whole point. An earlier version normalised `adata` itself, which made the provenance graph lie: a step that read `adata` got different numbers depending on whether some other tab had run first. Every downstream template declares `deps=["normalize"]` and reads `adata_norm`, so the dependency is explicit and the notebook reproduces it in the right order. `ctx.ensure_normalized()` is idempotent — running it twice does not re-normalise, and the scaling target is part of what it memoises, so changing the setting re-runs the step rather than handing back the old copy.
 
 **Contract**
 
-_No parameters._
+| Parameter | Type | Required |
+|---|---|---|
+| `target_sum` | `float` | no |
 
 - **Requires:** `adata`, `sc`
 - **Outputs:** `adata_norm`
-- **Blocks:** `main`
+- **Blocks:** `copy`, `scale.fixed`, `scale.median`, `tail`
 
-**Default source**
+**Variants** — 2 assemblies:
+
+The two assemblies are the two scaling conventions, set in [Preprocess](Tab-Preprocess). `scale.fixed` scales every cell to a chosen `target_sum` — 10,000 by default, and the viewer's historical behaviour. `scale.median` passes no `target_sum` at all, which is `scanpy`'s own default: each cell is scaled to the median count across cells. They are separate blocks rather than one parameter that may be `None`, because `target_sum=None` in a recorded cell reads as an argument someone failed to fill in rather than as a choice.
+
+- `copy + scale.fixed + tail`
+- `copy + scale.median + tail`
+
+**Default source** — by block; an assembly above picks which of these run, in that order
 
 ```python
+#--- block copy
 # Normalized copy used by expression-based analyses
 adata_norm = adata.copy()
-sc.pp.normalize_total(adata_norm, target_sum=1e4)
+
+#--- block scale.fixed
+sc.pp.normalize_total(adata_norm, target_sum=$target_sum)
+
+#--- block scale.median
+# No target_sum, so scanpy scales every cell to the *median* count across
+# cells. This is scanpy's own default and what most published pipelines use;
+# a fixed target is the other convention. The choice is a whole block rather
+# than a `None` parameter so the recorded cell reads as the code someone would
+# have written, with no argument spelled out as absent.
+sc.pp.normalize_total(adata_norm)
+
+#--- block tail
 sc.pp.log1p(adata_norm)
 sc.pp.pca(adata_norm)
 ```
@@ -312,6 +334,10 @@ sq.gr.spatial_neighbors_knn(adata_norm, n_neighs=$n_neighs)
 Leiden community detection on a copy of `adata_norm`, writing the labels back to `adata.obs[key]`. The result is what every cluster-keyed analysis — ranked genes, neighbourhood enrichment, co-occurrence, ligand-receptor — is grouped by.
 
 `leiden_labels` is a declared output rather than something read back off `ctx.adata` afterwards. That matters: reading back worked only while the executor namespace and `ctx.adata` were the same object, and the executor now raises if a template stops binding a declared output, so an edit that breaks the result fails loudly.
+
+`flavor`, `n_iterations`, `directed` and `random_state` are written out as literals rather than left to `scanpy`'s defaults, which are scheduled to change — `sc.tl.leiden(flavor=None)` still resolves to `leidenalg` today but warns that it will become `igraph`. Leaving them implicit would silently change clusterings on an upgrade.
+
+`directed` is derived from the backend rather than exposed as a control, and the reason is asymmetric: `igraph` **raises** on `directed=True`, while `leidenalg` merely defaults to it. Both values the viewer writes are documentary rather than functional — under `igraph` the argument is validated and then ignored (the graph is built undirected regardless), and under `leidenalg` `True` is what omitting it would give you anyway. They are there so the cell states its assumptions, not to change this run.
 
 **Contract**
 

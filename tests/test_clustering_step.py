@@ -31,7 +31,7 @@ from palms.utils.steps import Step, StepExecutor, check_step  # noqa: E402
 from palms.tabs.tab_clustering import (  # noqa: E402
     FLAVOR_DEFAULTS, LEIDEN_FLAVORS, _leiden_template,
 )
-from palms.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
+from palms.tabs._helpers import DEFAULT_TARGET_SUM, _NORMALIZE_TEMPLATE  # noqa: E402
 
 
 def _adata(n_obs: int = 200, n_vars: int = 60):
@@ -47,6 +47,7 @@ def _adata(n_obs: int = 200, n_vars: int = 60):
 
 def _normalize_step():
     return Step(id="normalize", template=_NORMALIZE_TEMPLATE, kind="setup",
+                params={"target_sum": DEFAULT_TARGET_SUM},
                 label="Normalize, log-transform, PCA", outputs=["adata_norm"])
 
 
@@ -209,6 +210,23 @@ def test_normalize_sorts_before_clustering():
     ex = _run(step, adata)
     order = ex.graph.topo_sort()
     assert order.index("normalize") < order.index(step.id)
+
+
+def test_igraph_is_paired_with_an_undirected_graph():
+    """xv-63f: the one combination scanpy refuses.
+
+    ``_validate_flavor`` raises ``ValueError("Cannot use igraph's leiden
+    implementation with a directed graph")`` for ``(igraph, True)`` — the only
+    illegal pair of the four, and the reason ``directed`` is derived from the
+    backend rather than offered as a control.
+
+    The parametrised test below reads ``directed`` out of ``FLAVOR_DEFAULTS``
+    and asserts it appears in the source, so it stays green if the table itself
+    is edited to the illegal pair; it pins the wiring, not the value. This pins
+    the value, because the failure it guards is a step that renders perfectly
+    and then raises at run time.
+    """
+    assert FLAVOR_DEFAULTS["igraph"][1] is False
 
 
 @pytest.mark.parametrize("flavor", LEIDEN_FLAVORS)
