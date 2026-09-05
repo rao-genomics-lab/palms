@@ -56,6 +56,27 @@ def test_the_recorded_versions_are_the_ones_actually_installed():
     assert recorded["python"] == versions["python"]
 
 
+def test_the_recorded_palms_version_is_the_sources_not_the_installs():
+    """xv-0ob: an editable install's dist-info is frozen at install time.
+
+    ``importlib.metadata.version('palms')`` answers with whatever the checkout
+    was installed as, which on a dev box that predates a release is a version
+    older than most of the code it is describing — and this value goes into the
+    provenance node and into ``report_*.json``, which is the evidence behind a
+    reproducibility claim. The module attribute tracks the source, so it is what
+    the recorded pin must say. Third-party names are the opposite case and stay
+    on the metadata, which this asserts too.
+    """
+    from importlib.metadata import version as installed
+
+    import palms
+    from palms.utils.environment import THIS_DISTRIBUTION
+
+    versions = package_versions()
+    assert versions[THIS_DISTRIBUTION] == palms.__version__
+    assert versions["numpy"] == installed("numpy")
+
+
 def test_the_cell_is_executable_python_that_seeds_the_rngs():
     """A comment block would tell a replay nothing it could act on."""
     import random

@@ -7,6 +7,22 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Fixed
+- **The recorded environment reported `palms 0.1.0` while the code that ran was
+  1.0.1.** `environment.package_versions()` resolved every name through
+  `importlib.metadata`, `palms` included — and an *editable* install's dist-info
+  is written once, at install time, and never refreshed when `pyproject.toml`'s
+  version moves. A checkout installed before the 1.0.0 cut therefore kept
+  reporting whatever it was installed as. Not cosmetic: that value is the version
+  pin in the `environment` provenance node and the `versions` block of every
+  `verify_notebook.py` report, so the evidence behind a reproducibility claim
+  named a version predating most of the code it described — and one a reader
+  would install and fail with. `palms` now reports `palms.__version__` (the
+  module attribute tracks the source); every third-party name stays on
+  `importlib.metadata`, where the *installed* version is the right answer because
+  it is what answered the call. Re-running `pip install -e .` fixes one machine,
+  not the class of problem. Any report generated before this understates the
+  version and should be regenerated.
+
 - **A crop export's `experiment.xenium` described the parent, not the crop.**
   `crop_export.py` copied the parent's file verbatim, so every quantity in it
   was about the wrong dataset — measured on `demo_data/crop_6`: `num_cells`

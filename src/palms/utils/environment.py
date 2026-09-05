@@ -44,14 +44,33 @@ RECORDED_PACKAGES = (
 DEFAULT_SEED = 0
 
 
+# The one name here whose *source* is the thing being recorded, so the one
+# whose installed metadata is the wrong answer. An editable install writes its
+# dist-info once, at install time, and never refreshes it when pyproject's
+# version moves: a checkout installed before the 1.0.0 cut kept reporting
+# ``0.1.0`` while the code that actually ran was ``1.0.1``. The module attribute
+# tracks the source; the dist-info tracks the install. Every third-party name
+# stays on ``importlib.metadata`` — they have no equivalent attribute, and for
+# them the installed version *is* what answered the call.
+THIS_DISTRIBUTION = "palms"
+
+
+def _installed_version(name: str) -> str | None:
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return None
+
+
 def package_versions(names=RECORDED_PACKAGES) -> dict:
     """Map distribution name → version string, ``None`` when not installed."""
     out = {"python": sys.version.split()[0]}
     for name in names:
-        try:
-            out[name] = version(name)
-        except PackageNotFoundError:
-            out[name] = None
+        if name == THIS_DISTRIBUTION:
+            from palms import __version__
+            out[name] = __version__
+        else:
+            out[name] = _installed_version(name)
     return out
 
 
