@@ -22,6 +22,20 @@ entries under **Development log** are the closed pre-1.0.0 record.
   it is what answered the call. Re-running `pip install -e .` fixes one machine,
   not the class of problem. Any report generated before this understates the
   version and should be regenerated.
+- **"Plot UMAP by cluster" failed on any clustering nobody had named yet**
+  (`xv-chq`). The `color.clusters` block draws `adata_norm`, which `normalize`
+  copied *before* the clustering existed, so its `obs` has no cluster column;
+  the only thing that ever put one there was the **optional** `relabel` block,
+  as a side effect of renaming. Plotting a clustering straight after running it
+  — the ordinary case — raised `KeyError: '<key>'` at statement 3 of 4. A new
+  `carry.clusters` block binds `adata_norm.obs[$groupby] = adata.obs[$groupby]`
+  and `tab_umap` selects it whenever there are no display names, so the two
+  cluster paths are now "carry" and "carry while renaming" rather than "renaming
+  or nothing". It failed loudly and recorded nothing, so no session holds a wrong
+  figure. Found by driving the GUI for the Phase C.4 session; the reference
+  session had missed it only because both of its clusterings happened to be
+  named, and every existing test missed it because the fixture attaches `leiden`
+  *before* normalising, which is the reverse of what a session does.
 
 - **A crop export's `experiment.xenium` described the parent, not the crop.**
   `crop_export.py` copied the parent's file verbatim, so every quantity in it

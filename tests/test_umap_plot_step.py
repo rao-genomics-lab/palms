@@ -153,6 +153,72 @@ def test_one_gene_gives_one_panel_and_several_give_a_grid(dataset, tmp_path):
     plt.close("all")
 
 
+def test_a_clustering_can_be_plotted_before_anyone_names_its_clusters(dataset, tmp_path):
+    """xv-chq: the default path — run a clustering, plot it, name nothing.
+
+    ``adata_norm`` is the copy ``normalize`` made *before* the clustering
+    existed, so its obs has no cluster column. ``relabel`` used to be the only
+    thing that copied one across, as a side effect of renaming, which left
+    ``sc.pl.umap(adata_norm, color=[key])`` raising ``KeyError`` on exactly the
+    clusterings nobody had labelled yet. The Phase B reference session escaped
+    it only because both of its clusterings happened to be named.
+    """
+    adata, data_path = dataset
+    # The order matters and is the reason this went unnoticed: the fixture hands
+    # out a table that already carries `leiden`, so every other test here
+    # normalises *after* the clustering exists and adata_norm inherits the
+    # column for free. In a session it is the other way round — normalize runs
+    # first, and the clustering step writes obs[key] afterwards.
+    clusters = adata.obs.pop("leiden")
+    executor = _executor(adata, data_path)
+    assert "leiden" not in executor.ns["adata_norm"].obs.columns
+    adata.obs["leiden"] = clusters
+
+    step, out = _run(
+        executor, ["embed.xenium", "carry.clusters", "color.clusters", "save"],
+        {"color": ["leiden"], "groupby": "leiden",
+         "paths": [str(tmp_path / "plots" / "c.png")]})
+
+    assert out["fig"] is not None
+    plotted = executor.ns["adata_norm"].obs["leiden"]
+    assert list(plotted) == list(adata.obs["leiden"]), (
+        "the column must be carried over unchanged — this block renames nothing"
+    )
+    plt.close("all")
+
+    # The block is load bearing, not decorative: the same figure without it is
+    # the reported failure, reproduced here so the reason survives the fix.
+    from palms.utils.steps import StepError
+
+    adata.obs.pop("leiden")
+    fresh = _executor(adata, data_path)
+    adata.obs["leiden"] = clusters
+    with pytest.raises(StepError, match="leiden"):
+        _run(fresh, ["embed.xenium", "color.clusters", "save"],
+             {"color": ["leiden"], "groupby": "leiden",
+              "paths": [str(tmp_path / "plots" / "bare.png")]})
+    plt.close("all")
+
+
+def test_the_tab_carries_the_column_when_there_are_no_display_names(dataset, tmp_path):
+    """The selection half of xv-chq: the template can only fix it if the tab
+    asks for the block. Named clusters take ``relabel``, unnamed take
+    ``carry.clusters``, and *neither* case may render a plot that reads a column
+    it never bound."""
+    import ast
+
+    source = (Path(__file__).resolve().parent.parent / "src" / "palms"
+              / "tabs" / "tab_umap.py").read_text()
+    tree = ast.parse(source)
+    func = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_umap_preview")
+    body = ast.unparse(func)
+    assert "'carry.clusters'" in body
+    assert "'groupby': key" in body, (
+        "groupby must be a param in cluster mode whether or not there are names"
+    )
+
+
 def test_the_cluster_assembly_relabels_from_the_display_names(dataset, tmp_path):
     adata, data_path = dataset
     executor = _executor(adata, data_path)
