@@ -16,10 +16,15 @@ entries under **Development log** are the closed pre-1.0.0 record.
   exactly the four `morphology_focus_000{0..3}.ome.tif` files a bundle ships.
   The old justification, that `dapi` is "what their Xenium tutorial uses", was
   half true: their docstring example does pass it, but their pipeline does not.
-  The narrow option is still there — the cost is real, four pyramids being
-  roughly 4× the 322–637 s runtime and the 220 MB output — and the tab's
-  tooltip now says what the choice buys instead of leaving it to be discovered
-  in the output.
+  The narrow option is still there — four pyramids cost proportionally more
+  time — and the tab's tooltip now says what the choice buys instead of leaving
+  it to be discovered in the output. **Output size is not 4×**, measured on
+  `Xenium_V1_human_Pancreas_FFPE`: 329 MB against the single-channel 220 MB,
+  because the vector data does not multiply and the four WebP pyramids compress
+  very differently (dapi 19 MB, bound 37 MB, rna 41 MB, prot 32 MB). That spread
+  is also the argument against the old default: DAPI is the *smallest* of the
+  four, so tiling it alone dropped most of the image content, not three
+  redundant copies of it.
 
 ### Fixed
 - **A crop export's `experiment.xenium` described the parent, not the crop.**

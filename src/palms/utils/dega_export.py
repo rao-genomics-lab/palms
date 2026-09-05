@@ -77,8 +77,12 @@ TILE_SIZE_UM = 250
 #: ``get_image_info`` defaults to it — but their pipeline entry point does not,
 #: and a published export that silently drops three of four channels is the
 #: wrong default for a tool whose point is that the artifact is the record.
-#: The cost is real (four pyramids, so roughly 4x the runtime and output size),
-#: which is why the tab still offers 'dapi' and now says what the choice buys.
+#: The cost is real but not proportional: measured on the pancreas section,
+#: 329 MB against 220 MB single-channel, because the vector data does not
+#: multiply and the four pyramids compress very differently (dapi 19 MB,
+#: bound 37 MB, rna 41 MB, prot 32 MB). DAPI being the smallest of the four
+#: is also why the old default dropped most of the image content rather than
+#: three redundant copies. The tab still offers 'dapi' for the fast path.
 IMAGE_TILE_LAYER = "all"
 
 #: The pin. A floating version here would be the ``insitucnv`` mistake twice —
