@@ -744,7 +744,7 @@ Draws the UMAP embedding as a publication figure — one panel per selected gene
 
 - **Requires:** `Path`, `adata`, `adata_norm`, `data_path`, `pd`, `plt`, `sc`
 - **Outputs:** `fig`
-- **Blocks:** `embed.xenium`, `embed.recompute`, `relabel`, `color.genes`, `color.clusters`, `save`
+- **Blocks:** `embed.xenium`, `embed.recompute`, `carry.clusters`, `relabel`, `color.genes`, `color.clusters`, `save`
 
 **Variants** — 6 assemblies:
 
@@ -752,9 +752,9 @@ Six assemblies from three choices: whether the dataset ships Xenium's UMAP or th
 
 - `embed.xenium + color.genes + save`
 - `embed.recompute + color.genes + save`
-- `embed.xenium + color.clusters + save`
+- `embed.xenium + carry.clusters + color.clusters + save`
 - `embed.xenium + relabel + color.clusters + save`
-- `embed.recompute + color.clusters + save`
+- `embed.recompute + carry.clusters + color.clusters + save`
 - `embed.recompute + relabel + color.clusters + save`
 
 **Default source** — by block; an assembly above picks which of these run, in that order
@@ -783,6 +783,14 @@ adata_norm.obsm['X_umap'] = (
 # No analysis/ folder — a Crop Dataset export has none — so compute one.
 sc.pp.neighbors(adata_norm)
 sc.tl.umap(adata_norm, random_state=0)
+
+#--- block carry.clusters
+# adata_norm is the copy `normalize` made *before* this clustering existed, so
+# its obs has no cluster column and the plot below would raise KeyError on it.
+# The relabel block copies the column across as a side effect of renaming, which
+# is why the failure only ever showed up on clusters nobody had named -- i.e. on
+# "plot the clustering you just ran".
+adata_norm.obs[$groupby] = adata.obs[$groupby]
 
 #--- block relabel
 # .map() rather than .cat.rename_categories(): two clusters may deliberately

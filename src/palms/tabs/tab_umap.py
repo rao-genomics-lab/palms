@@ -178,11 +178,17 @@ def build_tab(ctx: ViewerContext) -> tuple:
             key = key or "clustering"
             categories = _display_categories(key)
             blocks = [embed]
-            params = {"color": [key], "paths": ctx.plot_paths(_stem_for_clusters(key))}
+            params = {"color": [key], "groupby": key,
+                      "paths": ctx.plot_paths(_stem_for_clusters(key))}
             if categories is not None:
                 blocks.append("relabel")
-                params["groupby"] = key
                 params["categories"] = categories
+            else:
+                # Something must put the cluster column onto adata_norm, which
+                # `normalize` copied before the clustering existed. `relabel`
+                # does it while renaming; with no names there is nothing else,
+                # and sc.pl.umap raised KeyError on the key it was given.
+                blocks.append("carry.clusters")
             blocks += ["color.clusters", "save"]
             return Preview(blocks, params)
 
