@@ -41,6 +41,7 @@
 *Tools*
 - [Annotations](Tab-Annotations)
 - [QC](Tab-QC)
+- [Preprocess](Tab-Preprocess)
 - [Segmentation](Tab-Segmentation)
 - [Crop Dataset](Tab-Crop-Dataset)
 - [Publish](Tab-Publish)

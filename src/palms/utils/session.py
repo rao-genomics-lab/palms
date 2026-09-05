@@ -37,6 +37,13 @@ import zarr
 from palms.utils.reporting import get_logger, report_write_failure
 from palms.utils.zarr_safe import safe_group_update
 
+#: "no normalisation setting was stored", which is *not* the same as a
+#: stored ``None`` (scanpy's median default). A store written before the
+#: Preprocess tab existed must open on the viewer's historical 1e4, and a
+#: store where someone chose the median must open on the median; a bare
+#: ``None`` cannot say both.
+_UNSET_TARGET_SUM = "unset"
+
 log = get_logger(__name__)
 
 # Attrs written by other code paths and never recomputed here. Carrying every
@@ -175,6 +182,12 @@ def _build_session_attrs(state: dict, he_state: dict, snapshot: dict,
     # at the next launch. An older store has no such attr, which reads back as
     # None -- so nothing recorded before this feature is disturbed.
     attrs["qc_filter"] = state.get("qc_filter")
+    # The normalisation target: a float, or None meaning scanpy's median
+    # default. Absent from an older store, which reads back as the sentinel
+    # below rather than as None -- None is a *meaningful* value here, so it
+    # cannot double as "not set" the way it does for qc_filter.
+    attrs["normalize_target_sum"] = state.get(
+        "normalize_target_sum", _UNSET_TARGET_SUM)
 
     # ── Reproducible-code provenance graph ───────────────────────────────
     # Never shrinks *here*. A smaller in-memory graph means it is not the
@@ -384,6 +397,8 @@ def load_session(zarr_path: Path) -> Optional[dict]:
         "umap_genes": list(attrs.get("umap_genes") or []),
         "segmentation_source": attrs.get("segmentation_source", "xenium"),
         "qc_filter": attrs.get("qc_filter"),
+        "normalize_target_sum": attrs.get(
+            "normalize_target_sum", _UNSET_TARGET_SUM),
         "external_images_ui": attrs.get("external_images_ui") or [],
         "patch_overlays_ui": attrs.get("patch_overlays_ui") or [],
         "prov_graph": attrs.get("prov_graph"),

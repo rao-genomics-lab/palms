@@ -24,7 +24,8 @@ pd = pytest.importorskip("pandas")
 sc = pytest.importorskip("scanpy")
 
 from palms.utils.steps import Step, StepExecutor, check_step  # noqa: E402
-from palms.tabs._helpers import _NORMALIZE_TEMPLATE  # noqa: E402
+from palms.tabs._helpers import DEFAULT_TARGET_SUM, _NORMALIZE_TEMPLATE
+from palms.utils.step_templates import builtin_assemble, builtin_spec  # noqa: E402
 from palms.tabs.tab_gene_analysis import _RANK_GENES_TEMPLATE  # noqa: E402
 from palms.utils.gene_analysis import rank_genes_key  # noqa: E402
 
@@ -44,6 +45,7 @@ def _adata(n_obs: int = 120, n_vars: int = 40):
 
 def _normalize_step():
     return Step(id="normalize", template=_NORMALIZE_TEMPLATE,
+                params={"target_sum": DEFAULT_TARGET_SUM},
                 label="Normalize, log-transform, PCA", outputs=["adata_norm"])
 
 
@@ -70,8 +72,38 @@ def _run_both(adata):
 # ── the divergence this fixes ────────────────────────────────────────────────
 
 def test_normalize_records_the_target_sum_it_uses():
-    """The old recorded cell omitted target_sum and silently median-scaled."""
-    assert "target_sum=1e4" in _NORMALIZE_TEMPLATE
+    """The old recorded cell omitted target_sum and silently median-scaled.
+
+    The guarded property is that the recorded cell is never *ambiguous* about
+    scaling — not that it contains one particular number. Since the target
+    became settable the two conventions are two blocks, so the fixed one has to
+    name its target and the median one has to be a deliberate choice rather
+    than an argument someone forgot.
+    """
+    fixed = Step(id="normalize", template=_NORMALIZE_TEMPLATE,
+                 params={"target_sum": DEFAULT_TARGET_SUM},
+                 outputs=["adata_norm"]).render()
+    assert "target_sum=10000.0" in fixed
+
+    median = builtin_assemble("normalize", ["copy", "scale.median", "tail"])
+    assert "sc.pp.normalize_total(adata_norm)" in median
+    assert "target_sum=" not in median, "the median variant passes no target"
+    assert "median" in median, (
+        "and says so — an omitted argument and a chosen default read "
+        "identically in a notebook unless the cell explains itself"
+    )
+
+
+def test_the_two_scaling_conventions_are_separate_blocks():
+    """xv-e2v: a `None` parameter would render as `target_sum=None`.
+
+    That is legal scanpy and means the median, but it reads as an argument
+    someone failed to fill in. Whole-line block variants are the idiom the
+    template rules already prescribe for this shape.
+    """
+    spec = builtin_spec("normalize")
+    assert ("copy", "scale.fixed", "tail") in spec.assemblies
+    assert ("copy", "scale.median", "tail") in spec.assemblies
 
 
 def test_normalize_does_not_mutate_adata():

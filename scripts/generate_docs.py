@@ -132,8 +132,8 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
         tab="every expression-based tab",
         what=(
             "Builds `adata_norm`, the normalised copy that every expression-based "
-            "analysis reads: counts per cell scaled to 10,000, `log1p`, then PCA. "
-            "Nothing else normalises, and nothing normalises `adata` in place."
+            "analysis reads: counts per cell scaled, `log1p`, then PCA. Nothing "
+            "else normalises, and nothing normalises `adata` in place."
         ),
         reading=(
             "The copy is the whole point. An earlier version normalised `adata` "
@@ -142,7 +142,20 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "had run first. Every downstream template declares `deps=[\"normalize\"]` "
             "and reads `adata_norm`, so the dependency is explicit and the "
             "notebook reproduces it in the right order. `ctx.ensure_normalized()` "
-            "is idempotent — running it twice does not re-normalise."
+            "is idempotent — running it twice does not re-normalise, and the "
+            "scaling target is part of what it memoises, so changing the setting "
+            "re-runs the step rather than handing back the old copy."
+        ),
+        variants=(
+            "The two assemblies are the two scaling conventions, set in "
+            "[Preprocess](Tab-Preprocess). `scale.fixed` scales every cell to a "
+            "chosen `target_sum` — 10,000 by default, and the viewer's historical "
+            "behaviour. `scale.median` passes no `target_sum` at all, which is "
+            "`scanpy`'s own default: each cell is scaled to the median count "
+            "across cells. They are separate blocks rather than one parameter "
+            "that may be `None`, because `target_sum=None` in a recorded cell "
+            "reads as an argument someone failed to fill in rather than as a "
+            "choice."
         ),
     ),
     "spatial_neighbors": TemplateNote(
@@ -179,7 +192,20 @@ TEMPLATE_NOTES: dict[str, TemplateNote] = {
             "off `ctx.adata` afterwards. That matters: reading back worked only "
             "while the executor namespace and `ctx.adata` were the same object, "
             "and the executor now raises if a template stops binding a declared "
-            "output, so an edit that breaks the result fails loudly."
+            "output, so an edit that breaks the result fails loudly.\n\n"
+            "`flavor`, `n_iterations`, `directed` and `random_state` are written "
+            "out as literals rather than left to `scanpy`'s defaults, which are "
+            "scheduled to change — `sc.tl.leiden(flavor=None)` still resolves to "
+            "`leidenalg` today but warns that it will become `igraph`. Leaving "
+            "them implicit would silently change clusterings on an upgrade.\n\n"
+            "`directed` is derived from the backend rather than exposed as a "
+            "control, and the reason is asymmetric: `igraph` **raises** on "
+            "`directed=True`, while `leidenalg` merely defaults to it. Both "
+            "values the viewer writes are documentary rather than functional — "
+            "under `igraph` the argument is validated and then ignored (the graph "
+            "is built undirected regardless), and under `leidenalg` `True` is what "
+            "omitting it would give you anyway. They are there so the cell states "
+            "its assumptions, not to change this run."
         ),
         variants=(
             "The four assemblies are the four combinations of the two "

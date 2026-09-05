@@ -56,7 +56,7 @@ from palms.tabs.tab_clustering import (  # noqa: E402
     FLAVOR_DEFAULTS, _leiden_template,
 )
 from palms.tabs._helpers import (  # noqa: E402
-    _NORMALIZE_TEMPLATE, _SPATIAL_NEIGHBORS_TEMPLATE,
+    DEFAULT_TARGET_SUM, _NORMALIZE_TEMPLATE, _SPATIAL_NEIGHBORS_TEMPLATE,
 )
 from palms.tabs.tab_gene_analysis import _RANK_GENES_TEMPLATE  # noqa: E402
 from palms.utils.gene_analysis import rank_genes_key  # noqa: E402
@@ -128,6 +128,7 @@ def _run_the_analysis(h5ad_path: Path) -> StepExecutor:
         ))
         ex.run(Step(
             id="normalize", template=_NORMALIZE_TEMPLATE, deps=["preamble"],
+            params={"target_sum": DEFAULT_TARGET_SUM},
             kind=SETUP, label="Normalize, log-transform, PCA",
             outputs=["adata_norm"],
         ))
@@ -645,6 +646,7 @@ def _run_the_qc_analysis(h5ad_path: Path) -> tuple[StepExecutor, pd.DataFrame]:
         ))
         ex.run(Step(
             id="normalize", template=_NORMALIZE_TEMPLATE, deps=["preamble"],
+            params={"target_sum": DEFAULT_TARGET_SUM},
             kind=SETUP, label="Normalize, log-transform, PCA",
             outputs=["adata_norm"],
         ))
@@ -657,6 +659,7 @@ def _run_the_qc_analysis(h5ad_path: Path) -> tuple[StepExecutor, pd.DataFrame]:
         ))
         ex.run(Step(
             id="normalize:qc", template=_NORMALIZE_TEMPLATE, deps=["qc_filter"],
+            params={"target_sum": DEFAULT_TARGET_SUM},
             kind=SETUP, label="Normalize, log-transform, PCA",
             outputs=["adata_norm"],
         ))

@@ -1,13 +1,27 @@
 # palms template
 # id: normalize
 # schema-version: 1
+# assemblies: copy+scale.fixed+tail | copy+scale.median+tail
 # doc: Normalised copy every expression-based analysis reads.
 # requires: sc, adata
 # outputs: adata_norm
+# params: target_sum:float?
 
-#--- block main
+#--- block copy
 # Normalized copy used by expression-based analyses
 adata_norm = adata.copy()
-sc.pp.normalize_total(adata_norm, target_sum=1e4)
+
+#--- block scale.fixed
+sc.pp.normalize_total(adata_norm, target_sum=$target_sum)
+
+#--- block scale.median
+# No target_sum, so scanpy scales every cell to the *median* count across
+# cells. This is scanpy's own default and what most published pipelines use;
+# a fixed target is the other convention. The choice is a whole block rather
+# than a `None` parameter so the recorded cell reads as the code someone would
+# have written, with no argument spelled out as absent.
+sc.pp.normalize_total(adata_norm)
+
+#--- block tail
 sc.pp.log1p(adata_norm)
 sc.pp.pca(adata_norm)

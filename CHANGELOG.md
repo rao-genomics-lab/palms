@@ -6,6 +6,50 @@ entries under **Development log** are the closed pre-1.0.0 record.
 
 ## [Unreleased]
 
+### Added
+- **Tools → Preprocess: the normalisation target is settable** (`xv-e2v`).
+  `normalize` scaled every cell to `1e4`, written as a literal in the template,
+  and declared no parameters at all — so the other convention, `scanpy`'s own
+  median default, was reachable only by writing a user template override. That
+  difference is one of four things behind the same analysis finding 15 clusters
+  through PALMS and 11 through the equivalent Celldega tutorial on **identical**
+  cells, which is what surfaced it.
+
+  The tab exists because `normalize` is the one step with **no owning tab**: it
+  is pulled in implicitly by `ctx.ensure_normalized()` from nine call sites, so
+  there was nowhere to put a control for it. It sits after QC in Tools, so the
+  tab order reads filter → normalise — the order the steps run in, and the order
+  the barrier puts them in when a filter is in force.
+
+  Three things worth not re-deriving:
+
+  - **The two conventions are two blocks, not a nullable parameter.**
+    `target_sum=None` is valid scanpy and means the median, but in a recorded
+    cell it reads as an argument someone failed to fill in. `scale.median`
+    passes no argument and says why; `scale.fixed` names its target. This is the
+    whole-line block-variant idiom the template rules already prescribe.
+  - **The scaling target is part of `ensure_normalized`'s memo key.** It used to
+    key on `id(ctx.adata)` alone, and the cell set does not change when the
+    target does — so a memo watching only the cells would hand every later
+    analysis the `adata_norm` the *old* setting produced while the graph recorded
+    the new code. `_ensure_spatial_neighbors` keys on its `n_neighs` for exactly
+    this reason.
+  - **`builtin_text` was the wrong accessor and is no longer used here.** It
+    assembles *every* block in file order, which for a template with two mutually
+    exclusive variants means two `normalize_total` calls in one cell.
+    `_NORMALIZE_TEMPLATE` is now the default assembly.
+
+  **Not yet honoured everywhere:** ROI DEG and inferCNV normalise their own
+  copies and still scale to 10,000 whatever is set (`xv-ebv`). The tab and its
+  page say so rather than leaving it to be discovered.
+
+  **One-time consequence of upgrading:** `steps.render` substitutes with `repr`,
+  so the recorded line is now `target_sum=10000.0` rather than `target_sum=1e4`.
+  The first expression-based analysis after upgrading therefore re-records
+  `normalize` with different *text* and marks its dependents stale — once, on an
+  unchanged analysis whose results are numerically identical. That is `upsert`
+  being honest about a code change, not a result changing.
+
 ### Changed
 - **The DegaFile export now tiles every morphology channel by default**
   (`xv-11y`). It defaulted to `dapi`, so a published Landscape carried one
@@ -25,6 +69,20 @@ entries under **Development log** are the closed pre-1.0.0 record.
   is also the argument against the old default: DAPI is the *smallest* of the
   four, so tiling it alone dropped most of the image content, not three
   redundant copies of it.
+- **Why Leiden's `directed` is derived from the backend is now written down**
+  (`xv-63f`). It has no control and never had an explanation: the generated
+  params table listed `directed | bool | yes` unannotated and
+  `docs/Tab-Clustering.md` did not mention it at all. Measured against scanpy
+  1.12.3: `("igraph", True)` is the **only** illegal pair of the four and raises
+  `ValueError`, while `leidenalg` merely *defaults* to `True`. So a checkbox
+  would be inert for the default backend and would invite the one combination
+  that fails. Both values the viewer writes turn out to be **documentary rather
+  than functional** — under igraph the argument is validated and then ignored,
+  and under leidenalg `True` is what omitting it would give — so they exist to
+  pin the cell against a scanpy default change, not to alter the run. A guard
+  test pins `FLAVOR_DEFAULTS["igraph"][1] is False`: the existing parametrised
+  test reads `directed` out of that table and would stay green if the table
+  itself were edited to the illegal pair.
 
 ### Fixed
 - **The recorded environment reported `palms 0.1.0` while the code that ran was

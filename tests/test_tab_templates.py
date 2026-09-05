@@ -162,9 +162,6 @@ def test_a_provider_naming_an_unknown_block_reports_rather_than_raises(ctx):
 #: Templates that deliberately have no preview provider, and why. A new template
 #: has to make this choice rather than defaulting silently to sample values.
 _NO_PROVIDER = {
-    "normalize": (
-        "declares no params, so the synthesised preview is already byte-exact"
-    ),
     "spatial_neighbors": (
         "n_neighs comes from whichever tab called ctx.ensure_spatial_neighbors(); "
         "the Nhood and L-R tabs each have their own slider, so a provider would "
@@ -345,6 +342,7 @@ _PROVIDER_TABS = (
     "tab_ligrec", "tab_gene_correlation", "tab_marker_genes", "tab_roi",
     "tab_cnv", "tab_umap", "tab_annot_nhood", "tab_annot_distance",
     "tab_transcripts", "tab_he_registration", "tab_publish", "tab_qc",
+    "tab_preprocess",
 )
 
 

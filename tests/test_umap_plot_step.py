@@ -78,7 +78,10 @@ def _executor(adata, data_path):
     executor = StepExecutor(namespace=namespace)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        executor.run(Step(id="normalize", template=builtin_text("normalize"),
+        executor.run(Step(id="normalize",
+                          template=builtin_assemble(
+                              "normalize", ["copy", "scale.fixed", "tail"]),
+                          params={"target_sum": 1e4},
                           kind="setup", outputs=["adata_norm"]))
     return executor
 

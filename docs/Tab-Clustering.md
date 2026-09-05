@@ -13,7 +13,7 @@ Each control's tooltip names the template parameter its value lands in, so a cap
 | Neighbours | Slider (5–50, default 15). Number of nearest neighbours used to build the kNN graph. Higher values produce coarser, more stable clusters. |
 | Principal components | Slider (10–50, default 40). Number of principal components used when constructing the kNN graph. |
 | Resolution | Float spinbox (0.1–5.0, step 0.1, default 1.0). Leiden resolution parameter. Higher values produce more, smaller clusters. |
-| Clustering backend | Dropdown (`igraph` / `leidenalg`, default `igraph`). Which implementation of the Leiden algorithm to use. `igraph` is orders of magnitude faster. `leidenalg` is scanpy's historical backend and optimises a different objective, so it produces a different partition — choose it to reproduce an existing scanpy pipeline. |
+| Clustering backend | Dropdown (`igraph` / `leidenalg`, default `igraph`). Which implementation of the Leiden algorithm to use. `igraph` is orders of magnitude faster. `leidenalg` is scanpy's historical backend and optimises a different objective, so it produces a different partition — choose it to reproduce an existing scanpy pipeline. The backend also fixes `directed`, which has no control of its own — see the note below. |
 | Iterations | Spinbox (-1–100). How many Leiden iterations to run; `-1` iterates until the partition stops improving. Resets to the selected backend's default when you change **Clustering backend** (`2` for igraph, `-1` for leidenalg). |
 | Use HVGs only | Checkbox (default unchecked). When checked, restricts the analysis to highly variable genes and enables the **Highly variable genes** slider. |
 | Highly variable genes | Slider (500–4000, default 2000). Number of highly variable genes selected when "Use HVGs only" is active. |
@@ -35,6 +35,8 @@ Each control's tooltip names the template parameter its value lands in, so a cap
 8. To save results for sharing or downstream scripts, click **Export Clustering...**.
 
 ## Notes
+
+- **`directed` follows the backend and is not a control.** The two are not symmetric: `igraph` **raises** `ValueError` on a directed graph, while `leidenalg` merely defaults to one. So there is one illegal combination and it is the one a checkbox would invite. Both values the viewer writes are documentary rather than functional — under `igraph` the argument is validated and then ignored, since the graph is built undirected regardless; under `leidenalg`, `True` is exactly what omitting it would give you. They appear in the recorded cell so it states its assumptions, and so a future scanpy changing its defaults cannot move your clustering without the code showing it.
 
 - The result key is deterministic: re-running with the same flavour and resolution produces the same key and overwrites the previous result.
 - Datasets clustered before the flavour picker existed hold keys of the older form `leiden_r{resolution}`. Those still load and appear in every dropdown, but a new run at the same resolution now writes `leiden_igraph_r{resolution}` alongside them rather than replacing them — delete the older key if you don't want both.
