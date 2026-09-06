@@ -85,6 +85,44 @@ entries under **Development log** are the closed pre-1.0.0 record.
   itself were edited to the illegal pair.
 
 ### Fixed
+- **A dataset whose session predated the normalisation setting could not be
+  opened at all** (`xv-bc8`). `tab_preprocess._restore_session` read
+  `session.get("normalize_target_sum", <default>)`, but `session.load` *always*
+  supplies that key — as the `_UNSET_TARGET_SUM` sentinel `"unset"` when the
+  store never held the setting — so the default never applied and the sentinel
+  reached `float()`:
+
+      ValueError: could not convert string to float: 'unset'
+
+  It is raised inside `restore_session`, i.e. during `_do_full_init`, so the
+  viewer aborts on launch rather than degrading: **every** dataset saved before
+  the feature landed was unopenable by the release that introduced it. `app.py`
+  resolved the sentinel correctly all along, and the handler's own docstring
+  already said `app.py` had seeded the state key — it just read the session dict
+  again anyway. It now reads the state key, which is the one place the sentinel
+  is resolved. Found by opening a real dataset; no test covered the tab's
+  restore path, and the new one is source-level for the reason
+  `test_a_store_written_before_this_feature_opens_on_the_old_behaviour` already
+  is — building the tab needs Qt and a live `ViewerContext`.
+- **The normalisation target never restored** (`xv-9ka`). A session saved with
+  the median target reopened on `1e4`, and `save_session` then wrote `10000.0`
+  back — while the recorded `normalize` node still said median. The setting and
+  the code it exists to control therefore disagreed across a restart, silently.
+
+  An ordering race, not a logic error. `_build_control_panel` builds every tab
+  at `app.py:1194`; the seeding that reads the session runs at `app.py:1292` and
+  is a **`setdefault`**. The Preprocess tab's build-time `_refresh_readout()`
+  published `state["normalize_target_sum"]` from the *widget default*, so the
+  key already existed and that seeding did nothing. The tab's own docstring said
+  "`app.py` has already seeded the state key" — it was the tab that made that
+  false. The build-time call is now display-only (`write_state=False`);
+  `restore_fn(session)` is unconditional, so the key is always published a
+  moment later by the tab's restore handler.
+
+  Found on a real store, not in tests, and only *after* `xv-bc8` was fixed —
+  the crash had been masking which value was in state. Worth a look elsewhere:
+  any tab whose build-time refresh writes a `ctx.state` key that `app.py` later
+  `setdefault`s has the same shape.
 - **The recorded environment reported `palms 0.1.0` while the code that ran was
   1.0.1.** `environment.package_versions()` resolved every name through
   `importlib.metadata`, `palms` included — and an *editable* install's dist-info
