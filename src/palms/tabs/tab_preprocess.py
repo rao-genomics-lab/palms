@@ -87,9 +87,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
         """The setting as the template wants it: a float, or None for median."""
         return None if median_check.value else float(target_spin.value)
 
-    def _refresh_readout():
+    def _refresh_readout(write_state: bool = True):
+        """Redraw from the widgets; *write_state* publishes what they say.
+
+        The one call that must not publish is the initial one below.
+        ``_build_control_panel`` runs long before ``app.py`` seeds
+        ``state["normalize_target_sum"]`` from the session, and that seeding is
+        a ``setdefault`` -- so a build-time write here claims the key with the
+        widget default and silently wins, and the stored setting never comes
+        back. The recorded ``normalize`` node kept saying ``median`` while the
+        tab reopened on 1e4.
+        """
         target_spin.enabled = not median_check.value
-        state["normalize_target_sum"] = _target_sum()
+        if write_state:
+            state["normalize_target_sum"] = _target_sum()
         blocks, params, _ = _normalize_preview()
         call = ("sc.pp.normalize_total(adata_norm)" if "scale.median" in blocks
                 else f"sc.pp.normalize_total(adata_norm, "
@@ -120,16 +131,24 @@ def build_tab(ctx: ViewerContext) -> tuple:
         Same division as the QC tab: this handler runs after every other tab's,
         and one of them reaching ``ensure_normalized`` first would normalise on
         whatever the default was.
+
+        The state key is read rather than *session*, and that is the whole
+        point of it. ``session.load`` always supplies this key --- with
+        ``_UNSET_TARGET_SUM`` when the store predates the setting --- so a
+        ``session.get(..., default)`` never falls back and hands the sentinel
+        string straight to ``float()``. ``app.py`` is the one place that
+        resolves the sentinel; asking it again here is what makes a store
+        written before PR #84 openable.
         """
-        target = session.get("normalize_target_sum",
-                             state.get("normalize_target_sum",
-                                       DEFAULT_TARGET_SUM))
+        target = state.get("normalize_target_sum", DEFAULT_TARGET_SUM)
         median_check.value = target is None
         if target is not None:
             target_spin.value = float(target)
         _refresh_readout()
 
-    _refresh_readout()
+    # Display only: see _refresh_readout. `restore_fn` is unconditional, so the
+    # state key is always published a moment later by _restore_session.
+    _refresh_readout(write_state=False)
 
     widget = make_tab(median_check, target_spin, readout, scope)
     return widget, {"restore_session": _restore_session}

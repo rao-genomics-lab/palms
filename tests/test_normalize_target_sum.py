@@ -183,3 +183,80 @@ def test_the_setting_is_listed_but_never_deletable():
     from palms.utils.store_inventory import _BLOCKED_SESSION_ATTRS
 
     assert "normalize_target_sum" in _BLOCKED_SESSION_ATTRS
+
+
+def test_the_preprocess_tab_restore_never_reads_the_raw_session_value():
+    """A store predating the setting crashed the launch, in this one line.
+
+    ``session.load`` always supplies ``normalize_target_sum`` — as the
+    ``_UNSET_TARGET_SUM`` sentinel when the store never held it — so a
+    ``session.get("normalize_target_sum", <default>)`` in the tab never falls
+    back, and the sentinel string reached ``float()``:
+
+        ValueError: could not convert string to float: 'unset'
+
+    ``app.py`` is the one place that resolves the sentinel, so the tab must
+    read the state key it seeded. Source-level, in the idiom of
+    ``test_a_store_written_before_this_feature_opens_on_the_old_behaviour``,
+    because building the tab needs Qt and a live ViewerContext.
+    """
+    import ast
+
+    tab = (Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
+           / "tab_preprocess.py").read_text()
+    tree = ast.parse(tab)
+    func = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_restore_session")
+    # The docstring names the defect, so unparse the statements without it.
+    stmts = [n for n in func.body if not (isinstance(n, ast.Expr)
+                                          and isinstance(n.value, ast.Constant)
+                                          and isinstance(n.value.value, str))]
+    body = "\n".join(ast.unparse(n) for n in stmts)
+    assert "session.get" not in body, (
+        "the raw session value carries the unset sentinel; read the state key "
+        "app.py already resolved it into"
+    )
+    assert "normalize_target_sum" in body
+
+
+def test_the_tab_does_not_claim_the_state_key_before_app_py_seeds_it():
+    """The setting never restored, because the tab won a race with `setdefault`.
+
+    ``_build_control_panel`` runs at ``app.py:1194``; the seeding that reads the
+    session runs at ``app.py:1292`` and is a ``setdefault``. So the Preprocess
+    tab's build-time ``_refresh_readout()`` — which published
+    ``state["normalize_target_sum"]`` from the *widget default* — claimed the
+    key first and made that seeding a no-op. Measured on a real store: a session
+    saved with ``None`` (median) reopened on ``1e4`` and was written back as
+    ``10000.0``, while the recorded ``normalize`` node still said median.
+
+    The initial call must therefore be display-only. Source-level for the same
+    reason as the tests above: building the tab needs Qt and a live
+    ``ViewerContext``.
+    """
+    import ast
+
+    tab = (Path(__file__).resolve().parent.parent / "src" / "palms" / "tabs"
+           / "tab_preprocess.py").read_text()
+    tree = ast.parse(tab)
+    build = next(n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "build_tab")
+
+    # Every _refresh_readout() call that is a direct statement of build_tab —
+    # i.e. not inside one of its nested handlers — must suppress the write.
+    nested = {id(n) for f in ast.walk(build)
+              if isinstance(f, ast.FunctionDef) and f is not build
+              for n in ast.walk(f)}
+    top_level_calls = [
+        n for n in ast.walk(build)
+        if isinstance(n, ast.Call) and id(n) not in nested
+        and isinstance(n.func, ast.Name) and n.func.id == "_refresh_readout"
+    ]
+    assert top_level_calls, "build_tab no longer refreshes the readout"
+    for call in top_level_calls:
+        kwargs = {k.arg: k.value for k in call.keywords}
+        assert "write_state" in kwargs, (
+            "the build-time refresh must not publish the state key — app.py "
+            "seeds it from the session afterwards, with setdefault"
+        )
+        assert kwargs["write_state"].value is False
