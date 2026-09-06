@@ -42,6 +42,7 @@ from palms.utils import stale_results, store_inventory, zarr_safe
 from palms.utils.adata_persistence import (
     CLUSTERING_PREFIX,
     _persist_table,
+    drop_table_entries,
 )
 from palms.utils.cache_repair import human_bytes
 from palms.utils.plot_output import plots_dir
@@ -520,26 +521,33 @@ def _delete_table_entries(ctx, nodes, roots, result: DeletionResult) -> None:
             result.failed.append((node.name, "no table is loaded"))
         return
 
-    staged = []
+    # setdefault, not a fixed dict: only the three table kinds are routed here
+    # (see _plan_for), and an unexpected one used to fall through every branch
+    # and still be staged. Keep that rather than turning it into a KeyError.
+    staged, by_kind = [], {}
     for node in nodes:
         try:
             store_inventory.assert_node_deletable(node, roots)
-            # A column can be on disk without being in memory (a failed
-            # restore, a --no-cache session, an external write). It still counts
-            # as deleted: _persist_table rewrites the whole table from memory.
-            if node.kind == store_inventory.OBS:
-                if node.name in adata.obs.columns:
-                    del adata.obs[node.name]
-            elif node.kind == store_inventory.UNS:
-                adata.uns.pop(node.name, None)
-            elif node.kind == store_inventory.OBSM:
-                if node.name in adata.obsm:
-                    del adata.obsm[node.name]
         except Exception as exc:
             report_write_failure(exc, f"delete {node.name}")
             result.failed.append((node.name, _explain(exc)))
         else:
+            by_kind.setdefault(node.kind, []).append(node.name)
             staged.append(node)
+
+    # Both tables, not just the bound one. Under a QC filter ``ctx.adata`` is a
+    # copy and ``_persist_table`` writes the full table, so deleting from
+    # ``adata`` alone left the entry on disk while this function reported it
+    # removed (xv-2em). A column can also be on disk without being in memory (a
+    # failed restore, a --no-cache session, an external write); that still
+    # counts as deleted, because _persist_table rewrites the whole table from
+    # memory.
+    drop_table_entries(
+        ctx,
+        obs=by_kind.get(store_inventory.OBS, ()),
+        uns=by_kind.get(store_inventory.UNS, ()),
+        obsm=by_kind.get(store_inventory.OBSM, ()),
+    )
 
     if not staged:
         return

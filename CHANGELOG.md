@@ -85,6 +85,36 @@ entries under **Development log** are the closed pre-1.0.0 record.
   itself were edited to the illegal pair.
 
 ### Fixed
+- **Tools → Dataset could not delete a table entry while a QC filter was in
+  force, and reported that it had** (`xv-2em`). The tab printed
+  "Removed 2 item(s), 120.6 KB reclaimed" while its own next rescan re-listed
+  both rows — a silent false success, and the worse half of the bug: a user
+  who believes the report stops looking.
+
+  `_delete_table_entries` dropped the key from `ctx.adata`, which under a
+  filter is a *copy*, and `_persist_table` writes the **full** table.
+  `_sync_filtered_obs_into_full` reaches that full table by iterating the
+  columns of the filtered `obs`, so a column just deleted from that `obs` is
+  never visited, the full table keeps it, and the write puts it straight back.
+  `uns` and `obsm` were affected for the same reason — the merge copies `uns`
+  across whole, and leaves `obsm` untouched by design.
+
+  Deletion is now **told**, through the new
+  `adata_persistence.drop_table_entries(ctx, obs=, uns=, obsm=)`, which removes
+  the keys from both the bound and the full table. Deliberately not *detected*:
+  the merge detects new and changed columns because `_persist_table` has a
+  dozen callers and no idea which column was written, but a removal cannot be
+  detected the same way without adopting the rule "a column on the full table
+  but not on the filtered one has been deleted" — which would work today, and
+  would turn the first code that writes only to the full table into silent data
+  loss. One caller knows a deletion happened; it says so.
+
+  Mirror image of `xv-cbz`: that was results *computed* under a filter never
+  reaching the store, this was results *deleted* under a filter never leaving
+  it. Both come from the same asymmetry between the filtered and full tables.
+  Found by running the real app; the new tests re-read the store rather than
+  trusting the in-memory objects, because in-memory was the half that always
+  worked, and all three were confirmed to fail against the previous code.
 - **The recorded environment reported `palms 0.1.0` while the code that ran was
   1.0.1.** `environment.package_versions()` resolved every name through
   `importlib.metadata`, `palms` included — and an *editable* install's dist-info
