@@ -158,6 +158,49 @@ def full_table(ctx: ViewerContext):
     return full if full is not None else ctx.adata
 
 
+def drop_table_entries(ctx: ViewerContext, obs=(), uns=(), obsm=()) -> None:
+    """Remove obs/uns/obsm keys from **both** the bound and the full table.
+
+    Deleting from ``ctx.adata`` alone is a no-op on disk whenever a QC filter
+    is in force, and a *silent* one. ``_persist_table`` writes the full table,
+    and :func:`_sync_filtered_obs_into_full` reaches it by iterating the
+    columns of the filtered ``obs`` -- so a column that has just been deleted
+    from that ``obs`` is never visited, the full table keeps it, and the write
+    puts it straight back. The Dataset tab reported "Removed 2 item(s),
+    120.6 KB reclaimed" while its own next rescan re-listed both rows (xv-2em).
+
+    Deletion is **told**, not detected, and that is deliberate. The merge
+    detects change because ``_persist_table`` has a dozen callers and no idea
+    which column was just written; a *removal* cannot be detected the same way
+    without adopting the rule "a column on the full table but not on the
+    filtered one has been deleted", which would silently discard anything ever
+    written to the full table on its own. Nothing does that today, so the rule
+    would work today -- and would turn the first such writer into data loss.
+    One caller knows a deletion happened; it says so.
+
+    ``uns`` and ``obsm`` need it as much as ``obs``: the merge copies ``uns``
+    across whole, so a popped key simply is not copied, and it leaves ``obsm``
+    untouched by design.
+
+    Missing keys are ignored, so this is safe to call with the union of what a
+    batch selected -- a column can be on disk without being in memory.
+    """
+    tables = [t for t in (ctx.adata, full_table(ctx)) if t is not None]
+    seen: list[int] = []
+    for table in tables:
+        if id(table) in seen:       # not filtered: one object, one pass
+            continue
+        seen.append(id(table))
+        for key in obs:
+            if key in table.obs.columns:
+                del table.obs[key]
+        for key in uns:
+            table.uns.pop(key, None)
+        for key in obsm:
+            if key in table.obsm:
+                del table.obsm[key]
+
+
 def _sync_filtered_obs_into_full(ctx: ViewerContext) -> None:
     """Merge results computed on a filtered ``adata`` back onto the full table.
 

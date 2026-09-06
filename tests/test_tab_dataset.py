@@ -502,3 +502,113 @@ def test_kind_order_puts_table_edits_first_and_backups_last():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── Deleting while a QC filter is in force ───────────────────────────────────
+
+def _filtered(ctx):
+    """Put *ctx* in the state a QC filter leaves: adata is a copy, not the table."""
+    full = ctx.adata
+    ctx.full_adata = full
+    ctx.adata = full[full.obs_names[: max(1, full.n_obs // 2)]].copy()
+    return full
+
+
+def test_deleting_an_obs_column_under_a_qc_filter_reaches_the_store(loaded):
+    """xv-2em: it did not — and the tab said it had.
+
+    Under a filter ``ctx.adata`` is a copy while ``_persist_table`` writes the
+    *full* table, which ``_sync_filtered_obs_into_full`` reaches by iterating
+    the columns of the filtered ``obs``. A column just deleted from that ``obs``
+    is therefore never visited, the full table keeps it, and the write puts it
+    straight back. Measured on a real dataset: the tab reported "Removed 2
+    item(s), 120.6 KB reclaimed" while its own next rescan re-listed both rows.
+
+    The store is re-read rather than the in-memory objects trusted, because
+    in-memory was exactly the half that always worked.
+    """
+    from spatialdata import read_zarr
+
+    full = _filtered(loaded)
+    assert "clustering_leiden_r1.0" in loaded.adata.obs.columns, (
+        "the filtered view carries every column of the full table — if it did "
+        "not, this test would pass for the wrong reason"
+    )
+
+    plan = _plan(loaded, ["obs:table/clustering_leiden_r1.0"])
+    result = tab_dataset._apply_deletion(loaded, plan)
+
+    assert result.failed == [], result.failed
+    assert "clustering_leiden_r1.0" not in loaded.adata.obs.columns
+    assert "clustering_leiden_r1.0" not in full.obs.columns, (
+        "the full table is the one _persist_table writes"
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        stored = read_zarr(loaded.sdata.path)["table"].obs.columns
+    assert "clustering_leiden_r1.0" not in stored
+    assert "cluster_labels_leiden_r1.0" not in stored, "the twin cascades too"
+
+
+def test_deleting_a_uns_key_under_a_qc_filter_reaches_the_store(loaded):
+    """``uns`` needs it as much as ``obs``: the merge copies uns across whole,
+    so a popped key is simply not copied and the full table keeps it."""
+    from spatialdata import read_zarr
+
+    full = _filtered(loaded)
+    plan = _plan(loaded, ["uns:table/rank_genes_groupby"])
+    result = tab_dataset._apply_deletion(loaded, plan)
+
+    assert result.failed == [], result.failed
+    assert "rank_genes_groupby" not in loaded.adata.uns
+    assert "rank_genes_groupby" not in full.uns
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert "rank_genes_groupby" not in read_zarr(loaded.sdata.path)["table"].uns
+
+
+def test_an_unfiltered_delete_visits_the_one_table_once(loaded):
+    """The no-filter path is unchanged: ``ctx.adata`` *is* the stored table, so
+    ``drop_table_entries`` must not iterate it twice and must not need a full."""
+    from palms.utils.adata_persistence import drop_table_entries
+
+    assert getattr(loaded, "full_adata", None) is None
+    drop_table_entries(loaded, obs=["clustering_leiden_r1.0"],
+                       uns=["rank_genes_groupby"])
+    assert "clustering_leiden_r1.0" not in loaded.adata.obs.columns
+    assert "rank_genes_groupby" not in loaded.adata.uns
+
+
+def test_dropping_a_key_that_is_not_there_is_not_an_error(loaded):
+    """A column can be on disk without being in memory (a failed restore, a
+    --no-cache session, an external write), so the caller passes the union."""
+    from palms.utils.adata_persistence import drop_table_entries
+
+    _filtered(loaded)
+    drop_table_entries(loaded, obs=["never_existed"], uns=["nor_this"],
+                       obsm=["X_absent"])
+
+
+def test_the_deletion_executor_tells_the_persistence_layer_about_removals():
+    """Source guard: the fix is that deletion is *told*, not detected.
+
+    ``_sync_filtered_obs_into_full`` detects new and changed columns by
+    iterating the filtered ``obs``; a removal is invisible to that. Inferring it
+    instead — "a column on the full table but not on the filtered one has been
+    deleted" — would work today and would turn the first code that writes only
+    to the full table into silent data loss. So the executor must route through
+    ``drop_table_entries`` rather than deleting from ``ctx.adata`` itself.
+    """
+    import ast
+
+    src = (Path(tab_dataset.__file__)).read_text()
+    tree = ast.parse(src)
+    func = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef)
+                and n.name == "_delete_table_entries")
+    body = ast.unparse(func)
+    assert "drop_table_entries" in body
+    assert "del adata.obs[" not in body and "adata.uns.pop(" not in body, (
+        "deleting from the bound table alone is the bug; both tables must go "
+        "through drop_table_entries"
+    )
