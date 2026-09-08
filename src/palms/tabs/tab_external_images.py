@@ -705,13 +705,16 @@ def build_tab(ctx: "ViewerContext"):
         # Remove from sdata
         try:
             element = entry.get("element_name")
+            # released=True: the layers are gone and the tif is closed, just
+            # above. Without it a cache-restored image is refused outright and
+            # the failure is swallowed by the print below.
             if element and ctx.sdata is not None and element in ctx.sdata:
-                safe_delete_element(ctx.sdata, element)
+                safe_delete_element(ctx.sdata, element, released=True)
             # Also remove landmarks from sdata
             for suffix in ("_xenium_lm", "_image_lm"):
                 lm_name = f"{element}{suffix}"
                 if lm_name in ctx.sdata:
-                    safe_delete_element(ctx.sdata, lm_name)
+                    safe_delete_element(ctx.sdata, lm_name, released=True)
         except Exception as e:
             print(f"  Warning: could not delete from sdata: {e}")
         list_widget.takeItem(row)

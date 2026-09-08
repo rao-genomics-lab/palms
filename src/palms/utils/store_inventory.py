@@ -864,6 +864,16 @@ def _cascade_candidates(node: Node) -> tuple[str, ...]:
             # Matches tab_external_images.on_remove, which deletes both.
             return (f"element:shapes/{node.name}_xenium_lm",
                     f"element:shapes/{node.name}_image_lm")
+        # A registration's landmarks exist only to place their image, and
+        # tab_he_registration writes and clears both sides as a pair — so one
+        # alone is half a correspondence with nothing left to correspond to.
+        # `arms_tiles` is deliberately *not* here even though crop_state pairs
+        # it with the same image: the tiles are an analysis artifact with their
+        # own DEG sidecar, not part of the registration.
+        landmarks = {"he_image": "he", "arms_he_image": "arms"}.get(node.name)
+        if landmarks:
+            return (f"element:shapes/{landmarks}_xenium_landmarks",
+                    f"element:shapes/{landmarks}_he_landmarks")
         # The Segmentation tab needs both halves; one alone leaves a labels
         # layer with no table and a segmentation_source pointing at nothing.
         if node.name == adata_persistence.CUSTOM_LABELS_KEY:

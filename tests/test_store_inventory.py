@@ -67,6 +67,11 @@ def dataset(tiny_sdata, make_table):
     )
     zarr_safe.safe_write_element(tiny_sdata, "ext_slide2_xenium_lm", landmarks)
 
+    # ── the H&E, whose landmarks are named by their own convention ──
+    zarr_safe.safe_write_element(tiny_sdata, "he_image", image)
+    zarr_safe.safe_write_element(tiny_sdata, "he_he_landmarks", landmarks)
+    zarr_safe.safe_write_element(tiny_sdata, "he_xenium_landmarks", landmarks)
+
     # ── table contents, persisted once ──
     adata = tiny_sdata["table"]
     n = adata.n_obs
@@ -497,6 +502,30 @@ def test_plan_expands_the_ext_landmark_cascade(dataset):
     keys = {n.key for n in plan.nodes}
     assert "element:shapes/ext_slide2_xenium_lm" in keys
     assert "element:shapes/ext_slide2_xenium_lm" in {n.key for n in plan.added}
+
+
+def test_plan_expands_the_he_landmark_cascade(dataset):
+    """Both sides of the registration go with the image they place.
+
+    They are written and cleared as a pair, so leaving them behind orphans half
+    a correspondence — and the ext_* rule above did not reach them, because the
+    H&E landmarks use a different naming convention.
+    """
+    sections = si.build_inventory(dataset.data_path, dataset.cache)
+    plan = si.plan_deletion(sections, ["element:images/he_image"])
+    keys = {n.key for n in plan.nodes}
+    assert "element:shapes/he_he_landmarks" in keys
+    assert "element:shapes/he_xenium_landmarks" in keys
+    assert {n.key for n in plan.added} == {
+        "element:shapes/he_he_landmarks", "element:shapes/he_xenium_landmarks"}
+
+
+def test_arms_tiles_do_not_cascade_with_the_arms_image():
+    """Deliberate: the tiles are an analysis artifact with their own sidecar,
+    not part of the registration — unlike the landmarks beside them."""
+    node = si.Node(key="element:images/arms_he_image", kind=si.ELEMENT,
+                   name="arms_he_image", deletable=True)
+    assert "element:shapes/arms_tiles" not in si._cascade_candidates(node)
 
 
 def test_plan_expands_clustering_to_cluster_labels(dataset):

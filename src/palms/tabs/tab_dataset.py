@@ -207,21 +207,34 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _set_busy(True)
         status.value = f"Deleting {len(plan.nodes)} item(s)..."
 
+        # Before the worker, and here rather than in it: this removes napari
+        # layers, which is Qt work. See _apply_deletion.
+        elements = plan.of_kinds(store_inventory.ELEMENT)
+        if elements:
+            _release_layers(ctx, [n.name for n in elements])
+
         @thread_worker
         def _run():
             return _apply_deletion(ctx, plan)
 
         def _done(result: "DeletionResult"):
+            # Also Qt work: refresh_clustering_choices rebuilds combo boxes.
+            _forget_clusterings(ctx, result.forgotten_clusterings)
             report_text.setVisible(True)
             report_text.setPlainText(result.summary())
             status.value = (f"Removed {len(result.removed)} item(s), "
                             f"{human_bytes(result.bytes_freed)} reclaimed."
                             if result.removed else "Nothing was removed.")
             _set_busy(False)
-            _on_scan()
-            # Last, because reload_dataset() tears down this very widget.
-            if result.needs_reload:
-                _offer_reload(result)
+            # The reload is offered *before* the rescan, and the rescan is
+            # skipped when it happens. `_on_scan` is asynchronous, so the old
+            # order left its `returned` slot landing on a tree that
+            # `reload_dataset()` had since destroyed — "wrapped C/C++ object of
+            # type QTreeWidget has been deleted", after every accepted reload.
+            # There is nothing to rescan for either: the reload rebuilds this
+            # tab from disk.
+            if not (result.needs_reload and _offer_reload(result)):
+                _on_scan()
 
         _start(_run, _done, "Deletion failed")
 
@@ -265,19 +278,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _confirm_and_delete(sorted(sel.keys), "Clear stale analysis results",
                             extra=_rename_warning(graph, n_stale))
 
-    def _offer_reload(result):
+    def _offer_reload(result) -> bool:
         """Element deletions need the dataset rebuilt to leave the viewer sane.
 
         Offered from the worker's `returned` slot, i.e. on the main thread:
         reload_dataset() destroys every tab widget, including the one whose
-        callback is running.
+        callback is running. Returns whether it actually reloaded, which is what
+        tells the caller not to touch this widget again.
         """
         reload_dataset = getattr(ctx, "reload_dataset", None)
         if reload_dataset is None:
             report_text.append(
                 "\n\nReopen this dataset (File → Open Dataset) so the viewer "
                 "stops showing what was just removed.")
-            return
+            return False
         answer = QMessageBox.question(
             None, "Reload dataset?",
             f"{len(result.removed)} item(s) were removed from the store.\n\n"
@@ -288,9 +302,10 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if answer != QMessageBox.StandardButton.Yes:
             report_text.append(
                 "\n\nNot reloaded. Reopen the dataset when convenient.")
-            return
+            return False
         status.value = "Reloading dataset..."
         reload_dataset()
+        return True
 
     # Nothing scans at build time, deliberately: the walk covers the whole
     # dataset directory, and charging every launch for a tab most sessions never
@@ -446,6 +461,10 @@ class DeletionResult:
     failed: list = field(default_factory=list)           # (name, reason)
     bytes_freed: int = 0
     needs_reload: bool = False
+    # Clustering keys whose column is gone from disk. Carried out to the
+    # `returned` slot rather than acted on here, because forgetting one
+    # refreshes combo boxes and the worker must not touch Qt.
+    forgotten_clusterings: list = field(default_factory=list)
 
     def summary(self) -> str:
         lines: list[str] = []
@@ -480,8 +499,9 @@ def _run_node(result: DeletionResult, node, action) -> bool:
 
 def _explain(exc: Exception) -> str:
     if isinstance(exc, zarr_safe.ZarrSafeError):
-        return ("in use — reload the dataset (Tools → Dataset offers this after "
-                "a delete) and try again")
+        # Deliberately not "reload and try again": for a cache-backed element
+        # the reload recreates the lazy binding, so the same advice loops.
+        return f"the store refused it — {exc}"
     return str(exc)
 
 
@@ -554,10 +574,12 @@ def _delete_table_entries(ctx, nodes, roots, result: DeletionResult) -> None:
     for node in staged:
         result.removed.append(node.name)
         result.bytes_freed += node.size_bytes or 0
-    _forget_clusterings(ctx, staged)
+    result.forgotten_clusterings += [
+        n.name[len(CLUSTERING_PREFIX):] for n in staged
+        if n.kind == store_inventory.OBS and n.name.startswith(CLUSTERING_PREFIX)]
 
 
-def _forget_clusterings(ctx, nodes) -> None:
+def _forget_clusterings(ctx, removed) -> None:
     """Drop deleted clusterings from the in-memory dicts the combos read.
 
     ``refresh_clustering_choices`` reads ``ctx.clusterings``, *not*
@@ -565,10 +587,9 @@ def _forget_clusterings(ctx, nodes) -> None:
     hand at each producer. Without this the deleted clustering stays in every
     combo and every ``ctx.clusterings[key]`` lookup still resolves against the
     cached Series, so the column is gone from disk and still colouring cells.
+
+    **GUI thread only** — the refresh rebuilds widgets. See ``_apply_deletion``.
     """
-    removed = [n.name[len(CLUSTERING_PREFIX):] for n in nodes
-               if n.kind == store_inventory.OBS
-               and n.name.startswith(CLUSTERING_PREFIX)]
     if not removed:
         return
     for name in removed:
@@ -648,11 +669,18 @@ def _drop_layer(viewer, layer) -> None:
 def _release_layers(ctx, element_names) -> None:
     """Let go of anything holding a lazily-loaded element, before deleting it.
 
-    ``safe_delete_element`` refuses to rename an element whose files still back
-    a live dask graph (``_assert_not_dask_backed``), and a napari image layer is
-    exactly such a reader. This is the teardown
-    ``tab_external_images.on_remove`` already does before its own delete: pull
-    the layer, close the tif, then collect.
+    The delete renames the element's files into the trash, and a dask graph
+    resolves lazily *by path*, so a surviving reader would go on to read
+    whatever lands there next. A napari image layer is exactly such a reader, so
+    this is what makes ``safe_delete_element(released=True)`` a true assertion
+    rather than a bypass. It is the teardown ``tab_external_images.on_remove``
+    already does before its own delete: pull the layer, close the tif, collect.
+
+    It does *not* satisfy ``_assert_not_dask_backed``, which sees only ``sdata``'s
+    own element dicts — dropping that binding is ``_unbind_backed``'s job, inside
+    ``safe_delete_element``.
+
+    **GUI thread only**: it removes napari layers. See ``_apply_deletion``.
     """
     viewer = getattr(ctx, "viewer", None)
     wanted = set(element_names)
@@ -711,8 +739,14 @@ def _release_layers(ctx, element_names) -> None:
 def _apply_deletion(ctx, plan) -> DeletionResult:
     """Apply *plan*, in its own kind order, reporting per node.
 
-    Runs on a worker: it can rmtree a multi-gigabyte backup. Nothing here
-    touches Qt, and the reload offer is left to the caller's `returned` slot.
+    Runs on a worker: it can rmtree a multi-gigabyte backup. **Nothing here may
+    touch Qt** — that is why ``_release_layers`` runs in ``_confirm_and_delete``
+    before the worker starts and ``_forget_clusterings`` runs in its `returned`
+    slot afterwards, and why a source guard pins both. Removing a napari layer
+    from this thread invalidates the row the layer-list view is painting, and
+    the delegate then reads ``index.data(SizeHintRole).height()`` off a ``None``
+    — an AttributeError raised on the GUI thread, which no ``try`` here can
+    catch. The reload offer is likewise left to the caller's `returned` slot.
     """
     result = DeletionResult()
     cache_path = _cache_path(ctx)
@@ -727,17 +761,17 @@ def _apply_deletion(ctx, plan) -> DeletionResult:
         _run_node(result, node,
                   lambda n=node: _delete_session_node(ctx, n, cache_path, roots))
 
-    elements = plan.of_kinds(store_inventory.ELEMENT)
-    if elements:
-        _release_layers(ctx, [n.name for n in elements])
-        for node in elements:
-            def _delete(n=node):
-                store_inventory.assert_node_deletable(n, roots)
-                if ctx.sdata is None or n.name not in ctx.sdata:
-                    raise RuntimeError("not in the loaded dataset any more")
-                zarr_safe.safe_delete_element(ctx.sdata, n.name)
-            if _run_node(result, node, _delete):
-                result.needs_reload = True
+    for node in plan.of_kinds(store_inventory.ELEMENT):
+        def _delete(n=node):
+            store_inventory.assert_node_deletable(n, roots)
+            if ctx.sdata is None or n.name not in ctx.sdata:
+                raise RuntimeError("not in the loaded dataset any more")
+            # released=True: _confirm_and_delete ran _release_layers before this
+            # worker started. Without it a cache-restored element is refused
+            # outright — see safe_delete_element.
+            zarr_safe.safe_delete_element(ctx.sdata, n.name, released=True)
+        if _run_node(result, node, _delete):
+            result.needs_reload = True
 
     for node in plan.of_kinds(store_inventory.SIDECAR, store_inventory.DERIVED,
                               store_inventory.TRASH, store_inventory.BACKUP):
