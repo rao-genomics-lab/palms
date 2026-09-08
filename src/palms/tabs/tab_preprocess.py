@@ -121,11 +121,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
         and one of them reaching ``ensure_normalized`` first would normalise on
         whatever the default was.
         """
+        from palms.utils.session import _UNSET_TARGET_SUM
+
         target = session.get("normalize_target_sum",
                              state.get("normalize_target_sum",
                                        DEFAULT_TARGET_SUM))
+        # `load_session` hands back the raw sentinel, not the translation
+        # `app.py` makes when it seeds the state key — and this handler reads
+        # the session first. "Never stored" is neither the median nor a number
+        # for the spinbox: it means the historical 1e4, which is the value the
+        # widget already carries. `float("unset")` raised, and this loop is
+        # unguarded, so it took the nine tabs after this one down with it.
         median_check.value = target is None
-        if target is not None:
+        if target is not None and target != _UNSET_TARGET_SUM:
             target_spin.value = float(target)
         _refresh_readout()
 
