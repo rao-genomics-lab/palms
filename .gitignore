@@ -24,6 +24,11 @@ transcript_cache/
 
 # Per-dataset zarr cache (created next to xenium output)
 sdata_cached.zarr/
+# ...except the end-to-end fixture's, which *is* the data: crop_7 is a crop
+# export, so its cache is the source of record and there is nothing to rebuild
+# it from. The negation names the directory rather than a glob beneath it —
+# git cannot re-include a file whose parent directory is excluded.
+!tests/data/crop_7/sdata_cached.zarr/
 
 # Large reference datasets (only metadata/JSON is checked in)
 reference_datasets/*.h5ad
@@ -32,8 +37,9 @@ reference_datasets/raw/
 # Manuscript drafts and planning notes (kept out of the public repo)
 manuscript/
 
-# Untracked local data
-data/
+# Untracked local data. Anchored: unanchored, this also matched tests/data/,
+# which is where the end-to-end fixture lives.
+/data/
 
 # Notebook-replay reports (scripts/verify_notebook.py --out): a measurement of
 # one dataset on one machine, not a build artefact worth versioning

@@ -172,6 +172,11 @@ Issues = "https://github.com/rao-genomics-lab/palms/issues"
 testpaths = ["tests"]
 pythonpath = ["src"]        # import palms.* without installing the package
 addopts = "-q"
+# The E2E fixture is ~380 files of zarr chunks; there is nothing to collect in it.
+norecursedirs = ["tests/data"]
+markers = [
+    "e2e: launches the real Qt/napari application and exercises persistence",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/palms"]

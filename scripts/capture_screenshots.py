@@ -37,9 +37,22 @@ import time
 from pathlib import Path
 
 import numpy as np
-from qtpy.QtCore import QPoint
-from qtpy.QtGui import QImage, QPainter
-from qtpy.QtWidgets import QApplication, QLineEdit, QPushButton, QTreeWidget, QWidget
+
+# Before the qtpy imports below: `import palms` is what points QT_API at PyQt6,
+# and qtpy binds on first import.
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+# Shared with tests/e2e/ — see src/palms/testing/rig.py for why it is not
+# defined here any more.
+from palms.testing.rig import (  # noqa: E402
+    BASE_LAYERS,
+    FRAME_LAYER,
+    Rig,
+    process_events as _process_events,
+)
+from qtpy.QtCore import QPoint  # noqa: E402
+from qtpy.QtGui import QImage, QPainter  # noqa: E402
+from qtpy.QtWidgets import QApplication, QLineEdit, QTreeWidget  # noqa: E402
 
 SCREENSHOTS = Path(__file__).parent.parent / "docs/screenshots"
 
@@ -83,147 +96,6 @@ os.environ.setdefault("DISPLAY", ":0")
 
 # Outer tabs:  0=Cells  1=Genes  2=Spatial  3=Images  4=Tools
 CELLS, GENES, SPATIAL, IMAGES, TOOLS = 0, 1, 2, 3, 4
-
-# Everything a working session restores that is not the dataset itself is hidden
-# by default: registration landmarks, an ARMS scan, patch overlays and prediction
-# rasters sit outside the Xenium extent or on top of it, and none of them is what
-# a reference image of the viewer should be showing. An allow-list rather than a
-# block-list, because a session can restore arbitrarily named overlays and an
-# unrecognised one must not end up in a published image.
-BASE_LAYERS = ("cell_labels", "morphology_focus")
-FRAME_LAYER = "cell_labels"
-
-
-def _process_events(pause=0.08):
-    QApplication.processEvents()
-    time.sleep(pause)
-    QApplication.processEvents()
-
-
-class Rig:
-    """The handle a shot's setup gets: the app, plus the few verbs it needs."""
-
-    def __init__(self, viewer, ctx, dock, panel):
-        self.viewer = viewer
-        self.ctx = ctx
-        self.dock = dock
-        self.panel = panel
-
-    # ── navigation ──────────────────────────────────────────────────────
-    def navigate(self, outer, inner):
-        self.panel.setCurrentIndex(outer)
-        _process_events(0.05)
-        sub = self.panel.currentWidget()
-        if sub is not None and hasattr(sub, "setCurrentIndex"):
-            sub.setCurrentIndex(inner)
-        _process_events(0.08)
-
-    @property
-    def page(self):
-        sub = self.panel.currentWidget()
-        return sub.currentWidget() if hasattr(sub, "currentWidget") else sub
-
-    # ── widgets ─────────────────────────────────────────────────────────
-    @staticmethod
-    def _norm(text):
-        return "".join(ch for ch in str(text).lower() if ch.isalnum())
-
-    def mg(self, label):
-        """A magicgui widget on the current page, by its label.
-
-        magicgui stores a back-reference on the Qt widget it wraps
-        (``native._magic_widget``), so the whole tab can be driven through the
-        real widget objects — ``.value = x``, ``.native.click()`` — without the
-        app having to export them and without matching on Qt layout structure.
-        """
-        want = self._norm(label)
-        for w in self.page.findChildren(QWidget):
-            mw = getattr(w, "_magic_widget", None)
-            if mw is not None and self._norm(getattr(mw, "label", "")) == want:
-                return mw
-        raise LookupError(f"no magicgui widget labelled {label!r} on this page")
-
-    def qbtn(self, text):
-        """A plain QPushButton on the current page, by its text."""
-        want = self._norm(text)
-        for b in self.page.findChildren(QPushButton):
-            if self._norm(b.text()) == want:
-                return b
-        raise LookupError(f"no QPushButton {text!r} on this page")
-
-    def click(self, label):
-        try:
-            self.mg(label).native.click()
-        except LookupError:
-            self.qbtn(label).click()
-        _process_events(0.2)
-
-    def wait_idle(self, label, timeout=600):
-        """Wait for a button that disables itself while its worker runs."""
-        widget = None
-        try:
-            widget = self.mg(label).native
-        except LookupError:
-            widget = self.qbtn(label)
-        deadline = time.time() + timeout
-        # give the worker a moment to actually disable it
-        for _ in range(10):
-            _process_events(0.1)
-            if not widget.isEnabled():
-                break
-        while time.time() < deadline:
-            _process_events(0.25)
-            if widget.isEnabled():
-                return True
-        print(f"    ! timed out after {timeout}s waiting for {label!r}")
-        return False
-
-    def wait_for(self, cond, timeout=600, what=""):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            _process_events(0.25)
-            if cond():
-                return True
-        print(f"    ! timed out after {timeout}s waiting for {what}")
-        return False
-
-    # ── layers and camera ───────────────────────────────────────────────
-    def show_only(self, *prefixes):
-        prefixes = prefixes or BASE_LAYERS
-        for layer in self.viewer.layers:
-            layer.visible = layer.name.startswith(tuple(prefixes))
-
-    def show_also(self, *prefixes):
-        for layer in self.viewer.layers:
-            if layer.name.startswith(tuple(prefixes)):
-                layer.visible = True
-
-    def select(self, name):
-        if name in self.viewer.layers:
-            self.viewer.layers.selection = {self.viewer.layers[name]}
-
-    def frame(self, name=FRAME_LAYER, margin=0.95, zoom_factor=1.0):
-        """Put the camera on one layer's own extent.
-
-        Not viewer.reset_view(): napari's fit_to_view measures
-        layers._extent_world_augmented, which ignores `visible`, so a hidden
-        ARMS scan far outside the tissue would still set the frame.
-        """
-        if name not in self.viewer.layers:
-            return
-        lo, hi = self.viewer.layers[name].extent.world
-        size = np.maximum(hi - lo, 1.0)
-        self.viewer.camera.center = (0.0, *((lo + hi) / 2.0))
-        base = float(np.min(np.array(self.viewer._canvas_size) / size))
-        self.viewer.camera.zoom = margin * base * zoom_factor
-
-    def zoom_in(self, factor=4.0, name=FRAME_LAYER, offset=(0.0, 0.0)):
-        self.frame(name)
-        cy, cx = self.viewer.camera.center[1:]
-        lo, hi = self.viewer.layers[name].extent.world
-        span = hi - lo
-        self.viewer.camera.center = (0.0, cy + offset[0] * span[0], cx + offset[1] * span[1])
-        self.viewer.camera.zoom *= factor
 
 
 # ── the shots ────────────────────────────────────────────────────────────────
@@ -676,7 +548,10 @@ def capture_all(viewer, ctx, dock, panel):
     tab_shots = [s for s in TAB_SHOTS if only is None or only in s[2]]
     if only:
         print(f"  --only {only!r}: {len(window_shots) + len(tab_shots)} shot(s)")
-    rig = Rig(viewer, ctx, dock, panel)
+    # strict=False: a picture of a step that is still running is still a picture
+    # of that step, so a wait_idle timeout here prints and carries on. The tests
+    # take the default, where a timeout is a failure.
+    rig = Rig(viewer, ctx, dock, panel, strict=False)
     qt_window = viewer.window._qt_window
     qt_window.raise_()
     qt_window.activateWindow()
@@ -731,29 +606,19 @@ def main():
     # fail in a second, not after a ten-second Qt/scanpy import.
     dataset = _dataset_from_args()
 
-    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
     import napari
     from qtpy.QtCore import QTimer
 
-    # Import internal helpers — these are private but stable across the codebase
-    from palms.app import _do_full_init  # noqa: PLC2701
+    # The application's own startup path, minus napari.run(). Previously this
+    # called _do_full_init with a hand-rolled _app dict that was missing
+    # "plots_dock" and "plots_panel" — the drift a shared seam removes.
+    from palms.app import create_viewer
 
-    _app = {
-        "dock_widget": None,
-        "restore_fn": None,
-        "snapshot": {},
-        "reload_in_progress": False,
-    }
-
-    viewer = napari.Viewer(title="PALMS — Screenshot Capture")
-    # Wider than the old 1400x900: at that size the Controls dock and the layer
-    # panel left the canvas ~400px across, so the tissue was a thumbnail in the
-    # middle of a reference image about a spatial viewer.
+    viewer, ctx, _app = create_viewer(dataset, no_cache=False)
+    # Wider than the 1400x900 create_viewer sets: at that size the Controls dock
+    # and the layer panel left the canvas ~400px across, so the tissue was a
+    # thumbnail in the middle of a reference image about a spatial viewer.
     viewer.window.resize(1800, 1000)
-
-    print(f"Loading dataset: {dataset}")
-    ctx = _do_full_init(viewer, dataset, no_cache=False, _app=_app)
 
     dock = _app["dock_widget"]
     # The dock wraps the outer QTabWidget (5 top-level groups)

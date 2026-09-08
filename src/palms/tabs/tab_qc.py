@@ -201,10 +201,20 @@ def build_tab(ctx: ViewerContext) -> tuple:
         return n_cells, len(counts), n_genes, adata.n_vars
 
     def _refresh_readout():
-        counts_spin.enabled = cells_check.value
-        cells_spin.enabled = genes_check.value
-        apply_button.enabled = bool(cells_check.value or genes_check.value)
-        revert_button.enabled = bool(state.get("qc_filter"))
+        try:
+            counts_spin.enabled = cells_check.value
+            cells_spin.enabled = genes_check.value
+            apply_button.enabled = bool(cells_check.value or genes_check.value)
+            revert_button.enabled = bool(state.get("qc_filter"))
+        except RuntimeError:
+            # Qt is deleting this page under us. Every widget below is connected
+            # to `changed`, and destroying the tree emits from one of them after
+            # its siblings have gone — so this fires on a dataset switch (which
+            # calls remove_dock_widget) and at exit. It is not survivable by
+            # ignoring: PyQt6 aborts the process on an exception raised in a
+            # slot, so "wrapped C/C++ object ... has been deleted" is a core
+            # dump, not a warning. There is nothing to refresh; return.
+            return
         try:
             kept = _would_keep()
         except Exception:            # noqa: BLE001 - a readout must not raise

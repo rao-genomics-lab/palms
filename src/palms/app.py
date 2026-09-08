@@ -1453,7 +1453,19 @@ def _push_to_console(viewer, ctx):
         print(f"  Warning: could not push variables to console: {exc}")
 
 
-def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = None):
+def create_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = None):
+    """Build the viewer, load a dataset and wire the app — without the event loop.
+
+    Everything ``run_viewer`` used to do before ``napari.run()``. Split out so
+    the startup path can be exercised without blocking: a test, or
+    ``scripts/capture_screenshots.py``, drives the real application instead of
+    an approximation of it.
+
+    Returns ``(viewer, ctx, app_state)``. ``ctx`` is the context for the dataset
+    loaded here; ``app_state["ctx"]`` is the one that *tracks dataset switches*,
+    and is what ``shutdown_viewer`` persists. Reading the returned value after a
+    switch would save the dataset the user has already left.
+    """
     print("=" * 60)
     print("Xenium Linux Viewer")
     if data_path:
@@ -1494,6 +1506,10 @@ def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = No
         "restore_fn": None,
         "snapshot": {},
         "reload_in_progress": False,
+        # The live context. A dataset switch rebinds the local `ctx` below, and
+        # shutdown reads it from here rather than from create_viewer's return
+        # value — which would still name the dataset the user switched away from.
+        "ctx": None,
     }
 
     ctx = None  # set after first dataset load
@@ -1673,7 +1689,7 @@ def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = No
 
             # 7. Full init (loads data, builds ctx, control panel, restores session)
             try:
-                ctx = _do_full_init(viewer, new_path, no_cache, _app)
+                ctx = _app["ctx"] = _do_full_init(viewer, new_path, no_cache, _app)
                 _push_to_console(viewer, ctx)
             except Exception as exc:
                 QMessageBox.critical(
@@ -1829,16 +1845,21 @@ def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = No
     _app["_close_guard"] = _close_guard  # keep a reference alive
 
     # ── Snapshot layer data before Qt teardown, then save on exit ────────────
-    if not no_cache:
-        def _on_viewer_closing(_event=None):
-            if ctx is not None:
-                _app["snapshot"] = _snapshot_layers(ctx)
+    # Two steps, and the order is the point: the layers must be read while their
+    # Qt objects are alive, and the store written after the loop has stopped. The
+    # first half is published on _app so a caller driving the app without an
+    # event loop invokes *this* function rather than a copy of it.
+    def _on_viewer_closing(_event=None):
+        if _app["ctx"] is not None:
+            _app["snapshot"] = _snapshot_layers(_app["ctx"])
 
+    _app["snapshot_layers"] = _on_viewer_closing
+    if not no_cache:
         from qtpy.QtWidgets import QApplication
         QApplication.instance().aboutToQuit.connect(_on_viewer_closing)
 
     if data_path is not None:
-        ctx = _do_full_init(viewer, data_path, no_cache, _app)
+        ctx = _app["ctx"] = _do_full_init(viewer, data_path, no_cache, _app)
         _push_to_console(viewer, ctx)
         total_time = time.perf_counter() - t_start
         print(f"\nViewer ready in {total_time:.1f}s. Close the napari window to exit.")
@@ -1848,29 +1869,49 @@ def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = No
     # After the load, not before: every bridge call marshals onto the Qt main
     # thread, so a bridge started ahead of _do_full_init would accept requests
     # it could not service until the dataset had finished loading anyway.
-    _mcp_server = dev_mcp.start_bridge(viewer, mcp_port) if mcp_port else None
+    _app["mcp_server"] = dev_mcp.start_bridge(viewer, mcp_port) if mcp_port else None
 
+    return viewer, ctx, _app
+
+
+def shutdown_viewer(_app: dict, no_cache: bool = False) -> None:
+    """Persist the session — what used to run once ``napari.run()`` returned.
+
+    Split out of ``run_viewer`` with the initializer, and for the same reason:
+    as straight-line code after the event loop it could not be reached without
+    one, so the last thing every session does had no test at all.
+
+    Reads ``_app["ctx"]``, not a caller-held reference, so a dataset switch
+    persists the dataset that is actually open.
+    """
+    ctx = _app.get("ctx")
+    if ctx is None or no_cache:
+        return
+    final_zarr_path = ctx.data_path / "sdata_cached.zarr"
+    if not final_zarr_path.exists():
+        return
+    from palms.utils.adata_persistence import _persist_table, save_rois_to_sdata
+    _persist_table(ctx)
+    roi_data = _app["snapshot"].get("roi_data", [])
+    save_rois_to_sdata(ctx, roi_data)
+    ctx.state["segmentation_source"] = ctx.segmentation_source
+    from palms.utils.session import save_session
+    save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
+    try:
+        from palms.utils.notebook_export import write_graph_notebook
+        _g = ctx.state.get("prov_graph")
+        if _g is not None and len(_g):
+            write_graph_notebook(_g, ctx.data_path / "analysis_notebook.ipynb")
+    except Exception:
+        pass
+    print("Session saved to zarr cache.")
+
+
+def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = None):
+    """Build the viewer, run the event loop, save on exit."""
+    _viewer, _ctx, _app = create_viewer(data_path, no_cache=no_cache, mcp_port=mcp_port)
     napari.run()
-
-    # ── Save session state on exit ────────────────────────────────────────
-    if ctx is not None and not no_cache:
-        final_zarr_path = ctx.data_path / "sdata_cached.zarr"
-        if final_zarr_path.exists():
-            from palms.utils.adata_persistence import _persist_table, save_rois_to_sdata
-            _persist_table(ctx)
-            roi_data = _app["snapshot"].get("roi_data", [])
-            save_rois_to_sdata(ctx, roi_data)
-            ctx.state["segmentation_source"] = ctx.segmentation_source
-            from palms.utils.session import save_session
-            save_session(final_zarr_path, ctx.state, ctx.he_state, _app["snapshot"])
-            try:
-                from palms.utils.notebook_export import write_graph_notebook
-                _g = ctx.state.get("prov_graph")
-                if _g is not None and len(_g):
-                    write_graph_notebook(_g, ctx.data_path / "analysis_notebook.ipynb")
-            except Exception:
-                pass
-            print("Session saved to zarr cache.")
+    shutdown_viewer(_app, no_cache=no_cache)
 
 
 def main():

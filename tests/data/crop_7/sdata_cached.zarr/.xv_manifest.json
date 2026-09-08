@@ -1,0 +1,9 @@
+{
+  "built_at": "2026-09-07T01:55:01.762340+00:00",
+  "cache_only": true,
+  "spatialdata_version": "0.8.0",
+  "zarr_version": "3.1.6",
+  "source": "experiment.xenium",
+  "source_sha256": "365b65c255afa199959cf99c3593f9402169a131dad9e3a042cc63fc2b07322e",
+  "source_size": 5039
+}
