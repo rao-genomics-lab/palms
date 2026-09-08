@@ -1,0 +1,244 @@
+{
+  "shape": [
+    25
+  ],
+  "data_type": {
+    "name": "structured",
+    "configuration": {
+      "fields": [
+        [
+          "0",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "1",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 24
+            }
+          }
+        ],
+        [
+          "10",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "11",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "12",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "13",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "14",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "15",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "16",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "17",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "18",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "19",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "2",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "20",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "21",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "3",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "4",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 36
+            }
+          }
+        ],
+        [
+          "5",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 28
+            }
+          }
+        ],
+        [
+          "6",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 24
+            }
+          }
+        ],
+        [
+          "7",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "8",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 32
+            }
+          }
+        ],
+        [
+          "9",
+          {
+            "name": "fixed_length_utf32",
+            "configuration": {
+              "length_bytes": 36
+            }
+          }
+        ]
+      ]
+    }
+  },
+  "chunk_grid": {
+    "name": "regular",
+    "configuration": {
+      "chunk_shape": [
+        25
+      ]
+    }
+  },
+  "chunk_key_encoding": {
+    "name": "default",
+    "configuration": {
+      "separator": "/"
+    }
+  },
+  "fill_value": "MAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "codecs": [
+    {
+      "name": "bytes"
+    },
+    {
+      "name": "zstd",
+      "configuration": {
+        "level": 0,
+        "checksum": false
+      }
+    }
+  ],
+  "attributes": {
+    "encoding-type": "rec-array",
+    "encoding-version": "0.2.0"
+  },
+  "zarr_format": 3,
+  "node_type": "array",
+  "storage_transformers": []
+}

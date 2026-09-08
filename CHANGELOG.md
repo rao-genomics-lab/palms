@@ -7,6 +7,47 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **An end-to-end suite that launches the real application** (`tests/e2e/`).
+  Until now the napari GUI proper had no automated coverage, and in CI that was
+  literal: two tests build a `napari.Viewer` and one is gated behind
+  `requires_display`, which is false under `QT_QPA_PLATFORM=offscreen` — so **no
+  CI run ever constructed a viewer**. Each of the 29 tabs was built only against
+  a `SimpleNamespace` stub, never against a real `ViewerContext`, and never
+  alongside the other 28. The new tests cover one lifecycle: stage a dataset,
+  `create_viewer`, drive a tab through its own widgets, `shutdown_viewer`,
+  re-read the zarr independently, launch again. `docs/e2e_test_plan.md` is the
+  write-up; four things are worth not re-deriving.
+
+  - **`run_viewer()` was split into `create_viewer()` + `shutdown_viewer()`**,
+    with `napari.run()` between them. The initializer half is the obvious seam,
+    but the *teardown* half is the one that had no coverage at all: the
+    save-on-exit block was straight-line code after the event loop, so the last
+    thing every session does could not be reached without one.
+    `app_state["ctx"]` carries the live context (a dataset switch rebinds it,
+    and shutting down on a stale reference would persist the dataset the user
+    left), and `app_state["snapshot_layers"]` publishes the `aboutToQuit` hook so
+    a caller with no event loop invokes that function rather than a copy of it.
+  - **`Rig` moved to `src/palms/testing/rig.py`**, shared with
+    `scripts/capture_screenshots.py`, which had been calling `_do_full_init` with
+    a hand-rolled `_app` dict missing `plots_dock` and `plots_panel` — the drift
+    a shared seam removes. `tests/test_rig_is_shared.py` is the source guard.
+  - **The fixture is committed** (`tests/data/crop_7/`, 6.7 MB, 151 cells), so CI
+    needs no download. `scripts/prepare_e2e_fixture.py` is how it was made and
+    refuses to finish unless the two steps that matter took: the recorded
+    absolute paths are neutralised to a placeholder (they would otherwise publish
+    a home directory *and* flag all 30 descendants stale on every launch, since
+    `app.py` re-emits `preamble` for the current `data_path`), and the ARMS scan
+    filename is scrubbed — a real one is a slide identifier and it reaches the
+    napari layer list. `.gitignore` needed both a negation for
+    `sdata_cached.zarr/` and `data/` anchored to the repo root.
+  - **It found two real defects on the way in**, both on the teardown path that
+    `remove_dock_widget` also takes on a live dataset switch, and both fatal
+    rather than noisy: **PyQt6 turns an exception raised in a slot into
+    `qFatal()`**, so "wrapped C/C++ object has been deleted" is a core dump.
+    `tab_qc._refresh_readout` is connected to four widgets' `changed` and fires
+    after its siblings are destroyed; `tab_he_registration`'s restore worker
+    guards on `ctx.dataset_generation`, which a *close* does not increment.
+
 - **Tools → Preprocess: the normalisation target is settable** (`xv-e2v`).
   `normalize` scaled every cell to `1e4`, written as a literal in the template,
   and declared no parameters at all — so the other convention, `scanpy`'s own
@@ -85,6 +126,11 @@ entries under **Development log** are the closed pre-1.0.0 record.
   itself were edited to the illegal pair.
 
 ### Fixed
+- **A closing or switching viewer could abort instead of exiting** — see the
+  entry above. `tab_qc._refresh_readout` now returns when Qt has deleted its page
+  under it, and the E2E harness waits for outstanding workers before tearing a
+  session down.
+
 - **The recorded environment reported `palms 0.1.0` while the code that ran was
   1.0.1.** `environment.package_versions()` resolved every name through
   `importlib.metadata`, `palms` included — and an *editable* install's dist-info

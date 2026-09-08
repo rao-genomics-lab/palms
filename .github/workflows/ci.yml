@@ -49,6 +49,10 @@ jobs:
               f"napari downgraded to {napari.__version__}"
           EOF
 
+      # --durations: tests/e2e/ builds a real napari.Viewer and loads a dataset
+      # per test, which is seconds rather than milliseconds. Printing the ten
+      # slowest keeps that cost visible in the log instead of inferred from the
+      # job's total.
       - name: Run test suite
         env:
           MPLBACKEND: Agg            # headless matplotlib; no X server needed
@@ -57,7 +61,7 @@ jobs:
                                      # no test name. tests/conftest.py sets this
                                      # too; stated here so the runner is honest
                                      # about what it needs.
-        run: pytest
+        run: pytest --durations=10
 
   # environment.yml became unsolvable on macOS the moment a linux-only package
   # (libglx-devel) was added to it, and nothing caught that — the first report was

@@ -1,0 +1,181 @@
+{
+  "attributes": {
+    "ome": {
+      "version": "0.5-dev-spatialdata",
+      "multiscales": [
+        {
+          "datasets": [
+            {
+              "path": "s0",
+              "coordinateTransformations": [
+                {
+                  "type": "scale",
+                  "scale": [
+                    1.0,
+                    1.0
+                  ]
+                },
+                {
+                  "type": "translation",
+                  "translation": [
+                    0.0,
+                    0.0
+                  ]
+                }
+              ]
+            },
+            {
+              "path": "s1",
+              "coordinateTransformations": [
+                {
+                  "type": "scale",
+                  "scale": [
+                    2.0,
+                    2.0024570024570023
+                  ]
+                },
+                {
+                  "type": "translation",
+                  "translation": [
+                    0.5,
+                    0.5012285012285012
+                  ]
+                }
+              ]
+            },
+            {
+              "path": "s2",
+              "coordinateTransformations": [
+                {
+                  "type": "scale",
+                  "scale": [
+                    4.018867924528302,
+                    4.014778325123153
+                  ]
+                },
+                {
+                  "type": "translation",
+                  "translation": [
+                    1.509433962264151,
+                    1.5073891625615765
+                  ]
+                }
+              ]
+            },
+            {
+              "path": "s3",
+              "coordinateTransformations": [
+                {
+                  "type": "scale",
+                  "scale": [
+                    8.037735849056604,
+                    8.069306930693068
+                  ]
+                },
+                {
+                  "type": "translation",
+                  "translation": [
+                    3.518867924528302,
+                    3.5346534653465342
+                  ]
+                }
+              ]
+            },
+            {
+              "path": "s4",
+              "coordinateTransformations": [
+                {
+                  "type": "scale",
+                  "scale": [
+                    16.384615384615383,
+                    16.3
+                  ]
+                },
+                {
+                  "type": "translation",
+                  "translation": [
+                    7.692307692307692,
+                    7.65
+                  ]
+                }
+              ]
+            },
+            {
+              "path": "s5",
+              "coordinateTransformations": [
+                {
+                  "type": "scale",
+                  "scale": [
+                    32.76923076923077,
+                    32.6
+                  ]
+                },
+                {
+                  "type": "translation",
+                  "translation": [
+                    15.884615384615383,
+                    15.8
+                  ]
+                }
+              ]
+            }
+          ],
+          "name": "nucleus_labels",
+          "axes": [
+            {
+              "name": "y",
+              "type": "space"
+            },
+            {
+              "name": "x",
+              "type": "space"
+            }
+          ],
+          "coordinateTransformations": [
+            {
+              "type": "identity",
+              "input": {
+                "name": "yx",
+                "axes": [
+                  {
+                    "name": "y",
+                    "type": "space",
+                    "unit": "unit"
+                  },
+                  {
+                    "name": "x",
+                    "type": "space",
+                    "unit": "unit"
+                  }
+                ]
+              },
+              "output": {
+                "name": "global",
+                "axes": [
+                  {
+                    "name": "y",
+                    "type": "space",
+                    "unit": "unit"
+                  },
+                  {
+                    "name": "x",
+                    "type": "space",
+                    "unit": "unit"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "image-label": {
+        "version": "0.5"
+      }
+    },
+    "spatialdata_attrs": {
+      "version": "0.3"
+    }
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

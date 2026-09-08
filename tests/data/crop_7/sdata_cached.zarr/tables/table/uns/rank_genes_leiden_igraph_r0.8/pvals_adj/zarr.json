@@ -1,0 +1,134 @@
+{
+  "shape": [
+    25
+  ],
+  "data_type": {
+    "name": "structured",
+    "configuration": {
+      "fields": [
+        [
+          "0",
+          "float64"
+        ],
+        [
+          "1",
+          "float64"
+        ],
+        [
+          "10",
+          "float64"
+        ],
+        [
+          "11",
+          "float64"
+        ],
+        [
+          "12",
+          "float64"
+        ],
+        [
+          "13",
+          "float64"
+        ],
+        [
+          "14",
+          "float64"
+        ],
+        [
+          "15",
+          "float64"
+        ],
+        [
+          "16",
+          "float64"
+        ],
+        [
+          "17",
+          "float64"
+        ],
+        [
+          "18",
+          "float64"
+        ],
+        [
+          "19",
+          "float64"
+        ],
+        [
+          "2",
+          "float64"
+        ],
+        [
+          "20",
+          "float64"
+        ],
+        [
+          "21",
+          "float64"
+        ],
+        [
+          "3",
+          "float64"
+        ],
+        [
+          "4",
+          "float64"
+        ],
+        [
+          "5",
+          "float64"
+        ],
+        [
+          "6",
+          "float64"
+        ],
+        [
+          "7",
+          "float64"
+        ],
+        [
+          "8",
+          "float64"
+        ],
+        [
+          "9",
+          "float64"
+        ]
+      ]
+    }
+  },
+  "chunk_grid": {
+    "name": "regular",
+    "configuration": {
+      "chunk_shape": [
+        25
+      ]
+    }
+  },
+  "chunk_key_encoding": {
+    "name": "default",
+    "configuration": {
+      "separator": "/"
+    }
+  },
+  "fill_value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "codecs": [
+    {
+      "name": "bytes"
+    },
+    {
+      "name": "zstd",
+      "configuration": {
+        "level": 0,
+        "checksum": false
+      }
+    }
+  ],
+  "attributes": {
+    "encoding-type": "rec-array",
+    "encoding-version": "0.2.0"
+  },
+  "zarr_format": 3,
+  "node_type": "array",
+  "storage_transformers": []
+}

@@ -45,7 +45,10 @@ tab.
 
 Run 2026-07-31 against a 4104-cell / 477-gene Xenium output, by driving
 `app.run_viewer` with `napari.run` replaced by an inspector that exits before
-the `save_session` block. Nothing was written back: the zarr was untouched, and
+the `save_session` block. (That monkeypatch is no longer necessary: `run_viewer`
+has since been split into `app.create_viewer()` and `app.shutdown_viewer()`, so
+a probe calls the first and simply never calls the second — see
+`docs/e2e_test_plan.md`.) Nothing was written back: the zarr was untouched, and
 the `viewer_cache/prov_graph.json` and `palms.log` the launch creates
 were removed afterwards. **`analysis.py` in the dataset root was overwritten**
 and could not be restored — it is derived and rewritten on every recorded step,

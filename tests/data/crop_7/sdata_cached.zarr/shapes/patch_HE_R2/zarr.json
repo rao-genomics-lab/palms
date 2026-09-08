@@ -1,0 +1,61 @@
+{
+  "attributes": {
+    "encoding-type": "ngff:shapes",
+    "axes": [
+      "x",
+      "y"
+    ],
+    "coordinateTransformations": [
+      {
+        "type": "affine",
+        "affine": [
+          [
+            6.758487911151593e-05,
+            -2.353531156674599,
+            7948.548408118622
+          ],
+          [
+            -2.353531156674599,
+            -6.758487911147426e-05,
+            16113.183959590791
+          ]
+        ],
+        "input": {
+          "name": "xy",
+          "axes": [
+            {
+              "name": "x",
+              "type": "space",
+              "unit": "unit"
+            },
+            {
+              "name": "y",
+              "type": "space",
+              "unit": "unit"
+            }
+          ]
+        },
+        "output": {
+          "name": "global",
+          "axes": [
+            {
+              "name": "y",
+              "type": "space",
+              "unit": "unit"
+            },
+            {
+              "name": "x",
+              "type": "space",
+              "unit": "unit"
+            }
+          ]
+        }
+      }
+    ],
+    "spatialdata_attrs": {
+      "version": "0.3"
+    }
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}
