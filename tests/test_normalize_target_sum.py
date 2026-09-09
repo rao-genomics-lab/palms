@@ -183,3 +183,62 @@ def test_the_setting_is_listed_but_never_deletable():
     from palms.utils.store_inventory import _BLOCKED_SESSION_ATTRS
 
     assert "normalize_target_sum" in _BLOCKED_SESSION_ATTRS
+
+
+def test_the_tab_restores_a_store_that_never_held_the_setting(qapp):
+    """The sentinel reaches the tab's restore handler, not just app.py's seeding.
+
+    ``load_session`` puts the raw ``_UNSET_TARGET_SUM`` string in the session
+    dict; ``app.py`` translates it when seeding ``ctx.state``, but the Preprocess
+    tab's handler reads ``session`` *first*, so it sees the sentinel. It used to
+    hand that to ``float()``.
+
+    That is not a cosmetic failure. ``_build_control_panel``'s ``restore_session``
+    calls each tab's handler in a bare loop, so the ``ValueError`` aborted the
+    rest of it — nine tabs after Preprocess never restored — and propagated out
+    of ``_do_full_init``. Every store written before this feature existed is in
+    exactly this state, which is every dataset anyone already had.
+
+    The two halves were each covered (``session.py``'s round trip, ``app.py``'s
+    fallback); the seam between them was not.
+    """
+    from types import SimpleNamespace
+
+    from palms.tabs.tab_preprocess import DEFAULT_TARGET_SUM, build_tab
+    from palms.utils.session import _UNSET_TARGET_SUM
+
+    ctx = SimpleNamespace(state={}, viewer=None)
+    _widget, exports = build_tab(ctx)
+
+    exports["restore_session"]({"normalize_target_sum": _UNSET_TARGET_SUM})
+
+    # Unset is not the median, and it is not a number to put in the spinbox:
+    # it means "open on the viewer's historical 1e4", which is the default the
+    # widget already carries.
+    assert ctx.state.get("normalize_target_sum", DEFAULT_TARGET_SUM) == DEFAULT_TARGET_SUM
+
+
+def test_the_tab_still_restores_the_two_real_choices(qapp):
+    """Neither of the values a user can actually pick regressed."""
+    from types import SimpleNamespace
+
+    from qtpy.QtWidgets import QWidget
+
+    from palms.tabs.tab_preprocess import build_tab
+
+    def widgets_of(root):
+        found = {}
+        for child in root.findChildren(QWidget):
+            mw = getattr(child, "_magic_widget", None)
+            if mw is not None:
+                found[getattr(mw, "label", "")] = mw
+        return found
+
+    for stored, median, spin in ((None, True, None), (5000.0, False, 5000.0)):
+        ctx = SimpleNamespace(state={}, viewer=None)
+        widget, exports = build_tab(ctx)
+        exports["restore_session"]({"normalize_target_sum": stored})
+        found = widgets_of(widget)
+        assert found["Median counts (scanpy default)"].value is median
+        if spin is not None:
+            assert found["Counts per cell"].value == spin

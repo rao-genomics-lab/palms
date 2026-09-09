@@ -152,6 +152,21 @@ entries under **Development log** are the closed pre-1.0.0 record.
   this tab from disk. Found by the end-to-end run on `demo_data/crop_7`, not by
   the suite — the deletion flow's Qt shell still has no automated coverage.
 
+- **Any dataset saved before Tools → Preprocess existed failed to open** — that
+  is, every dataset anyone already had. `load_session` hands back the raw
+  `_UNSET_TARGET_SUM` sentinel for a store that never held the setting;
+  `app.py` translates it when seeding `ctx.state`, but the tab's own
+  `restore_session` reads the *session* first and passed the string `"unset"` to
+  `float()`. `_build_control_panel`'s restore loop is unguarded, so the
+  `ValueError` took the nine tabs after Preprocess down with it and propagated
+  out of `_do_full_init`.
+
+  Both halves had tests — `session.py`'s round trip and `app.py`'s fallback to
+  the historical 1e4 — and the seam between them did not, which is exactly where
+  it broke. `test_the_tab_restores_a_store_that_never_held_the_setting` drives
+  the real handler with the sentinel; it reproduces the `ValueError` against the
+  unfixed line.
+
 - **The recorded environment reported `palms 0.1.0` while the code that ran was
   1.0.1.** `environment.package_versions()` resolved every name through
   `importlib.metadata`, `palms` included — and an *editable* install's dist-info
