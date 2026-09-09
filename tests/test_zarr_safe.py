@@ -429,6 +429,52 @@ def test_replace_backed_keeps_the_new_binding_after_a_successful_write(tiny_sdat
     assert lazy["lab"] is new
 
 
+# ── deleting an element the store still backs ────────────────────────────────
+#
+# The same asymmetry, on the delete side: Tools -> Dataset could not remove the
+# H&E image at all. For a delete the element the guard finds in `sdata` *is* the
+# one being removed, so a lazily-backed element refuses unconditionally however
+# thoroughly the caller tore its readers down. `test_safe_delete_element` above
+# passes only because it deletes a table written in this process.
+
+def test_deleting_a_store_backed_element_is_refused_without_released(tiny_sdata):
+    lazy = _reread(Path(tiny_sdata.path))
+    with pytest.raises(ZarrSafeError, match="lazily-loaded"):
+        safe_delete_element(lazy, "lab")
+
+
+def test_released_deletes_a_store_backed_element(tiny_sdata):
+    cache = Path(tiny_sdata.path)
+    lazy = _reread(cache)
+    assert "lab" in lazy.labels
+
+    safe_delete_element(lazy, "lab", released=True)
+
+    assert "lab" not in lazy.labels, "the in-memory object must follow the delete"
+    assert "lab" not in _reread(cache).labels
+    assert not (cache / "labels" / "lab").exists()
+    assert len(list_trash(cache)["labels/lab"]) == 1, "a backup must be kept"
+
+
+def test_released_restores_the_binding_when_the_delete_fails(tiny_sdata, monkeypatch):
+    """A failed delete must not leave sdata missing an element still on disk."""
+    cache = Path(tiny_sdata.path)
+    lazy = _reread(cache)
+    original = lazy["lab"]
+
+    def boom(*a, **k):
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr(zarr_safe, "atomic_json", boom)
+    with pytest.raises(OSError):
+        safe_delete_element(lazy, "lab", released=True)
+    monkeypatch.undo()
+
+    assert "lab" in lazy.labels, "the previous binding must be restored"
+    assert lazy["lab"] is original
+    assert (cache / "labels" / "lab").exists(), "and the store must be untouched"
+
+
 # ── grouped (non-element) updates ────────────────────────────────────────────
 
 def test_safe_group_update_commits(tiny_sdata):

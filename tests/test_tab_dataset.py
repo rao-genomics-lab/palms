@@ -335,14 +335,37 @@ def test_deleting_two_obs_columns_persists_the_table_exactly_once(loaded, monkey
     assert "cluster_labels_leiden_r1.0" not in loaded.adata.obs.columns
 
 
+def test_deleting_a_store_backed_element_removes_it(loaded):
+    """The reported bug: the H&E came back lazily from the cache, so it was
+    ``sdata.images['he_image']`` itself that tripped the dask guard, and the
+    delete was refused every time. The fixture above writes its element in this
+    process, which is why the test beside it never saw this.
+    """
+    from spatialdata import read_zarr
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        loaded.sdata = read_zarr(loaded.sdata.path)
+    plan = _plan(loaded, ["element:images/ext_slide2"])
+    result = tab_dataset._apply_deletion(loaded, plan)
+
+    assert result.failed == [], result.failed
+    assert result.removed == ["ext_slide2"]
+    assert "ext_slide2" not in loaded.sdata.images
+    assert not (Path(loaded.sdata.path) / "images" / "ext_slide2").exists()
+
+
 def test_deleting_a_clustering_also_forgets_it_in_memory(loaded):
     """refresh_clustering_choices reads ctx.clusterings, not adata.obs."""
     refreshed = []
     loaded.refresh_clustering_choices = lambda: refreshed.append(True)
     plan = _plan(loaded, ["obs:table/clustering_leiden_r1.0"])
-    tab_dataset._apply_deletion(loaded, plan)
+    result = tab_dataset._apply_deletion(loaded, plan)
+    # What `_done` does on the GUI thread; the worker only names them.
+    assert result.forgotten_clusterings == ["leiden_r1.0"]
+    tab_dataset._forget_clusterings(loaded, result.forgotten_clusterings)
 
     assert "leiden_r1.0" not in loaded.clusterings
+    assert refreshed == [True]
     assert "leiden_r1.0" not in loaded.state["custom_clusterings"]
     assert "leiden_r1.0" not in loaded.state["cluster_labels"]
     assert refreshed == [True]
@@ -492,6 +515,50 @@ def test_only_one_function_removes_files_and_its_callers_vet_the_node():
     for caller in callers:
         assert "assert_node_deletable" in bodies.get(caller, ""), (
             f"{caller} removes files without calling assert_node_deletable first")
+
+
+def test_the_deletion_worker_never_touches_qt():
+    """``_apply_deletion`` runs on a thread_worker, so its Qt work must not.
+
+    Removing a napari layer from that thread invalidates the row the layer-list
+    view is painting, and napari's delegate then reads
+    ``index.data(SizeHintRole).height()`` off a ``None``. The AttributeError is
+    raised later, on the GUI thread, during a paint event — so ``_drop_layer``'s
+    own ``try/except`` cannot catch it and the batch reports success. That is
+    half of what deleting the H&E image produced.
+    """
+    import ast
+    source = Path(tab_dataset.__file__).read_text()
+    tree = ast.parse(source)
+    bodies = {node.name: node for node in ast.walk(tree)
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    def _reaches(start: str, target: str, seen=None) -> bool:
+        seen = seen if seen is not None else set()
+        if start in seen or start not in bodies:
+            return False
+        seen.add(start)
+        for node in ast.walk(bodies[start]):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name == target:
+                return True
+            if name and _reaches(name, target, seen):
+                return True
+        return False
+
+    for gui_only in ("_release_layers", "_forget_clusterings",
+                     "refresh_clustering_choices"):
+        assert not _reaches("_apply_deletion", gui_only), (
+            f"{gui_only} touches Qt; call it from _confirm_and_delete or the "
+            "worker's returned slot, not from _apply_deletion")
+
+    # And they are still called *somewhere* — a guard that passes because the
+    # teardown was deleted outright would be worse than no guard.
+    for gui_only in ("_release_layers", "_forget_clusterings"):
+        assert _reaches("_confirm_and_delete", gui_only), (
+            f"{gui_only} is no longer called from the GUI thread")
 
 
 def test_kind_order_puts_table_edits_first_and_backups_last():
