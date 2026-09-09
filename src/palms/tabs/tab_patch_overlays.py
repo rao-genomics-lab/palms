@@ -590,8 +590,9 @@ def build_tab(ctx: "ViewerContext"):
             pass
         try:
             element = entry.get("element_name")
+            # released=True: the shapes layer is gone, just above.
             if element and ctx.sdata is not None and element in ctx.sdata:
-                safe_delete_element(ctx.sdata, element)
+                safe_delete_element(ctx.sdata, element, released=True)
         except Exception as e:
             report_write_failure(e, f"delete '{element}' from zarr cache")
         list_widget.takeItem(row)

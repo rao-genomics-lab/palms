@@ -263,11 +263,12 @@ def _unbind_backed(sdata, etype: str, name: str, live: Path, element: Any):
 
     Refuses when *element* is itself backed by *live*: "I have torn down every
     reader" cannot be true of the value being written, and the rename would leave
-    the new element's own graph pointing into the trash.
+    the new element's own graph pointing into the trash. A delete has no new
+    value, so it passes ``element=None`` and that refusal does not apply.
 
-    The returned value is the caller's rollback — restore it if the write fails
-    before it commits, or the in-memory object silently loses an element that is
-    still on disk.
+    The returned value is the caller's rollback — restore it if the write or
+    delete fails before it commits, or the in-memory object silently loses an
+    element that is still on disk.
     """
     try:
         from spatialdata._io._utils import _backed_elements_contained_in_path
@@ -568,14 +569,52 @@ def safe_import_element(cache_path: Path, element: str, source_dir: Path) -> Non
         raise
 
 
-def safe_delete_element(sdata, name: str, *, keep_backup: bool = True) -> None:
-    """Remove *name* from the store, keeping a backup copy in the trash."""
+def safe_delete_element(sdata, name: str, *, keep_backup: bool = True,
+                        released: bool = False) -> None:
+    """Remove *name* from the store, keeping a backup copy in the trash.
+
+    Pass ``released=True`` to **assert that every live reader of the element has
+    already been torn down** — the napari layer above all. It is the delete-side
+    twin of ``safe_write_element(replace_backed=True)`` and, like it, is not
+    "ignore the guard": the files are renamed into the trash, and a dask graph
+    resolves lazily *by path*, so a surviving reader would go on to read whatever
+    lands there next.
+
+    Without it, a lazily-backed element can never be deleted at all. The guard
+    inspects only ``sdata``'s element dicts, and for a delete the element it
+    finds there is the very one being removed — so images, labels and points
+    refuse unconditionally once they have been read back from the store, however
+    thoroughly the caller tore its readers down. That was the Tools → Dataset
+    failure: ``_release_layers`` did everything right and the delete still raised.
+    """
     cache_path = cache_path_of(sdata)
     etype = element_type_of(sdata, name)
     live = cache_path / etype / name
     if not live.exists():
         _drop_in_memory(sdata, etype, name)
         return
+    # element=None: there is no incoming value that could be backed by `live`.
+    previous = _unbind_backed(sdata, etype, name, live, None) if released else None
+    committed = False
+    try:
+        _delete_element_locked(sdata, name, etype, cache_path, live,
+                               keep_backup=keep_backup)
+        committed = True
+    finally:
+        # Only before the commit — and a failure after the rename leaves a
+        # journal that `recover_pending` rolls *back* from the trash, so the
+        # element is on disk either way and the binding should describe it.
+        if released and not committed and previous is not None:
+            _set_in_memory(sdata, etype, name, previous)
+
+
+def _delete_element_locked(sdata, name: str, etype: str, cache_path: Path,
+                           live: Path, *, keep_backup: bool) -> None:
+    """Journal, rename into the trash, re-consolidate.
+
+    Split out only so the rollback above can wrap it. The guard stays *here*, so
+    a caller that did not opt into ``released`` still gets it.
+    """
     _assert_not_dask_backed(sdata, live, name)
 
     uid = uuid.uuid4().hex[:12]

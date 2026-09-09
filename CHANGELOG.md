@@ -85,6 +85,73 @@ entries under **Development log** are the closed pre-1.0.0 record.
   itself were edited to the illegal pair.
 
 ### Fixed
+- **Deleting the H&E image in Tools → Dataset always failed** — and with it any
+  element the zarr cache still backs lazily, which after a cached launch is every
+  image, label raster and points element. Two independent defects, one report:
+
+  ```
+  AttributeError: 'NoneType' object has no attribute 'height'
+  ERROR: Could not save delete he_image: cannot safely rewrite 'he_image': its
+         files back a lazily-loaded element still in use. Load it into memory first.
+  ```
+
+  **`safe_delete_element` could never pass its own guard.**
+  `_assert_not_dask_backed` asks whether any element's dask graph reads a file
+  under `<cache>/images/he_image`, and for a *delete* the element it finds there
+  is the one being removed — so the answer is yes by construction, however
+  thoroughly the caller tore its readers down. The write path had known this for
+  months: `_unbind_backed` drops the in-memory binding before the guard runs, and
+  its docstring already said in as many words that `tab_dataset._release_layers`
+  "drops layers, closes tifs and collects, and deletion still raises". That fix
+  was simply never applied to the delete side. `safe_delete_element` now takes
+  `released=True`, the delete-side twin of `safe_write_element(replace_backed=)`,
+  with the same pre-commit rollback of the binding; the guard stays inside
+  `_delete_element_locked`, so a caller that does not opt in still gets it. The
+  three call sites that do the teardown pass it — Tools → Dataset, Tools → Images
+  and the patch overlays, where the same failure was being swallowed by a `print`.
+
+  `_explain` no longer answers a `ZarrSafeError` with "reload the dataset and try
+  again": for a cache-backed element the reload recreates the lazy binding, so
+  that advice was a loop.
+
+  **The `AttributeError` was a napari layer removed from a worker thread.**
+  `_apply_deletion` runs on a `thread_worker` and its docstring claimed nothing in
+  it touches Qt, but `_release_layers` calls `viewer.layers.remove`. That
+  invalidates the row the layer-list view is painting; `QtLayerListModel.data`
+  returns `None` for an invalid index and napari's delegate then reads
+  `index.data(SizeHintRole).height()` off it. Being raised on the GUI thread
+  during a paint event, it is not something `_drop_layer`'s `try/except` can
+  catch. `_release_layers` now runs in `_confirm_and_delete` before the worker
+  starts, and `_forget_clusterings` — which rebuilds combo boxes — in its
+  `returned` slot afterwards, reached through a new `DeletionResult` field.
+
+  Nothing caught the first defect because both existing delete tests remove an
+  element the fixture wrote *in this process*: an in-memory dask array with no
+  backing files, so the predicate is `any([])`. The new tests re-read the store
+  first. A source guard walks the call graph out of `_apply_deletion` and fails if
+  it reaches `_release_layers`, `_forget_clusterings` or
+  `refresh_clustering_choices` — and, in the other direction, if the GUI thread
+  stops calling the first two.
+
+- **Deleting an H&E or ARMS image left its landmarks behind.**
+  `store_inventory._cascade_candidates` knew only the `ext_*` naming, so
+  `he_he_landmarks` / `he_xenium_landmarks` (and the ARMS pair) stayed on disk
+  as half a correspondence with nothing left to correspond to —
+  `tab_he_registration` writes and clears both sides together, and `crop_state`
+  already knew the pairing. `arms_tiles` is deliberately **not** cascaded even
+  though `crop_state` pairs it with the same image: the tiles are an analysis
+  artifact with their own DEG sidecar, not part of the registration.
+
+- **Accepting the reload after a delete printed a `RuntimeError`.** `_done` ran
+  `_on_scan()` and *then* offered the reload, on the stated reasoning that the
+  reload must come last because it tears the widget down — but the rescan is a
+  `thread_worker`, so its `returned` slot landed on a tree `reload_dataset()`
+  had already destroyed: `wrapped C/C++ object of type QTreeWidget has been
+  deleted`, every time. The reload is now offered first and the rescan skipped
+  when it happens, which is also the right amount of work: the reload rebuilds
+  this tab from disk. Found by the end-to-end run on `demo_data/crop_7`, not by
+  the suite — the deletion flow's Qt shell still has no automated coverage.
+
 - **Any dataset saved before Tools → Preprocess existed failed to open** — that
   is, every dataset anyone already had. `load_session` hands back the raw
   `_UNSET_TARGET_SUM` sentinel for a store that never held the setting;
