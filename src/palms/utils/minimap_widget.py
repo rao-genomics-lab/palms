@@ -13,13 +13,18 @@ class MinimapWidget(QWidget):
 
     Shows the DAPI channel of the morphology thumbnail with a white rectangle
     indicating the current camera viewport. Clicking navigates the camera.
+
+    Takes the DAPI *plane*, already read: the pixels come off the pyramid in a
+    worker (``app._start_minimap`` -> ``raster_io.overview_thumbnail``), and
+    only one channel of one level is ever wanted, so handing this the whole
+    ``(C, Y, X)`` stack read three channels nothing here looks at.
     """
 
     _WIDGET_W = 200
     _WIDGET_H = 160
     _MARGIN = 10
 
-    def __init__(self, viewer, morph_thumb: np.ndarray,
+    def __init__(self, viewer, dapi_thumb: np.ndarray,
                  morph_full_shape_yx: tuple, canvas_native: QWidget,
                  pixel_size: float = 1.0):
         super().__init__(canvas_native)
@@ -34,8 +39,8 @@ class MinimapWidget(QWidget):
                                 morph_full_shape_yx[1] * self._pixel_size)
         self._canvas_native = canvas_native
 
-        # Build grayscale QPixmap from DAPI channel (morph_thumb[0])
-        dapi = morph_thumb[0].astype(np.float32)
+        # Build grayscale QPixmap from the DAPI plane
+        dapi = dapi_thumb.astype(np.float32)
         p99 = np.percentile(dapi, 99)
         if p99 > 0:
             dapi = np.clip(dapi / p99 * 255, 0, 255).astype(np.uint8)

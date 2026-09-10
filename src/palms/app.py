@@ -738,7 +738,7 @@ def _populate_viewer(viewer, data: dict) -> dict:
     """Add layers to the napari viewer from loaded data.
 
     Returns a dict with: cell_labels_layer, transcript_layer, roi_layer,
-    morph_thumb, morph_full_shape_yx, centroids_yx.
+    morph_thumb_level, morph_full_shape_yx, centroids_yx.
     """
     sdata = data["sdata"]
     adata = data["adata"]
@@ -758,16 +758,28 @@ def _populate_viewer(viewer, data: dict) -> dict:
     _add_layers_manually(viewer, sdata)
     print(f"  Layers added in {time.perf_counter() - t0:.1f}s")
 
-    # ── Extract lowest-res morphology thumbnail for coarse tissue alignment ───
-    morph_thumb = None
+    # ── Lowest-res morphology level, for the minimap ─────────────────────────
+    # Bound lazily and read later, off this thread. It used to be `.compute()`d
+    # here "for coarse tissue alignment", which stopped being true when
+    # `he.coarse_align.tmpl` shipped: the fit derives its own thumbnail from
+    # `sdata` inside the recorded step, so the notebook's cell reads the element
+    # rather than a value the viewer happened to compute at launch. The one
+    # remaining reader of these pixels is the minimap, which takes a single
+    # channel of them into a 200x160 pixmap -- half a second of the main thread
+    # on a warm local cache, more over a network share, and unbounded when the
+    # pyramid is not stored. `raster_io.overview_thumbnail` is where all three
+    # of those are dealt with.
+    #
+    # The full-resolution *shape* is a separate matter: it costs nothing (no
+    # read), and Crop Dataset clips the drawn polygon with it.
+    morph_thumb_level = None
     morph_full_shape_yx = None
     if "morphology_focus" in sdata.images:
         morph_scales = _extract_dt_scales(sdata.images["morphology_focus"])
         if morph_scales:
-            morph_thumb = morph_scales[-1].compute()  # (C, Y, X), uint16
+            morph_thumb_level = morph_scales[-1]  # (C, Y, X), uint16, lazy
             morph_full = morph_scales[0]
             morph_full_shape_yx = (morph_full.shape[-2], morph_full.shape[-1])
-            print(f"  Morphology thumbnail for coarse align: {morph_thumb.shape}")
 
     # ── Get label layers ─────────────────────────────────────────────────────
     cell_labels_layer = None
@@ -864,7 +876,7 @@ def _populate_viewer(viewer, data: dict) -> dict:
         "roi_layer": roi_layer,
         "annotation_layer": annotation_layer,
         "crop_layer": crop_layer,
-        "morph_thumb": morph_thumb,
+        "morph_thumb_level": morph_thumb_level,
         "morph_full_shape_yx": morph_full_shape_yx,
         "centroids_yx": centroids_yx,
     }
@@ -1157,7 +1169,7 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
         roi_layer=layers["roi_layer"],
         annotation_layer=layers["annotation_layer"],
         crop_layer=layers["crop_layer"],
-        morph_thumb=layers["morph_thumb"],
+        morph_thumb_level=layers["morph_thumb_level"],
         morph_full_shape_yx=layers["morph_full_shape_yx"],
     )
     ctx.state = _make_initial_state(data["gene_names"], data["clustering_names"])
@@ -1400,28 +1412,71 @@ def _do_full_init(viewer, data_path: Path, no_cache: bool, _app: dict) -> Viewer
     viewer.title = f"PALMS — {data_path.name}"
 
     # ── Minimap overlay ───────────────────────────────────────────────────────
-    if ctx.morph_thumb is not None and ctx.morph_full_shape_yx is not None:
+    # The read happens off this thread. It is the last of the morphology
+    # pyramid the launch path touches, and the only one whose result is a
+    # picture, so it is also the only one a user can wait for without noticing.
+    _start_minimap(ctx, _app)
+
+    return ctx
+
+
+def _start_minimap(ctx, _app):
+    """Read the overview plane in the background, then build the minimap.
+
+    Split out of ``_do_full_init`` because it now finishes *after* it: the
+    widget is built in ``returned``, which napari delivers on the GUI thread,
+    so every Qt call below stays where it always was. What moved is the read.
+
+    The generation guard is the same one the tabs use: a dataset switch during
+    the read must not install a minimap of the section the user just left.
+    """
+    from napari.qt.threading import thread_worker
+    from palms.utils import raster_io
+
+    act = _app.get("minimap_action")
+    level = ctx.morph_thumb_level
+    if level is None or ctx.morph_full_shape_yx is None:
+        return
+
+    gen = ctx.dataset_generation
+
+    def _fail(message):
+        print(f"  Warning: minimap could not be created: {message}")
+        if act is not None:
+            act.setEnabled(False)
+            act.setChecked(False)
+
+    def _build(dapi_thumb):
+        if ctx.dataset_generation != gen:
+            return
+        if dapi_thumb is None:
+            # An unstored pyramid: overview_thumbnail refuses rather than
+            # re-walking the coarsen chain for a 200x160 pixmap.
+            _fail("morphology pyramid is not stored")
+            return
         try:
             from palms.utils.minimap_widget import MinimapWidget
-            canvas_native = viewer.window._qt_viewer.canvas.native
+            canvas_native = ctx.viewer.window._qt_viewer.canvas.native
             minimap = MinimapWidget(
-                ctx.viewer, ctx.morph_thumb, ctx.morph_full_shape_yx, canvas_native,
+                ctx.viewer, dapi_thumb, ctx.morph_full_shape_yx, canvas_native,
                 pixel_size=ctx.pixel_size,
             )
             minimap.show()
             _app["minimap"] = minimap
-            act = _app.get("minimap_action")
             if act is not None:
                 act.setEnabled(True)
                 act.setChecked(True)
         except Exception as exc:
-            print(f"  Warning: minimap could not be created: {exc}")
-            act = _app.get("minimap_action")
-            if act is not None:
-                act.setEnabled(False)
-                act.setChecked(False)
+            _fail(exc)
 
-    return ctx
+    @thread_worker
+    def _read_thumbnail():
+        return raster_io.overview_thumbnail(level)
+
+    worker = _read_thumbnail()
+    worker.returned.connect(_build)
+    worker.errored.connect(_fail)
+    worker.start()
 
 
 def _push_to_console(viewer, ctx):
@@ -1651,7 +1706,7 @@ def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = No
                 ctx.roi_layer = None
                 ctx.annotation_layer = None
                 ctx.crop_layer = None
-                ctx.morph_thumb = None
+                ctx.morph_thumb_level = None
                 gc.collect()
 
             # Clean up old minimap before creating a new one
@@ -1762,7 +1817,7 @@ def run_viewer(data_path=None, no_cache: bool = False, mcp_port: int | None = No
             ctx.clustering_names = None;  ctx.centroids_yx = None
             ctx.cell_labels_layer = None;  ctx.transcript_layer = None
             ctx.roi_layer = None;  ctx.annotation_layer = None;  ctx.crop_layer = None
-            ctx.morph_thumb = None
+            ctx.morph_thumb_level = None
         gc.collect()
 
         dlg, bar, lbl = _make_progress_dialog("Preprocessing Datasets")

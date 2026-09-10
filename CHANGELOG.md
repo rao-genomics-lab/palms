@@ -51,6 +51,46 @@ entries under **Development log** are the closed pre-1.0.0 record.
   being honest about a code change, not a result changing.
 
 ### Changed
+- **The morphology thumbnail is read in the background, one channel, and only
+  when it is worth reading** (#91). `_populate_viewer` `.compute()`d the bottom
+  `morphology_focus` level on the main thread at every load, under a comment
+  saying it was "for coarse tissue alignment". Half of that had been untrue for
+  a while and the other half was doing four times the work it needed.
+
+  - **The coarse-align purpose was gone.** `he.coarse_align.tmpl` derives its
+    own thumbnail from `sdata`, which is the point — the recorded cell has to
+    read the element rather than a value the viewer happened to compute at
+    launch. The H&E tab was left reading `ctx.morph_thumb` **only** as an
+    `is not None` flag to enable the Coarse Align button. It asks `sdata`
+    whether the dataset has `morphology_focus` now: the same question the
+    template asks, and one that can be answered before any read has finished.
+  - **The one live reader is the minimap**, which takes channel 0 into a
+    200x160 pixmap and drops the array. So the level is bound lazily
+    (`ctx.morph_thumb_level`), and `raster_io.overview_thumbnail` takes the DAPI
+    *plane* off it in a `thread_worker`; the widget is still built on the GUI
+    thread, in `returned`, guarded by `dataset_generation` so a dataset switch
+    mid-read cannot install the section the user just left. The minimap still
+    appears by default; it now appears just after the window rather than just
+    before it.
+  - **An unstored pyramid is refused rather than read.** With `--no-cache`, or
+    after a failed cache write, the bottom level is a chained `coarsen().mean()`
+    and touching it materialises the largest one — the first-load crash, 23.1 GB
+    and a killed session (see the 2026-08-17 entry). `overview_thumbnail`
+    returns `None` there, so that dataset gets no minimap and `Show Minimap`
+    stays disabled; `_warn_if_pyramid_is_not_stored` has already said why.
+
+  Measured on the cached pancreas section (`morphology_focus/s5`, 4x430x1067
+  uint16): the load-time read was **0.66 s** of the main thread in a cold
+  process and 0.034 s warm, retaining 3.7 MB of which 0.9 MB was ever read. The
+  half-second is dask first-touch rather than channel count — taking one plane
+  costs 0.51 s cold and 0.027 s warm — which is why the fix that matters is
+  moving it off the main thread, not making it smaller. `tests/test_minimap.py`
+  pins the plane, the refusal, and a source guard that no tab reads the display
+  array again.
+
+  `ViewerContext.morph_thumb` is gone, replaced by `morph_thumb_level` (lazy).
+  `morph_full_shape_yx` is unchanged and still eager — it is a `.shape`, not a
+  read, and Crop Dataset clips the drawn polygon with it.
 - **The DegaFile export now tiles every morphology channel by default**
   (`xv-11y`). It defaulted to `dapi`, so a published Landscape carried one
   toggle and nothing said the other three channels had been left out. celldega's

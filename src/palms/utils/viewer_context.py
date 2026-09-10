@@ -52,8 +52,15 @@ class ViewerContext:
     annotation_layer: Any = None        # Named tissue annotation shapes
     crop_layer: Any = None              # Crop Dataset polygons (not session-persisted)
 
-    # ── Morphology data (for coarse align) ──────────────────────────────────
-    morph_thumb: Any = None
+    # ── Morphology data ─────────────────────────────────────────────────────
+    #: Lowest-resolution level of ``morphology_focus``, (C, Y, X) and **lazy**.
+    #: Display only: the minimap reads one channel of it into a 200x160 pixmap
+    #: (via ``raster_io.overview_thumbnail``) and nothing else reads it at all.
+    #: In particular the H&E fits do not -- ``he.coarse_align.tmpl`` derives its
+    #: own thumbnail from ``sdata`` so that the recorded cell reads the element.
+    morph_thumb_level: Any = None
+    #: Full-resolution (H, W) in data pixels. A shape, not a read; Crop Dataset
+    #: clips the drawn polygon with it (``utils/crop_export.py``).
     morph_full_shape_yx: tuple | None = None
 
     # ── Mutable state dicts ──────────────────────────────────────────────────
