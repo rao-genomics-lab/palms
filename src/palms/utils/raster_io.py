@@ -44,6 +44,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 # Chunks for the parsed element and the written store. 1024 -> 4096 is a clean
 # 4x4 gather (one output chunk needs 16 source tiles, ~33 MB), so the on-disk
 # layout is unchanged from what spatialdata_io produced.
@@ -64,6 +66,34 @@ def level_is_computed(level) -> bool:
     if dask_graph is None:
         return False
     return len(dask_graph) > level.npartitions + 1
+
+
+def overview_thumbnail(level) -> Optional[np.ndarray]:
+    """The DAPI plane of a morphology pyramid level, as a 2-D array — or None.
+
+    The minimap is the only thing that reads these pixels, and it reads one
+    channel of them into a 200x160 pixmap. Taking the plane rather than the
+    ``(C, Y, X)`` stack is most of why this exists; the other reason is the
+    ``None``.
+
+    ``None`` means "not worth reading": either there is no level, or the level
+    is a coarsen chain rather than stored bytes, in which case filling that
+    pixmap would re-walk the whole pyramid — ~24 GB on a full slide, and a
+    killed session, see :func:`level_is_computed`. A dataset opened with
+    ``--no-cache`` is in exactly that state, and ``app._warn_if_pyramid_is_not_stored``
+    has already said so by the time this is asked.
+    """
+    if level is None or level_is_computed(level):
+        return None
+    # morphology_focus is (C, Y, X); a single-channel element would already be
+    # the plane. Nothing else is expected, so anything else is refused rather
+    # than indexed into on a guess.
+    ndim = getattr(level, "ndim", None)
+    if ndim == 3:
+        return np.asarray(level[0])
+    if ndim == 2:
+        return np.asarray(level)
+    return None
 
 
 def find_morphology_tiff(data_path: Path) -> Optional[Path]:

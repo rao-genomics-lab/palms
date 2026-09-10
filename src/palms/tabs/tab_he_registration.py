@@ -79,11 +79,19 @@ def build_tab(ctx: ViewerContext) -> tuple:
     data_path = ctx.data_path
     no_cache = ctx.no_cache
     pixel_size = ctx.pixel_size
-    # Only to decide whether Coarse Align can be offered at all. The search
-    # derives its own thumbnail inside the template, from `sdata`, so that the
-    # notebook's cell reads the same element rather than a value the viewer
-    # happened to compute at launch.
-    morph_thumb = getattr(ctx, "morph_thumb", None)
+
+    def _has_morphology() -> bool:
+        """Whether Coarse Align can be offered at all.
+
+        The same question the template asks: the search derives its own
+        thumbnail inside `he.coarse_align.tmpl`, from `sdata`, so that the
+        notebook's cell reads the element rather than a value the viewer
+        happened to compute at launch. Asking `sdata` here means the button
+        tracks what the step needs, and not whether some display array on the
+        context was filled in -- which is what it used to ask, and which is now
+        read in the background for the minimap and may not have arrived yet.
+        """
+        return sdata is not None and "morphology_focus" in getattr(sdata, "images", {})
 
     def _step_progress(prefix: str, status):
         """Adapt ``StepExecutor``'s per-statement callback to the status bar.
@@ -372,7 +380,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         _save_he_to_sdata(pyramid, Path(path).name)
         he_opacity_slider.enabled = True
         he_load_button.enabled = True
-        coarse_align_button.enabled = morph_thumb is not None
+        coarse_align_button.enabled = _has_morphology()
         shape_str = "x".join(str(s) for s in pyramid[0].shape)
         print(f"  {describe_pyramid(pyramid, f'H&E {Path(path).name}')}")
         he_status_label.value = f"H&E loaded: {Path(path).name} ({shape_str}, {len(pyramid)} levels)"
@@ -483,7 +491,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
         if he_state["he_layer"] is None:
             reg_status_label.value = "Load H&E image first"
             return
-        if morph_thumb is None:
+        if not _has_morphology():
             reg_status_label.value = "No morphology data available"
             return
         reg_status_label.value = "Computing coarse alignment (global rotation search)..."
@@ -948,7 +956,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             he_state["he_lm_layer"].data = he_lm_data
         he_opacity_slider.enabled = True
         he_load_button.enabled = True
-        coarse_align_button.enabled = morph_thumb is not None
+        coarse_align_button.enabled = _has_morphology()
         _refresh_nuclei_button()
         has_affine = he_state["affine_3x3"] is not None or he_state["coarse_affine"] is not None
         how = ""

@@ -77,7 +77,7 @@ The viewer adds three menus to napari's own menu bar.
 | Item | Description |
 |------|-------------|
 | Show Controls (Ctrl+Shift+X) | Show or hide the control panel dock. On by default. |
-| Show Minimap | Show or hide the overview minimap. Off, and disabled until a minimap exists. |
+| Show Minimap | Show or hide the overview minimap. It appears, ticked, once the overview thumbnail has been read — a background read that starts as the dataset finishes loading. Disabled for a dataset with no morphology image, and for one whose pyramid is not stored (`--no-cache`), where reading a thumbnail would mean recomputing the whole pyramid. |
 | Show Plots (Ctrl+Shift+P) | Show or hide the [Plots](Plots-Window) dock, where every figure the viewer produces is collected. Off until the first plot, which reveals it. |
 
 ### Scale bar
