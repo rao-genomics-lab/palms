@@ -463,6 +463,40 @@ def pick_level(pyramid, min_long_side=384):
     return best
 
 
+def as_rgb_yxc(image):
+    """One H&E level as (Y, X, C), whatever layout it arrived in.
+
+    ``he.load`` binds ``he_pyramid`` from either of two blocks, and they used to
+    disagree: ``from_file`` reads a TIFF, which is (Y, X, C), while
+    ``from_store`` reads ``sdata.images['he_image']``, which is an
+    ``Image2DModel`` and therefore (C, Y, X). Every consumer of that pyramid
+    assumes channel-last, so a session restored from the cache either crashed --
+    ``cv2.cvtColor`` on a (3, Y, X) array reports ``'scn' is 1``, because OpenCV
+    builds a 3-D single-channel Mat when the trailing dim is not a channel count
+    -- or, worse, silently fitted an alignment to ``rgb[..., 1]`` of a (3, Y)
+    array. The layout is normalised once, here, rather than guessed at each of
+    the four places that had grown their own copy of this transpose.
+
+    Lazy in, lazy out: the restore path deliberately keeps the pyramid as dask so
+    napari fetches only the tiles it draws, so this must never materialise.
+    A 2-D (grayscale) array passes through untouched.
+    """
+    arr = image
+    ndim = getattr(arr, "ndim", None)
+    if ndim != 3:
+        return arr
+    shape = tuple(arr.shape)
+    if shape[0] in (3, 4) and shape[-1] not in (3, 4):
+        transpose = da.transpose if isinstance(arr, da.Array) else np.transpose
+        return transpose(arr, (1, 2, 0))
+    return arr
+
+
+def rgb_pyramid_yxc(pyramid):
+    """Every level of an H&E pyramid as (Y, X, C). See :func:`as_rgb_yxc`."""
+    return [as_rgb_yxc(level) for level in pyramid]
+
+
 def extract_tissue_mask(image_gray, blur_ksize=5, open_ksize=5,
                         close_ksize=5, min_area_ratio=0.01,
                         method="otsu", outline=False, outline_sigma=6):
@@ -586,14 +620,22 @@ def extract_tissue_mask_he(image_rgb):
 
     Parameters
     ----------
-    image_rgb : ndarray, shape (Y, X, 3), uint8
+    image_rgb : ndarray, shape (Y, X, 3) or (3, Y, X), uint8
+        Either layout; ``as_rgb_yxc`` normalises it. Anything that is not
+        3- or 4-channel after that is refused by name rather than left to
+        OpenCV, whose message for it names a channel count nothing passed in.
 
     Returns
     -------
     mask : ndarray, uint8, shape (Y, X)
     """
-    rgb = np.asarray(image_rgb)
-    if rgb.ndim == 3 and rgb.shape[-1] == 4:
+    rgb = np.asarray(as_rgb_yxc(image_rgb))
+    if rgb.ndim != 3 or rgb.shape[-1] not in (3, 4):
+        raise ValueError(
+            "an H&E tissue mask needs an RGB(A) image; got an array of shape "
+            f"{tuple(np.shape(image_rgb))}"
+        )
+    if rgb.shape[-1] == 4:
         rgb = rgb[..., :3]
     hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
     saturation = hsv[:, :, 1]  # uint8, 0–255
@@ -653,11 +695,21 @@ def nuclear_density_he(image_rgb):
     density. Full colour deconvolution buys nothing here — the field is about to
     be reduced to a density at a few hundred pixels across anyway.
     """
-    rgb = np.asarray(image_rgb)
-    if rgb.ndim == 3 and rgb.shape[-1] >= 3:
+    # ``as_rgb_yxc`` first, and the channel test is ``in (3, 4)`` rather than
+    # ``>= 3``: handed a (C, Y, X) array the old test was satisfied by the image
+    # *width*, so it sliced column 1 of a (3, Y) array and returned a field that
+    # looked like a density and was not. That is the silent half of the layout
+    # bug -- nothing raised, and the fit simply came out wrong.
+    rgb = np.asarray(as_rgb_yxc(image_rgb))
+    if rgb.ndim == 3 and rgb.shape[-1] in (3, 4):
         green = rgb[..., 1].astype(np.float32)
     else:
         green = np.squeeze(rgb).astype(np.float32)
+    if green.ndim != 2:
+        raise ValueError(
+            "haematoxylin density needs an RGB(A) or grayscale image; got an "
+            f"array of shape {tuple(np.shape(image_rgb))}"
+        )
     return 1.0 - green / 255.0
 
 

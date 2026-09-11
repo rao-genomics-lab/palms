@@ -319,15 +319,30 @@ def build_tab(ctx: ViewerContext) -> tuple:
         *path* is passed by the run site at the moment the user picks a file --
         before ``he_state`` knows about it -- and defaults to whatever is on
         record, which is what the Templates pane asks for.
+
+        A recorded path is used only if it still **resolves**. That is what
+        ``from_store`` is for -- "a session whose H&E survives only in the
+        viewer's cache" -- and the existence check is the only thing that tells
+        the two cases apart: a dataset moved to another machine, or an unmounted
+        share, would otherwise turn Coarse Align into a ``FileNotFoundError``
+        raised from inside a step, where the copy the viewer is already
+        displaying would have done.
         """
         path = path or he_state.get("he_path")
+        reachable = bool(path) and Path(path).exists()
+        if path and not reachable:
+            note = (f"the recorded H&E file is not reachable ({path}), so the "
+                    "cell reads the copy in the viewer's cache")
+        elif not path:
+            note = ("no file path is on record for this H&E, so the cell reads "
+                    "the copy in the viewer's cache")
+        else:
+            note = ""
         return Preview(
-            blocks=["from_file"] if path else ["from_store"],
-            params={"path": str(path) if path else None,
+            blocks=["from_file"] if reachable else ["from_store"],
+            params={"path": str(path) if reachable else None,
                     "px_um": coerce(he_state.get("he_pixel_size_um"))},
-            note=("" if path else
-                  "no file path is on record for this H&E, so the cell reads "
-                  "the copy in the viewer's cache"),
+            note=note,
         )
 
     def _flip_preview() -> Preview:
@@ -979,6 +994,16 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 "xenium_landmarks": session.get("xenium_landmarks"),
                 "he_landmarks": session.get("he_landmarks"),
                 "he_filename": session.get("he_filename", "H&E"),
+                # Both of these were missing until 2026-09-11, and each has a
+                # consumer in `_on_he_restored_from_sdata` that quietly got None.
+                # `he_path` is what makes the next `he:load` pick `from_file`
+                # rather than the cache, and -- because `_build_session_attrs`
+                # lets a computed None win for the H&E keys -- dropping it here
+                # erased it from the store on the very next save. `he_px_um` is
+                # the scale prior Coarse Align most wants; without it the search
+                # falls back to a tissue-area estimate.
+                "he_path": session.get("he_path"),
+                "he_pixel_size_um": session.get("he_pixel_size_um"),
                 "he_shape_yx": session.get("he_shape_yx"),
                 "flip_v": session.get("flip_v", False),
                 "flip_h": session.get("flip_h", False),
@@ -993,16 +1018,15 @@ def build_tab(ctx: ViewerContext) -> tuple:
                 # copy of this was fixed in 9cad210 and this one was missed.
                 # napari fetches only the tiles it draws from a dask multiscale.
                 import dask.array as da
+                from palms.utils.registration import rgb_pyramid_yxc
                 he_dt = sdata.images["he_image"]
-                pyramid = pyramid_levels(he_dt)
-                pyramid_rgb = []
-                for arr in pyramid:
-                    if not isinstance(arr, da.Array):
-                        arr = da.from_array(arr)
-                    if arr.ndim == 3 and arr.shape[0] in (3, 4):
-                        arr = da.transpose(arr, (1, 2, 0))
-                    pyramid_rgb.append(arr)
-                return pyramid_rgb
+                pyramid = [level if isinstance(level, da.Array) else da.from_array(level)
+                           for level in pyramid_levels(he_dt)]
+                # The store is (c, y, x) and napari wants (y, x, c) for `rgb=True`
+                # -- the same normalisation `he.load`'s `from_store` block does,
+                # through the same helper, so the layer and the recorded step can
+                # never again be looking at differently shaped arrays.
+                return rgb_pyramid_yxc(pyramid)
 
             worker = _load_he_from_sdata()
             worker.returned.connect(

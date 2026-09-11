@@ -322,10 +322,12 @@ def haematoxylin_od(rgb) -> np.ndarray:
     """
     from skimage.color import rgb2hed
 
-    arr = np.asarray(rgb)
-    if arr.ndim == 3 and arr.shape[0] in (3, 4) and arr.shape[-1] not in (3, 4):
-        arr = np.transpose(arr, (1, 2, 0))
-    arr = arr[..., :3]
+    from palms.utils.registration import as_rgb_yxc
+
+    # `as_rgb_yxc` rather than a local layout test: `he_pyramid` is channel-last
+    # by contract, but this is also handed raw tiles, and one definition of the
+    # rule is the point -- see `registration.as_rgb_yxc`.
+    arr = np.asarray(as_rgb_yxc(np.asarray(rgb)))[..., :3]
     if arr.dtype != np.float32 and arr.dtype != np.float64:
         arr = arr.astype(np.float32) / 255.0
     return rgb2hed(arr)[..., 0].astype(np.float32)
@@ -348,6 +350,10 @@ def detect_he_nuclei(image, pixel_size_um: float, downsample: float = 1.0,
     from skimage.feature import peak_local_max
 
     arr = finest_level(image)
+    # The one place that keeps its own channel-first test rather than calling
+    # `registration.as_rgb_yxc`: the layout is needed *before* a tile is sliced
+    # out of a lazy array, which a helper returning a normalised array cannot
+    # give. The exemption is named in `tests/test_registration.py`.
     channel_first = (getattr(arr, "ndim", 0) == 3 and arr.shape[0] in (3, 4)
                      and arr.shape[-1] not in (3, 4))
     h, w = (arr.shape[1], arr.shape[2]) if channel_first else (arr.shape[0], arr.shape[1])

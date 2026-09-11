@@ -29,6 +29,11 @@ palms-build-cache /path/to/xenium/output/
 palms-rename-dataset /path/to/xenium/output/ new_name
 palms-rename-dataset /path/that/was/moved/ --repair
 
+# Put back the H&E file path and pixel size a pre-2026-09-11 session restore
+# erased, by matching the recorded he_filename against a directory of slides.
+# A candidate is used only if its height and width match what the store recorded.
+palms-relink-he /path/to/xenium/output/ --he-dir /path/to/slides --dry-run
+
 # Launch viewer (file dialog opens if no path given)
 palms [/path/to/xenium/output/]
 
@@ -36,7 +41,7 @@ palms [/path/to/xenium/output/]
 palms /path/to/xenium/output/ --no-cache
 ```
 
-The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
+The package is installed as `palms` (PyPI name) / `palms` (import name) via `pip install -e .` (handled automatically by `environment.yml`). Console scripts: `palms`, `palms-preprocess`, `palms-build-cache`, `palms-rename-dataset`, `palms-relink-he`, `palms-fetch-references`, `palms-build-custom-segmentation`. You can also run `python -m palms ...`.
 
 There is a `pytest` suite in `tests/` (**2011 tests** across 82 files, measured 2026-09-05 —
 count it with `pytest --collect-only -q` rather than trusting a remembered figure; this
@@ -823,6 +828,28 @@ replayed notebook does not have; it reads `sdata.points['transcripts']` now.
   that is what the GUI used to do on a re-run, and it cannot be recorded — the step would
   depend on itself. Re-running starts where the first run did, which is also what makes
   the recorded step the one that replays.
+
+  **`he_pyramid` is always channel-last `(Y, X, C)`, from either `he.load` block**
+  (2026-09-11). It was not: `from_file` reads a TIFF and `from_store` reads an
+  `Image2DModel`, which is `(c, y, x)` — one declared output, two layouts, and every
+  consumer written for one of them. The crash it caused is the *readable* half
+  (`cvtColor` on `(3, Y, X)` reports `'scn' is 1`, a channel count nothing passed in,
+  because OpenCV makes a 3-D single-channel Mat when the trailing dim is not a channel
+  count) and it only happens when no pixel size is on record. With one, the other branch
+  runs and returns **scale 10.0826 against a truth of 0.6298** with no error at all:
+  `nuclear_density_he`'s `shape[-1] >= 3` test is satisfied by the image *width*, so it
+  sliced a column instead of the green channel, and `_he_full_yx` read `(3, Y)`.
+  `registration.as_rgb_yxc` / `rgb_pyramid_yxc` are the one definition, replacing four
+  copies of the transpose that disagreed (the two tabs did it for the napari layer, the
+  template did not), and a source guard in `tests/test_registration.py` pins it —
+  `detect_he_nuclei` is the one exemption, because it needs the layout *before* slicing a
+  tile. **The related half is that a restore must carry `he_path` and
+  `he_pixel_size_um`**: `_restore_session` did not pass them to
+  `_on_he_restored_from_sdata`, so a restored session used `from_store` for ever after
+  and lost the metadata scale prior — and since the H&E attrs are written "computed value
+  wins, `None` included" (which is how clearing an H&E clears it), the next save erased
+  the path from the store. `palms-relink-he` repairs stores already in that state;
+  `tab_arms` had it right all along.
 - **Legacy: `ctx.record_node(id, code, deps=..., kind=..., label=..., params=...)`**
   in tab callbacks — still used by the not-yet-migrated tabs, and the reason the recorded
   and executed code could drift. Re-running a step (same `id`) revises its node in place

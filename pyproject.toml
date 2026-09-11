@@ -160,6 +160,7 @@ palms = "palms.app:main"
 palms-preprocess = "palms.preprocess:main"
 palms-build-cache = "palms.loader:main"
 palms-rename-dataset = "palms.scripts.rename_dataset:main"
+palms-relink-he = "palms.scripts.relink_he:main"
 palms-fetch-references = "palms.scripts.fetch_reference_datasets:main"
 palms-build-custom-segmentation = "palms.scripts.build_custom_segmentation:main"
 
