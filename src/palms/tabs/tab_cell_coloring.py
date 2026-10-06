@@ -18,6 +18,23 @@ if TYPE_CHECKING:
 from palms.utils.coloring import AVAILABLE_COLORMAPS
 
 
+def set_canvas_background_override(viewer, color) -> None:
+    """Override the canvas colour, or hand it back to the theme with ``None``.
+
+    The override rather than the canvas colour itself, because napari resets the
+    colour from the theme on every theme event, undoing a direct set. The two
+    branches are two napari APIs, not a preference: 0.9 moved the override to
+    the public ``viewer.canvas`` model and dropped ``VispyCanvas.bgcolor``,
+    which raised ``AttributeError`` here on a 0.9.2 cluster install and left
+    the checkbox doing nothing. 0.8 has no ``viewer.canvas``.
+    """
+    model = getattr(viewer, "canvas", None)
+    if model is not None and hasattr(model, "background_color_override"):
+        model.background_color_override = color          # napari >= 0.9
+    else:
+        viewer.window._qt_viewer.canvas.background_color_override = color  # 0.8
+
+
 def build_tab(ctx: ViewerContext) -> tuple:
     state = ctx.state
 
@@ -248,7 +265,7 @@ def build_tab(ctx: ViewerContext) -> tuple:
             worker.start()
 
     def on_bg_change(value):
-        ctx.viewer.window._qt_viewer.canvas.bgcolor = (1, 1, 1, 1) if value else (0, 0, 0, 1)
+        set_canvas_background_override(ctx.viewer, "white" if value else None)
         ctx.record_node(
             "viewer:background",
             f"\n# Viewer background set to {'white' if value else 'black'} (display only)",
