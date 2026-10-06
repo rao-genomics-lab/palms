@@ -125,6 +125,26 @@ entries under **Development log** are the closed pre-1.0.0 record.
   itself were edited to the illegal pair.
 
 ### Fixed
+- **Cells → Cell Coloring → "White background" did nothing on napari 0.9**
+  (reported on the BMRC cluster, which resolved napari 0.9.2 / vispy 0.17.0 —
+  `environment.yml` says only `napari>=0.8`). napari 0.9 removed
+  `VispyCanvas.bgcolor`, the private attribute the checkbox set, so the handler
+  raised `AttributeError` on its first line and the canvas stayed black. The
+  colour now lives on the public `viewer.canvas.background_color_override`
+  model, which 0.8 does not have, so `set_canvas_background_override` takes
+  whichever API the running napari provides. Both are the *override*, not the
+  colour itself: napari resets the plain colour from the theme on every theme
+  event, which would have undone the checkbox on 0.8 as well. Unticking clears
+  the override, so the canvas returns to the theme's colour rather than a
+  hard-coded black. `tests/test_cell_coloring_background.py` reads the colour
+  vispy actually draws (the one thing both versions share), and fails against
+  the old handler under napari 0.9.2 (measured in a venv overlay).
+  `scripts/diagnose_canvas_bg.py` is the standalone check that found it: no
+  dataset, no PALMS import; it prints the napari/vispy/Qt/GL stack and a
+  `works` / `reset` / `not rendered` / `unsupported` verdict per route.
+  Unrelated and unchanged: inside the image area the morphology layer still
+  covers the canvas, because napari draws the first channel of a
+  `channel_axis` stack opaque.
 - **Deleting the H&E image in Tools → Dataset always failed** — and with it any
   element the zarr cache still backs lazily, which after a cached launch is every
   image, label raster and points element. Two independent defects, one report:
