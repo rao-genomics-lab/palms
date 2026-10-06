@@ -1105,16 +1105,13 @@ def build_tab(ctx: ViewerContext) -> tuple:
             @thread_worker
             def _load_arms_from_sdata():
                 import dask.array as da
+                from palms.utils.registration import rgb_pyramid_yxc
                 arms_dt = sdata.images["arms_he_image"]
-                pyramid = pyramid_levels(arms_dt)
-                pyramid_rgb = []
-                for arr in pyramid:
-                    if not isinstance(arr, da.Array):
-                        arr = da.from_array(arr)
-                    if arr.ndim == 3 and arr.shape[0] in (3, 4):
-                        arr = da.transpose(arr, (1, 2, 0))
-                    pyramid_rgb.append(arr)
-                return pyramid_rgb
+                pyramid = [level if isinstance(level, da.Array) else da.from_array(level)
+                           for level in pyramid_levels(arms_dt)]
+                # (c, y, x) in the store, (y, x, c) for napari's `rgb=True`; see
+                # `registration.as_rgb_yxc` for why this is one definition.
+                return rgb_pyramid_yxc(pyramid)
 
             worker = _load_arms_from_sdata()
             worker.returned.connect(

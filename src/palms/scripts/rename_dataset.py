@@ -47,10 +47,11 @@ from typing import Callable
 from palms.utils.adata_persistence import sidecar_dir  # noqa: E402
 from palms.utils.zarr_safe import atomic_json, safe_group_update, store_lock  # noqa: E402
 
-#: Session attrs holding a filesystem path. All four are frequently ``None`` in
-#: practice — ``_on_he_restored_from_sdata`` does not repopulate
-#: ``he_state["he_path"]``, so it decays to None on the first re-save — but a
-#: dataset saved in the same session that loaded the image does carry them.
+#: Session attrs holding a filesystem path. ``he_path`` used to decay to ``None``
+#: on the first re-save after a restore — ``_restore_session`` did not pass it to
+#: ``_on_he_restored_from_sdata``, and the H&E attrs are written "computed value
+#: wins, None included" — so a store written before 2026-09-11 may carry none of
+#: these. ``palms-relink-he`` puts ``he_path`` back for those.
 PATH_ATTRS = ("he_path", "arms_he_path", "arms_geojson_path", "arms_csv_path")
 
 #: Sidecar JSONs under ``viewer_cache/`` whose string values may hold paths.

@@ -189,3 +189,91 @@ def test_the_flip_template_needs_no_palms_import():
     spec = builtin_spec("he.flip")
     assert not spec.palms_reason
     assert all("palms" not in b.text for b in spec.blocks.values())
+
+
+# ── The session restore carries everything the restore handler reads ──────────
+
+def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} is not defined in {TAB.name}")
+
+
+def _dict_keys_assigned_to(func: ast.AST, target: str) -> set[str]:
+    """The literal string keys of the dict assigned to *target* inside *func*."""
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Assign):
+            continue
+        names = {t.id for t in node.targets if isinstance(t, ast.Name)}
+        if target in names and isinstance(node.value, ast.Dict):
+            return {k.value for k in node.value.keys
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    raise AssertionError(f"no dict is assigned to {target}")
+
+
+def _subscripted_keys(func: ast.AST, target: str) -> set[str]:
+    """Every ``target.get("k")`` / ``target["k"]`` key read inside *func*."""
+    keys = set()
+    for node in ast.walk(func):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == target
+                and node.args and isinstance(node.args[0], ast.Constant)):
+            keys.add(node.args[0].value)
+        if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                and node.value.id == target
+                and isinstance(node.slice, ast.Constant)):
+            keys.add(node.slice.value)
+    return keys
+
+
+def test_the_restore_passes_every_key_the_restore_handler_reads(tab_ast):
+    """``_session_he_data`` is built in one function and read in another.
+
+    ``he_path`` and ``he_pixel_size_um`` were read by
+    ``_on_he_restored_from_sdata`` and never put into the dict, so both came back
+    ``None`` on every restore. That is not a quiet loss: with no path on record
+    ``he:load`` falls back to its ``from_store`` block, and because
+    ``session._build_session_attrs`` lets a computed ``None`` win for the H&E
+    keys (which is how clearing an H&E clears it), the next save erased the path
+    from the store for good. Coarse Align then ran against a channel-first
+    pyramid with no scale prior and failed inside OpenCV.
+
+    Asserted as the property rather than as those two names, because the same
+    omission is available to every key anyone adds later.
+    """
+    provided = _dict_keys_assigned_to(_function(tab_ast, "_restore_session"),
+                                      "_session_he_data")
+    consumed = _subscripted_keys(_function(tab_ast, "_on_he_restored_from_sdata"),
+                                 "session_he_data")
+
+    missing = consumed - provided
+    assert not missing, (
+        "_on_he_restored_from_sdata reads keys _restore_session never provides: "
+        + ", ".join(sorted(missing))
+    )
+    assert {"he_path", "he_pixel_size_um"} <= provided
+
+
+def test_the_load_step_falls_back_to_the_cache_for_an_unreachable_file(tab_ast):
+    """``from_file`` is chosen on the path *resolving*, not on it being recorded.
+
+    Restoring ``he_path`` (above) is what makes this matter: before, the path was
+    always None after a restore and ``from_store`` was always taken. With a path
+    on record, a dataset copied to another machine or an unmounted share would
+    turn Coarse Align into a FileNotFoundError raised from inside a step -- while
+    the copy the viewer is already displaying sits in the cache unused.
+    """
+    preview = _function(tab_ast, "_he_load_preview")
+    source = ast.unparse(preview)
+    assert "exists()" in source, (
+        "_he_load_preview must check that the recorded path still resolves "
+        "before selecting the from_file block"
+    )
+    # The block choice reads the resolved flag, not the raw path.
+    blocks = [node for node in ast.walk(preview)
+              if isinstance(node, ast.keyword) and node.arg == "blocks"]
+    assert blocks, "no blocks= keyword in _he_load_preview"
+    assert "reachable" in ast.unparse(blocks[0])

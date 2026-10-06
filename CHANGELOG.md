@@ -7,6 +7,18 @@ entries under **Development log** are the closed pre-1.0.0 record.
 ## [Unreleased]
 
 ### Added
+- **`palms-relink-he`** — puts back the `he_path` and `he_pixel_size_um` that
+  the restore bug above erased, for stores written before it was fixed. Nothing
+  left on disk says where such an image came from, so the tool matches each
+  store's recorded `he_filename` against a directory of H&E images and
+  **requires the candidate's height and width to equal the recorded
+  `he_shape_yx`** before writing: a filename match is not evidence that it is the
+  same section, and every transform the dataset carries is expressed in the
+  original's pixels. Reads TIFF metadata only — no pixels, no SpatialData load —
+  writes through `safe_group_update`, and has `--dry-run`, `--recursive` and
+  `--relink-all`. ARMS is out of scope and says so: `arms_he_path` never had
+  this bug.
+
 - **Tools → Preprocess: the normalisation target is settable** (`xv-e2v`).
   `normalize` scaled every cell to `1e4`, written as a literal in the template,
   and declared no parameters at all — so the other convention, `scanpy`'s own
@@ -145,6 +157,60 @@ entries under **Development log** are the closed pre-1.0.0 record.
   Unrelated and unchanged: inside the image area the morphology layer still
   covers the canvas, because napari draws the first channel of a
   `channel_axis` stack opaque.
+- **Coarse Align failed on an H&E restored from the cache** — reported as
+
+  ```
+  step 'he:coarse_align' failed at statement 12/15: error: OpenCV(5.0.0) ...
+  (-15:Bad number of channels) ... 'scn' is 1
+  ```
+
+  `he.load` binds one name, `he_pyramid`, from two blocks that read different
+  things: `from_file` opens a TIFF, which is `(Y, X, C)`, while `from_store`
+  reads `sdata.images['he_image']`, which is an `Image2DModel` and therefore
+  `(C, Y, X)`. Every consumer of that pyramid assumes channel-last. `cvtColor`
+  on a `(3, Y, X)` array reports `'scn' is 1` because OpenCV builds a 3-D
+  single-channel Mat when the trailing dimension is not a valid channel count —
+  a channel count nothing in the call ever passed in, which is why the message
+  reads as a grayscale image.
+
+  **The crash was the lucky half.** It only happens on the branch taken when no
+  pixel size is on record. With one, the same pyramid took the other branch and
+  raised nothing: `nuclear_density_he` tested `shape[-1] >= 3`, which a
+  `(C, Y, X)` array satisfies through its *width*, so it sliced column 1 of a
+  `(3, Y)` array and returned something shaped like a density field; and
+  `_he_full_yx` read `(3, Y)`, making `_source_ds` 1. Measured end to end on a
+  real prostate section: **scale 10.0826 against a truth of 0.6298**, reported
+  as a normal result. Fixed at the pyramid, not at the symptom —
+  `registration.as_rgb_yxc` / `rgb_pyramid_yxc` are the one definition of
+  channel-last, replacing four hand-rolled copies of the same transpose that did
+  not agree with each other, and a source guard keeps a fifth from appearing.
+  `extract_tissue_mask_he` now refuses a non-RGB image *by name* rather than
+  leaving OpenCV to describe it.
+
+- **A session restore silently dropped the H&E path and its pixel size.**
+  `tab_he_registration._restore_session` built `_session_he_data` without
+  `he_path` or `he_pixel_size_um`, although `_on_he_restored_from_sdata` reads
+  both — so both came back `None` on every restore. Not a quiet loss: with no
+  path on record the next `he:load` falls back to `from_store` (the cache, which
+  is also the only thing the recorded notebook cell can then replay against),
+  with no pixel size Coarse Align loses its best scale prior, and because the
+  H&E attrs are written "computed value wins, `None` included" — which is how
+  clearing an H&E clears it — the next save erased the path from the store for
+  good. `tab_arms` passed its twin through correctly all along; this was the
+  copy that was missed. The new guard asserts the property (every key the
+  restore handler reads is a key the restore provides), not the two names.
+
+  Restoring the path made one more thing necessary: `he:load` now picks
+  `from_file` on the path *resolving*, not on it merely being recorded.
+  Otherwise a dataset copied to another machine, or an unmounted share, turns
+  Coarse Align into a `FileNotFoundError` raised from inside a step — while the
+  copy the viewer is already displaying sits unused in the cache, which is
+  exactly the case `from_store` exists for. The preview says which it chose and
+  why.
+
+  `docs/Analysis-Templates.md` is regenerated: the `he.load` contract changed,
+  and that page is generated from the templates themselves.
+
 - **Deleting the H&E image in Tools → Dataset always failed** — and with it any
   element the zarr cache still backs lazily, which after a cached launch is every
   image, label raster and points element. Two independent defects, one report:

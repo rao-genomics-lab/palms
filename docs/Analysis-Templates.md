@@ -70,7 +70,7 @@ substituted string for the settings currently in the owning tab.
 - [`he.coarse_align`](#hecoarse_align) — Coarse H&E alignment by a global search over blurred nuclear density.
 - [`he.flip`](#heflip) — Whether the H&E is mirrored relative to the Xenium morphology image.
 - [`he.landmark_align`](#helandmark_align) — Fine H&E registration from hand-placed matching landmarks.
-- [`he.load`](#heload) — The H&E image the registration works on, as a pyramid, finest level first.
+- [`he.load`](#heload) — The H&E image the registration works on, as a pyramid, finest level first, every level channel-last (Y, X, C) whichever block bound it.
 - [`he.nuclei_align`](#henuclei_align) — Fine H&E registration: haematoxylin nuclei matched onto the nuclear masks.
 - [`export.degafiles`](#exportdegafiles) — Export the dataset as Celldega DegaFiles - a browser-viewable copy.
 
@@ -1973,9 +1973,15 @@ he_px_um = he_pixel_size_um(he_tif)
 # replays only against that cache. That is why `from_file` is used whenever the
 # path is known, and why this block records the pixel size as a literal — the
 # TIFF metadata it came from is not being read here.
-from palms.utils.registration import pyramid_levels
+#
+# The layout is normalised because the two blocks read different things: a TIFF
+# is (Y, X, C) and an `Image2DModel` is (C, Y, X), and everything downstream of
+# `he_pyramid` -- the flips, the shape arithmetic, the density fields -- is
+# written for channel-last. Leaving the two disagreeing is what made Coarse
+# Align fail on a restored session with an OpenCV channel-count error.
+from palms.utils.registration import pyramid_levels, rgb_pyramid_yxc
 
-he_pyramid = pyramid_levels(sdata.images['he_image'])
+he_pyramid = rgb_pyramid_yxc(pyramid_levels(sdata.images['he_image']))
 he_px_um = $px_um
 ```
 
